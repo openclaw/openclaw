@@ -498,8 +498,8 @@ releases.
   | `plugin-sdk/config-schema` | Root config schema export | `OpenClawSchema` |
   | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
   | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
-  | `plugin-sdk/setup` | Shared setup wizard helpers | Allowlist prompts, setup status builders |
-  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+  | `plugin-sdk/setup` | Shared setup wizard helpers | Setup translator, allowlist prompts, setup status builders |
+  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | `createSetupTranslator`, import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
   | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
   | `plugin-sdk/setup-tools` | Setup tooling helpers | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
   | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
@@ -563,8 +563,7 @@ releases.
   | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers, EnvHttpProxyAgent option helpers |
   | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
   | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
-  | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
-  | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
+  | `plugin-sdk/allow-from` | Allowlist formatting and input mapping | `formatAllowFromLowercase`, `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers including dynamic argument menu formatting |
   | `plugin-sdk/command-status` | Command status/help renderers | `buildCommandsMessage`, `buildCommandsMessagePaginated`, `buildHelpMessage` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
@@ -572,7 +571,7 @@ releases.
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
   | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize, provider dispatch, and conversation-label helpers |
-  | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
+  | `plugin-sdk/reply-history` | Reply-history helpers | `createChannelHistoryWindow`; deprecated map-helper compatibility exports such as `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
@@ -605,7 +604,7 @@ releases.
   | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
   | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
   | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
-  | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and Gemini schema cleanup + diagnostics |
+  | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, and DeepSeek/Gemini/OpenAI schema cleanup + diagnostics |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
@@ -754,6 +753,29 @@ canonical replacement.
 
     Affected areas: `inbound_claim`, `message_received`, and any custom
     channel plugin that post-processed `channelEnvelope` text.
+
+  </Accordion>
+
+  <Accordion title="deactivate hook → gateway_stop">
+    **Old**: `api.on("deactivate", handler)`.
+
+    **New**: `api.on("gateway_stop", handler)`. The event and context are the
+    same shutdown cleanup contract; only the hook name changes.
+
+    ```typescript
+    // Before
+    api.on("deactivate", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+
+    // After
+    api.on("gateway_stop", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+    ```
+
+    `deactivate` remains wired as a deprecated compatibility alias until after
+    2026-08-16.
 
   </Accordion>
 

@@ -225,6 +225,22 @@ describe("tool-loop-detection", () => {
       expect(hash.startsWith("read:")).toBe(true);
       expect(hash.length).toBe("read:".length + 64);
     });
+
+    it("hashes circular params without collapsing repeated references", () => {
+      const shared = { id: "shared" };
+      const payload: Record<string, unknown> = { first: shared, second: shared };
+      payload.self = payload;
+
+      const equivalentShared = { id: "shared" };
+      const equivalentPayload: Record<string, unknown> = {
+        second: equivalentShared,
+        first: equivalentShared,
+      };
+      equivalentPayload.self = equivalentPayload;
+
+      expect(hashToolCall("tool", payload)).toBe(hashToolCall("tool", equivalentPayload));
+      expect(hashToolCall("tool", payload)).toEqual(expect.stringMatching(/^tool:[a-f0-9]{64}$/));
+    });
   });
 
   describe("recordToolCall", () => {

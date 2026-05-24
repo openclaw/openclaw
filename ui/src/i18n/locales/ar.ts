@@ -347,6 +347,12 @@ export const ar: TranslationMap = {
     eventLogSubtitle: "أحدث أحداث Gateway.",
     noEvents: "لا توجد أحداث بعد.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "تنتهي خلال {time}",
     expired: "منتهية الصلاحية",
@@ -686,9 +692,6 @@ export const ar: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "اطّلع على أين تذهب الرموز، ومتى ترتفع الجلسات، وما الذي يحدد التكلفة.",
-    },
     common: {
       emptyValue: "—",
       unknown: "غير معروف",
@@ -1026,6 +1029,10 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    autoScrollMode: "وضع التمرير التلقائي",
+    autoScrollAlways: "دائمًا",
+    autoScrollNearBottom: "قرب الأسفل",
+    autoScrollOff: "إيقاف",
     focusToggle: "تبديل وضع التركيز (إخفاء الشريط الجانبي + رأس الصفحة)",
     hideCronSessions: "إخفاء جلسات cron",
     showCronSessions: "إظهار جلسات cron",
@@ -1069,11 +1076,16 @@ export const ar: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "لا يزال يستمع",
+      talkTranscript: "نص الحديث",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "تصفية الجلسات حسب الوكيل",
       session: "Chat session",
+      sessionSearch: "البحث في الجلسات",
+      clearSessionSearch: "مسح البحث في الجلسات",
+      loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1185,6 +1197,9 @@ export const ar: TranslationMap = {
       ascending: "تصاعدي",
       descending: "تنازلي",
       reset: "إعادة تعيين",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "لا توجد مهام مطابقة.",
       loading: "جارٍ التحميل...",
       loadMore: "تحميل المزيد من المهام",
@@ -1220,6 +1235,7 @@ export const ar: TranslationMap = {
     form: {
       editJob: "تعديل المهمة",
       newJob: "مهمة جديدة",
+      advancedJob: "Advanced job",
       updateSubtitle: "حدّث المهمة المجدولة المحددة.",
       createSubtitle: "أنشئ تنبيهًا مجدولًا أو تشغيل وكيل.",
       required: "مطلوب",

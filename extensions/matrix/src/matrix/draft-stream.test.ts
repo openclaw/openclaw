@@ -180,7 +180,7 @@ function sentContentAt(callIndex: number): Record<string, unknown> {
 }
 
 function expectLogContaining(log: ReturnType<typeof vi.fn>, fragment: string): void {
-  expect(log.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 beforeAll(async () => {
@@ -349,7 +349,7 @@ describe("createMatrixDraftStream", () => {
     await stream.stop();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toHaveProperty("org.matrix.msc4357.live");
+    expect(sendMessageMock.mock.calls.at(0)?.[1]).toHaveProperty("org.matrix.msc4357.live");
   });
 
   it("finalizeLive clears the live marker at most once", async () => {
@@ -367,7 +367,7 @@ describe("createMatrixDraftStream", () => {
     await stream.finalizeLive();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls[1]?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
+    expect(sendMessageMock.mock.calls.at(1)?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
   });
 
   it("marks live finalize failures for normal final delivery fallback", async () => {

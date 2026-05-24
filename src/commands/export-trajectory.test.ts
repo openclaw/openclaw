@@ -45,6 +45,44 @@ describe("exportTrajectoryCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("reports malformed encoded request JSON without leaking parser output", async () => {
+    const runtime = createRuntime();
+    const requestJsonBase64 = Buffer.from("not json", "utf8").toString("base64url");
+
+    await exportTrajectoryCommand({ requestJsonBase64 }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Failed to decode trajectory export request: Encoded trajectory export request is invalid JSON",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves direct options when an encoded request omits them", async () => {
+    const runtime = createRuntime();
+    const requestJsonBase64 = Buffer.from(
+      JSON.stringify({ output: "/tmp/export.json" }),
+      "utf8",
+    ).toString("base64url");
+
+    await exportTrajectoryCommand(
+      {
+        requestJsonBase64,
+        sessionKey: "agent:main:telegram:direct:123",
+        store: "/tmp/direct-store.json",
+      },
+      runtime,
+    );
+
+    expect(mocks.resolveDefaultSessionStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith("/tmp/direct-store.json", {
+      skipCache: true,
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:telegram:direct:123. Run openclaw sessions to see available sessions.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("points missing session users at the sessions command", async () => {
     const runtime = createRuntime();
 

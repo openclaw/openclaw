@@ -1,3 +1,24 @@
+OPENCLAW_PLUGINS_FIXTURE_PID_FILES=()
+
+openclaw_plugins_cleanup_fixture_servers() {
+  local pid_file
+  local pid
+  for pid_file in "${OPENCLAW_PLUGINS_FIXTURE_PID_FILES[@]:-}"; do
+    [[ -f "$pid_file" ]] || continue
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file"
+  done
+}
+
+openclaw_plugins_register_fixture_pid_file() {
+  local pid_file="$1"
+  OPENCLAW_PLUGINS_FIXTURE_PID_FILES+=("$pid_file")
+  trap openclaw_plugins_cleanup_fixture_servers EXIT
+}
+
 record_fixture_plugin_trust() {
   local plugin_id="$1"
   local plugin_root="$2"
@@ -86,6 +107,27 @@ pack_fixture_plugin() {
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
+pack_fixture_plugin_with_invalid_extension_entry() {
+  local pack_dir="$1"
+  local output_tgz="$2"
+  local id="$3"
+  local version="$4"
+  local method="$5"
+  local name="$6"
+
+  mkdir -p "$pack_dir/package"
+  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  node --input-type=module - "$pack_dir/package/package.json" <<'NODE'
+import fs from "node:fs";
+
+const packageJsonPath = process.argv[2];
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+packageJson.openclaw.extensions = ["./index.js", " "];
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+NODE
+  tar -czf "$output_tgz" -C "$pack_dir" package
+}
+
 start_npm_fixture_registry() {
   local package_name="$1"
   local version="$2"
@@ -104,7 +146,7 @@ start_npm_fixture_registry() {
   for _ in $(seq 1 100); do
     if [[ -s "$server_port_file" ]]; then
       export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
-      trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
+      openclaw_plugins_register_fixture_pid_file "$server_pid_file"
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then

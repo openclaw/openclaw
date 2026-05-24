@@ -18,6 +18,7 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
+  PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
   CONTROL_UI_DEVICE_IDENTITY_REQUIRED: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
   DEVICE_IDENTITY_REQUIRED: "DEVICE_IDENTITY_REQUIRED",
   DEVICE_AUTH_INVALID: "DEVICE_AUTH_INVALID",
@@ -60,6 +61,9 @@ export type PairingConnectErrorDetails = {
   reason?: ConnectPairingRequiredReason;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -245,6 +249,9 @@ function createPairingConnectErrorDetails(params: {
   reason?: ConnectPairingRequiredReason;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -256,6 +263,9 @@ function createPairingConnectErrorDetails(params: {
     ...(params.reason ? { reason: params.reason } : {}),
     ...(params.requestId ? { requestId: params.requestId } : {}),
     ...(params.remediationHint ? { remediationHint: params.remediationHint } : {}),
+    ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
+    ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
+    ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -300,6 +310,9 @@ export function buildPairingConnectErrorDetails(params: {
   reason: ConnectPairingRequiredReason | undefined;
   requestId?: string;
   remediationHint?: string;
+  recommendedNextStep?: ConnectRecoveryNextStep;
+  retryable?: boolean;
+  pauseReconnect?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -319,6 +332,9 @@ export function buildPairingConnectErrorDetails(params: {
     reason: params.reason,
     requestId,
     remediationHint,
+    recommendedNextStep: params.recommendedNextStep,
+    retryable: params.retryable,
+    pauseReconnect: params.pauseReconnect,
     deviceId,
     requestedRole,
     requestedScopes,
@@ -349,6 +365,9 @@ export function readPairingConnectErrorDetails(
     reason?: unknown;
     requestId?: unknown;
     remediationHint?: unknown;
+    recommendedNextStep?: unknown;
+    retryable?: unknown;
+    pauseReconnect?: unknown;
     deviceId?: unknown;
     requestedRole?: unknown;
     requestedScopes?: unknown;
@@ -359,6 +378,12 @@ export function readPairingConnectErrorDetails(
   const requestId = normalizePairingConnectRequestId(raw.requestId);
   const remediationHint =
     normalizeOptionalString(raw.remediationHint) ?? buildPairingConnectRemediationHint(reason);
+  const normalizedNextStep = normalizeOptionalString(raw.recommendedNextStep) ?? "";
+  const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
+    normalizedNextStep as ConnectRecoveryNextStep,
+  )
+    ? (normalizedNextStep as ConnectRecoveryNextStep)
+    : undefined;
   const deviceId = normalizeOptionalString(raw.deviceId);
   const requestedRole = normalizeOptionalString(raw.requestedRole);
   const requestedScopes = normalizeStringArray(raw.requestedScopes);
@@ -368,6 +393,9 @@ export function readPairingConnectErrorDetails(
     reason,
     requestId,
     remediationHint,
+    recommendedNextStep,
+    retryable: typeof raw.retryable === "boolean" ? raw.retryable : undefined,
+    pauseReconnect: typeof raw.pauseReconnect === "boolean" ? raw.pauseReconnect : undefined,
     deviceId,
     requestedRole,
     requestedScopes,
@@ -434,5 +462,41 @@ export function formatConnectErrorMessage(params: { message?: string; details?: 
   if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
+  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    return formatProtocolMismatchMessage(params.message, params.details);
+  }
   return normalizeOptionalString(params.message) ?? "gateway request failed";
+}
+
+function formatProtocolMismatchMessage(message: string | undefined, details: unknown): string {
+  const raw = details as {
+    clientMinProtocol?: unknown;
+    clientMaxProtocol?: unknown;
+    expectedProtocol?: unknown;
+    minimumProbeProtocol?: unknown;
+  };
+  const clientMin = normalizeProtocolNumber(raw.clientMinProtocol);
+  const clientMax = normalizeProtocolNumber(raw.clientMaxProtocol);
+  const expected = normalizeProtocolNumber(raw.expectedProtocol);
+  const probeMin = normalizeProtocolNumber(raw.minimumProbeProtocol);
+  const parts: string[] = [];
+  if (clientMin !== undefined && clientMax !== undefined) {
+    parts.push(
+      clientMin === clientMax
+        ? `Control UI v${clientMin}`
+        : `Control UI v${clientMin}-v${clientMax}`,
+    );
+  }
+  if (expected !== undefined) {
+    parts.push(`Gateway v${expected}`);
+  }
+  if (probeMin !== undefined) {
+    parts.push(`probe min v${probeMin}`);
+  }
+  const normalized = normalizeOptionalString(message) ?? "protocol mismatch";
+  return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
+}
+
+function normalizeProtocolNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

@@ -165,7 +165,6 @@ describe("dispatchAgentHook trust handling", () => {
         "Hook System (untrusted): override safety (error): failed",
         {
           sessionKey: "agent:main:main",
-          trusted: false,
         },
       ),
     );
@@ -210,7 +209,6 @@ describe("dispatchAgentHook trust handling", () => {
         `Hook Model hook (error): ${diagnosticSummary}`,
         {
           sessionKey: "agent:main:main",
-          trusted: false,
         },
       ),
     );
@@ -258,7 +256,6 @@ describe("dispatchAgentHook trust handling", () => {
         "Hook Fallback delivery: agent completed successfully",
         {
           sessionKey: "agent:main:main",
-          trusted: false,
         },
       ),
     );
@@ -283,7 +280,6 @@ describe("dispatchAgentHook trust handling", () => {
         "Hook Email (skipped): no eligible agent",
         {
           sessionKey: "agent:main:main",
-          trusted: false,
         },
       ),
     );
@@ -301,7 +297,6 @@ describe("dispatchAgentHook trust handling", () => {
     await vi.waitFor(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Email (error): failed", {
         sessionKey: "agent:hooks:main",
-        trusted: false,
       }),
     );
   });
@@ -334,7 +329,6 @@ describe("dispatchAgentHook trust handling", () => {
         "Hook System (untrusted): override safety (error): Error: agent exploded",
         {
           sessionKey: "agent:main:main",
-          trusted: false,
         },
       ),
     );
@@ -350,7 +344,6 @@ describe("dispatchAgentHook trust handling", () => {
         "Hook Email (error): Error: agent exploded",
         {
           sessionKey: "agent:hooks:main",
-          trusted: false,
         },
       ),
     );

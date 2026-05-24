@@ -716,6 +716,87 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("uses Codex OAuth auth labels for explicit OpenAI PI auth order", async () => {
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        );
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:status": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60 * 60_000,
+              },
+              "openai:backup": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-test",
+              },
+            },
+          }),
+          "utf8",
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.5": {
+                    agentRuntime: { id: "pi" },
+                  },
+                },
+              },
+            },
+            auth: {
+              order: {
+                openai: ["openai-codex:status", "openai:backup"],
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-openai-pi-codex-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedHarness: "pi",
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("oauth (openai-codex:status)");
+        expect(normalized).not.toContain("api-key (openai:backup)");
+      },
+      { env: { OPENAI_API_KEY: undefined } },
+    );
+  });
+
   it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
     await withTempHome(
       async (dir) => {
@@ -819,6 +900,55 @@ describe("buildStatusReply subagent summary", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: openai/gpt-5.5");
     expect(normalized).toContain("Context: 25k/1.0m");
+  });
+
+  it("caps stale persisted /status context limits with the active Codex runtime window", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ ...codexStatusModel, contextWindow: 400_000 }],
+            },
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [{ ...codexStatusModel, contextWindow: 258_000, contextTokens: 258_000 }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex-stale-context",
+        updatedAt: 0,
+        totalTokens: 181_000,
+        contextTokens: 400_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 181k/258k");
   });
 
   it("uses workspace-scoped auth evidence in /status auth labels", async () => {

@@ -17,6 +17,12 @@ let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePlugi
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
+type PluginLoadOptions = { logger?: Record<string, unknown> } & Record<string, unknown>;
+
+function firstPluginLoadOptions(mock: { mock: { calls: unknown[][] } }): PluginLoadOptions {
+  return (mock.mock.calls[0]?.[0] ?? {}) as PluginLoadOptions;
+}
+
 function createWebFetchEnv(overrides?: Partial<NodeJS.ProcessEnv>) {
   return {
     OPENCLAW_HOME: "/tmp/openclaw-home",
@@ -175,7 +181,7 @@ describe("resolvePluginWebFetchProviders", () => {
     });
 
     expect(providers).toStrictEqual([]);
-    const { logger: inFlightLogger, ...inFlightLoadOptions } = inFlightSpy.mock.calls[0]?.[0] ?? {};
+    const { logger: inFlightLogger, ...inFlightLoadOptions } = firstPluginLoadOptions(inFlightSpy);
     expect(Object.keys(inFlightLogger ?? {}).toSorted()).toEqual([
       "debug",
       "error",
@@ -204,7 +210,7 @@ describe("resolvePluginWebFetchProviders", () => {
         bundledAllowlistCompat: true,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -241,7 +247,7 @@ describe("resolvePluginWebFetchProviders", () => {
         workspaceDir: DEFAULT_WORKSPACE,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -291,7 +297,7 @@ describe("resolvePluginWebFetchProviders", () => {
       diagnostics: [],
       installRecords: {},
     });
-    const { logger, ...loadOptions } = loadOpenClawPluginsMock.mock.calls[0]?.[0] ?? {};
+    const { logger, ...loadOptions } = firstPluginLoadOptions(loadOpenClawPluginsMock);
     expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
     expect(loadOptions).toEqual({
       config: createFirecrawlAllowConfig(),

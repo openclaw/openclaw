@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import {
-  __testing,
+  testing,
   overlayExternalOAuthProfiles,
   shouldPersistExternalOAuthProfile,
 } from "./external-auth.js";
@@ -58,11 +58,11 @@ describe("auth external oauth helpers", () => {
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
-    __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
+    testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
   });
 
   afterEach(() => {
-    __testing.resetResolveExternalAuthProfilesForTest();
+    testing.resetResolveExternalAuthProfilesForTest();
   });
 
   it("overlays provider-managed runtime oauth profiles onto the store", () => {
@@ -96,7 +96,7 @@ describe("auth external oauth helpers", () => {
     });
 
     const resolveParams = requireRecord(
-      resolveExternalAuthProfilesWithPluginsMock.mock.calls[0]?.[0],
+      resolveExternalAuthProfilesWithPluginsMock.mock.calls.at(0)?.[0],
       "resolve external auth params",
     );
     expect(resolveParams.config).toBe(cfg);

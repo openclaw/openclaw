@@ -56,6 +56,16 @@ const hasKeyInEnv = vi.hoisted(() =>
 const listConfiguredWebSearchProviders = vi.hoisted(() =>
   vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
 );
+const hasAuthProfileForProvider = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      provider: string;
+      agentDir?: string;
+      includeExternalCli?: boolean;
+      type?: string;
+    }) => boolean
+  >(() => false),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -97,6 +107,10 @@ vi.mock("../commands/onboard-search.js", () => ({
   hasExistingKey,
   hasKeyInEnv,
   resolveExistingKey,
+}));
+
+vi.mock("../agents/tools/model-config.helpers.js", () => ({
+  hasAuthProfileForProvider,
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
@@ -165,7 +179,14 @@ function createRuntime(): RuntimeEnv {
 function createWebSearchProviderEntry(
   provider: Pick<
     PluginWebSearchProviderEntry,
-    "id" | "label" | "hint" | "envVars" | "placeholder" | "signupUrl" | "credentialPath"
+    | "id"
+    | "label"
+    | "hint"
+    | "envVars"
+    | "authProviderId"
+    | "placeholder"
+    | "signupUrl"
+    | "credentialPath"
   >,
 ): PluginWebSearchProviderEntry {
   return {
@@ -179,7 +200,8 @@ function createWebSearchProviderEntry(
 
 function expectFirstOnboardingInstallPlanCallOmitsToken() {
   const [firstArg] =
-    (buildGatewayInstallPlan.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+    (buildGatewayInstallPlan.mock.calls[0] as unknown as [Record<string, unknown>] | undefined) ??
+    [];
   if (!firstArg) {
     throw new Error("expected first onboarding install plan call");
   }
@@ -253,7 +275,7 @@ function expectNoteContains(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
+  expect(calls.filter((call) => call[0].includes(expected) && call[1] === title)).not.toEqual([]);
 }
 
 function expectNoteTitleNotCalled(
@@ -261,7 +283,7 @@ function expectNoteTitleNotCalled(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.every((call) => call[1] !== title)).toBe(true);
+  expect(calls.filter((call) => call[1] === title)).toEqual([]);
 }
 
 describe("finalizeSetupWizard", () => {
@@ -296,6 +318,8 @@ describe("finalizeSetupWizard", () => {
     hasKeyInEnv.mockReturnValue(false);
     listConfiguredWebSearchProviders.mockReset();
     listConfiguredWebSearchProviders.mockReturnValue([]);
+    hasAuthProfileForProvider.mockReset();
+    hasAuthProfileForProvider.mockReturnValue(false);
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -421,6 +445,61 @@ describe("finalizeSetupWizard", () => {
       message: "Wake up, my friend!",
       timeoutMs: 300_000,
     });
+  });
+
+  it("localizes the bootstrap hatch TUI seed message", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "你想如何启动 agent？") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    try {
+      await finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      });
+
+      expect(launchTuiCli).toHaveBeenCalledWith({
+        local: true,
+        deliver: false,
+        message: "醒醒，我的朋友！",
+        timeoutMs: 300_000,
+      });
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
   });
 
   it("restores terminal state after failed TUI hatch", async () => {
@@ -558,8 +637,33 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(1);
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-    expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service…");
+    expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service...");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+  });
+
+  it("localizes finalize non-prompt notes", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const prompter = createLaterPrompter();
+
+    try {
+      await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const noteMessages = (prompter.note as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+      String(call[0]),
+    );
+    expect(noteMessages.some((message) => message.includes("备份你的 agent 工作区"))).toBe(true);
+    expect(
+      noteMessages.some((message) => message.includes("在你的电脑上运行 agent 存在风险")),
+    ).toBe(true);
+    expect(noteMessages.some((message) => message.includes("已跳过 web search"))).toBe(true);
   });
 
   it("reports selected providers blocked by plugin policy as unavailable", async () => {
@@ -593,7 +697,7 @@ describe("finalizeSetupWizard", () => {
         credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
       }),
     ]);
-    hasExistingKey.mockImplementation((_config, provider) => provider === "perplexity");
+    hasExistingKey.mockImplementation((configForTest, provider) => provider === "perplexity");
 
     const prompter = createLaterPrompter();
 
@@ -618,7 +722,7 @@ describe("finalizeSetupWizard", () => {
         credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
       }),
     ]);
-    hasExistingKey.mockImplementation((_config, provider) => provider === "firecrawl");
+    hasExistingKey.mockImplementation((configForTest, provider) => provider === "firecrawl");
 
     const prompter = createLaterPrompter();
 
@@ -633,6 +737,67 @@ describe("finalizeSetupWizard", () => {
       prompter,
       "Web search is enabled, so your agent can look things up online when needed.",
       "Web search",
+    );
+  });
+
+  it("reports OAuth-backed web search as enabled without an API key", async () => {
+    listConfiguredWebSearchProviders.mockReturnValue([
+      createWebSearchProviderEntry({
+        id: "grok",
+        label: "Grok (xAI)",
+        hint: "Uses xAI OAuth or API key",
+        envVars: ["XAI_API_KEY"],
+        authProviderId: "xai",
+        placeholder: "xai-...",
+        signupUrl: "https://console.x.ai/",
+        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+      }),
+    ]);
+    hasAuthProfileForProvider.mockImplementation(
+      ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
+    );
+
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: {
+          tools: {
+            web: {
+              search: {
+                provider: "grok",
+                enabled: true,
+              },
+            },
+          },
+        },
+        prompter,
+      }),
+    );
+
+    expectNoteContains(
+      prompter,
+      "Web search is enabled, so your agent can look things up online when needed.",
+      "Web search",
+    );
+    expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
+    expect(
+      vi
+        .mocked(prompter.note)
+        .mock.calls.some(
+          ([message, title]) => title === "Web search" && message.includes("no API key"),
+        ),
+    ).toBe(false);
+    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+      }),
+    );
+    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+        type: "oauth",
+      }),
     );
   });
 
@@ -833,6 +998,6 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(note.mock.calls.every((call) => call[1] !== "Codex native search")).toBe(true);
+    expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });

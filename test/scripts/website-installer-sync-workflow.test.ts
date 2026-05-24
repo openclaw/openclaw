@@ -23,7 +23,8 @@ describe("website installer sync workflow", () => {
   it("verifies installers on Linux Docker plus native macOS and Windows runners", () => {
     expect(workflow).toContain("linux-docker:");
     expect(workflow).toContain("docker run --rm");
-    expect(workflow).toContain("bash /tmp/install.sh --no-prompt --no-onboard");
+    expect(workflow).toContain("bash /tmp/install.sh --version latest && openclaw --version");
+    expect(workflow).not.toContain("bash /tmp/install.sh --no-prompt --no-onboard");
     expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw");
     expect(workflow).toContain("macos-installer:");
     expect(workflow).toContain("runs-on: macos-latest");
@@ -42,7 +43,9 @@ describe("website installer sync workflow", () => {
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
     expect(workflow).toContain("needs: [static, linux-docker, macos-installer, windows-installer]");
     expect(workflow).toContain("repository: openclaw/openclaw.ai");
-    expect(workflow).toContain("token: ${{ secrets.OPENCLAW_GH_TOKEN }}");
+    expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
+    expect(workflow).toContain("OPENCLAW_GH_TOKEN is not configured");
+    expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
     expect(workflow).toContain("cp openclaw/scripts/install.sh openclaw.ai/public/install.sh");
     expect(workflow).toContain(
       "cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh",

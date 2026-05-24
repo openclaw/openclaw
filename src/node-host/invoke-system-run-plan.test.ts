@@ -65,6 +65,22 @@ function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function canWritePathSync(targetPath: string): boolean {
+  try {
+    fs.accessSync(targetPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
+  const realPath = fs.realpathSync(binaryPath);
+  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
+    canWritePathSync(entry),
+  );
+}
+
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
   if (fixture) {
     return {
@@ -646,7 +662,7 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
-  it("allows shell payloads that invoke absolute-path native binaries", () => {
+  it("handles shell payloads that invoke absolute-path native binaries", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -656,6 +672,10 @@ describe("hardenApprovedExecutionPaths", () => {
       rawCommand: binaryPath,
       cwd: process.cwd(),
     });
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      return;
+    }
     expect(prepared.ok).toBe(true);
     if (!prepared.ok) {
       throw new Error("unreachable");
@@ -945,22 +965,127 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
-    const tmp = createFixtureDir("openclaw-shell-option-value-");
-    const scriptPath = path.join(tmp, "run.sh");
-    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
-    fs.writeFileSync(path.join(tmp, "errexit"), "decoy\n");
-    const snapshot = resolveMutableFileOperandSnapshotSync({
-      argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
-      cwd: tmp,
-      shellCommand: null,
-    });
-    expect(snapshot).toEqual({
-      ok: true,
-      snapshot: {
-        argvIndex: 3,
-        path: fs.realpathSync(scriptPath),
-        sha256: sha256FileSync(scriptPath),
+    const cases = [
+      {
+        name: "separate set option",
+        argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
       },
-    });
+      {
+        name: "combined set option",
+        argv: ["/bin/bash", "-eo", "pipefail", "./run.sh"],
+        decoyName: "pipefail",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined trace option",
+        argv: ["/bin/bash", "-xo", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined unset option",
+        argv: ["/bin/bash", "-uo", "nounset", "./run.sh"],
+        decoyName: "nounset",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "plus set option",
+        argv: ["/bin/bash", "+o", "histexpand", "./run.sh"],
+        decoyName: "histexpand",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "plus shopt option",
+        argv: ["/bin/bash", "+O", "extglob", "./run.sh"],
+        decoyName: "extglob",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "combined plus set option",
+        argv: ["/bin/bash", "+eo", "pipefail", "./run.sh"],
+        decoyName: "pipefail",
+        expectedArgvIndex: 3,
+      },
+    ];
+
+    for (const testCase of cases) {
+      runNamedCase(testCase.name, () => {
+        const tmp = createFixtureDir("openclaw-shell-option-value-");
+        const scriptPath = path.join(tmp, "run.sh");
+        fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+        fs.writeFileSync(path.join(tmp, testCase.decoyName), "decoy\n");
+        const snapshot = resolveMutableFileOperandSnapshotSync({
+          argv: testCase.argv,
+          cwd: tmp,
+          shellCommand: null,
+        });
+        expect(snapshot).toEqual({
+          ok: true,
+          snapshot: {
+            argvIndex: testCase.expectedArgvIndex,
+            path: fs.realpathSync(scriptPath),
+            sha256: sha256FileSync(scriptPath),
+          },
+        });
+        if (!snapshot.ok || snapshot.snapshot === null) {
+          throw new Error("expected mutable file operand snapshot");
+        }
+        fs.writeFileSync(scriptPath, "#!/bin/sh\necho CHANGED\n");
+        expect(
+          revalidateApprovedMutableFileOperand({
+            snapshot: snapshot.snapshot,
+            argv: testCase.argv,
+            cwd: tmp,
+          }),
+        ).toBe(false);
+      });
+    }
+  });
+
+  it("captures fish script operands with plus-prefixed filenames", () => {
+    const cases = [
+      {
+        name: "plus-prefixed fish script",
+        argv: ["fish", "+setup.fish"],
+      },
+      {
+        name: "plus-prefixed fish script before script args",
+        argv: ["fish", "+setup.fish", "-c", "echo arg"],
+      },
+    ];
+
+    for (const testCase of cases) {
+      runNamedCase(testCase.name, () => {
+        const tmp = createFixtureDir("openclaw-fish-plus-script-");
+        const scriptPath = path.join(tmp, "+setup.fish");
+        fs.writeFileSync(scriptPath, "echo SAFE\n");
+        const snapshot = resolveMutableFileOperandSnapshotSync({
+          argv: testCase.argv,
+          cwd: tmp,
+          shellCommand: null,
+        });
+        expect(snapshot).toEqual({
+          ok: true,
+          snapshot: {
+            argvIndex: 1,
+            path: fs.realpathSync(scriptPath),
+            sha256: sha256FileSync(scriptPath),
+          },
+        });
+        if (!snapshot.ok || snapshot.snapshot === null) {
+          throw new Error("expected mutable file operand snapshot");
+        }
+        fs.writeFileSync(scriptPath, "echo CHANGED\n");
+        expect(
+          revalidateApprovedMutableFileOperand({
+            snapshot: snapshot.snapshot,
+            argv: testCase.argv,
+            cwd: tmp,
+          }),
+        ).toBe(false);
+      });
+    }
   });
 });

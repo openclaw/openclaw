@@ -126,6 +126,7 @@ type UpdateRunnerOptions = {
   tag?: string;
   channel?: UpdateChannel;
   devTargetRef?: string;
+  deferConfiguredPluginInstallRepair?: boolean;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -159,7 +160,7 @@ export type UpdateInstallSurface =
 
 function mapManagerResolutionFailure(
   reason: UpdatePackageManagerFailureReason,
-): UpdateRunResult["reason"] {
+): NonNullable<UpdateRunResult["reason"]> {
   return reason;
 }
 
@@ -168,6 +169,8 @@ const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
+  "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const PREFLIGHT_TEMP_PREFIX =
@@ -175,7 +178,7 @@ const PREFLIGHT_TEMP_PREFIX =
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_LOCAL_CHECK: "1",
   OPENCLAW_LOCAL_CHECK_MODE: "throttled",
@@ -223,7 +226,12 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
       dirs.push(packageRoot);
     }
   }
-  const proc = normalizeDir(process.cwd());
+  let proc: string | null = null;
+  try {
+    proc = normalizeDir(process.cwd());
+  } catch {
+    proc = null;
+  }
   if (proc) {
     dirs.push(proc);
   }
@@ -503,32 +511,44 @@ function shouldPreferIgnoreScriptsForWindowsPreflight(manager: "pnpm" | "bun" | 
   return process.platform === "win32" && manager === "pnpm";
 }
 
-function resolveWindowsBuildNodeOptions(baseOptions: string | undefined): string {
+function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   const current = baseOptions?.trim() ?? "";
-  const desired = `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`;
+  const desired = `--max-old-space-size=${BUILD_MAX_OLD_SPACE_MB}`;
   const existingMatch = /(?:^|\s)--max-old-space-size=(\d+)(?=\s|$)/.exec(current);
   if (!existingMatch) {
     return current ? `${current} ${desired}` : desired;
   }
   const existingValue = Number(existingMatch[1]);
-  if (Number.isFinite(existingValue) && existingValue >= WINDOWS_BUILD_MAX_OLD_SPACE_MB) {
+  if (Number.isFinite(existingValue) && existingValue >= BUILD_MAX_OLD_SPACE_MB) {
     return current;
   }
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-function resolveWindowsBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
-  if (process.platform !== "win32") {
-    return env;
-  }
+function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
   const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
-  const nextNodeOptions = resolveWindowsBuildNodeOptions(currentNodeOptions);
+  const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
   if (nextNodeOptions === currentNodeOptions) {
     return env;
   }
   return {
     ...env,
     NODE_OPTIONS: nextNodeOptions,
+  };
+}
+
+function resolveInstallEnv(
+  manager: "pnpm" | "bun" | "npm",
+  env?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | undefined {
+  if (manager !== "pnpm") {
+    return env;
+  }
+  return {
+    ...env,
+    PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
+    npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
+    pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
 }
 
@@ -745,7 +765,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const beforeVersion = await readPackageVersion(gitRoot);
     const channel: UpdateChannel = opts.channel ?? "dev";
     const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
-    const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
+    const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
@@ -764,6 +784,60 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         return buildGitErrorResult(reason);
       }
       return null;
+    };
+    const appendRecoveryStep = async (name: string, argv: string[]) => {
+      const started = Date.now();
+      const result = await runCommand(argv, { cwd: gitRoot, timeoutMs });
+      const recoveryStep: UpdateStepResult = {
+        name,
+        command: argv.join(" "),
+        cwd: gitRoot,
+        durationMs: Date.now() - started,
+        exitCode: result.code,
+        stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
+        stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
+      };
+      steps.push(recoveryStep);
+      return recoveryStep.exitCode === 0;
+    };
+    const rollbackGitCheckout = async () => {
+      if (!beforeSha) {
+        return;
+      }
+      await appendRecoveryStep("git rollback clean", ["git", "-C", gitRoot, "reset", "--hard"]);
+      if (branch && branch !== "HEAD") {
+        const checkedOutBranch = await appendRecoveryStep("git rollback checkout", [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          "--force",
+          branch,
+        ]);
+        if (checkedOutBranch) {
+          await appendRecoveryStep("git rollback reset", [
+            "git",
+            "-C",
+            gitRoot,
+            "reset",
+            "--hard",
+            beforeSha,
+          ]);
+        }
+        return;
+      }
+      await appendRecoveryStep("git rollback checkout", [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        beforeSha,
+      ]);
+    };
+    const buildGitErrorResultWithRollback = async (reason: string): Promise<UpdateRunResult> => {
+      await rollbackGitCheckout();
+      return buildGitErrorResult(reason);
     };
 
     const statusCheck = await runStep(
@@ -1009,9 +1083,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           const depsStepName = preflightIgnoreScripts
             ? `preflight deps install (ignore scripts) (${shortSha})`
             : `preflight deps install (${shortSha})`;
-          const depsStep = await runStep(
-            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
-          );
+          const installEnv = resolveInstallEnv(manager.manager, manager.env);
+          const depsStep = await runStep(step(depsStepName, depsStepArgv, worktreeDir, installEnv));
           steps.push(depsStep);
           let finalDepsStep = depsStep;
           if (
@@ -1026,7 +1099,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                   `preflight deps install (ignore scripts) (${shortSha})`,
                   retryArgv,
                   worktreeDir,
-                  manager.env,
+                  installEnv,
                 ),
               );
               steps.push(retryStep);
@@ -1042,7 +1115,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               `preflight build (${shortSha})`,
               managerScriptArgs(manager.manager, "build"),
               worktreeDir,
-              resolveWindowsBuildEnv(manager.env),
+              resolveBuildEnv(manager.env),
             ),
           );
           steps.push(buildStep);
@@ -1192,17 +1265,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       "require-preferred",
     );
     if (manager.kind === "missing-required") {
-      return {
-        status: "error",
-        mode: "git",
-        root: gitRoot,
-        reason: mapManagerResolutionFailure(manager.reason),
-        before: { sha: beforeSha, version: beforeVersion },
-        steps,
-        durationMs: Date.now() - startedAt,
-      };
+      return await buildGitErrorResultWithRollback(mapManagerResolutionFailure(manager.reason));
     }
     try {
+      const installEnv = resolveInstallEnv(manager.manager, manager.env);
       const depsStep = await runStep(
         step(
           "deps install",
@@ -1210,7 +1276,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             compatFallback: manager.fallback && manager.manager === "npm",
           }),
           gitRoot,
-          manager.env,
+          installEnv,
         ),
       );
       steps.push(depsStep);
@@ -1219,22 +1285,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
         if (retryArgv) {
           const retryStep = await runStep(
-            step("deps install (ignore scripts)", retryArgv, gitRoot, manager.env),
+            step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
           );
           steps.push(retryStep);
           finalDepsStep = retryStep;
         }
       }
       if (finalDepsStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "deps-install-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("deps-install-failed");
       }
 
       const buildStep = await runStep(
@@ -1242,20 +1300,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           "build",
           managerScriptArgs(manager.manager, "build"),
           gitRoot,
-          resolveWindowsBuildEnv(manager.env),
+          resolveBuildEnv(manager.env),
         ),
       );
       steps.push(buildStep);
       if (buildStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "build-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("build-failed");
       }
 
       const uiBuildStep = await runStep(
@@ -1263,15 +1313,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(uiBuildStep);
       if (uiBuildStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "ui-build-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("ui-build-failed");
       }
 
       const doctorEntry = path.join(gitRoot, "openclaw.mjs");
@@ -1288,15 +1330,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           exitCode: 1,
           stderrTail: `missing ${doctorEntry}`,
         });
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "doctor-entry-missing",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("doctor-entry-missing");
       }
 
       // Use --fix so that doctor auto-strips unknown config keys introduced by
@@ -1306,20 +1340,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          ...(opts.deferConfiguredPluginInstallRepair
+            ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
+            : {}),
           [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
         }),
       );
       steps.push(doctorStep);
       if (doctorStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "doctor-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        return await buildGitErrorResultWithRollback("doctor-failed");
       }
 
       const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
@@ -1343,15 +1372,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         steps.push(repairStep);
 
         if (repairResult.code !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "ui-build-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+          return await buildGitErrorResultWithRollback("ui-build-failed");
         }
 
         const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
@@ -1366,15 +1387,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             exitCode: 1,
             stderrTail: `missing ${uiIndexPath}`,
           });
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "ui-assets-missing",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+          return await buildGitErrorResultWithRollback("ui-assets-missing");
         }
       }
 
@@ -1459,6 +1472,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           return null;
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
+        const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
         return await runStep({
           runCommand,
           name: "openclaw doctor",
@@ -1468,6 +1482,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            ...(candidateHostVersion === null
+              ? {}
+              : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),
           },
           progress,
           stepIndex: 0,

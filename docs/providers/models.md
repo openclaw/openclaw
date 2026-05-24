@@ -32,7 +32,6 @@ model as `provider/model`.
 - [DeepInfra](/providers/deepinfra)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
-- [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
@@ -47,11 +46,11 @@ model as `provider/model`.
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI)](/providers/venice)
 - [xAI](/providers/xai)
-- [Z.AI](/providers/zai)
+- [Z.AI (GLM)](/providers/zai)
 
-## Additional bundled provider variants
+## Additional provider variants
 
-- `anthropic-vertex` - implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice
+- `anthropic-vertex` - install `@openclaw/anthropic-vertex-provider` for implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice
 - `copilot-proxy` - local VS Code Copilot Proxy bridge; use `openclaw onboard --auth-choice copilot-proxy`
 - `google-gemini-cli` - unofficial Gemini CLI OAuth flow; requires a local `gemini` install (`brew install gemini-cli` or `npm install -g @google/gemini-cli`); default model `google-gemini-cli/gemini-3-flash-preview`; use `openclaw onboard --auth-choice google-gemini-cli` or `openclaw models auth login --provider google-gemini-cli --set-default`
 

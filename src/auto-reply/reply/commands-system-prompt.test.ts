@@ -117,7 +117,7 @@ function requireFirstArg(
   mockFn: { mock: { calls: unknown[][] } },
   label: string,
 ): Record<string, unknown> {
-  const arg = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  const arg = mockFn.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
   if (!arg) {
     throw new Error(`expected ${label} to be called`);
   }
@@ -178,6 +178,11 @@ describe("resolveCommandsSystemPromptBundle", () => {
     );
     expect(toolParams.agentId).toBe("target");
     expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
+    const bootstrapParams = requireFirstArg(
+      vi.mocked(resolveBootstrapContextForRun),
+      "resolveBootstrapContextForRun",
+    );
+    expect(bootstrapParams.agentId).toBe("target");
   });
 
   it("prefers the target session entry for bootstrap and tool metadata", async () => {

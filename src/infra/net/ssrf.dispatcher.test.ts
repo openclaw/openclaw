@@ -73,8 +73,8 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
     },
   });
 
-  return (agentCtor.mock.calls.at(-1)?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })
-    ?.connect?.lookup;
+  const call = agentCtor.mock.calls[agentCtor.mock.calls.length - 1];
+  return (call?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })?.connect?.lookup;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -247,9 +247,7 @@ describe("createPinnedDispatcher", () => {
     const callback = vi.fn();
     lookup?.("example.com", callback);
 
-    const originalLookupCall = originalLookupMock.mock.calls[0];
-    expect(originalLookupCall?.[0]).toBe("example.com");
-    expect(typeof originalLookupCall?.[1]).toBe("function");
+    expect(originalLookupMock).toHaveBeenCalledWith("example.com", expect.any(Function));
     expect(callback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
   });
 
@@ -300,6 +298,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      clientFactory: expect.any(Function),
       allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
@@ -326,6 +325,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      clientFactory: expect.any(Function),
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -361,6 +361,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      clientFactory: expect.any(Function),
       requestTls: {
         autoSelectFamily: false,
         lookup,

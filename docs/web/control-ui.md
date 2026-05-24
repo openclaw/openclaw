@@ -56,6 +56,8 @@ If the browser is already paired and you change it from read access to write/adm
 
 Once approved, the device is remembered and won't require re-approval unless you revoke it with `openclaw devices revoke --device <id> --role <role>`. See [Devices CLI](/cli/devices) for token rotation and revocation.
 
+Paperclip agents that connect through the `openclaw_gateway` adapter use the same first-run approval flow. After the initial connection attempt, run `openclaw devices approve --latest` to preview the pending request, then rerun the printed `openclaw devices approve <requestId>` command to approve it. Pass explicit `--url` and `--token` values for a remote gateway. To keep approvals stable across restarts, configure a persistent `adapterConfig.devicePrivateKeyPem` in Paperclip instead of letting it generate a new ephemeral device identity each run.
+
 <Note>
 - Direct local loopback browser connections (`127.0.0.1` / `localhost`) are auto-approved.
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity.
@@ -89,6 +91,8 @@ Docs translations are generated for the same non-English locale set, but the doc
 
 The Appearance panel keeps the built-in Claw, Knot, and Dash themes, plus one browser-local tweakcn import slot. To import a theme, open [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied theme link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
 
+Appearance also includes a browser-local Text size setting. The setting is stored with the rest of Control UI preferences, applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
+
 Imported themes are stored only in the current browser profile. They are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches the active theme back to Claw if the imported theme was selected.
 
 ## What it can do (today)
@@ -121,6 +125,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Apply + restart with validation (`config.apply`) and wake the last active session.
     - Writes include a base-hash guard to prevent clobbering concurrent edits.
     - Writes (`config.set`/`config.apply`/`config.patch`) preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write.
+    - Form saves discard stale redacted placeholders that cannot be restored from the saved config while preserving redacted values that still map to saved secrets.
     - Schema + form rendering (`config.schema` / `config.schema.lookup`, including field `title` / `description`, matched UI hints, immediate child summaries, docs metadata on nested object/wildcard/array/composition nodes, plus plugin + channel schemas when available); Raw JSON editor is available only when the snapshot has a safe raw round-trip.
     - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot.
     - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
@@ -199,6 +204,8 @@ Imported themes are stored only in the current browser profile. They are not wri
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
 
+If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh the page. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
+
 | Surface                                               | What it does                                                       |
 | ----------------------------------------------------- | ------------------------------------------------------------------ |
 | `ui/public/manifest.webmanifest`                      | PWA manifest. Browsers offer "Install app" once it is reachable.   |
@@ -210,7 +217,7 @@ Override the VAPID keypair through env vars on the Gateway process when you want
 
 - `OPENCLAW_VAPID_PUBLIC_KEY`
 - `OPENCLAW_VAPID_PRIVATE_KEY`
-- `OPENCLAW_VAPID_SUBJECT` (defaults to `mailto:openclaw@localhost`)
+- `OPENCLAW_VAPID_SUBJECT` (defaults to `https://openclaw.ai`)
 
 The Control UI uses these scope-gated Gateway methods to register and test browser subscriptions:
 
@@ -468,7 +475,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
     - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
     - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
     - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-    - Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). This includes remote dev setups.
+    - Public non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin LAN/Tailnet loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing. It means allow any browser origin, not "match whatever host I am using."
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode, but it is a dangerous security mode.

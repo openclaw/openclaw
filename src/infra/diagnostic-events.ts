@@ -92,6 +92,36 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
+export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
+  type: "message.received";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchStartedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.started";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchCompletedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.completed";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+  durationMs: number;
+  outcome: "completed" | "skipped" | "error";
+  reason?: string;
+  error?: string;
+};
+
 export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   type: "message.processed";
   channel: string;
@@ -224,6 +254,16 @@ export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryB
   outcomeReason?: string;
   released?: number;
   stale?: boolean;
+};
+
+export type DiagnosticSessionTurnCreatedEvent = DiagnosticBaseEvent & {
+  type: "session.turn.created";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
+  trigger: "user" | "heartbeat";
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -458,6 +498,9 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
+  contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
 };
 
@@ -569,12 +612,26 @@ export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
   errorCategory?: string;
 };
 
+export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.async_queue.dropped";
+  droppedEvents: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  queueLength: number;
+  maxQueueLength: number;
+  drainBatchSize: number;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageReceivedEvent
+  | DiagnosticMessageDispatchStartedEvent
+  | DiagnosticMessageDispatchCompletedEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
@@ -586,6 +643,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionTurnCreatedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
@@ -613,6 +671,7 @@ export type DiagnosticEventPayload =
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
   | DiagnosticTelemetryExporterEvent
+  | DiagnosticAsyncQueueDroppedEvent
   | DiagnosticFailoverEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
@@ -643,9 +702,14 @@ type DiagnosticEventsGlobalState = {
   dispatchDepth: number;
   asyncQueue: QueuedDiagnosticEvent[];
   asyncDrainScheduled: boolean;
+  asyncDroppedEvents: number;
+  asyncDroppedTrustedEvents: number;
+  asyncDroppedUntrustedEvents: number;
+  asyncDroppedPriorityEvents: number;
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
@@ -668,6 +732,11 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "context.assembled",
   "log.record",
 ]);
+const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
+]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
   return {
@@ -678,6 +747,10 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     dispatchDepth: 0,
     asyncQueue: [],
     asyncDrainScheduled: false,
+    asyncDroppedEvents: 0,
+    asyncDroppedTrustedEvents: 0,
+    asyncDroppedUntrustedEvents: 0,
+    asyncDroppedPriorityEvents: 0,
   };
 }
 
@@ -701,6 +774,10 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   const globalRecord = globalThis as Record<PropertyKey, unknown>;
   const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
   if (isDiagnosticEventsState(existing)) {
+    existing.asyncDroppedEvents ??= 0;
+    existing.asyncDroppedTrustedEvents ??= 0;
+    existing.asyncDroppedUntrustedEvents ??= 0;
+    existing.asyncDroppedPriorityEvents ??= 0;
     return existing;
   }
   const state = createDiagnosticEventsState();
@@ -777,6 +854,37 @@ function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): Diagnos
   return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
 }
 
+function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
+  return entry.metadata.trusted && PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(entry.event.type);
+}
+
+function noteAsyncDiagnosticDrop(
+  state: DiagnosticEventsGlobalState,
+  entry: QueuedDiagnosticEvent,
+): void {
+  state.asyncDroppedEvents += 1;
+  if (entry.metadata.trusted) {
+    state.asyncDroppedTrustedEvents += 1;
+  } else {
+    state.asyncDroppedUntrustedEvents += 1;
+  }
+  if (isPriorityAsyncDiagnosticEvent(entry)) {
+    state.asyncDroppedPriorityEvents += 1;
+  }
+}
+
+function makeRoomForPriorityAsyncDiagnosticEvent(
+  state: DiagnosticEventsGlobalState,
+): QueuedDiagnosticEvent | undefined {
+  const nonPriorityIndex = state.asyncQueue.findIndex(
+    (entry) => !isPriorityAsyncDiagnosticEvent(entry),
+  );
+  if (nonPriorityIndex >= 0) {
+    return state.asyncQueue.splice(nonPriorityIndex, 1)[0];
+  }
+  return state.asyncQueue.shift();
+}
+
 function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -804,14 +912,48 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   state.asyncDrainScheduled = true;
   setImmediate(() => {
     state.asyncDrainScheduled = false;
-    const batch = state.asyncQueue.splice(0);
+    const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
       dispatchDiagnosticEvent(state, entry.event, entry.metadata);
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
+      return;
     }
+    dispatchAsyncDiagnosticDropSummary(state);
   });
+}
+
+function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState): void {
+  if (state.asyncDroppedEvents <= 0) {
+    return;
+  }
+  const droppedEvents = state.asyncDroppedEvents;
+  const droppedTrustedEvents = state.asyncDroppedTrustedEvents;
+  const droppedUntrustedEvents = state.asyncDroppedUntrustedEvents;
+  const droppedPriorityEvents = state.asyncDroppedPriorityEvents;
+  state.asyncDroppedEvents = 0;
+  state.asyncDroppedTrustedEvents = 0;
+  state.asyncDroppedUntrustedEvents = 0;
+  state.asyncDroppedPriorityEvents = 0;
+  const event = enrichDiagnosticEvent(state, {
+    type: "diagnostic.async_queue.dropped",
+    droppedEvents,
+    ...(droppedTrustedEvents > 0 ? { droppedTrustedEvents } : {}),
+    ...(droppedUntrustedEvents > 0 ? { droppedUntrustedEvents } : {}),
+    ...(droppedPriorityEvents > 0 ? { droppedPriorityEvents } : {}),
+    queueLength: state.asyncQueue.length,
+    maxQueueLength: MAX_ASYNC_DIAGNOSTIC_EVENTS,
+    drainBatchSize: MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN,
+  });
+  dispatchDiagnosticEvent(state, event, { trusted: false });
+}
+
+export async function waitForDiagnosticEventsDrained(): Promise<void> {
+  const state = getDiagnosticEventsState();
+  while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function enrichDiagnosticEvent(
@@ -843,7 +985,14 @@ function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: bool
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
-      return;
+      if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+        noteAsyncDiagnosticDrop(state, { event: enriched, metadata });
+        return;
+      }
+      const droppedEntry = makeRoomForPriorityAsyncDiagnosticEvent(state);
+      if (droppedEntry) {
+        noteAsyncDiagnosticDrop(state, droppedEntry);
+      }
     }
     state.asyncQueue.push({ event: enriched, metadata });
     scheduleAsyncDiagnosticDrain(state);
@@ -876,6 +1025,24 @@ export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): ()
   };
 }
 
+export function hasPendingInternalDiagnosticEvent(
+  predicate: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => boolean,
+): boolean {
+  const state = getDiagnosticEventsState();
+  for (const entry of state.asyncQueue) {
+    let event: DiagnosticEventPayload;
+    try {
+      event = cloneDiagnosticEventForListener(entry.event);
+    } catch {
+      continue;
+    }
+    if (predicate(event, Object.freeze({ ...entry.metadata }))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted || event.type === "log.record") {
@@ -903,4 +1070,8 @@ export function resetDiagnosticEventsForTest(): void {
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;
+  state.asyncDroppedEvents = 0;
+  state.asyncDroppedTrustedEvents = 0;
+  state.asyncDroppedUntrustedEvents = 0;
+  state.asyncDroppedPriorityEvents = 0;
 }

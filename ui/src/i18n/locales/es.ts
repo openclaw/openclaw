@@ -348,6 +348,12 @@ export const es: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -695,10 +701,6 @@ export const es: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconocido",
@@ -1048,6 +1050,10 @@ export const es: TranslationMap = {
     settings: "Configuración del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
+    autoScrollMode: "Modo de desplazamiento automático",
+    autoScrollAlways: "Siempre",
+    autoScrollNearBottom: "Cerca del final",
+    autoScrollOff: "Desactivado",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
     hideCronSessions: "Ocultar sesiones de cron",
     showCronSessions: "Mostrar sesiones de cron",
@@ -1091,11 +1097,16 @@ export const es: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Sigo escuchando",
+      talkTranscript: "Transcripción de voz",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "Filtrar sesiones por agente",
       session: "Chat session",
+      sessionSearch: "Buscar sesiones",
+      clearSessionSearch: "Borrar búsqueda de sesiones",
+      loadMoreSessions: "Cargar más sesiones",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1208,6 +1219,9 @@ export const es: TranslationMap = {
       ascending: "Ascendente",
       descending: "Descendente",
       reset: "Restablecer",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No hay tareas coincidentes.",
       loading: "Cargando...",
       loadMore: "Cargar más tareas",
@@ -1243,6 +1257,7 @@ export const es: TranslationMap = {
     form: {
       editJob: "Editar tarea",
       newJob: "Nueva tarea",
+      advancedJob: "Advanced job",
       updateSubtitle: "Actualiza la tarea programada seleccionada.",
       createSubtitle: "Crea una activación programada o ejecución de agente.",
       required: "Requerido",

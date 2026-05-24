@@ -17,15 +17,18 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import type { MessagingToolSourceReplyPayload } from "./pi-embedded-messaging.types.js";
 import { mergeEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -34,6 +37,7 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import {
   extractToolResultMediaArtifact,
+  extractToolErrorCode,
   extractMessagingToolSend,
   extractToolErrorMessage,
   extractToolResultText,
@@ -66,6 +70,19 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+
+function isMiddlewareToolResultError(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = (result as { details?: unknown }).details;
+  return Boolean(
+    details &&
+    typeof details === "object" &&
+    !Array.isArray(details) &&
+    (details as { middlewareError?: unknown }).middlewareError === true,
+  );
+}
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
   return execApprovalReplyModuleLoader.load();
@@ -341,16 +358,35 @@ function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): 
 function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushUniqueMediaUrl(urls, seen, attachment.media);
+    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.path);
+    pushUniqueMediaUrl(urls, seen, attachment.filePath);
+    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
+    pushUniqueMediaUrl(urls, seen, attachment.url);
+  };
 
   pushUniqueMediaUrl(urls, seen, record.media);
   pushUniqueMediaUrl(urls, seen, record.mediaUrl);
   pushUniqueMediaUrl(urls, seen, record.path);
   pushUniqueMediaUrl(urls, seen, record.filePath);
+  pushUniqueMediaUrl(urls, seen, record.fileUrl);
 
   const mediaUrls = record.mediaUrls;
   if (Array.isArray(mediaUrls)) {
     for (const mediaUrl of mediaUrls) {
       pushUniqueMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  const attachments = record.attachments;
+  if (Array.isArray(attachments)) {
+    for (const attachment of attachments) {
+      pushAttachment(attachment);
     }
   }
 
@@ -389,6 +425,87 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   }
 
   return urls;
+}
+
+function readRecordField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readStringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const strings = value.filter(
+    (item): item is string => typeof item === "string" && item.trim().length > 0,
+  );
+  return strings.length ? strings : undefined;
+}
+
+function copyRecordField(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = record[key];
+  return readRecordField(value) ? { ...(value as Record<string, unknown>) } : undefined;
+}
+
+function extractMessagingToolSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetailsRecord(result);
+  if (!details || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
+  if (status && status !== "sent") {
+    return undefined;
+  }
+  const sourceReply = readRecordField(details.sourceReply) ?? details;
+  const payload: MessagingToolSourceReplyPayload = {};
+  const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
+  if (text) {
+    payload.text = text;
+  }
+  const mediaUrl = readStringField(sourceReply, "mediaUrl") ?? readStringField(details, "mediaUrl");
+  if (mediaUrl) {
+    payload.mediaUrl = mediaUrl;
+  }
+  const mediaUrls =
+    readStringArrayField(sourceReply, "mediaUrls") ?? readStringArrayField(details, "mediaUrls");
+  if (mediaUrls) {
+    payload.mediaUrls = mediaUrls;
+  }
+  const audioAsVoice =
+    sourceReply.audioAsVoice === true || details.audioAsVoice === true ? true : undefined;
+  if (audioAsVoice) {
+    payload.audioAsVoice = true;
+  }
+  const presentation = normalizeMessagePresentation(sourceReply.presentation);
+  if (presentation) {
+    payload.presentation = presentation;
+  }
+  const interactive = normalizeInteractiveReply(sourceReply.interactive);
+  if (interactive) {
+    payload.interactive = interactive;
+  }
+  const channelData = copyRecordField(sourceReply, "channelData");
+  if (channelData) {
+    payload.channelData = channelData;
+  }
+  const idempotencyKey =
+    readStringField(sourceReply, "idempotencyKey") ?? readStringField(details, "idempotencyKey");
+  if (idempotencyKey) {
+    payload.idempotencyKey = idempotencyKey;
+  }
+  return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
 function queuePendingToolMedia(
@@ -911,15 +1028,25 @@ export async function handleToolExecutionEnd(
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
   ctx.state.toolMetas.push({ toolName, meta });
+  const acceptedSessionSpawn =
+    toolName === "sessions_spawn" && !isToolError
+      ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
+      : null;
+  if (acceptedSessionSpawn) {
+    ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
+  }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
+    const errorCode = extractToolErrorCode(sanitizedResult);
     ctx.state.lastToolError = {
       toolName,
       meta,
+      ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
       fileTarget: callSummary?.fileTarget,
@@ -941,7 +1068,7 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
-  if (completedMutatingAction) {
+  if (completedMutatingAction || acceptedSessionSpawn) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -987,6 +1114,11 @@ export async function handleToolExecutionEnd(
   if (!isToolError && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
+      ctx.trimMessagingToolSent();
+    }
+    const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
+    if (sourceReplyPayload) {
+      ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
       ctx.trimMessagingToolSent();
     }
   }

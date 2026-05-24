@@ -22,7 +22,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -274,7 +274,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {

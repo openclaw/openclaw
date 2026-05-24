@@ -78,6 +78,30 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
+function makeTurnRuntime(): GatewayPluginRuntime["channel"]["turn"] {
+  return {
+    run: vi.fn(async (rawParams: unknown) => {
+      const params = rawParams as {
+        raw: unknown;
+        adapter: {
+          ingest: (raw: unknown) => unknown;
+          resolveTurn: (...args: unknown[]) => unknown;
+        };
+      };
+      const input = await params.adapter.ingest(params.raw);
+      const turn = (await params.adapter.resolveTurn(
+        input,
+        {
+          canStartAgentTurn: true,
+          kind: "message",
+        },
+        {},
+      )) as { runDispatch: () => Promise<unknown> };
+      return { dispatchResult: await turn.runDispatch() };
+    }),
+  };
+}
+
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
@@ -123,27 +147,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
-        run: vi.fn(async (rawParams: unknown) => {
-          const params = rawParams as {
-            raw: unknown;
-            adapter: {
-              ingest: (raw: unknown) => unknown;
-              resolveTurn: (...args: unknown[]) => unknown;
-            };
-          };
-          const input = await params.adapter.ingest(params.raw);
-          const turn = (await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          )) as { runDispatch: () => Promise<unknown> };
-          return { dispatchResult: await turn.runDispatch() };
-        }),
-      },
+      turn: makeTurnRuntime(),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -202,7 +206,7 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
-    const sentMedia = sendMediaMock.mock.calls[0]?.[0] as
+    const sentMedia = sendMediaMock.mock.calls.at(0)?.[0] as
       | { kind?: string; source?: unknown; msgId?: string; ttsText?: string }
       | undefined;
     expect(sentMedia?.kind).toBe("voice");

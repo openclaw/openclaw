@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { createDiagnosticsPrometheusExporter, __test__ } from "./service.js";
+import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
 
 const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
 const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
@@ -11,9 +11,9 @@ function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
 
 describe("diagnostics-prometheus service", () => {
   it("records trusted run metrics without raw diagnostic identifiers", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -30,7 +30,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain("# TYPE openclaw_run_completed_total counter");
     expect(rendered).toContain(
@@ -44,9 +44,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("records hook-blocked run metrics with safe blocker originator only", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -64,7 +64,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1',
@@ -75,9 +75,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("drops untrusted plugin-emitted diagnostic events", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -91,13 +91,45 @@ describe("diagnostics-prometheus service", () => {
       untrusted,
     );
 
-    expect(__test__.renderPrometheusMetrics(store)).toBe("");
+    expect(testApi.renderPrometheusMetrics(store)).toBe("");
+  });
+
+  it("records trusted async diagnostic queue drop summaries", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
+        droppedTrustedEvents: 1,
+        droppedUntrustedEvents: 2,
+        queueLength: 0,
+        maxQueueLength: 10_000,
+        drainBatchSize: 100,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2',
+    );
+    expect(rendered).toContain("openclaw_diagnostic_async_queue_length 0");
   });
 
   it("redacts and bounds label values", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -109,7 +141,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool"} 1',
@@ -118,10 +150,74 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("sk-secret");
   });
 
-  it("bounds messaging labels without exporting raw chat identifiers", () => {
-    const store = __test__.createPrometheusMetricStore();
+  it("drops session-shaped agent labels", () => {
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        agentId: "Agent:qa:otel-trace-smoke",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 12 },
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+    );
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("drops session-shaped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "session:Agent:qa:otel-trace-smoke",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="session"} 2');
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("keeps only the bounded prefix from scoped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "dreaming-narrative:session-main",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="dreaming-narrative"} 2');
+    expect(rendered).not.toContain("session-main");
+  });
+
+  it("bounds messaging labels without exporting raw chat identifiers", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -132,7 +228,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -146,7 +242,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -159,7 +255,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1',
@@ -176,10 +272,97 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("progress draft");
   });
 
-  it("records session recovery and talk metrics without exporting raw ids or content", () => {
-    const store = __test__.createPrometheusMetricStore();
+  it("records inbound dispatch and session turn telemetry", () => {
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.received",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.started",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram",
+        source: "webhook",
+        durationMs: 250,
+        outcome: "completed",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram/custom",
+        source: "webhook with secret sk-test",
+        durationMs: 300,
+        outcome: "completed",
+        reason: "progress draft / message tool 123",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.turn.created",
+        runId: "run-should-not-export",
+        agentId: "agent.default",
+        channel: "telegram",
+        trigger: "user",
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="unknown",outcome="completed",reason="none",source="unknown"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="unknown",outcome="completed",reason="none",source="unknown"} 0.3',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+  });
+
+  it("records session recovery and talk metrics without exporting raw ids or content", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -198,7 +381,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -215,7 +398,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1',
@@ -236,10 +419,10 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("caps metric series growth and reports dropped series", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
     for (let index = 0; index < 2100; index += 1) {
-      __test__.recordDiagnosticEvent(
+      testApi.recordDiagnosticEvent(
         store,
         {
           ...baseEvent(),
@@ -254,7 +437,7 @@ describe("diagnostics-prometheus service", () => {
       );
     }
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain("# TYPE openclaw_prometheus_series_dropped_total counter");
     expect(rendered).toContain("openclaw_prometheus_series_dropped_total ");

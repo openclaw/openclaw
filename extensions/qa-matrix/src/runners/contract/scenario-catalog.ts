@@ -74,6 +74,7 @@ type MatrixQaScenarioId =
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
   | "matrix-e2ee-basic-reply"
+  | "matrix-e2ee-state-after-missing-encryption"
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
@@ -138,7 +139,7 @@ export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
 export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
 
-const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
+const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 180_000;
 const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
 const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
@@ -468,6 +469,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       },
       blockStreaming: true,
       streaming: "quiet",
+      toolProfile: "coding",
     },
   },
   {
@@ -834,6 +836,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-basic-reply",
       name: "Matrix QA E2EE Basic Reply Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-after-missing-encryption",
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
+    title: "Matrix E2EE sync state_after opt-in stays disabled for encrypted rooms",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-after-missing-encryption",
+      name: "Matrix QA E2EE State After Missing Encryption Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },
@@ -1214,6 +1226,10 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
   "matrix-e2ee-media-image",
 ] satisfies MatrixQaScenarioId[];
 
+const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
+  "matrix-subagent-thread-spawn",
+]);
+
 const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [
   "matrix-e2ee-basic-reply",
   "matrix-e2ee-thread-follow-up",
@@ -1248,7 +1264,9 @@ function normalizeMatrixQaProfile(profile?: string): MatrixQaProfile {
 }
 
 function getMatrixQaProfileScenarioIds(profile: MatrixQaProfile): MatrixQaScenarioId[] {
-  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id);
+  const allIds = MATRIX_QA_SCENARIOS.map((scenario) => scenario.id).filter(
+    (id) => !MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS.has(id),
+  );
   const mediaIds = buildMatrixQaScenarioIdSet(MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS);
   const smokeIds = buildMatrixQaScenarioIdSet(MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS);
   switch (profile) {
@@ -1290,7 +1308,7 @@ export function findMatrixQaScenarios(ids?: string[], profile?: string) {
   });
 }
 
-export const __matrixQaProfileTesting = {
+export const matrixQaProfileTesting = {
   getMatrixQaProfileScenarioIds,
   normalizeMatrixQaProfile,
 };

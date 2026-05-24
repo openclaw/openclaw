@@ -103,12 +103,14 @@ async function runPollAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
+  inboundEventKind?: "user_request" | "room_event";
 }) {
   await runMessageAction({
     cfg: params.cfg,
     action: "poll",
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
+    inboundEventKind: params.inboundEventKind,
   });
   const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
     resolveCorePoll?: () => {
@@ -116,7 +118,7 @@ async function runPollAction(params: {
       maxSelections?: number;
       threadId?: string;
     };
-    ctx?: { params?: Record<string, unknown> };
+    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
   };
   return {
     ...call.resolveCorePoll?.(),
@@ -187,6 +189,21 @@ describe("runMessageAction poll handling", () => {
     expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it("passes inbound event kind to poll execution", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      inboundEventKind: "room_event",
+    });
+
+    expect(call?.ctx?.inboundEventKind).toBe("room_event");
   });
 
   it("expands maxSelections when pollMulti is enabled", async () => {

@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
+import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
@@ -547,7 +547,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const priorStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     try {
-      _resetIMessageShortIdState();
+      resetIMessageShortIdState();
       rememberIMessageReplyCache({
         accountId: "default",
         messageId: "p:0/imsg-production",
@@ -577,7 +577,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         isKnownFromMeMessageId: undefined,
       });
 
-      expect(decision).toMatchObject({ kind: "reaction" });
+      expect(decision.kind).toBe("reaction");
       if (decision.kind !== "reaction") {
         throw new Error("expected reaction decision");
       }
@@ -585,7 +585,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
       );
     } finally {
-      _resetIMessageShortIdState();
+      resetIMessageShortIdState();
       if (priorStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -685,7 +685,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
 describe("resolveIMessageReactionContext", () => {
   it("detects legacy tapback text without treating normal prose as a reaction", () => {
-    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toMatchObject({
+    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toStrictEqual({
       action: "added",
       emoji: "❤️",
       targetText: "Hello",
@@ -699,7 +699,12 @@ describe("resolveIMessageReactionContext", () => {
         { is_tapback: true, reaction_emoji: "👍", reacted_to_guid: "target" },
         "",
       ),
-    ).toMatchObject({ action: "added", emoji: "👍", targetGuid: "target" });
+    ).toStrictEqual({
+      action: "added",
+      emoji: "👍",
+      targetGuid: "target",
+      targetGuids: ["target"],
+    });
     expect(
       resolveIMessageReactionContext(
         {
@@ -709,14 +714,20 @@ describe("resolveIMessageReactionContext", () => {
         },
         "Loved “tapback proof”",
       ),
-    ).toMatchObject({
+    ).toStrictEqual({
       action: "added",
       emoji: "❤️",
       targetGuid: "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+      targetGuids: [
+        "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+        "p:0/321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+      ],
     });
-    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toMatchObject({
+    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toStrictEqual({
       action: "added",
       emoji: "reaction",
+      targetGuid: undefined,
+      targetGuids: [],
     });
     expect(resolveIMessageReactionContext({ associated_message_type: 1 }, "ok")).toBeNull();
   });
@@ -858,7 +869,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     fs.rmSync(tempStateDir, { recursive: true, force: true });
   });
   beforeEach(() => {
-    _resetIMessageShortIdState();
+    resetIMessageShortIdState();
     try {
       fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
     } catch {

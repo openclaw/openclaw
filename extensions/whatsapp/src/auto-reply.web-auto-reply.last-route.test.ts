@@ -7,12 +7,12 @@ import {
   installWebAutoReplyUnitTestHooks,
   makeSessionStore,
 } from "./auto-reply.test-harness.js";
+import { buildMentionConfig } from "./auto-reply/mentions.js";
+import { createEchoTracker } from "./auto-reply/monitor/echo.js";
+import { awaitBackgroundTasks } from "./auto-reply/monitor/last-route.js";
+import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
-let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
-let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionConfig;
-let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
-let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
 
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
@@ -100,13 +100,8 @@ function buildInboundMessage(params: {
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
-    ({ awaitBackgroundTasks } = await import("./auto-reply/monitor/last-route.js"));
-    ({ buildMentionConfig } = await import("./auto-reply/mentions.js"));
-    ({ createEchoTracker } = await import("./auto-reply/monitor/echo.js"));
-    ({ createWebOnMessageHandler } = await import("./auto-reply/monitor/on-message.js"));
   });
 
   it("updates last-route for direct chats without senderE164", async () => {
@@ -136,7 +131,7 @@ describe("web auto-reply last-route", () => {
     await awaitBackgroundTasks(backgroundTasks);
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
-    const updateParams = updateLastRouteInBackgroundMock.mock.calls[0]?.[0] as
+    const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
       | Record<string, unknown>
       | undefined;
     expect(updateParams?.cfg).toBe(cfg);
@@ -175,6 +170,13 @@ describe("web auto-reply last-route", () => {
       ChatType: "direct",
       CommandAuthorized: undefined,
       ConversationLabel: "+1000",
+      CommandSource: undefined,
+      CommandTurn: {
+        authorized: false,
+        body: "hello",
+        kind: "normal",
+        source: "message",
+      },
       GroupMembers: "+1000",
       GroupSubject: undefined,
       GroupSystemPrompt: undefined,
@@ -239,7 +241,7 @@ describe("web auto-reply last-route", () => {
     await awaitBackgroundTasks(backgroundTasks);
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
-    const updateParams = updateLastRouteInBackgroundMock.mock.calls[0]?.[0] as
+    const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
       | Record<string, unknown>
       | undefined;
     expect(updateParams?.cfg).toBe(cfg);

@@ -55,7 +55,25 @@ function lowCardinalityLabel(value: string | undefined, fallback = "unknown"): s
     return fallback;
   }
   const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function lowCardinalityQueueLaneLabel(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:")) {
+    return fallback;
+  }
+  const scopedLaneIndex = redacted.indexOf(":");
+  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
+  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
 }
 
 function numericValue(value: number | undefined): number | undefined {
@@ -538,6 +556,45 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "message.received":
+      store.counter("openclaw_message_received_total", "Inbound messages received by channel.", {
+        channel: lowCardinalityLabel(evt.channel),
+        source: lowCardinalityLabel(evt.source),
+      });
+      return;
+    case "message.dispatch.started":
+      store.counter(
+        "openclaw_message_dispatch_started_total",
+        "Inbound message dispatch attempts started by channel.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      return;
+    case "message.dispatch.completed":
+      store.counter(
+        "openclaw_message_dispatch_completed_total",
+        "Inbound message dispatch attempts completed by outcome.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      store.histogram(
+        "openclaw_message_dispatch_duration_seconds",
+        "Inbound message dispatch duration in seconds.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+        seconds(evt.durationMs),
+      );
+      return;
     case "message.delivery.completed":
     case "message.delivery.error":
       store.counter(
@@ -604,7 +661,7 @@ function recordDiagnosticEvent(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
         {
-          lane: lowCardinalityLabel(evt.lane),
+          lane: lowCardinalityQueueLaneLabel(evt.lane),
         },
         numericValue(evt.queueSize),
       );
@@ -612,7 +669,7 @@ function recordDiagnosticEvent(
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: lowCardinalityLabel(evt.lane) },
+          { lane: lowCardinalityQueueLaneLabel(evt.lane) },
           seconds(evt.waitMs),
         );
       }
@@ -632,6 +689,13 @@ function recordDiagnosticEvent(
           numericValue(evt.queueDepth),
         );
       }
+      return;
+    case "session.turn.created":
+      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
+        agent: lowCardinalityLabel(evt.agentId),
+        channel: lowCardinalityLabel(evt.channel),
+        trigger: evt.trigger,
+      });
       return;
     case "diagnostic.memory.sample":
       store.gauge(
@@ -668,6 +732,44 @@ function recordDiagnosticEvent(
           level: evt.level,
           reason: evt.reason,
         },
+      );
+      return;
+    case "diagnostic.async_queue.dropped":
+      store.counter(
+        "openclaw_diagnostic_async_queue_dropped_total",
+        "Async diagnostic queue drops by dropped event class.",
+        { drop_class: "total" },
+        numericValue(evt.droppedEvents),
+      );
+      if (evt.droppedTrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "trusted" },
+          numericValue(evt.droppedTrustedEvents),
+        );
+      }
+      if (evt.droppedUntrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "untrusted" },
+          numericValue(evt.droppedUntrustedEvents),
+        );
+      }
+      if (evt.droppedPriorityEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "priority" },
+          numericValue(evt.droppedPriorityEvents),
+        );
+      }
+      store.gauge(
+        "openclaw_diagnostic_async_queue_length",
+        "Latest async diagnostic queue length after a drop summary.",
+        {},
+        numericValue(evt.queueLength),
       );
       return;
     case "diagnostic.heartbeat":
@@ -751,8 +853,9 @@ export function createDiagnosticsPrometheusExporter() {
   };
 }
 
-export const __test__ = {
+export const testApi = {
   createPrometheusMetricStore,
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
+export { testApi as __test__ };

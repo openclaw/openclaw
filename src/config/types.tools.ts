@@ -205,6 +205,35 @@ export type ToolSearchConfig =
       maxSearchLimit?: number;
     };
 
+export type CodeModeConfig =
+  | boolean
+  | {
+      /** Enable generic OpenClaw code mode. Default: false. */
+      enabled?: boolean;
+      /** Guest runtime. Only quickjs-wasi is supported. */
+      runtime?: "quickjs-wasi";
+      /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
+      mode?: "only";
+      /** Accepted source languages. */
+      languages?: Array<"javascript" | "typescript">;
+      /** Wall-clock limit in milliseconds for one exec or wait call. */
+      timeoutMs?: number;
+      /** QuickJS heap limit in bytes. */
+      memoryLimitBytes?: number;
+      /** Maximum serialized output bytes. */
+      maxOutputBytes?: number;
+      /** Maximum serialized snapshot bytes. */
+      maxSnapshotBytes?: number;
+      /** Maximum concurrent nested tool calls. */
+      maxPendingToolCalls?: number;
+      /** Retention for suspended snapshots. */
+      snapshotTtlSeconds?: number;
+      /** Default search result count for tools.search. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count for tools.search. */
+      maxSearchLimit?: number;
+    };
+
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
 export type ToolPolicyConfig = {
@@ -341,6 +370,8 @@ export type AgentToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -657,10 +688,10 @@ export type ToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
+  /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
+  codeMode?: CodeModeConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
-    model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
       /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */

@@ -9,6 +9,19 @@ export const SessionCompactionCheckpointReasonSchema = Type.Union([
   Type.Literal("timeout-retry"),
 ]);
 
+export const SessionOperationEventSchema = Type.Object(
+  {
+    operationId: NonEmptyString,
+    operation: Type.Literal("compact"),
+    phase: Type.Union([Type.Literal("start"), Type.Literal("end")]),
+    sessionKey: NonEmptyString,
+    ts: Type.Integer({ minimum: 0 }),
+    completed: Type.Optional(Type.Boolean()),
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionCompactionTranscriptReferenceSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -43,6 +56,7 @@ export const SessionsListParamsSchema = Type.Object(
      * to keep large session stores from monopolizing the event loop.
      */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
@@ -156,6 +170,7 @@ export const SessionsAbortParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -194,6 +209,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
+    inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
@@ -336,8 +353,10 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
 
 export const SessionsUsageParamsSchema = Type.Object(
   {
-    /** Specific session key to analyze; if omitted returns all sessions. */
+    /** Specific session key to analyze; if omitted returns sessions for the effective agent. */
     key: Type.Optional(NonEmptyString),
+    /** Agent scope for list-style usage queries. */
+    agentId: Type.Optional(NonEmptyString),
     /** Start date for range filter (YYYY-MM-DD). */
     startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
     /** End date for range filter (YYYY-MM-DD). */

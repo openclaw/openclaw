@@ -7,6 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../agents/cli-session.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -23,6 +24,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  canonicalizeAbsoluteSessionFilePath,
+  rewriteSessionFileForNewSessionId,
+} from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -43,6 +48,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
+import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -57,6 +63,35 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveResetSessionFile(params: {
+  nextSessionId: string;
+  currentEntry?: SessionEntry;
+  storePath: string;
+  agentId: string;
+}): string {
+  const currentEntry = params.currentEntry;
+  const rewrittenSessionFile = currentEntry?.sessionId
+    ? rewriteSessionFileForNewSessionId({
+        sessionFile: currentEntry.sessionFile,
+        previousSessionId: currentEntry.sessionId,
+        nextSessionId: params.nextSessionId,
+      })
+    : undefined;
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
+  return resolveSessionFilePath(
+    params.nextSessionId,
+    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
+    resolveSessionFilePathOptions({
+      storePath: params.storePath,
+      agentId: params.agentId,
+    }),
+  );
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -77,6 +112,7 @@ export function archiveSessionTranscriptsForSession(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
@@ -87,6 +123,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
     return [];
@@ -97,6 +134,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+    onArchiveError: params.onArchiveError,
   });
 }
 
@@ -521,6 +559,52 @@ async function ensureFreshAcpResetState(params: {
   });
 }
 
+async function closeChildAcpRuntimesForParent(params: {
+  cfg: OpenClawConfig;
+  parentKey: string;
+  reason: "session-reset" | "session-delete";
+}): Promise<void> {
+  // Enumerate across every agent session store, not just the parent's: ACP
+  // spawns create child keys under the target agent (`agent:<targetAgentId>:acp:…`)
+  // whose entries live in that agent's store, which is a different file from the
+  // parent's under the default per-agent layout. The combined gateway store
+  // aggregates all agent stores under canonical keys (same source the dashboard
+  // session list uses).
+  let children: Array<{ sessionKey: string; entry: SessionEntry }>;
+  try {
+    children = findDirectChildSessionsForParent({
+      cfg: params.cfg,
+      parentKey: params.parentKey,
+    }).filter(({ entry }) => entry.acp);
+  } catch (error) {
+    logVerbose(
+      `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
+    );
+    return;
+  }
+  // Close only direct ACP-backed children of the session being mutated; the
+  // parent itself is closed separately by the caller. Without this, child ACP
+  // sessions spawned via sessions_spawn are orphaned on parent reset/delete.
+  // Close children concurrently so total latency is bounded by a single ACP
+  // cleanup timeout window rather than scaling with the number of stuck
+  // children; per-child failures are logged best-effort and never propagated,
+  // so a stuck child cannot block or fail the parent mutation.
+  await Promise.allSettled(
+    children.map(({ sessionKey, entry }) =>
+      closeAcpRuntimeForSession({
+        cfg: params.cfg,
+        sessionKey,
+        entry,
+        reason: params.reason,
+      }).then((childError) => {
+        if (childError) {
+          logVerbose(`sessions.${params.reason}: child ACP cleanup incomplete for ${sessionKey}`);
+        }
+      }),
+    ),
+  );
+}
+
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -550,12 +634,18 @@ export async function cleanupSessionBeforeMutation(params: {
       `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
     );
   }
-  return await closeAcpRuntimeForSession({
+  const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
     entry: params.entry,
     reason: params.reason,
   });
+  await closeChildAcpRuntimesForParent({
+    cfg: params.cfg,
+    parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
+    reason: params.reason,
+  });
+  return parentAcpError;
 }
 
 export async function emitGatewayBeforeResetPluginHook(params: {
@@ -683,14 +773,12 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
+    const sessionFile = resolveResetSessionFile({
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+      currentEntry,
+      storePath,
+      agentId: sessionAgentId,
+    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,
@@ -758,6 +846,15 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
+    // Drop CLI provider bindings so the next turn after reset starts a fresh
+    // CLI conversation on the provider side. Preserved only for spawned
+    // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced
+    // regression fix intentionally protects CLI continuity for
+    // orchestration-driven resets. Non-subagent sessions that happen to set
+    // `parentSessionKey` (e.g. dashboard children) are not exempt.
+    if (!isSubagentSessionKey(primaryKey)) {
+      clearAllCliSessions(nextEntry);
+    }
     store[primaryKey] = nextEntry;
     return nextEntry;
   });

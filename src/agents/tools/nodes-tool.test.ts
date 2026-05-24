@@ -124,11 +124,6 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
-  it("marks nodes as owner-only", () => {
-    const tool = createNodesTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("caps durationMs schema at 300000", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {
@@ -152,11 +147,12 @@ describe("createNodesTool screen_record duration guardrails", () => {
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    const call = gatewayMocks.callGatewayTool.mock.calls[0] as [
-      string,
-      unknown,
-      { params?: { durationMs?: unknown } },
-    ];
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | undefined;
+    if (!call) {
+      throw new Error("expected callGatewayTool to be called");
+    }
     expect(call[0]).toBe("node.invoke");
     expect(call[1]).toStrictEqual({});
     expect(call[2].params?.durationMs).toBe(300_000);

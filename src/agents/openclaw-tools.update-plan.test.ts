@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { isUpdatePlanToolEnabledForOpenClawTools } from "./openclaw-tools.registration.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -44,6 +45,10 @@ function openAiGpt5Params(
 }
 
 describe("openclaw-tools update_plan gating", () => {
+  afterEach(() => {
+    setEmbeddedMode(false);
+  });
+
   it("keeps update_plan disabled by default", () => {
     expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
   });
@@ -84,6 +89,58 @@ describe("openclaw-tools update_plan gating", () => {
     ).toBe(false);
   });
 
+  it("keeps message tool in embedded message-tool-only completions", () => {
+    setEmbeddedMode(true);
+    const tools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(toolNames(tools)).toContain("message");
+  });
+
+  it("keeps explicitly allowed message tool in embedded completions", () => {
+    setEmbeddedMode(true);
+    const fromRuntimeAllowlist = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+    });
+    const fromGlobalAlsoAllow = createOpenClawTools({
+      config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const denied = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+      pluginToolDenylist: ["message"],
+    });
+
+    expect(toolNames(fromRuntimeAllowlist)).toContain("message");
+    expect(toolNames(fromGlobalAlsoAllow)).toContain("message");
+    expect(toolNames(denied)).not.toContain("message");
+  });
+
+  it("keeps subagent spawn available for trusted embedded gateway-bound runs", () => {
+    setEmbeddedMode(true);
+    const defaultTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const gatewayBoundTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(toolNames(defaultTools)).not.toContain("sessions_spawn");
+    expect(toolNames(defaultTools)).not.toContain("sessions_send");
+    expect(toolNames(gatewayBoundTools)).toContain("sessions_spawn");
+    expect(toolNames(gatewayBoundTools)).not.toContain("sessions_send");
+  });
+
   it("registers update_plan when explicitly enabled", () => {
     const config = {
       tools: {
@@ -94,7 +151,7 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled({ config }, true);
-    expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
+    expect(createUpdatePlanTool().displaySummary).toBe("Track short work plan.");
   });
 
   it("registers update_plan when the runtime allowlist explicitly requests it", () => {

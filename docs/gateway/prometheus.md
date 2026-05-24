@@ -100,6 +100,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_tool_execution_duration_seconds`    | histogram | `error_category`, `outcome`, `params_kind`, `tool`                                        |
 | `openclaw_harness_run_total`                  | counter   | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
 | `openclaw_harness_run_duration_seconds`       | histogram | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
+| `openclaw_message_received_total`             | counter   | `channel`, `source`                                                                       |
+| `openclaw_message_dispatch_started_total`     | counter   | `channel`, `source`                                                                       |
+| `openclaw_message_dispatch_completed_total`   | counter   | `channel`, `outcome`, `reason`, `source`                                                  |
+| `openclaw_message_dispatch_duration_seconds`  | histogram | `channel`, `outcome`, `reason`, `source`                                                  |
 | `openclaw_message_processed_total`            | counter   | `channel`, `outcome`, `reason`                                                            |
 | `openclaw_message_processed_duration_seconds` | histogram | `channel`, `outcome`, `reason`                                                            |
 | `openclaw_message_delivery_started_total`     | counter   | `channel`, `delivery_kind`                                                                |
@@ -112,6 +116,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_queue_lane_wait_seconds`            | histogram | `lane`                                                                                    |
 | `openclaw_session_state_total`                | counter   | `reason`, `state`                                                                         |
 | `openclaw_session_queue_depth`                | gauge     | `state`                                                                                   |
+| `openclaw_session_turn_created_total`         | counter   | `agent`, `channel`, `trigger`                                                             |
 | `openclaw_session_recovery_total`             | counter   | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_session_recovery_age_seconds`       | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_memory_bytes`                       | gauge     | `kind`                                                                                    |
@@ -126,7 +131,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
   <Accordion title="Bounded, low-cardinality labels">
     Prometheus labels stay bounded and low-cardinality. The exporter does not emit raw diagnostic identifiers such as `runId`, `sessionKey`, `sessionId`, `callId`, `toolCallId`, message IDs, chat IDs, or provider request IDs.
 
-    Label values are redacted and must match OpenClaw's low-cardinality character policy. Values that fail the policy are replaced with `unknown`, `other`, or `none`, depending on the metric.
+    Label values are redacted and must match OpenClaw's low-cardinality character policy. Values that fail the policy are replaced with `unknown`, `other`, or `none`, depending on the metric. Labels that look like scoped agent session keys are also replaced with `unknown`.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">

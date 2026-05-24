@@ -40,6 +40,12 @@ export type AgentRuntimeConfig =
 
 export type AgentBindingMatch = {
   channel: string;
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
   accountId?: string;
   peer?: { kind: ChatType; id: string };
   guildId?: string;
@@ -79,6 +85,8 @@ export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Optional human-authored agent description. */
+  description?: string;
   workspace?: string;
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
@@ -90,6 +98,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
+  compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
@@ -100,6 +110,14 @@ export type AgentConfig = {
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional per-agent bootstrap/context injection mode override. */
+  contextInjection?: AgentDefaultsConfig["contextInjection"];
+  /** Optional per-agent max chars for each injected bootstrap file. */
+  bootstrapMaxChars?: AgentDefaultsConfig["bootstrapMaxChars"];
+  /** Optional per-agent max total chars across injected bootstrap files. */
+  bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
+  /** Optional per-agent experimental flags. Omitted fields inherit agents.defaults.experimental. */
+  experimental?: AgentDefaultsConfig["experimental"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
@@ -119,13 +137,15 @@ export type AgentConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;
-    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
+  /** Optional outer run loop retry boundaries. */
+  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded Pi overrides. */
   embeddedPi?: {
     /** Optional per-agent execution contract override. */

@@ -36,6 +36,38 @@ Two equivalent ways to set inline env vars (both are non-overriding):
 }
 ```
 
+The config `env` block accepts literal string values only. It does not expand
+`file:...` values; for example, `XAI_API_KEY: "file:secrets/xai-api-key.txt"`
+is passed to providers as that exact string.
+
+For file-backed provider keys, use a SecretRef on the credential field that
+supports it:
+
+```json5
+{
+  secrets: {
+    providers: {
+      xai_key_file: {
+        source: "file",
+        path: "~/.openclaw/secrets/xai-api-key.txt",
+        mode: "singleValue",
+      },
+    },
+  },
+  models: {
+    providers: {
+      xai: {
+        apiKey: { source: "file", provider: "xai_key_file", id: "value" },
+      },
+    },
+  },
+}
+```
+
+See [Secrets Management](/gateway/secrets) and the
+[SecretRef credential surface](/reference/secretref-credential-surface) for
+supported fields.
+
 ## Shell env import
 
 `env.shellEnv` runs your login shell and imports only **missing** expected keys:
@@ -64,6 +96,7 @@ OpenClaw also injects context markers into spawned child processes:
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.
+- `OPENCLAW_CLI=1`: set for child processes spawned by the CLI entry point.
 
 These are runtime markers (not required user config). They can be used in shell/profile logic
 to apply context-specific rules.
@@ -100,6 +133,8 @@ OpenClaw supports two env-driven patterns:
 - SecretRef objects (`{ source: "env", provider: "default", id: "VAR" }`) for fields that support secrets references.
 
 Both resolve from process env at activation time. SecretRef details are documented in [Secrets Management](/gateway/secrets).
+The config `env` block itself does not resolve SecretRefs or `file:...`
+shorthand values.
 
 ## Path-related env vars
 

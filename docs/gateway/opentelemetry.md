@@ -70,11 +70,11 @@ openclaw plugins enable diagnostics-otel
 
 ## Signals exported
 
-| Signal      | What goes in it                                                                                                                                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Metrics** | Counters and histograms for token usage, cost, run duration, message flow, Talk events, queue lanes, session state/recovery, exec, and memory pressure. |
-| **Traces**  | Spans for model usage, model calls, harness lifecycle, tool execution, exec, webhook/message processing, context assembly, and tool loops.              |
-| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled.                                                           |
+| Signal      | What goes in it                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Metrics** | Counters and histograms for token usage, cost, run duration, message flow, Talk events, queue lanes, session state/recovery, exec, and memory pressure.             |
+| **Traces**  | Spans for model usage, model calls, harness lifecycle, tool execution, exec, webhook/message processing, context assembly, and tool loops.                          |
+| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled. |
 
 Toggle `traces`, `metrics`, and `logs` independently. All three default to on
 when `diagnostics.otel.enabled` is true.
@@ -129,6 +129,11 @@ Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids)
 and never include prompt text, response text, tool inputs, tool outputs, or
 session keys.
+OTLP log records keep severity, logger, code location, trusted trace context,
+and sanitized attributes by default, but the raw log message body is exported
+only when `diagnostics.otel.captureContent` is set to boolean `true`. Granular
+`captureContent.*` subkeys do not enable log bodies. Labels that look like
+scoped agent session keys are replaced with `unknown`.
 Talk metrics export only bounded event metadata such as mode, transport,
 provider, and event type. They do not include transcripts, audio payloads,
 session ids, turn ids, call ids, room ids, or handoff tokens.
@@ -149,7 +154,9 @@ text. Each subkey is opt-in independently:
 - `systemPrompt` - assembled system/developer prompt.
 
 When any subkey is enabled, model and tool spans get bounded, redacted
-`openclaw.content.*` attributes for that class only.
+`openclaw.content.*` attributes for that class only. Use boolean
+`captureContent: true` only for broad diagnostics captures where OTLP log
+message bodies are also approved for export.
 
 ## Sampling and flushing
 
@@ -189,6 +196,10 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.webhook.error` (counter, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.message.queued` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.received` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.started` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.completed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
+- `openclaw.message.dispatch.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
 - `openclaw.message.processed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`, `openclaw.delivery.kind`)
@@ -209,6 +220,7 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
 - `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
 - `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
@@ -230,7 +242,7 @@ OpenClaw classifies sessions by the work it can still observe:
   recent progress. Stalled embedded runs stay observe-only at first, then
   abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
   turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 10 minutes and 5x
+  the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.

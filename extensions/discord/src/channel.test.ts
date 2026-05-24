@@ -93,6 +93,25 @@ function installDiscordRuntime(discord: Record<string, unknown>) {
   } as unknown as PluginRuntime);
 }
 
+async function expectStaleProbeMetadataCleared(statusPatches: Array<Record<string, unknown>>) {
+  await vi.waitFor(() =>
+    expect(
+      statusPatches
+        .filter(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        )
+        .map((patch) => ({
+          bot: patch.bot,
+          application: patch.application,
+        })),
+    ).toEqual([{ bot: undefined, application: undefined }]),
+  );
+}
+
 type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
@@ -502,6 +521,22 @@ describe("discordPlugin outbound", () => {
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
   });
 
+  it("fails loudly before provider startup when a token SecretRef is configured but unresolved", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(startDiscordAccount(cfg)).rejects.toThrow(
+      'Discord bot token configured for account "default" is unavailable',
+    );
+    expect(probeDiscordMock).not.toHaveBeenCalled();
+    expect(monitorDiscordProviderMock).not.toHaveBeenCalled();
+  });
+
   it("does not block Discord monitor startup on the startup probe", async () => {
     let resolveProbe:
       | ((value: {
@@ -536,7 +571,7 @@ describe("discordPlugin outbound", () => {
         includeApplication: true,
       }),
     );
-    expect(statusPatches.some((patch) => "bot" in patch || "application" in patch)).toBe(false);
+    expect(statusPatches.filter((patch) => "bot" in patch || "application" in patch)).toEqual([]);
 
     if (!resolveProbe) {
       throw new Error("Expected Discord startup probe resolver to be initialized");
@@ -550,12 +585,20 @@ describe("discordPlugin outbound", () => {
 
     await vi.waitFor(() =>
       expect(
-        statusPatches.some(
-          (patch) =>
-            (patch.bot as { username?: string } | undefined)?.username === "AsyncBob" &&
-            Boolean(patch.application),
-        ),
-      ).toBe(true),
+        statusPatches
+          .filter(
+            (patch) => (patch.bot as { username?: string } | undefined)?.username === "AsyncBob",
+          )
+          .map((patch) => ({
+            bot: patch.bot,
+            application: patch.application,
+          })),
+      ).toEqual([
+        {
+          bot: { username: "AsyncBob" },
+          application: { intents: { messageContent: "limited" } },
+        },
+      ]),
     );
   });
 
@@ -583,17 +626,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches.some(
-          (patch) =>
-            "bot" in patch &&
-            "application" in patch &&
-            patch.bot === undefined &&
-            patch.application === undefined,
-        ),
-      ).toBe(true),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("clears stale Discord probe metadata when the async startup probe throws", async () => {
@@ -615,17 +648,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches.some(
-          (patch) =>
-            "bot" in patch &&
-            "application" in patch &&
-            patch.bot === undefined &&
-            patch.application === undefined,
-        ),
-      ).toBe(true),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {

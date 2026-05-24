@@ -123,6 +123,10 @@ function createFakeProcess() {
   }) as unknown as NodeJS.Process;
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   const pluginSdkAliasPath = path.join(tmp, "src", "plugin-sdk", "root-alias.cjs");
   await fs.mkdir(path.dirname(pluginSdkAliasPath), { recursive: true });
@@ -457,6 +461,50 @@ describe("run-node script", () => {
       ).resolves.toContain(
         '"extensions": [\n      "./src/index.js",\n      "./nested/entry.js"\n    ]',
       );
+    });
+  });
+
+  it("skips DTS generation only for launcher-triggered local builds", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+      const spawnCalls: Array<{
+        args: string[];
+        env: Record<string, string | undefined>;
+      }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({
+          args,
+          env: { ...opts?.env },
+        });
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toHaveLength(3);
+      expect(spawnCalls[0]?.args).toEqual([
+        "scripts/bundled-plugin-assets.mjs",
+        "--phase",
+        "build",
+      ]);
+      expect(spawnCalls[1]?.args).toEqual(["scripts/tsdown-build.mjs", "--no-clean"]);
+      expect(spawnCalls[2]?.args).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+      expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+      expect(spawnCalls[2]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
     });
   });
 
@@ -847,12 +895,45 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
-      const postBuildParams = runRuntimePostBuild.mock.calls[0]?.[0] as
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
         | { cwd?: string; env?: Record<string, string | undefined> }
         | undefined;
       expect(postBuildParams?.cwd).toBe(tmp);
       expect(postBuildParams?.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
       expect(postBuildParams?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+      expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("0");
+    });
+  });
+
+  it("preserves an explicit bundled plugin disable flag for QA runs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      });
+
+      expect(exitCode).toBe(0);
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
+        | { cwd?: string; env?: Record<string, string | undefined> }
+        | undefined;
+      expect(postBuildParams?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
     });
   });
 
@@ -1010,9 +1091,9 @@ describe("run-node script", () => {
           "qa",
           "parity-report",
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
         env: {
           ...process.env,
@@ -1031,9 +1112,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-parity-report.ts"),
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
       ]);
     });
@@ -1056,7 +1137,14 @@ describe("run-node script", () => {
 
       const exitCode = await runNodeMain({
         cwd: tmp,
-        args: ["qa", "coverage", "--json"],
+        args: [
+          "qa",
+          "coverage",
+          "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+        ],
         env: {
           ...process.env,
           OPENCLAW_RUNNER_LOG: "0",
@@ -1074,6 +1162,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-coverage-report.ts"),
           "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
         ],
       ]);
     });
@@ -1328,7 +1419,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       expect(spawn).toHaveBeenCalledTimes(1);
-      const spawnCall = spawn.mock.calls[0] as [string, string[], { stdio?: unknown }] | undefined;
+      const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
       expect(spawnCall?.[0]).toBe(process.execPath);
       expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
       expect(spawnCall?.[2].stdio).toBe("inherit");
@@ -1357,6 +1448,48 @@ describe("run-node script", () => {
         expectedBuildSpawn(),
         statusCommandSpawn(),
       ]);
+    });
+  });
+
+  it("shows tty progress while rebuilding source-checkout artifacts", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const { spawn, spawnSync } = createSpawnRecorder();
+      const stderrChunks: string[] = [];
+      const stderr = {
+        isTTY: true,
+        write: vi.fn((chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        }),
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          CI: "false",
+          OPENCLAW_FORCE_BUILD: "1",
+        },
+        spawn,
+        spawnSync,
+        stderr,
+        runRuntimePostBuild: async () => {},
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0]);
+
+      expect(exitCode).toBe(0);
+      const stderrText = stderrChunks.join("");
+      expect(stderrText).toContain("Building local CLI artifacts");
+      expect(stderrText).toContain("\x1b[2K");
     });
   });
 

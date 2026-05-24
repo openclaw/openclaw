@@ -93,7 +93,7 @@ describe("gateway --force helpers", () => {
 
     const killed = forceFreePort(18789);
 
-    expect(execFileSync).toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledTimes(1);
     expect(killMock).toHaveBeenCalledTimes(2);
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
     expect(killMock).toHaveBeenCalledWith(99, "SIGTERM");

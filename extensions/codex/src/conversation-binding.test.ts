@@ -29,6 +29,14 @@ import {
 
 let tempDir: string;
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 describe("codex conversation binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -92,10 +100,15 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const authOrderParams = agentRuntimeMocks.resolveAuthProfileOrder.mock.calls[0]?.[0];
+    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+      cfg?: unknown;
+      provider?: unknown;
+    };
     expect(authOrderParams?.cfg).toBe(config);
     expect(authOrderParams?.provider).toBe("openai-codex");
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -149,7 +162,9 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -161,6 +176,30 @@ describe("codex conversation binding", () => {
     await expect(
       fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     ).resolves.not.toContain('"modelProvider": "openai"');
+  });
+
+  it("stores and uses the owning agent dir for bound app-server sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async () => ({
+        thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+        model: "gpt-5.4-mini",
+      })),
+    });
+
+    const data = await startCodexConversationThread({
+      sessionFile,
+      workspaceDir: tempDir,
+      agentDir,
+      model: "gpt-5.4-mini",
+    });
+
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
+    expect(data.agentDir).toBe(agentDir);
   });
 
   it("clears the Codex app-server sidecar when a pending bind is denied", async () => {
@@ -217,6 +256,206 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true });
+  });
+
+  it("routes bound Codex CLI node sessions through node resume", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      text: "done",
+    }));
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        config: { tools: { exec: { host: "node", node: "mb-m5" } } },
+        resumeCodexCliSessionOnNode,
+        timeoutMs: 1234,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
+      nodeId: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      prompt: "continue the task",
+      cwd: "/repo",
+      timeoutMs: 1234,
+    });
+  });
+
+  it("blocks bound Codex app-server turns when the current OpenClaw session is sandboxed", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "sandboxed-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "sandboxed-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex app-server conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("blocks bound Codex app-server turns when exec host=node is active", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "node-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "node-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex app-server conversation binding is unavailable because OpenClaw exec host=node is active for this session.",
+        ),
+      },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn();
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "sandboxed-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "sandboxed-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        resumeCodexCliSessionOnNode,
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
   });
 
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
@@ -327,7 +566,9 @@ describe("codex conversation binding", () => {
       "thread/start",
       "turn/start",
     ]);
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[1]?.params.approvalPolicy).toBe("on-request");
@@ -350,6 +591,7 @@ describe("codex conversation binding", () => {
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -401,6 +643,7 @@ describe("codex conversation binding", () => {
               version: 1,
               sessionFile,
               workspaceDir: tempDir,
+              agentDir,
             },
           },
         },
@@ -426,6 +669,7 @@ describe("codex conversation binding", () => {
 
   it("falls back to content when the channel body for agent is blank", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -487,6 +731,7 @@ describe("codex conversation binding", () => {
             version: 1,
             sessionFile,
             workspaceDir: tempDir,
+            agentDir,
           },
         },
       },
@@ -494,6 +739,10 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(turnStartParams[0]?.input).toEqual([
       { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);

@@ -250,14 +250,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       warningNotes: repairSequence.warningNotes,
     });
   } else {
-    const { collectDoctorPreviewWarnings } = await import("./doctor/shared/preview-warnings.js");
+    const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
+    const previewNotes = await collectDoctorPreviewNotes({
+      cfg: candidate,
+      doctorFixCommand,
+      env: process.env,
+    });
     emitDoctorNotes({
       note,
-      warningNotes: await collectDoctorPreviewWarnings({
-        cfg: candidate,
-        doctorFixCommand,
-        env: process.env,
-      }),
+      infoNotes: previewNotes.infoNotes,
+      warningNotes: previewNotes.warningNotes,
     });
   }
 
@@ -307,6 +309,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    preservedLegacyRootKeys: ["defaultModel"],
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };

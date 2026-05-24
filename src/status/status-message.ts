@@ -32,6 +32,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -79,6 +80,7 @@ export type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  configuredDefaultModelLabel?: string;
   runtimeContextTokens?: number;
   explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
@@ -497,6 +499,19 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
+function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
+  if (!entry?.modelOverride) {
+    return false;
+  }
+  if (entry.modelOverrideSource === "user") {
+    return true;
+  }
+  if (entry.modelOverrideSource === "auto") {
+    return false;
+  }
+  return !hasSessionAutoModelFallbackProvenance(entry);
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -656,13 +671,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
       ? args.runtimeContextTokens
       : undefined;
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    model: contextLookupModel,
+    allowAsyncLoad: false,
+  });
   const activeContextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-      model: contextLookupModel,
-      allowAsyncLoad: false,
-    }) ?? explicitRuntimeContextTokens;
+    typeof explicitRuntimeContextTokens === "number" &&
+    typeof resolvedActiveContextTokens === "number"
+      ? Math.min(explicitRuntimeContextTokens, resolvedActiveContextTokens)
+      : (explicitRuntimeContextTokens ?? resolvedActiveContextTokens);
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -674,6 +693,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
       : undefined;
+  const cappedPersistedContextTokens =
+    typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
+      ? Math.min(persistedContextTokens, activeContextTokens)
+      : persistedContextTokens;
   const agentContextTokens =
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
@@ -750,7 +773,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride:
           channelOverrideContextTokens ??
-          persistedContextTokens ??
+          cappedPersistedContextTokens ??
           cappedConfiguredContextTokens ??
           cappedAgentContextTokens ??
           explicitRuntimeContextTokens,
@@ -902,7 +925,23 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
+  const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const configDefaultDiffersFromSession =
+    sessionHasPersistedModelSelection &&
+    configuredDefaultModelLabel &&
+    selectedModelLabel !== configuredDefaultModelLabel &&
+    !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel);
+  const modelLines = configDefaultDiffersFromSession
+    ? [
+        `🧠 Configured default: ${configuredDefaultModelLabel}`,
+        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
+        "⚠️ Reason: session override",
+        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
+        `↩️ Clear with: /model ${configuredDefaultModelLabel} or /reset`,
+        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      ]
+    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
@@ -936,7 +975,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     args.uptimeLine,
-    modelLine,
+    ...modelLines,
     configuredFallbacksLine,
     fallbackLine,
     usageCostLine,

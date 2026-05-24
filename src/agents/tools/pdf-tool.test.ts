@@ -91,6 +91,22 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   }
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstCompletionContext(): { systemPrompt?: string } | undefined {
+  const [, context] = firstMockCall(completeMock, "complete") as [
+    unknown,
+    { systemPrompt?: string } | undefined,
+  ];
+  return context;
+}
+
 async function stubPdfToolInfra(
   agentDir: string,
   params?: {
@@ -183,7 +199,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       expect(tool.name).toBe("pdf");
       expect(tool.label).toBe("PDF");
-      expect(tool.description).toContain("PDF documents");
+      expect(tool.description).toContain("Analyze PDFs");
     });
   });
 
@@ -333,7 +349,7 @@ describe("createPdfTool", () => {
           pdf: `media://inbound/${mediaId}`,
         });
 
-        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
         expect(loadRef).toBe(`media://inbound/${mediaId}`);
         expectFields(loadOptions, { localRoots: [] });
         expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
@@ -369,10 +385,34 @@ describe("createPdfTool", () => {
         pdf: "http://198.18.0.153/doc.pdf",
       });
 
-      const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+      const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
+        readIdleTimeoutMs: 120_000,
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
+    });
+  });
+
+  it("passes the shared remote read idle timeout when loading remote PDFs", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "https://example.com/stalled.pdf",
+      });
+
+      const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      expect(loadRef).toBe("https://example.com/stalled.pdf");
+      expectFields(loadOptions, {
+        readIdleTimeoutMs: 120_000,
       });
     });
   });
@@ -400,7 +440,7 @@ describe("createPdfTool", () => {
           pdf: mediaPath,
         });
 
-        const [loadRef, loadOptions] = loadSpy.mock.calls[0] ?? [];
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
         expect(loadRef).toBe(mediaPath);
         expect(loadOptions).toBeTypeOf("object");
       });
@@ -424,8 +464,10 @@ describe("createPdfTool", () => {
       });
 
       const ensureModelsJsonMock = vi.mocked(modelsConfig.ensureOpenClawModelsJson);
-      const [modelsConfigArg, modelsAgentDir, modelsOptions] =
-        ensureModelsJsonMock.mock.calls[0] ?? [];
+      const [modelsConfigArg, modelsAgentDir, modelsOptions] = firstMockCall(
+        ensureModelsJsonMock,
+        "ensureOpenClawModelsJson",
+      );
       expectFields(
         (modelsConfigArg as { agents?: { defaults?: unknown } } | undefined)?.agents?.defaults,
         {
@@ -486,8 +528,7 @@ describe("createPdfTool", () => {
         native: false,
         model: OPENAI_PDF_MODEL,
       });
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toBeUndefined();
+      expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });
   });
 
@@ -524,8 +565,7 @@ describe("createPdfTool", () => {
         model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 
@@ -562,8 +602,7 @@ describe("createPdfTool", () => {
         model: CODEX_PDF_MODEL,
       });
       expect(completeMock).toHaveBeenCalledTimes(1);
-      const [, context] = completeMock.mock.calls[0] ?? [];
-      expect(context?.systemPrompt).toContain("Analyze the provided PDF content");
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 

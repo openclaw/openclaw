@@ -129,12 +129,12 @@ describe("TwitchClientManager", () => {
 
   afterEach(() => {
     // Clean up manager to avoid side effects
-    manager._clearForTest();
+    manager.clearForTest();
   });
 
   describe("getClient", () => {
     it("should create a new client connection", async () => {
-      const _client = await manager.getClient(testAccount);
+      const clientForTest = await manager.getClient(testAccount);
 
       // New implementation: connect is called, channels are passed to constructor
       expect(mockConnect).toHaveBeenCalledTimes(1);
@@ -198,6 +198,33 @@ describe("TwitchClientManager", () => {
       expect(mockAuthProvider.constructor).toHaveBeenCalledWith(
         "test-client-id",
         "mock-token-from-tests",
+      );
+    });
+
+    it("should register refreshing tokens for Twurple chat intent", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 1_700_000_000_000,
+      };
+
+      await manager.getClient(refreshingAccount);
+
+      expect(mockAddUserForToken).toHaveBeenCalledTimes(1);
+      expect(mockAddUserForToken).toHaveBeenCalledWith(
+        {
+          accessToken: "mock-token-from-tests",
+          refreshToken: "test-refresh-token",
+          expiresIn: 3600,
+          obtainmentTimestamp: 1_700_000_000_000,
+        },
+        ["chat"],
+      );
+      expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Using RefreshingAuthProvider for testbot (automatic token refresh enabled)",
       );
     });
 

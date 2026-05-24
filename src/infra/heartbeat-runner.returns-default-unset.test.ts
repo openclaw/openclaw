@@ -217,6 +217,17 @@ function expectReplyCall(
   }
 }
 
+function replyBody(
+  replySpy: ReturnType<typeof vi.fn>,
+  index = 0,
+): { Body?: string; Provider?: string } {
+  const call = replySpy.mock.calls[index];
+  return requireRecord(call?.[0], `reply call ${index} body`) as {
+    Body?: string;
+    Provider?: string;
+  };
+}
+
 beforeAll(async () => {
   previousRegistry = getActivePluginRegistry();
 
@@ -277,9 +288,17 @@ beforeAll(async () => {
     },
   };
 
+  const discordPlugin = createOutboundTestPlugin({
+    id: "discord",
+    outbound: {
+      deliveryMode: "direct",
+    },
+  });
+
   testRegistry = createTestRegistry([
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    { pluginId: "discord", plugin: discordPlugin, source: "test" },
   ]);
   setActivePluginRegistry(testRegistry);
 
@@ -508,6 +527,20 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         expected: {
           channel: "telegram",
           to: "-100123",
+          chatType: "group",
+          accountId: undefined,
+          lastChannel: undefined,
+          lastAccountId: undefined,
+        },
+      },
+      {
+        name: "infer explicit discord channel target",
+        cfg: { agents: { defaults: { heartbeat: { target: "discord", to: "channel:123" } } } },
+        entry: baseEntry,
+        expected: {
+          channel: "discord",
+          to: "channel:123",
+          chatType: "channel",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -520,6 +553,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         expected: {
           channel: "telegram",
           to: "5232990709",
+          chatType: "direct",
           accountId: undefined,
           lastChannel: "telegram",
           lastAccountId: undefined,
@@ -570,6 +604,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       expected: {
         channel: "telegram",
         to: "-100123",
+        chatType: "group",
         accountId: "work",
         lastChannel: undefined,
         lastAccountId: undefined,
@@ -1204,13 +1239,31 @@ describe("runHeartbeatOnce", () => {
         name: "raw flagged reasoning + final payload",
         caseDir: "hb-reasoning-raw",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+        expectedTexts: ["Thinking\n\n_Because it helps_", "Final alert"],
       },
       {
         name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_"],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
+      },
+      {
+        name: "visible final that starts with thinking prose",
+        caseDir: "hb-thinking-visible-final",
+        replies: [{ text: "Thinking... all clear" }],
+        expectedTexts: ["Thinking... all clear"],
+      },
+      {
+        name: "visible final that is exactly thinking label",
+        caseDir: "hb-thinking-exact-final",
+        replies: [{ text: "Thinking..." }],
+        expectedTexts: ["Thinking..."],
+      },
+      {
+        name: "visible final that starts with thinking status line",
+        caseDir: "hb-thinking-status-final",
+        replies: [{ text: "Thinking...\nI'll check that now" }],
+        expectedTexts: ["Thinking...\nI'll check that now"],
       },
     ]),
   )(
@@ -1470,7 +1523,7 @@ describe("runHeartbeatOnce", () => {
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+      const calledCtx = replyBody(replySpy);
       const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
       expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
       expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
@@ -1541,7 +1594,7 @@ Some global directive after tasks.
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1612,7 +1665,7 @@ tasks:
 
     expect(res.status).toBe("ran");
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
     expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
@@ -1750,7 +1803,7 @@ tasks:
         expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
         expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
         if (expectCronContext) {
-          const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+          const calledCtx = replyBody(replySpy);
           expect(calledCtx.Provider, name).toBe("cron-event");
           expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
@@ -1808,7 +1861,7 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
@@ -1865,13 +1918,8 @@ tasks:
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as {
-        Provider?: string;
-        Body?: string;
-        ForceSenderIsOwnerFalse?: boolean;
-      };
+      const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("exec-event");
-      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {

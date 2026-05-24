@@ -14,8 +14,26 @@ const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
-const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const emptyOwners = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+  const zeroMetrics = {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  };
+  return {
     policyHash: "policy",
     index: {
       version: 1,
@@ -34,26 +52,10 @@ const pluginMetadataSnapshot = vi.hoisted(
     diagnostics: [],
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
-  }),
-);
+    owners: emptyOwners,
+    metrics: zeroMetrics,
+  };
+});
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
@@ -155,7 +157,10 @@ function installConfigIoMockDefaults() {
     }
     return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
   });
-  writeConfig.mockResolvedValue(undefined);
+  writeConfig.mockResolvedValue({
+    persistedHash: "test-persisted-hash",
+    persistedConfig: validConfig,
+  });
 }
 
 describe("gateway startup config validation", () => {
@@ -450,7 +455,7 @@ describe("gateway startup config validation", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       }),
     ).rejects.toThrow(
-      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.`,
+      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
     );
   });
 

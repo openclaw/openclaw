@@ -146,6 +146,23 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
+  it("matches kill paths without trusting malformed Host headers", async () => {
+    authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
+    loadSessionEntryMock.mockReturnValue({ entry: undefined });
+
+    const response = await post(
+      "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
+      TEST_GATEWAY_TOKEN,
+      {
+        Host: "[",
+        "x-openclaw-scopes": "operator.admin",
+      },
+    );
+    expect(response.status).toBe(404);
+    expectErrorResponse(await response.json(), { type: "not_found" });
+    expect(loadSessionEntryMock).toHaveBeenCalled();
+  });
+
   it.each(["/sessions/%zz/kill", "/sessions/%20/kill"])(
     "rejects invalid encoded session key %s without falling through",
     async (pathname) => {
@@ -310,7 +327,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
     expect(killControlledSubagentRunMock).toHaveBeenCalledTimes(1);
-    const killCall = killControlledSubagentRunMock.mock.calls[0]?.[0] as
+    const killCall = killControlledSubagentRunMock.mock.calls.at(0)?.[0] as
       | {
           cfg?: unknown;
           controller?: { controllerSessionKey?: string };

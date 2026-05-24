@@ -351,6 +351,12 @@ export const ja_JP: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -695,9 +701,6 @@ export const ja_JP: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "トークンの使用先、セッションが急増するタイミング、コストの要因を確認できます。",
-    },
     common: {
       emptyValue: "—",
       unknown: "不明",
@@ -1045,6 +1048,10 @@ export const ja_JP: TranslationMap = {
     settings: "チャット設定",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
+    autoScrollMode: "自動スクロールモード",
+    autoScrollAlways: "常に",
+    autoScrollNearBottom: "下部付近",
+    autoScrollOff: "オフ",
     focusToggle: "フォーカスモードを切り替え（サイドバー + ページヘッダーを非表示）",
     hideCronSessions: "Cron セッションを非表示",
     showCronSessions: "Cron セッションを表示",
@@ -1088,11 +1095,16 @@ export const ja_JP: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "まだ聞いています",
+      talkTranscript: "会話の文字起こし",
       stopTalk: "Stop Talk",
     },
     selectors: {
       agentFilter: "エージェントでセッションを絞り込む",
       session: "Chat session",
+      sessionSearch: "セッションを検索",
+      clearSessionSearch: "セッション検索をクリア",
+      loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
@@ -1205,6 +1217,9 @@ export const ja_JP: TranslationMap = {
       ascending: "昇順",
       descending: "降順",
       reset: "リセット",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "一致するジョブはありません。",
       loading: "読み込み中...",
       loadMore: "さらにジョブを読み込む",
@@ -1240,6 +1255,7 @@ export const ja_JP: TranslationMap = {
     form: {
       editJob: "ジョブを編集",
       newJob: "新しいジョブ",
+      advancedJob: "Advanced job",
       updateSubtitle: "選択したスケジュール済みジョブを更新します。",
       createSubtitle: "スケジュールされたウェイクアップまたはエージェント実行を作成します。",
       required: "必須",

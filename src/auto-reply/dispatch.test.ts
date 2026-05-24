@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -88,11 +89,20 @@ function createDispatcher(record: string[]): ReplyDispatcher {
 }
 
 function lastTypingDispatcherOptions(): Parameters<CreateReplyDispatcherWithTypingFn>[0] {
-  const [options] = hoisted.createReplyDispatcherWithTypingMock.mock.calls.at(-1) ?? [];
+  const calls = hoisted.createReplyDispatcherWithTypingMock.mock.calls;
+  const [options] = calls[calls.length - 1] ?? [];
   if (!options) {
     throw new Error("expected createReplyDispatcherWithTyping call");
   }
   return options as Parameters<CreateReplyDispatcherWithTypingFn>[0];
+}
+
+function requireReplyDispatcherOptions(index = 0): Parameters<CreateReplyDispatcherFn>[0] {
+  const call = hoisted.createReplyDispatcherMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createReplyDispatcher call ${index}`);
+  }
+  return call[0] as Parameters<CreateReplyDispatcherFn>[0];
 }
 
 describe("withReplyDispatcher", () => {
@@ -143,6 +153,41 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("emits message.received diagnostics before dispatch", async () => {
+    const events: Array<{ type: string; channel?: string; sessionKey?: string; source?: string }> =
+      [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const dispatcher = createDispatcher([]);
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    try {
+      await dispatchInboundMessage({
+        ctx: buildTestCtx({
+          Provider: "signal",
+          Surface: "signal",
+          SessionKey: "agent:main:signal:direct:u1",
+        }),
+        cfg: {} as OpenClawConfig,
+        dispatcher,
+      });
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        sessionKey: "agent:main:signal:direct:u1",
+        source: "dispatchInboundMessage",
+      }),
+    );
   });
 
   it("always marks complete and waits for idle after success", async () => {
@@ -218,7 +263,7 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("runs message_sending hooks before inbound dispatcher delivery", async () => {
@@ -243,7 +288,7 @@ describe("withReplyDispatcher", () => {
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    const dispatcherOptions = hoisted.createReplyDispatcherMock.mock.calls[0]?.[0];
+    const dispatcherOptions = requireReplyDispatcherOptions();
     if (!dispatcherOptions?.beforeDeliver) {
       throw new Error("expected beforeDeliver hook");
     }

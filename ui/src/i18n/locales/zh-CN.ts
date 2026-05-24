@@ -346,6 +346,12 @@ export const zh_CN: TranslationMap = {
     eventLogSubtitle: "最新 Gateway 事件。",
     noEvents: "暂无事件。",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "{time} 后过期",
     expired: "已过期",
@@ -683,9 +689,6 @@ export const zh_CN: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "查看 token 的去向、会话何时激增，以及成本由什么驱动。",
-    },
     common: {
       emptyValue: "—",
       unknown: "未知",
@@ -1007,6 +1010,10 @@ export const zh_CN: TranslationMap = {
     settings: "聊天设置",
     thinkingToggle: "切换助手思考/工作输出",
     toolCallsToggle: "切换工具调用和工具结果",
+    autoScrollMode: "自动滚动模式",
+    autoScrollAlways: "始终",
+    autoScrollNearBottom: "接近底部",
+    autoScrollOff: "关闭",
     focusToggle: "切换专注模式 (隐藏侧边栏 + 页面页眉)",
     hideCronSessions: "隐藏定时任务会话",
     showCronSessions: "显示定时任务会话",
@@ -1050,11 +1057,16 @@ export const zh_CN: TranslationMap = {
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       attachFile: "附加文件",
       startTalk: "开始 Talk",
+      stillListening: "仍在聆听",
+      talkTranscript: "语音转写",
       stopTalk: "停止 Talk",
     },
     selectors: {
       agentFilter: "按代理筛选会话",
       session: "聊天会话",
+      sessionSearch: "搜索会话",
+      clearSessionSearch: "清除会话搜索",
+      loadMoreSessions: "加载更多会话",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
     },
@@ -1166,6 +1178,9 @@ export const zh_CN: TranslationMap = {
       ascending: "升序",
       descending: "降序",
       reset: "重置",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "没有匹配的任务。",
       loading: "加载中...",
       loadMore: "加载更多任务",
@@ -1201,6 +1216,7 @@ export const zh_CN: TranslationMap = {
     form: {
       editJob: "编辑任务",
       newJob: "新建任务",
+      advancedJob: "Advanced job",
       updateSubtitle: "更新所选定时任务。",
       createSubtitle: "创建定时唤醒或代理运行。",
       required: "必填",

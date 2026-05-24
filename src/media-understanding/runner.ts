@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -14,6 +15,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
@@ -25,8 +27,7 @@ import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
-import { extractGeminiResponse } from "./output-extract.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
+import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -73,7 +74,7 @@ function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
 ): string | null {
-  const value = cfg?.models?.providers?.[providerId]?.apiKey;
+  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
@@ -81,6 +82,7 @@ async function hasProviderAuthAvailable(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
 }): Promise<boolean> {
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
@@ -97,11 +99,14 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaProviderId(providerId))
+    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
     .filter(Boolean)
     .filter((providerId, index, values) => values.indexOf(providerId) === index)
     .filter((providerId) =>
-      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
+      providerSupportsCapability(
+        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+        params.capability,
+      ),
     );
 
   return [...new Set([...configuredProviders, ...params.fallbackProviders])];
@@ -111,6 +116,9 @@ function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return undefined;
+  }
   const configured = resolveConfiguredImageModel(params);
   const id = configured?.id?.trim();
   return id || undefined;
@@ -144,7 +152,7 @@ function resolveCatalogImageModelId(params: {
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
       params.modelSupportsVision(entry),
   );
   if (matches.length === 0) {
@@ -199,6 +207,12 @@ async function explicitImageModelVisionStatus(params: {
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
+  if (
+    isMinimaxVlmProvider(params.providerId) &&
+    !isMinimaxVlmModel(params.providerId, params.model)
+  ) {
+    return "unsupported";
+  }
   const configured = resolveConfiguredImageModel(params);
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
@@ -217,6 +231,7 @@ async function resolveAutoImageModelId(params: {
   providerId: string;
   providerRegistry: ProviderRegistry;
   explicitModel?: string;
+  workspaceDir?: string;
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
@@ -228,6 +243,9 @@ async function resolveAutoImageModelId(params: {
     if (explicitStatus !== "unsupported") {
       return explicit;
     }
+  }
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return "MiniMax-VL-01";
   }
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
@@ -246,6 +264,7 @@ async function resolveAutoImageModelId(params: {
     cfg: params.cfg,
     providerId: params.providerId,
     capability: "image",
+    workspaceDir: params.workspaceDir,
   });
   if (bundledDefaultModel) {
     return bundledDefaultModel;
@@ -269,13 +288,14 @@ export function buildProviderRegistry(
 export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  workspaceDir?: string;
 }): readonly string[] {
   // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
   // inbound attachments were staged into a sandbox workspace. The paths in
   // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
   // container can read them), and the workspace dir is carried separately so
   // host-side media-understanding can still resolve them via this root list.
-  const workspaceDir = params.ctx.MediaWorkspaceDir;
+  const workspaceDir = params.ctx.MediaWorkspaceDir ?? params.workspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
     workspaceDir ? [path.resolve(workspaceDir)] : undefined,
@@ -284,11 +304,11 @@ export function resolveMediaAttachmentLocalRoots(params: {
 }
 
 const binaryCache = new Map<string, Promise<string | null>>();
-const geminiProbeCache = new Map<string, Promise<boolean>>();
+const antigravityCliCache = new Map<string, Promise<string | null>>();
 
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
-  geminiProbeCache.clear();
+  antigravityCliCache.clear();
 }
 
 function expandHomeDir(value: string): string {
@@ -386,27 +406,50 @@ async function hasBinary(name: string): Promise<boolean> {
   return Boolean(await findBinary(name));
 }
 
-async function probeGeminiCli(): Promise<boolean> {
-  const cached = geminiProbeCache.get("gemini");
+async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
+  const resolved = await findBinary(command);
+  if (!resolved) {
+    return null;
+  }
+  const probeDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-antigravity-probe-"),
+  );
+  try {
+    const { stdout } = await runExec(resolved, ["--help"], {
+      timeoutMs: 3000,
+      cwd: probeDir,
+    });
+    return stdout.includes("--print") &&
+      stdout.includes("--add-dir") &&
+      stdout.includes("--sandbox")
+      ? resolved
+      : null;
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(probeDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function resolveAntigravityCliBinary(): Promise<string | null> {
+  const cached = antigravityCliCache.get("agy");
   if (cached) {
     return cached;
   }
   const resolved = (async () => {
-    if (!(await hasBinary("gemini"))) {
-      return false;
+    const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
+    const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
+      Boolean(value),
+    );
+    for (const candidate of candidates) {
+      const command = await probeAntigravityCliCandidate(candidate);
+      if (command) {
+        return command;
+      }
     }
-    try {
-      const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
-        timeoutMs: 8000,
-      });
-      return Boolean(
-        extractGeminiResponse(stdout) ?? normalizeLowercaseStringOrEmpty(stdout).includes("ok"),
-      );
-    } catch {
-      return false;
-    }
+    return null;
   })();
-  geminiProbeCache.set("gemini", resolved);
+  antigravityCliCache.set("agy", resolved);
   return resolved;
 }
 
@@ -497,24 +540,25 @@ async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig |
   return await resolveLocalWhisperEntry();
 }
 
-async function resolveGeminiCliEntry(
-  _capability: MediaUnderstandingCapability,
+async function resolveAntigravityCliEntry(
+  capability: MediaUnderstandingCapability,
 ): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await probeGeminiCli())) {
+  if (capability === "audio") {
+    return null;
+  }
+  const command = await resolveAntigravityCliBinary();
+  if (!command) {
     return null;
   }
   return {
     type: "cli",
-    command: "gemini",
+    command,
     args: [
-      "--output-format",
-      "json",
-      "--allowed-tools",
-      "read_many_files",
-      "--include-directories",
+      "--sandbox",
+      "--add-dir",
       "{{MediaDir}}",
-      "{{Prompt}}",
-      "Use read_many_files to read {{MediaPath}} and respond with only the text output.",
+      "--print",
+      "{{Prompt}} Inspect {{MediaPath}} and reply with only the requested media description.",
     ],
   };
 }
@@ -522,11 +566,12 @@ async function resolveGeminiCliEntry(
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, agentDir, providerRegistry, capability } = params;
+  const { cfg, agentDir, workspaceDir, providerRegistry, capability } = params;
   const checkProvider = async (
     providerId: string,
     model?: string,
@@ -549,6 +594,7 @@ async function resolveKeyEntry(params: {
         provider: providerId,
         cfg,
         agentDir,
+        workspaceDir,
       }))
     ) {
       return null;
@@ -560,6 +606,7 @@ async function resolveKeyEntry(params: {
             providerId,
             providerRegistry,
             explicitModel: model,
+            workspaceDir,
           })
         : model;
     if (capability === "image" && !resolvedModel) {
@@ -634,6 +681,7 @@ function hasExplicitImageUnderstandingConfig(params: {
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
@@ -658,13 +706,13 @@ async function resolveAutoEntries(params: {
       return [localAudio];
     }
   }
-  const gemini = await resolveGeminiCliEntry(params.capability);
-  if (gemini) {
-    return [gemini];
-  }
   const keys = await resolveKeyEntry(params);
   if (keys) {
     return [keys];
+  }
+  const antigravity = await resolveAntigravityCliEntry(params.capability);
+  if (antigravity) {
+    return [antigravity];
   }
   return [];
 }
@@ -672,6 +720,7 @@ async function resolveAutoEntries(params: {
 export async function resolveAutoImageModel(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
@@ -695,6 +744,7 @@ export async function resolveAutoImageModel(params: {
   const activeEntry = await resolveActiveModelEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
@@ -706,6 +756,7 @@ export async function resolveAutoImageModel(params: {
   const keyEntry = await resolveKeyEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     providerRegistry,
     capability: "image",
     activeModel: params.activeModel,
@@ -716,6 +767,7 @@ export async function resolveAutoImageModel(params: {
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
@@ -724,7 +776,7 @@ async function resolveActiveModelEntry(params: {
   if (!activeProviderRaw) {
     return null;
   }
-  const providerId = normalizeMediaProviderId(activeProviderRaw);
+  const providerId = normalizeMediaExecutionProviderId(activeProviderRaw);
   if (!providerId) {
     return null;
   }
@@ -745,6 +797,7 @@ async function resolveActiveModelEntry(params: {
     provider: providerId,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   if (!hasAuth) {
     return null;
@@ -756,6 +809,7 @@ async function resolveActiveModelEntry(params: {
       providerId,
       providerRegistry: params.providerRegistry,
       explicitModel: params.activeModel?.model,
+      workspaceDir: params.workspaceDir,
     });
   } else if (params.capability === "audio") {
     model = resolveDefaultMediaModelFromRegistry({
@@ -782,6 +836,7 @@ async function runAttachmentEntries(params: {
   ctx: MsgContext;
   attachmentIndex: number;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   cache: MediaAttachmentCache;
   entries: MediaUnderstandingModelConfig[];
@@ -814,6 +869,7 @@ async function runAttachmentEntries(params: {
               attachmentIndex: params.attachmentIndex,
               cache: params.cache,
               agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
               config: params.config,
             });
@@ -876,6 +932,7 @@ export async function runCapability(params: {
   attachments: MediaAttachmentCache;
   media: MediaAttachment[];
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
@@ -923,6 +980,7 @@ export async function runCapability(params: {
   if (
     capability === "image" &&
     activeProvider &&
+    !isMinimaxVlmProvider(activeProvider) &&
     !hasExplicitImageUnderstandingConfig({ cfg, config })
   ) {
     const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
@@ -970,6 +1028,7 @@ export async function runCapability(params: {
     resolvedEntries = await resolveAutoEntries({
       cfg,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
       capability,
       activeModel: params.activeModel,
@@ -995,6 +1054,7 @@ export async function runCapability(params: {
       ctx,
       attachmentIndex: attachment.index,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
       cache: params.attachments,
       entries: resolvedEntries,

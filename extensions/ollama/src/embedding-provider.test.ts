@@ -46,6 +46,14 @@ function mockEmbeddingFetch(embedding: number[]) {
   return fetchMock;
 }
 
+function firstFetchInit(fetchMock: ReturnType<typeof mockEmbeddingFetch>): RequestInit | undefined {
+  const call = fetchMock.mock.calls[0] as unknown[] | undefined;
+  if (!call) {
+    throw new Error("expected embedding fetch call");
+  }
+  return call[1] as RequestInit | undefined;
+}
+
 function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unknown } {
   if (typeof init?.body !== "string") {
     throw new Error("expected JSON string request body");
@@ -54,7 +62,7 @@ function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unkn
 }
 
 function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch>): unknown {
-  const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit | undefined];
+  const init = firstFetchInit(fetchMock);
   const body = readEmbeddingRequestBody(init);
   return body.input;
 }
@@ -243,6 +251,56 @@ describe("ollama embedding provider", () => {
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
   });
 
+  it("reports malformed embed JSON with a provider-owned error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response returned malformed JSON",
+    );
+  });
+
+  it("rejects non-number embedding values instead of zeroing them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ embeddings: [["0.1", 0.2]] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response contains a non-number embedding value",
+    );
+  });
+
   it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
@@ -379,10 +437,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -433,10 +488,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -486,10 +538,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });

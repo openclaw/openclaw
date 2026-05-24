@@ -4,12 +4,18 @@ import {
   deriveInboundMessageHookContext,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
+import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { logMessageReceived } from "../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import {
+  resolveCommandTurnContext,
+  resolveCommandTurnTargetSessionKey,
+} from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -117,15 +123,11 @@ function resolveDispatcherSilentReplyContext(
   cfg: OpenClawConfig,
 ) {
   const finalized = finalizeInboundContext(ctx);
-  const policySessionKey =
-    finalized.CommandSource === "native"
-      ? (finalized.CommandTargetSessionKey ?? finalized.SessionKey)
-      : finalized.SessionKey;
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const policySessionKey = commandTargetSessionKey ?? finalized.SessionKey;
   const chatType = normalizeChatType(finalized.ChatType);
   const conversationType: SilentReplyConversationType | undefined =
-    finalized.CommandSource === "native" &&
-    finalized.CommandTargetSessionKey &&
-    finalized.CommandTargetSessionKey !== finalized.SessionKey
+    commandTargetSessionKey && commandTargetSessionKey !== finalized.SessionKey
       ? undefined
       : chatType === "direct"
         ? "direct"
@@ -186,6 +188,7 @@ function buildMessageSendingBeforeDeliver(
 }
 
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
+  const commandTurn = resolveCommandTurnContext(ctx);
   return {
     surface:
       typeof ctx.Surface === "string"
@@ -195,7 +198,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
           : "unknown",
     hasSessionKey:
       typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
-    commandSource: typeof ctx.CommandSource === "string" ? ctx.CommandSource : "message",
+    commandSource: commandTurn.source,
   };
 }
 
@@ -256,6 +259,15 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
+  if (isDiagnosticsEnabled(params.cfg)) {
+    logMessageReceived({
+      sessionKey: finalized.SessionKey,
+      channel: finalized.Surface ?? finalized.Provider,
+      chatId: finalized.To ?? finalized.From,
+      messageId: finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast,
+      source: "dispatchInboundMessage",
+    });
+  }
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
