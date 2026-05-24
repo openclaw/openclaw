@@ -9,6 +9,7 @@ import {
   createExistingSessionAgentSharedModule,
   existingSessionRouteState,
 } from "./existing-session.test-support.js";
+import { DEFAULT_TRACE_DIR } from "./path-output.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const routeState = existingSessionRouteState;
@@ -1064,11 +1065,13 @@ describe("existing-session browser routes", () => {
   });
 
   it("routes existing-session lighthouse and screencast debug routes through Chrome MCP", async () => {
+    const lighthouseDir = `openclaw-test-lh-${Date.now()}`;
+    const lighthousePath = path.join(DEFAULT_TRACE_DIR, lighthouseDir);
     await getDebugPostHandler("/lighthouse")?.(
       {
         params: {},
         query: {},
-        body: { mode: "snapshot", device: "desktop", outputDirPath: "/tmp/lh" },
+        body: { mode: "snapshot", device: "desktop", outputDirPath: lighthouseDir },
       },
       createBrowserRouteResponse().res,
     );
@@ -1078,14 +1081,15 @@ describe("existing-session browser routes", () => {
       targetId: "7",
       mode: "snapshot",
       device: "desktop",
-      outputDirPath: "/tmp/lh",
+      outputDirPath: lighthousePath,
       timeoutMs: undefined,
     });
 
-    const screencastPath = path.join(os.tmpdir(), `openclaw-test-cast-${Date.now()}.webm`);
+    const screencastFile = `openclaw-test-cast-${Date.now()}.webm`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
     try {
       await getDebugPostHandler("/screencast/start")?.(
-        { params: {}, query: {}, body: { path: screencastPath } },
+        { params: {}, query: {}, body: { path: screencastFile } },
         createBrowserRouteResponse().res,
       );
       expect(chromeMcpMocks.startChromeMcpScreencast).toHaveBeenCalledWith(
@@ -1107,7 +1111,40 @@ describe("existing-session browser routes", () => {
       expect(stopBody.artifactBytes).toBeGreaterThan(0);
     } finally {
       await fs.rm(screencastPath, { force: true });
+      await fs.rm(lighthousePath, { force: true, recursive: true });
     }
+  });
+
+  it("rejects Chrome MCP artifact paths outside the Browser output root", async () => {
+    const lighthouseResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/lighthouse")?.(
+      {
+        params: {},
+        query: {},
+        body: { outputDirPath: path.resolve(os.tmpdir(), "openclaw-outside-lh") },
+      },
+      lighthouseResponse.res,
+    );
+    expect(lighthouseResponse.statusCode).toBe(400);
+    expect(String(requireRecord(lighthouseResponse.body, "lighthouse error").error)).toContain(
+      "lighthouse output directory",
+    );
+    expect(chromeMcpMocks.runChromeMcpLighthouseAudit).not.toHaveBeenCalled();
+
+    const screencastResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/screencast/start")?.(
+      {
+        params: {},
+        query: {},
+        body: { path: path.resolve(os.tmpdir(), "openclaw-outside-cast.webm") },
+      },
+      screencastResponse.res,
+    );
+    expect(screencastResponse.statusCode).toBe(400);
+    expect(String(requireRecord(screencastResponse.body, "screencast error").error)).toContain(
+      "screencast directory",
+    );
+    expect(chromeMcpMocks.startChromeMcpScreencast).not.toHaveBeenCalled();
   });
 
   it("routes existing-session extension debug routes through Chrome MCP", async () => {

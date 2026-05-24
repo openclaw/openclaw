@@ -35,3 +35,25 @@ export async function resolveWritableOutputPathOrRespond(params: {
   }
   return pathResult.path;
 }
+
+export async function resolveOutputDirectoryPathOrRespond(params: {
+  res: BrowserResponse;
+  rootDir: string;
+  requestedPath: string;
+  scopeLabel: string;
+  defaultDirName?: string;
+  ensureRootDir?: boolean;
+}): Promise<string | null> {
+  if (params.ensureRootDir) {
+    await ensureOutputRootDir(params.rootDir);
+  }
+  const pathResult = await pathScope(params.rootDir, { label: params.scopeLabel }).ensureDir(
+    params.requestedPath,
+    { defaultName: params.defaultDirName },
+  );
+  if (!pathResult.ok) {
+    params.res.status(400).json({ error: pathResult.error });
+    return null;
+  }
+  return pathResult.path;
+}
