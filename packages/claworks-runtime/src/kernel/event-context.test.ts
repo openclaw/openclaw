@@ -23,6 +23,21 @@ describe("buildEventContext", () => {
     expect(packet.meta).toEqual({ robot_id: "robot-99" });
   });
 
+  it("maps _robot_id alias into meta when robot_id is absent", () => {
+    const packet = buildEventContext({ _robot_id: "robot-alias-1" }, "robot.patrol");
+
+    expect(packet.meta).toEqual({ robot_id: "robot-alias-1" });
+  });
+
+  it("prefers robot_id over _robot_id when both are present", () => {
+    const packet = buildEventContext(
+      { robot_id: "robot-primary", _robot_id: "robot-alias" },
+      "robot.patrol",
+    );
+
+    expect(packet.meta).toEqual({ robot_id: "robot-primary" });
+  });
+
   it("maps patrol snapshot fields into meta and event_ts for robot.patrol", () => {
     const ts = 1_700_000_000_000;
     const packet = buildEventContext(

@@ -176,7 +176,8 @@ export function buildEventContext(
   const pendingRuns = typeof payload.pending_runs === "number" ? payload.pending_runs : undefined;
   const playbookCount =
     typeof payload.playbook_count === "number" ? payload.playbook_count : undefined;
-  const robotId = typeof payload.robot_id === "string" ? payload.robot_id : undefined;
+  const robotIdRaw = payload["robot_id"] ?? payload["_robot_id"];
+  const robotId = typeof robotIdRaw === "string" ? robotIdRaw : undefined;
 
   let sentiment = inferSentiment(payload, text);
   if (sentiment === "normal" && pendingRuns !== undefined && pendingRuns > 5) {
