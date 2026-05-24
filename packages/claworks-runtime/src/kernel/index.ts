@@ -22,6 +22,14 @@ export {
   type EventPriority,
 } from "./event-priority.js";
 export { matchGlob } from "./glob.js";
+export {
+  createRootTraceContext,
+  createChildTraceContext,
+  formatTraceparent,
+  parseTraceparent,
+  resolvePublishTraceparent,
+  type TraceContext,
+} from "./trace-context.js";
 export type * from "./types.js";
 export {
   createActionRegistry,

@@ -6,7 +6,11 @@ export interface CwEvent {
   source: string;
   timestamp: Date;
   payload: Record<string, unknown>;
+  /** OpenTelemetry-compatible 32-hex trace id for cross-layer correlation. */
+  traceId?: string;
   correlationId?: string;
+  /** W3C traceparent for distributed trace pass-through. */
+  traceparent?: string;
   /** 触发主体标识（REST apikey hash、A2A peer name、channel user id、system） */
   subjectId?: string;
   /** 触发主体类型 */

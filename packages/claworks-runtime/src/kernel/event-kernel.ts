@@ -11,6 +11,7 @@ import { createDedupGuard, type DedupGuard } from "./dedup.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createEventOutbox, type EventOutbox } from "./outbox.js";
 import { createPlaybookMatcher, type PlaybookMatcher } from "./playbook-matcher.js";
+import { resolvePublishTraceparent, parseTraceparent } from "./trace-context.js";
 import type { CwEvent, CwEventMatch } from "./types.js";
 
 export interface EventKernel {
@@ -26,6 +27,7 @@ export interface EventKernel {
     payload: Record<string, unknown>,
     opts?: {
       correlationId?: string;
+      traceparent?: string;
       idempotencyKey?: string;
       subjectId?: string;
       subjectType?: CwEvent["subjectType"];
@@ -144,7 +146,9 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
     }
 
     runningCounts.set(playbookId, concurrent + 1);
-    if (userId) userActivePlays.set(userId, (userActivePlays.get(userId) ?? 0) + 1);
+    if (userId) {
+      userActivePlays.set(userId, (userActivePlays.get(userId) ?? 0) + 1);
+    }
     try {
       await opts.playbookEngine.trigger(playbookId, input, { triggerEvent: event });
       failureState.set(playbookId, { failCount: 0, coolingUntil: 0 });
@@ -246,13 +250,21 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
         dedup.record(idemKey);
       }
 
+      const incomingTraceparent =
+        pubOpts?.traceparent ??
+        (typeof payload.traceparent === "string" ? payload.traceparent : undefined) ??
+        (typeof payload.trace_parent === "string" ? payload.trace_parent : undefined);
+      const traceparent = resolvePublishTraceparent(incomingTraceparent);
+      const traceCtx = parseTraceparent(traceparent);
       const event: CwEvent = {
         id: randomUUID(),
         type,
         source,
         timestamp: new Date(),
         payload,
-        correlationId: pubOpts?.correlationId,
+        traceparent,
+        traceId: traceCtx?.traceId,
+        correlationId: pubOpts?.correlationId ?? traceCtx?.traceId,
         subjectId: pubOpts?.subjectId,
         subjectType: pubOpts?.subjectType ?? "system",
         idempotencyKey: pubOpts?.idempotencyKey,

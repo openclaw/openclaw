@@ -15,6 +15,7 @@ export type IngressPublishParams = {
   subjectId: string;
   payload: Record<string, unknown>;
   correlationId?: string;
+  traceparent?: string;
   subjectType?: CwEvent["subjectType"];
   idempotencyKey?: string;
   /** kernel.publish 的 source 字段（默认 subjectId） */
@@ -75,6 +76,7 @@ export async function applyIngressPublish(
     params.payload,
     {
       correlationId: params.correlationId,
+      traceparent: params.traceparent,
       idempotencyKey: params.idempotencyKey,
       subjectType: params.subjectType,
       subjectId: params.subjectId,

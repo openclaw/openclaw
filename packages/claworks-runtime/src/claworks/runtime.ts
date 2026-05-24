@@ -153,10 +153,12 @@ export async function createClaworksRuntime(
     source: string,
     payload: Record<string, unknown>,
     correlationId?: string,
+    traceparent?: string,
   ) => {
     appendObservationEvent(source, type, payload);
     await kernel.publish(type, source, payload, {
       correlationId,
+      traceparent,
       subjectType: "system",
       subjectId: source,
     });

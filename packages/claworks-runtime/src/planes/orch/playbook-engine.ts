@@ -4,6 +4,7 @@ import type { RbacCheckInput, RbacCheckResult } from "../../claworks/robot-ident
 import { buildEventContext } from "../../kernel/event-context.js";
 import { CW_EVENTS } from "../../kernel/event-names.js";
 import { globalMetrics } from "../../kernel/metrics.js";
+import { formatTraceparent, createChildTraceContext } from "../../kernel/trace-context.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
 import type { LoadedPack } from "../../pack-loader/index.js";
 import type { CwDatabase } from "../data/db.js";
@@ -84,6 +85,7 @@ export type PlaybookEngineDeps = {
     source: string,
     payload: Record<string, unknown>,
     correlationId?: string,
+    traceparent?: string,
   ) => Promise<void>;
   ontology?: import("../data/ontology-engine.js").OntologyEngine;
   subagentRun?: import("./step-executor.js").SubagentRunFn;
@@ -198,12 +200,18 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       playbook_id: run.playbookId,
       status: "completed",
     });
-    publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_COMPLETED, "playbook-engine", {
-      playbook_id: run.playbookId,
-      run_id: run.id,
-      steps: run.steps.length,
-      duration_ms: durationMs,
-    }).catch(() => {});
+    publishEvent?.(
+      CW_EVENTS.PLAYBOOK_RUN_COMPLETED,
+      "playbook-engine",
+      {
+        playbook_id: run.playbookId,
+        run_id: run.id,
+        steps: run.steps.length,
+        duration_ms: durationMs,
+      },
+      run.id,
+      run.traceparent,
+    ).catch(() => {});
     recordAssistantTurnOnCompletion(input, variables, run.playbookId, run.id, deps.contextEngine);
   }
 
@@ -261,6 +269,12 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     const runId = randomUUID();
     const _pbStartMs = Date.now();
+    const parentTraceparent =
+      partialCtx?.triggerEvent?.traceparent ??
+      (typeof input.traceparent === "string" ? input.traceparent : undefined);
+    const runTraceparent = parentTraceparent
+      ? formatTraceparent(createChildTraceContext(parentTraceparent))
+      : undefined;
     const run: PlaybookRun = {
       id: runId,
       playbookId,
@@ -268,6 +282,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       startedAt: new Date(),
       input,
       steps: [],
+      traceparent: runTraceparent,
     };
     runs.set(runId, run);
     persistRun(upsertRun, run, suspended.get(runId));
@@ -276,6 +291,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     const ctx: PlaybookStepContext = {
       runId,
       playbookId,
+      traceparent: runTraceparent,
       variables: {
         ...input,
         payload: input,
@@ -305,7 +321,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       objectStore: deps.objectStore,
       kb: deps.kb,
       robot: deps.robot,
-      publishEvent,
+      publishEvent: publishEvent
+        ? async (type, source, payload, correlationId, traceparent) =>
+            publishEvent(type, source, payload, correlationId, traceparent ?? runTraceparent)
+        : undefined,
       ontology,
       reloadPacks,
       a2aPeers,
@@ -322,12 +341,18 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
           run.status = "failed";
           run.error = `Playbook exceeded global timeout of ${def.timeout_seconds ?? 300}s`;
           run.completedAt = new Date();
-          publishEvent?.(CW_EVENTS.PLAYBOOK_FAILED, "playbook-engine", {
-            playbook_id: playbookId,
-            run_id: runId,
-            error: run.error,
-            timeout: true,
-          }).catch(() => {});
+          publishEvent?.(
+            CW_EVENTS.PLAYBOOK_FAILED,
+            "playbook-engine",
+            {
+              playbook_id: playbookId,
+              run_id: runId,
+              error: run.error,
+              timeout: true,
+            },
+            runId,
+            run.traceparent,
+          ).catch(() => {});
         }
       }, playbookTimeoutMs);
       await runSteps(def, run, ctx, 0).finally(() => clearTimeout(timeoutHandle));
@@ -355,22 +380,34 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         status: "failed",
       });
       // 发布 playbook.failed 事件，触发 error_recovery_notify Playbook
-      publishEvent?.(CW_EVENTS.PLAYBOOK_FAILED, "playbook-engine", {
-        playbook_id: playbookId,
-        run_id: runId,
-        error: run.error,
-        user_id: String(input.user_id ?? input.sender_id ?? ""),
-        original_text: String(input.text ?? input.message ?? ""),
-        failed_at: run.completedAt.toISOString(),
-      }).catch(() => {});
+      publishEvent?.(
+        CW_EVENTS.PLAYBOOK_FAILED,
+        "playbook-engine",
+        {
+          playbook_id: playbookId,
+          run_id: runId,
+          error: run.error,
+          user_id: String(input.user_id ?? input.sender_id ?? ""),
+          original_text: String(input.text ?? input.message ?? ""),
+          failed_at: run.completedAt.toISOString(),
+        },
+        runId,
+        run.traceparent,
+      ).catch(() => {});
       // EvolveEngine 订阅此事件做失败案例分析
-      publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_FAILED, "playbook-engine", {
-        playbook_id: playbookId,
-        run_id: runId,
-        error: run.error,
-        steps: run.steps.length,
-        duration_ms: Date.now() - _pbStartMs,
-      }).catch(() => {});
+      publishEvent?.(
+        CW_EVENTS.PLAYBOOK_RUN_FAILED,
+        "playbook-engine",
+        {
+          playbook_id: playbookId,
+          run_id: runId,
+          error: run.error,
+          steps: run.steps.length,
+          duration_ms: Date.now() - _pbStartMs,
+        },
+        runId,
+        run.traceparent,
+      ).catch(() => {});
     }
 
     if (run.status === "completed") {
@@ -672,6 +709,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       const ctx: PlaybookStepContext = {
         runId,
         playbookId: pending.playbookId,
+        traceparent: run.traceparent,
         variables: {
           ...pending.variables,
           payload: pending.input,
@@ -682,7 +720,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         objectStore: deps.objectStore,
         kb: deps.kb,
         robot: deps.robot,
-        publishEvent,
+        publishEvent: publishEvent
+          ? async (type, source, payload, correlationId, traceparent) =>
+              publishEvent(type, source, payload, correlationId, traceparent ?? run.traceparent)
+          : undefined,
         ontology,
         reloadPacks,
         a2aPeers,
@@ -737,7 +778,9 @@ function extractResponseText(variables: Record<string, unknown>): string | null 
   const candidates = ["reply", "response", "answer", "message", "output", "result"];
   for (const key of candidates) {
     const val = variables[key];
-    if (typeof val === "string" && val.trim()) return val.trim();
+    if (typeof val === "string" && val.trim()) {
+      return val.trim();
+    }
   }
   return null;
 }
@@ -750,7 +793,9 @@ function recordAssistantTurnOnCompletion(
   contextEngine?: import("../../kernel/context-engine.js").ContextEngine,
 ): void {
   const sessionId = String(input.session_id ?? input.sessionId ?? "").trim();
-  if (!sessionId || !contextEngine) return;
+  if (!sessionId || !contextEngine) {
+    return;
+  }
   const replyText = extractResponseText(variables);
   if (replyText) {
     contextEngine.append(sessionId, "assistant", replyText, {

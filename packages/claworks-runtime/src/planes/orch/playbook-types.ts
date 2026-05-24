@@ -39,6 +39,7 @@ export type PublishEventFn = (
   source: string,
   payload: Record<string, unknown>,
   correlationId?: string,
+  traceparent?: string,
 ) => Promise<void>;
 
 export interface NotificationStep extends StepMeta {
@@ -312,6 +313,8 @@ export interface PlaybookDefinition {
 export interface PlaybookStepContext {
   runId: string;
   playbookId: string;
+  /** W3C traceparent for the current Playbook run. */
+  traceparent?: string;
   triggerEvent?: import("../../kernel/types.js").CwEvent;
   variables: Record<string, unknown>;
   objectStore: import("../data/object-store.js").ObjectStore;
@@ -342,6 +345,8 @@ export interface StepLog {
   input: unknown;
   output?: unknown;
   error?: string;
+  /** Child span traceparent for this step execution. */
+  traceparent?: string;
 }
 
 export interface PlaybookRun {
@@ -354,4 +359,6 @@ export interface PlaybookRun {
   output?: Record<string, unknown>;
   error?: string;
   steps: StepLog[];
+  /** W3C traceparent for this Playbook run. */
+  traceparent?: string;
 }

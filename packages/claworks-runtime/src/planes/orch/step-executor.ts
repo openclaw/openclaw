@@ -6,6 +6,7 @@ import { A2aClient } from "../../interfaces/a2a/client.js";
 import type { ActionRegistry } from "../../kernel/action-registry.js";
 import type { ContextPacket } from "../../kernel/event-context.js";
 import { buildLlmContext } from "../../kernel/llm-context-builder.js";
+import { createChildTraceContext, formatTraceparent } from "../../kernel/trace-context.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
 import { isDocumentKnowledgeBase } from "../data/kb-types.js";
 import type { ObjectStore } from "../data/object-store.js";
@@ -180,6 +181,14 @@ function resolveParamsDeep(value: unknown, vars: Record<string, unknown>): unkno
   return value;
 }
 
+function stepTraceparent(ctx: PlaybookStepContext, run: PlaybookRun): string | undefined {
+  const parent = ctx.traceparent ?? run.traceparent;
+  if (!parent) {
+    return undefined;
+  }
+  return formatTraceparent(createChildTraceContext(parent));
+}
+
 export async function executePlaybookStep(
   step: PlaybookStep,
   ctx: PlaybookStepContext,
@@ -195,6 +204,7 @@ export async function executePlaybookStep(
       completedAt: new Date(),
       input: step,
       output: { skipped: true, reason: "condition" },
+      traceparent: stepTraceparent(ctx, run),
     };
     run.steps.push(skipLog);
     return;
@@ -205,6 +215,7 @@ export async function executePlaybookStep(
     status: "running",
     startedAt: new Date(),
     input: step,
+    traceparent: stepTraceparent(ctx, run),
   };
   run.steps.push(log);
 
@@ -246,6 +257,7 @@ export async function executePlaybookStep(
               user_id: ctx.variables.user_id ?? "",
             },
             ctx.runId,
+            log.traceparent,
           )
           .catch(() => {
             /* non-critical */
@@ -703,7 +715,7 @@ export async function executePlaybookStep(
         const resolvedPayload = step.payload
           ? (resolveParamsDeep(step.payload, ctx.variables) as Record<string, unknown>)
           : {};
-        await ctx.publishEvent(eventType, source, resolvedPayload, ctx.runId);
+        await ctx.publishEvent(eventType, source, resolvedPayload, ctx.runId, log.traceparent);
         log.output = { published: true, eventType, source };
         deps.logger?.(`[claworks:publish_event] published ${eventType} from ${source}`);
       }
@@ -904,6 +916,7 @@ async function executeActionStep(
           "playbook-action",
           { ...created },
           ctx.triggerEvent?.correlationId,
+          run.traceparent ?? ctx.traceparent ?? ctx.triggerEvent?.traceparent,
         );
       }
     }
