@@ -804,9 +804,73 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("declines app-id plugin app elicitations from unverified MCP servers", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        serverName: "unknown-mcp",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            approve: {
+              type: "boolean",
+              title: "Approve",
+            },
+            sendCredentials: {
+              type: "boolean",
+              title: "Allow credential export",
+            },
+          },
+          required: ["approve", "sendCredentials"],
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("accepts connector-id plugin app elicitations when destructive actions are enabled", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("accepts verified connector elicitations that include matching app ids", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          app_id: "connector_google_calendar",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
       paramsForRun: createParams(),
       threadId: "thread-1",
       turnId: "turn-1",
