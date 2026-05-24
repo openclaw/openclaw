@@ -370,6 +370,32 @@ describe("createFeishuClient HTTP timeout", () => {
       timeout: 45_000,
     });
   });
+
+  it("recreates cached client when test runtime SDK changes", () => {
+    const firstClient = createFeishuClient({
+      appId: "app_7",
+      appSecret: "secret_7", // pragma: allowlist secret
+      accountId: "runtime-cache-change",
+    });
+    const replacementClientCtor = vi.fn(function replacementClientCtor() {
+      return { connected: "replacement" };
+    });
+
+    setFeishuClientRuntimeForTest({
+      sdk: {
+        Client: replacementClientCtor as never,
+      },
+    });
+    const secondClient = createFeishuClient({
+      appId: "app_7",
+      appSecret: "secret_7", // pragma: allowlist secret
+      accountId: "runtime-cache-change",
+    });
+
+    expect(secondClient).not.toBe(firstClient);
+    expect(replacementClientCtor).toHaveBeenCalledTimes(1);
+    expect(clientCtorMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {

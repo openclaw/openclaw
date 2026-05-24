@@ -256,6 +256,7 @@ export function clearClientCache(accountId?: string): void {
 export function setFeishuClientRuntimeForTest(overrides?: {
   sdk?: Partial<FeishuClientSdk>;
 }): void {
+  clearClientCache();
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
