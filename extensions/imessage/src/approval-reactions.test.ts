@@ -284,6 +284,44 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves a reaction when the approver was configured with a service-prefixed allowFrom entry", async () => {
+    // Regression test for the ClawSweeper-flagged normalizer bug: a previous
+    // version of normalizeIMessageApproverId rejected service-prefixed direct
+    // handles (`imessage:+...`, `sms:+...`, `auto:+...`) before stripping the
+    // prefix, so the approver list collapsed to empty and reaction resolution
+    // silently denied with "reactions require explicit approvers".
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "approval-message",
+      approvalId: "exec-service-prefix",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const cfg = {
+      channels: { imessage: { allowFrom: ["imessage:+15551230000"] } },
+    };
+    const handled = await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: "default",
+      message: buildTapbackReactionPayload({
+        sender: "+15551230000",
+        reaction_emoji: "👍",
+        reacted_to_guid: "approval-message",
+      }),
+      bodyText: "",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "exec-service-prefix",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
   it("resolves DM reactions even when send registered under handle but inbound carries chat_guid", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",
