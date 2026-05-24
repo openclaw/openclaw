@@ -299,6 +299,7 @@ export type DiagnosticCodexNativeThreadLifecycleAction =
   | "bypassed"
   | "failed"
   | "invalidated"
+  | "preserved"
   | "rejected"
   | "reused"
   | "rotated";
@@ -308,8 +309,14 @@ export type DiagnosticCodexNativeThreadLifecycleEvent = DiagnosticBaseEvent & {
   action: DiagnosticCodexNativeThreadLifecycleAction;
   reason: string;
   threadId?: string;
+  sessionFile?: string;
+  previousSessionFile?: string;
+  successorSessionFile?: string;
+  compactionRolledOver?: boolean;
   sessionKey?: string;
   sessionId?: string;
+  previousSessionId?: string;
+  successorSessionId?: string;
   runId?: string;
   bindingMode?: "legacy" | "none" | "per_turn" | "thread_bootstrap" | "transient";
   contextEngineId?: string;

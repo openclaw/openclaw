@@ -1110,17 +1110,25 @@ function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
 function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
-  if (!configPatch) {
-    return undefined;
-  }
-  const stableJson = JSON.stringify(stabilizeJsonValue(configPatch));
-  return `sha256:${createHash("sha256").update(stableJson).digest("hex")}`;
+  return configPatch
+    ? fingerprintStableJsonValue("openclaw:codex:user-mcp-servers:v1", configPatch)
+    : undefined;
 }
 
 function fingerprintEnvironmentSelection(
   environments: CodexTurnEnvironmentParams[] | undefined,
 ): string | undefined {
-  return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
+  return environments
+    ? fingerprintStableJsonValue("openclaw:codex:environment-selection:v1", environments)
+    : undefined;
+}
+
+function fingerprintStableJsonValue(namespace: string, value: JsonValue): string {
+  const hash = createHash("sha256");
+  hash.update(namespace);
+  hash.update("\0");
+  hash.update(JSON.stringify(stabilizeJsonValue(value)));
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {

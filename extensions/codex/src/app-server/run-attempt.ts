@@ -87,6 +87,7 @@ import {
   isCodexAppServerConnectionClosedError,
   type CodexAppServerClient,
 } from "./client.js";
+import { reconcileContextEngineCompactedCodexBinding } from "./compact.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
@@ -135,6 +136,7 @@ import {
   emitCodexNativeThreadLifecycleDiagnostic,
   resolveCodexNativeThreadBindingMode,
   type CodexNativeThreadLifecycleDiagnostic,
+  type CodexNativeThreadLifecycleDiagnosticInput,
 } from "./native-thread-diagnostics.js";
 import {
   describeCodexNotificationCorrelation,
@@ -1466,6 +1468,12 @@ export async function runCodexAppServerAttempt(
     try {
       const runtimeContext = buildActiveContextEngineRuntimeContext();
       const overflowTokenCount = params.contextTokenBudget ?? params.contextWindowInfo?.tokens;
+      const preCompactionCodexBinding =
+        (await readCodexAppServerBinding(activeSessionFile, { config: params.config })) ?? null;
+      // Bound the plugin-owned compaction with the same finite safety timeout
+      // that protects native runtime compaction, and thread the run-level
+      // abort signal through, so a slow/hung plugin compact() cannot stall
+      // Codex overflow recovery indefinitely.
       const compactResult = await compactContextEngineWithSafetyTimeout(
         activeContextEngine,
         {
@@ -1499,6 +1507,25 @@ export async function runCodexAppServerAttempt(
       if (!compactResult.ok || !compactResult.compacted) {
         return undefined;
       }
+      const previousSessionId = activeSessionId;
+      const previousSessionFile = activeSessionFile;
+      const compactedSessionId = compactResult.result?.sessionId ?? activeSessionId;
+      const compactedSessionFile = compactResult.result?.sessionFile ?? activeSessionFile;
+      await reconcileContextEngineCompactedCodexBinding({
+        params: {
+          sessionId: previousSessionId,
+          sessionKey: contextSessionKey,
+          sessionFile: previousSessionFile,
+          workspaceDir: effectiveWorkspace,
+          contextTokenBudget: params.contextTokenBudget,
+          currentTokenCount: overflowTokenCount,
+          config: params.config,
+        },
+        contextEngineId: activeContextEngine.info.id,
+        compactedSessionId,
+        compactedSessionFile,
+        originalBinding: preCompactionCodexBinding,
+      });
       adoptContextEngineCompactionTranscript(compactResult);
       await runHarnessContextEngineMaintenance({
         contextEngine: activeContextEngine,
@@ -1566,11 +1593,17 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  let contextEngineProjectionDecision: { project: boolean; reason: string } | undefined;
+  let pendingContextEngineSemanticReuseDiagnostic:
+    | CodexNativeThreadLifecycleDiagnosticInput
+    | undefined;
   const resetCodexPromptInputs = () => {
     promptText = params.prompt;
     developerInstructions = baseDeveloperInstructions;
     prePromptMessageCount = historyMessages.length;
     contextEngineProjection = undefined;
+    contextEngineProjectionDecision = undefined;
+    pendingContextEngineSemanticReuseDiagnostic = undefined;
   };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: CodexAppServerThreadBinding | undefined,
@@ -1622,6 +1655,7 @@ export async function runCodexAppServerAttempt(
           dynamicToolsFingerprint,
         })
       : { project: true, reason: "per-turn-projection" };
+    contextEngineProjectionDecision = projectionDecision;
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
       sessionId: activeSessionId,
       sessionKey: contextSessionKey,
@@ -1648,13 +1682,14 @@ export async function runCodexAppServerAttempt(
         baseDeveloperInstructions,
         projection.developerInstructionAddition,
       );
-      emitCodexNativeThreadLifecycleDiagnostic({
+      pendingContextEngineSemanticReuseDiagnostic = {
         action: "reused",
         reason: CodexNativeThreadLifecycleReason.ThreadBootstrapSemanticReuse,
         level: "info",
         message: "codex app-server reused matching context-engine thread-bootstrap binding",
         runId: params.runId,
         sessionId: activeSessionId,
+        sessionFile: describeSessionFileForDiagnostic(activeSessionFile),
         sessionKey: contextSessionKey,
         threadId: decisionStartupBinding?.threadId,
         bindingMode: resolveCodexNativeThreadBindingMode(decisionStartupBinding),
@@ -1685,7 +1720,7 @@ export async function runCodexAppServerAttempt(
         workspaceBootstrapContributed:
           hasCodexWorkspaceBootstrapContribution(workspaceBootstrapContext),
         semanticReuse: true,
-      });
+      };
     }
     promptText = projectionDecision.project ? projection.promptText : params.prompt;
     developerInstructions = joinPresentSections(
@@ -1766,6 +1801,9 @@ export async function runCodexAppServerAttempt(
   const rebuildPromptAfterContextEngineCompaction = async () => {
     historyMessages =
       (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+    startupBinding = !nativeToolSurfaceEnabled
+      ? undefined
+      : await readCodexAppServerBinding(activeSessionFile, { config: params.config });
     resetCodexPromptInputs();
     startupBinding = await readCodexAppServerBinding(activeSessionFile, {
       authProfileStore: params.authProfileStore,
@@ -1784,6 +1822,45 @@ export async function runCodexAppServerAttempt(
     }
     promptBuild = await buildPromptFromCurrentInputs();
     refreshCodexTurnPromptText();
+  };
+  const rebuildPromptForFreshThreadAfterOptimisticSemanticReuse = async (
+    nextThread: CodexAppServerThreadLifecycleBinding,
+  ) => {
+    if (
+      !activeContextEngine ||
+      nextThread.lifecycle.action !== "started" ||
+      contextEngineProjectionDecision?.project !== false ||
+      contextEngineProjectionDecision.reason !== "matching-thread-bootstrap-binding"
+    ) {
+      return;
+    }
+    resetCodexPromptInputs();
+    try {
+      await applyActiveContextEngineProjection(undefined);
+    } catch (assembleErr) {
+      embeddedAgentLog.warn(
+        "context engine assemble failed after Codex native thread rotation; using Codex baseline prompt",
+        {
+          error: formatErrorMessage(assembleErr),
+        },
+      );
+    }
+    promptBuild = await buildPromptFromCurrentInputs();
+    refreshCodexTurnPromptText();
+  };
+  const emitPendingContextEngineSemanticReuseDiagnostic = (
+    nextThread: CodexAppServerThreadLifecycleBinding,
+  ) => {
+    if (!pendingContextEngineSemanticReuseDiagnostic) {
+      return;
+    }
+    if (nextThread.lifecycle.action === "resumed") {
+      emitCodexNativeThreadLifecycleDiagnostic({
+        ...pendingContextEngineSemanticReuseDiagnostic,
+        threadId: nextThread.threadId,
+      });
+    }
+    pendingContextEngineSemanticReuseDiagnostic = undefined;
   };
   const buildCodexProviderBoundaryPrecheck = () => {
     const contextTokenBudget =
@@ -2264,6 +2341,8 @@ export async function runCodexAppServerAttempt(
     codexEnvironmentSelection = startupResult.environmentSelection;
     codexExecutionCwd = startupResult.executionCwd;
     codexSandboxPolicy = startupResult.sandboxPolicy;
+    await rebuildPromptForFreshThreadAfterOptimisticSemanticReuse(thread);
+    emitPendingContextEngineSemanticReuseDiagnostic(thread);
     startupClientForCleanup = undefined;
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -3546,6 +3625,7 @@ export async function runCodexAppServerAttempt(
         });
         await clearCodexAppServerBinding(preRetrySessionFile);
         thread = await restartContextEngineCodexThread();
+        emitPendingContextEngineSemanticReuseDiagnostic(thread);
         emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",
           data: { phase: "thread_ready_retry", threadId: thread.threadId },
@@ -6714,6 +6794,13 @@ function getCodexContextFileDisplayBasename(filePath: string): string {
 
 function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
+}
+
+function describeSessionFileForDiagnostic(sessionFile: string | undefined): string | undefined {
+  if (!sessionFile?.trim()) {
+    return undefined;
+  }
+  return path.basename(sessionFile);
 }
 
 async function mirrorTranscriptBestEffort(params: {

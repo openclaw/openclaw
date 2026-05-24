@@ -2008,20 +2008,20 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(binding.threadId).toBe("new-thread");
-    expect(lifecycleDiagnostics.events).toContainEqual(
+    const lifecycleEvent = lifecycleDiagnostics.events.find(
+      (event) => event.reason === "environment-selection-mismatch",
+    );
+    expect(lifecycleEvent).toEqual(
       expect.objectContaining({
         type: "codex.native_thread.lifecycle",
         action: "rotated",
         reason: "environment-selection-mismatch",
         threadId: "old-thread",
-        previousEnvironmentSelectionFingerprint: JSON.stringify([
-          { cwd: "/workspace", environmentId: "env-old" },
-        ]),
-        environmentSelectionFingerprint: JSON.stringify([
-          { cwd: "/workspace", environmentId: "env-new" },
-        ]),
+        previousEnvironmentSelectionFingerprint: expect.stringMatching(/^sha256:/),
+        environmentSelectionFingerprint: expect.stringMatching(/^sha256:/),
       }),
     );
+    expect(JSON.stringify(lifecycleEvent)).not.toContain("/workspace");
   });
 
   it("starts a no-MCP Codex thread when MCP config is evaluated empty", async () => {

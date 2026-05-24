@@ -218,6 +218,12 @@ OpenClaw returns after starting that native operation. It does not wait for
 completion, impose a separate OpenClaw timeout, restart the shared Codex
 app-server, or record the operation as an OpenClaw-completed compaction.
 
+If context-engine overflow recovery rotates a transcript before a turn starts,
+OpenClaw preserves compatible `thread_bootstrap` bindings when their semantic
+identity still matches the projected context. Legacy, ownerless, and
+non-bootstrap bindings are abandoned so the next turn can rehydrate a fresh
+thread from engine-managed context.
+
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result content
 into the fresh Codex thread. It does not copy raw tool-call argument values into
@@ -259,18 +265,29 @@ context-engine id, policy fingerprint, projection epoch, projection
 fingerprint, and dynamic-tool surface. In that case OpenClaw logs
 `thread-bootstrap-semantic-reuse` and skips the proactive token and byte guards,
 because the large projection was already bootstrapped into that Codex thread.
+Successful context-engine-owned compaction preserves that binding when the
+projection remains `thread_bootstrap`. If compaction keeps the same session
+file, the binding stays in place. If compaction rolls over to a successor
+session file, OpenClaw copies the binding to the successor and clears the
+archived original so the next turn can resume the warm Codex thread. Legacy,
+ownerless, or non-bootstrap bindings are still invalidated by compaction.
 When any semantic identity changes, OpenClaw starts a fresh native thread and
-emits `codex.native_thread.lifecycle` with a stable reason such as
+emits `codex.native_thread.lifecycle` with a rotation reason such as
 `projection-mismatch`, `context-engine-binding-mismatch`,
 `dynamic-tools-mismatch`, `mcp-config-mismatch`,
 `environment-selection-mismatch`, `native-tool-surface-disabled`,
 `plugin-app-config-mismatch`, `auth-profile-mismatch`, `missing-thread-binding`,
 `app-server-rejected-thread`, `native-token-guard`, or `native-byte-guard`.
+Compaction itself emits either `context-engine-compaction-preserved-binding` or
+`context-engine-compaction-invalidated-binding` so the outcome is visible even
+when no fresh thread is started immediately.
 
-The trusted lifecycle diagnostic includes counts and fingerprints, but not raw
-prompt text, bootstrap file contents, tool arguments, or secrets. Its companion
-log entry is intentionally lower-cardinality and omits scoped thread/session ids
-and fingerprints. Use the trusted event to answer whether a slow Codex session is
+The trusted lifecycle diagnostic includes counts, hashed comparison
+fingerprints, and basename session-file labels for rollover, but not raw prompt
+text, bootstrap file contents, tool arguments, local absolute paths, or secrets.
+Its companion log entry is intentionally lower-cardinality and omits scoped
+thread/session ids and fingerprints. Use the trusted event to answer whether a
+slow Codex session is
 rebuilding context because the warm native thread exceeded a guard, because
 OpenClaw assembled too much prompt/context, or because Codex itself rejected the
 native thread or turn.

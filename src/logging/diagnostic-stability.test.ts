@@ -260,16 +260,28 @@ describe("diagnostic stability recorder", () => {
 
     emitDiagnosticEvent({
       type: "codex.native_thread.lifecycle",
-      action: "reused",
-      reason: "semantic-thread-reuse",
-      threadId: "thread-secret",
+      action: "preserved",
+      reason: "context-engine-compaction-preserved-binding",
+      threadId: "native-thread-secret",
+      sessionFile: "current-session.jsonl",
+      previousSessionFile: "archived-session.jsonl",
+      successorSessionFile: "successor-session.jsonl",
+      compactionRolledOver: true,
+      sessionKey: "agent:main:discord:channel:secret",
       sessionId: "session-secret",
-      sessionKey: "agent:main:session-secret",
+      previousSessionId: "previous-session-secret",
+      successorSessionId: "successor-session-secret",
       runId: "run-secret",
       bindingMode: "thread_bootstrap",
-      contextTokenBudget: 200_000,
-      nativeTokens: 1234,
-      nativeTranscriptBytes: 5678,
+      contextEngineId: "engine-secret",
+      contextEnginePolicyFingerprint: "policy-secret",
+      projectionEpoch: "epoch-secret",
+      projectionFingerprint: "projection-secret",
+      contextTokenBudget: 272_000,
+      sessionTokens: 77_000,
+      nativeTokens: 86_000,
+      nativeTranscriptBytes: 344_000,
+      maxActiveTranscriptBytes: 1_048_576,
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -277,19 +289,36 @@ describe("diagnostic stability recorder", () => {
 
     expectFields(snapshot.events[0], {
       type: "codex.native_thread.lifecycle",
-      action: "reused",
-      reason: "semantic-thread-reuse",
+      action: "preserved",
+      reason: "context-engine-compaction-preserved-binding",
       mode: "thread_bootstrap",
-      count: 1234,
-      bytes: 5678,
-      context: { limit: 200_000, used: 1234 },
+      count: 86_000,
+      bytes: 344_000,
+      limitBytes: 1_048_576,
+      context: {
+        limit: 272_000,
+        used: 86_000,
+      },
     });
-    expect(snapshot.events[0]).not.toHaveProperty("target");
-    expect(snapshot.events[0]).not.toHaveProperty("threadId");
-    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
-    expect(snapshot.events[0]).not.toHaveProperty("sessionKey");
-    expect(snapshot.events[0]).not.toHaveProperty("runId");
-    expect(JSON.stringify(snapshot.events[0])).not.toContain("thread-secret");
+    for (const key of [
+      "threadId",
+      "target",
+      "sessionFile",
+      "previousSessionFile",
+      "successorSessionFile",
+      "sessionKey",
+      "sessionId",
+      "previousSessionId",
+      "successorSessionId",
+      "runId",
+      "contextEngineId",
+      "contextEnginePolicyFingerprint",
+      "projectionEpoch",
+      "projectionFingerprint",
+    ]) {
+      expect(snapshot.events[0]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(snapshot.events[0])).not.toContain("secret");
   });
 
   it("sanitizes tool and model diagnostic error categories", async () => {

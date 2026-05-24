@@ -435,9 +435,13 @@ Codex binding still matches the active context-engine id, policy fingerprint,
 projection epoch/fingerprint, and dynamic-tool surface, OpenClaw treats the
 large bootstrap/projection payload as already present in the native thread and
 logs `thread-bootstrap-semantic-reuse` instead of reprojecting it every turn.
-If those identities change, OpenClaw starts a fresh Codex thread and reprojects
-context once for the new epoch. This keeps long-running agents fast without
-pretending a stale bootstrap or stale context-engine projection is still valid.
+Successful context-engine-owned compaction preserves that binding when the
+projection mode remains `thread_bootstrap`: same-file compaction leaves it in
+place, and successor-transcript rollover copies it to the successor before
+clearing the archived original. If those identities change, OpenClaw starts a
+fresh Codex thread and reprojects context once for the new epoch. This keeps
+long-running agents fast without pretending a stale bootstrap or stale
+context-engine projection is still valid.
 
 ## Environment overrides
 
