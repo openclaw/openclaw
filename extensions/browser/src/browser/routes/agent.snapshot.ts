@@ -703,6 +703,7 @@ export function registerBrowserAgentSnapshotRoutes(
             return await snapshotRoleViaCdp({
               wsUrl: tab.wsUrl,
               urls: plan.urls,
+              timeoutMs: plan.timeoutMs,
               options: {
                 interactive: plan.interactive ?? undefined,
                 compact: plan.compact ?? undefined,
@@ -807,7 +808,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 });
               });
             })()
-          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit });
+          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit: plan.limit, timeoutMs: plan.timeoutMs });
 
         const resolved = await Promise.resolve(snap);
         if (!resolved) {
