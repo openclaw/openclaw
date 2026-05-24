@@ -37,6 +37,17 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("turn2view0");
   });
 
+  it("strips unsupported citation control markers even without code block chrome", () => {
+    const html = toSanitizedMarkdownHtml(
+      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
+      { codeBlockChrome: false },
+    );
+
+    expect(html).toBe("<p>v2026.5.20 release note</p>\n<p>Still readable.</p>\n");
+    expect(html).not.toContain("cite");
+    expect(html).not.toContain("turn2view0");
+  });
+
   // ── Additional tests for markdown-it migration ──
   describe("www autolinks", () => {
     it("links www.example.com", () => {
