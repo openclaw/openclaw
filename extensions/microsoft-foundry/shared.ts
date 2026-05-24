@@ -96,7 +96,8 @@ function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
 
 type FoundryModelCompat = {
   supportsStore?: boolean;
-  maxTokensField: "max_completion_tokens" | "max_tokens";
+  maxTokensField?: "max_completion_tokens" | "max_tokens";
+  thinkingFormat?: "deepseek";
 };
 
 type FoundryConfigShape = {
@@ -124,6 +125,11 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
     normalized.startsWith("deepseek-v4") ||
     normalized === "computer-use-preview"
   );
+}
+
+function usesFoundryDeepSeekDsmlToolFormat(value?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(value);
+  return normalized?.startsWith("deepseek-v4") === true;
 }
 
 export function supportsFoundryImageInput(value?: string | null): boolean {
@@ -219,12 +225,17 @@ function buildFoundryModelCompat(
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
   const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
-  if (resolvedApi !== DEFAULT_GPT5_API && !needsMaxCompletionTokens) {
+  const needsDeepSeekDsmlRecovery =
+    resolvedApi === DEFAULT_API && usesFoundryDeepSeekDsmlToolFormat(configuredModelName);
+  if (resolvedApi !== DEFAULT_GPT5_API && !needsMaxCompletionTokens && !needsDeepSeekDsmlRecovery) {
     return undefined;
   }
   return {
     ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
-    maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
+    ...(resolvedApi === DEFAULT_GPT5_API || needsMaxCompletionTokens
+      ? { maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens" }
+      : {}),
+    ...(needsDeepSeekDsmlRecovery ? { thinkingFormat: "deepseek" } : {}),
   };
 }
 
@@ -275,7 +286,7 @@ function buildFoundryProviderConfig(
   const isApiKeyAuth = options?.authMethod === "api-key";
   const deployments = options?.deployments?.length
     ? options.deployments
-    : [{ name: modelId, modelName: modelNameHint ?? undefined }];
+    : [{ name: modelId, modelName: modelNameHint ?? undefined, api: options?.api }];
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
   return {
     baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, resolvedApi),

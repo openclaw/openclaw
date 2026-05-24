@@ -670,6 +670,23 @@ describe("microsoft-foundry plugin", () => {
     expect(provider?.models[0]?.compat?.maxTokensField).toBe("max_completion_tokens");
   });
 
+  it("marks Foundry DeepSeek completions deployments for DSML tool-call recovery", () => {
+    const result = buildFoundryAuthResult({
+      profileId: "microsoft-foundry:entra",
+      apiKey: "__entra_id_dynamic__",
+      endpoint: "https://example.services.ai.azure.com",
+      modelId: "prod-deepseek-v4",
+      modelNameHint: "deepseek-v4-pro",
+      api: "openai-completions",
+      authMethod: "entra-id",
+    });
+
+    const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
+    expect(provider?.api).toBe("openai-completions");
+    expect(provider?.models[0]?.api).toBe("openai-completions");
+    expect(provider?.models[0]?.compat).toEqual({ thinkingFormat: "deepseek" });
+  });
+
   it("keeps persisted response-mode routing for custom deployment aliases", async () => {
     const provider = registerProvider();
     const config: OpenClawConfig = {

@@ -2441,6 +2441,9 @@ async function processOpenAICompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
     : null;
+  const deepSeekDsmlToolCallRecovery = deepSeekTextFilter
+    ? createDeepSeekDsmlToolCallRecovery()
+    : null;
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2569,7 +2572,41 @@ async function processOpenAICompletionsStream(
       appendTextDelta(text);
     }
   };
+  let recoveredDeepSeekDsmlToolCallIndex = 0;
+  const appendRecoveredDeepSeekDsmlToolCall = (toolCall: RecoveredDeepSeekDsmlToolCall) => {
+    const switchingToolCall = currentBlock?.type === "toolCall";
+    finishCurrentBlock();
+    if (switchingToolCall) {
+      currentBlock = null;
+      flushPendingPostToolCallDeltas();
+    }
+    const block: ToolCallBlock = {
+      type: "toolCall",
+      id: `call_deepseek_dsml_${++recoveredDeepSeekDsmlToolCallIndex}`,
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+      partialArgs: toolCall.partialArgs,
+    };
+    output.content.push(block);
+    currentBlock = block;
+    output.stopReason = "toolUse";
+    stream.push({
+      type: "toolcall_start",
+      contentIndex: output.content.indexOf(block),
+      partial: output,
+    });
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: output.content.indexOf(block),
+      delta: toolCall.partialArgs,
+      partial: output,
+    });
+  };
   const appendFilteredVisibleTextDelta = (text: string) => {
+    const recoveredToolCalls = deepSeekDsmlToolCallRecovery?.push(text) ?? [];
+    for (const toolCall of recoveredToolCalls) {
+      appendRecoveredDeepSeekDsmlToolCall(toolCall);
+    }
     const parts = deepSeekTextFilter?.push(text) ?? [text];
     for (const part of parts) {
       appendVisibleTextDelta(part);
@@ -2607,7 +2644,13 @@ async function processOpenAICompletionsStream(
     }
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
-      output.stopReason = finishReasonResult.stopReason;
+      const preservesRecoveredToolUse =
+        output.stopReason === "toolUse" &&
+        recoveredDeepSeekDsmlToolCallIndex > 0 &&
+        finishReasonResult.stopReason === "stop";
+      if (!preservesRecoveredToolUse) {
+        output.stopReason = finishReasonResult.stopReason;
+      }
       if (finishReasonResult.errorMessage) {
         output.errorMessage = finishReasonResult.errorMessage;
       }
@@ -2737,6 +2780,160 @@ type CompletionsReasoningDelta =
 
 function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {
   return compat.thinkingFormat === "deepseek";
+}
+
+type RecoveredDeepSeekDsmlToolCall = {
+  name: string;
+  arguments: Record<string, unknown>;
+  partialArgs: string;
+};
+
+const DEEPSEEK_DSML_TOOL_BLOCK_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
+const DEEPSEEK_DSML_TOOL_BLOCK_BARS = ["|", "｜"] as const;
+const DEEPSEEK_DSML_TOOL_BLOCK_OPEN_TOKENS = DEEPSEEK_DSML_TOOL_BLOCK_BARS.flatMap((bar) =>
+  DEEPSEEK_DSML_TOOL_BLOCK_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
+);
+const DEEPSEEK_DSML_TOOL_BLOCK_PATTERN =
+  /<([|｜])DSML\1(tool_calls|tool_call|function_calls)>([\s\S]*?)<\/\1DSML\1\2>/g;
+const DEEPSEEK_DSML_INVOKE_PATTERN = /<([|｜])DSML\1invoke\b([^>]*)>([\s\S]*?)<\/\1DSML\1invoke>/g;
+const DEEPSEEK_DSML_PARAMETER_PATTERN =
+  /<([|｜])DSML\1parameter\b([^>]*)>([\s\S]*?)<\/\1DSML\1parameter>/g;
+const MAX_DEEPSEEK_DSML_TOOL_CALL_BUFFER_BYTES = 256_000;
+
+function createDeepSeekDsmlToolCallRecovery() {
+  let buffer = "";
+
+  return {
+    push(chunk: string): RecoveredDeepSeekDsmlToolCall[] {
+      buffer += chunk;
+      if (Buffer.byteLength(buffer, "utf8") > MAX_DEEPSEEK_DSML_TOOL_CALL_BUFFER_BYTES) {
+        buffer = buffer.slice(-MAX_DEEPSEEK_DSML_TOOL_CALL_BUFFER_BYTES);
+      }
+
+      const recovered: RecoveredDeepSeekDsmlToolCall[] = [];
+      let consumedThrough = 0;
+      DEEPSEEK_DSML_TOOL_BLOCK_PATTERN.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = DEEPSEEK_DSML_TOOL_BLOCK_PATTERN.exec(buffer))) {
+        consumedThrough = match.index + match[0].length;
+        recovered.push(...parseDeepSeekDsmlToolCalls(match[3]));
+      }
+
+      if (consumedThrough > 0) {
+        buffer = buffer.slice(consumedThrough);
+      } else {
+        buffer = trimToDeepSeekDsmlToolBlockCandidate(buffer);
+      }
+      return recovered;
+    },
+  };
+}
+
+function trimToDeepSeekDsmlToolBlockCandidate(text: string) {
+  const earliestOpen = DEEPSEEK_DSML_TOOL_BLOCK_OPEN_TOKENS.reduce<number | null>(
+    (earliest, token) => {
+      const index = text.indexOf(token);
+      return index === -1 || (earliest !== null && index >= earliest) ? earliest : index;
+    },
+    null,
+  );
+  if (earliestOpen !== null) {
+    return text.slice(earliestOpen);
+  }
+  const maxLength = Math.min(
+    text.length,
+    Math.max(...DEEPSEEK_DSML_TOOL_BLOCK_OPEN_TOKENS.map((token) => token.length)) - 1,
+  );
+  for (let length = maxLength; length > 0; length--) {
+    const suffix = text.slice(text.length - length);
+    if (DEEPSEEK_DSML_TOOL_BLOCK_OPEN_TOKENS.some((token) => token.startsWith(suffix))) {
+      return suffix;
+    }
+  }
+  return "";
+}
+
+function parseDeepSeekDsmlToolCalls(body: string): RecoveredDeepSeekDsmlToolCall[] {
+  const recovered: RecoveredDeepSeekDsmlToolCall[] = [];
+  DEEPSEEK_DSML_INVOKE_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = DEEPSEEK_DSML_INVOKE_PATTERN.exec(body))) {
+    const name = getDeepSeekDsmlAttribute(match[2], "name");
+    if (!name || !isValidRecoveredDeepSeekDsmlToolName(name)) {
+      continue;
+    }
+    const args = parseDeepSeekDsmlToolArguments(match[3]);
+    if (!args) {
+      continue;
+    }
+    recovered.push({
+      name,
+      arguments: args,
+      partialArgs: JSON.stringify(args),
+    });
+  }
+  return recovered;
+}
+
+function parseDeepSeekDsmlToolArguments(body: string): Record<string, unknown> | null {
+  const args: Record<string, unknown> = {};
+  let parameterCount = 0;
+  DEEPSEEK_DSML_PARAMETER_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = DEEPSEEK_DSML_PARAMETER_PATTERN.exec(body))) {
+    const name = getDeepSeekDsmlAttribute(match[2], "name");
+    if (!name) {
+      continue;
+    }
+    const isString = getDeepSeekDsmlAttribute(match[2], "string") === "true";
+    const decodedValue = decodeDeepSeekDsmlEntities(match[3].trim());
+    if (isString) {
+      args[name] = decodedValue;
+      parameterCount++;
+      continue;
+    }
+    if (!decodedValue) {
+      return null;
+    }
+    try {
+      args[name] = JSON.parse(decodedValue) as unknown;
+      parameterCount++;
+    } catch {
+      return null;
+    }
+  }
+  if (parameterCount > 0) {
+    return args;
+  }
+  const decodedBody = decodeDeepSeekDsmlEntities(body.trim());
+  if (!decodedBody) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(decodedBody) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getDeepSeekDsmlAttribute(attrs: string, name: string) {
+  const pattern = new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, "i");
+  const match = pattern.exec(attrs);
+  return match ? decodeDeepSeekDsmlEntities(match[2]) : null;
+}
+
+function decodeDeepSeekDsmlEntities(text: string) {
+  return text
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function isValidRecoveredDeepSeekDsmlToolName(name: string) {
+  return name.length > 0 && name.length <= 128 && /^[A-Za-z0-9_.-]+$/.test(name);
 }
 
 function getCompletionsContentDeltas(content: unknown): CompletionsReasoningDelta[] {

@@ -41,6 +41,22 @@ function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
   };
 }
 
+function createFoundryDeepSeekCompletionsModel(): Model<"openai-completions"> {
+  return {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openai-completions",
+    provider: "microsoft-foundry",
+    baseUrl: "https://example.services.ai.azure.com/openai/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+    compat: { thinkingFormat: "deepseek" },
+  };
+}
+
 function createAssistantOutput(model: Model<"openai-completions">): OpenAICompletionsOutput {
   return {
     role: "assistant" as const,
@@ -1531,6 +1547,272 @@ describe("openai transport stream", () => {
         partialArgs: '{"path":"/tmp/native.md"}',
       },
     ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("recovers observed DeepSeek DSML parameter tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  "<｜DSML｜tool_calls>\n" +
+                  '<｜DSML｜invoke name="session_status">\n' +
+                  '<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n' +
+                  "</｜DSML｜invoke>\n" +
+                  "</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+    expect(events.some((event) => event.type === "toolcall_delta")).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("recovers split DeepSeek DSML parameter tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n' +
+                  '<｜DSML｜parameter name="sessionKey" string="true">',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("preserves recovered DeepSeek DSML tool use across a later stop chunk", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool-final-stop",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  "<｜DSML｜tool_calls>\n" +
+                  '<｜DSML｜invoke name="session_status">\n' +
+                  '<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n' +
+                  "</｜DSML｜invoke>\n" +
+                  "</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-dsml-tool-final-stop",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("recovers observed Foundry DeepSeek DSML tool calls across a later stop chunk", async () => {
+    const model = createFoundryDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-foundry-deepseek-dsml-tool-final-stop",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  "<｜DSML｜tool_calls>\n" +
+                  '<｜DSML｜invoke name="session_status">\n' +
+                  '<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n' +
+                  "</｜DSML｜invoke>\n" +
+                  "</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-foundry-deepseek-dsml-tool-final-stop",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+    expect(events.some((event) => event.type === "toolcall_delta")).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("does not execute malformed DeepSeek DSML tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-malformed-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  "<｜DSML｜tool_calls>\n" +
+                  '<｜DSML｜invoke name="session_status">\n' +
+                  "</｜DSML｜invoke>\n" +
+                  "</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([]);
+    expect(output.stopReason).toBe("stop");
+    expect(events.some((event) => event.type === "toolcall_delta")).toBe(false);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
