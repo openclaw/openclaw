@@ -69,6 +69,8 @@ export type ClaworksRuntime = {
   _outboxFlushTimer?: ReturnType<typeof setInterval>;
   /** HITL expiry sweep timer (30 s interval). */
   _hitlExpiryTimer?: ReturnType<typeof setInterval>;
+  /** AutonomyEngine 周期性扫描定时器（每5分钟检测学习机会） */
+  _autonomyScanTimer?: ReturnType<typeof setInterval>;
   close: () => void;
 
   // ── 可选扩展组件（由 extension-capabilities 或上层注入）─────────────────

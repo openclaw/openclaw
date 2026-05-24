@@ -585,6 +585,20 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     });
     runtime.logger?.(`[claworks:patrol] 自主巡逻已启动，间隔=${patrolIntervalMs}ms`);
   }
+
+  // 启动 AutonomyEngine 周期性学习机会扫描（5 分钟间隔）
+  const autonomyScanMs = 5 * 60 * 1000;
+  runtime._autonomyScanTimer = setInterval(async () => {
+    try {
+      const { detectLearnOpportunities } = await import("../kernel/autonomy-engine.js");
+      await detectLearnOpportunities(runtime);
+    } catch (err) {
+      runtime.logger?.(
+        `[claworks:autonomy] 扫描失败: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, autonomyScanMs);
+  runtime.logger?.("[claworks:autonomy] 自主学习机会扫描已启动（每5分钟）");
 }
 
 function validateStartupConfig(config: ClaworksRobotConfig): string[] {
@@ -650,6 +664,10 @@ export async function stopClaworksRuntime(runtime: ClaworksRuntime): Promise<voi
   if (runtime._hitlExpiryTimer) {
     clearInterval(runtime._hitlExpiryTimer);
     runtime._hitlExpiryTimer = undefined;
+  }
+  if (runtime._autonomyScanTimer) {
+    clearInterval(runtime._autonomyScanTimer);
+    runtime._autonomyScanTimer = undefined;
   }
   try {
     await runtime.kernel.publish("system.runtime.stopped", "runtime", {
