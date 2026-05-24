@@ -675,7 +675,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
-  it("falls back to context-engine compaction when Codex native binding is stale", async () => {
+  it("fails instead of falling back to context-engine compaction when Codex native binding is stale", async () => {
     const sessionKey = "agent:main:codex-stale-binding";
     const sessionId = "session-codex-stale-binding";
     const sessionFile = path.join(tmpDir, "session-codex-stale-binding.jsonl");
@@ -732,38 +732,35 @@ describe("runCliTurnCompactionLifecycle", () => {
       recordCliCompactionInStore,
     });
 
-    const updatedEntry = await runCliTurnCompactionLifecycle({
-      cfg: {} as OpenClawConfig,
-      sessionId,
-      sessionKey,
-      sessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      workspaceDir: tmpDir,
-      agentDir: tmpDir,
-      provider: "codex",
-      model: "gpt-5.5",
-    });
+    await expect(
+      runCliTurnCompactionLifecycle({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        storePath,
+        sessionAgentId: "main",
+        workspaceDir: tmpDir,
+        agentDir: tmpDir,
+        provider: "codex",
+        model: "gpt-5.5",
+      }),
+    ).rejects.toThrow(
+      "CLI native harness compaction failed for codex/gpt-5.5: thread not found: thread-1",
+    );
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(compactCalls).toHaveLength(1);
-    expect(maintenance).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex",
-        sessionKey,
-        tokensAfter: undefined,
-      }),
-    );
-    expect(updatedEntry?.compactionCount).toBe(1);
+    expect(compactCalls).toHaveLength(0);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
   it("keeps successful context-engine fallback when post-compaction maintenance fails", async () => {
-    const sessionKey = "agent:main:codex-stale-maintenance";
-    const sessionId = "session-codex-stale-maintenance";
-    const sessionFile = path.join(tmpDir, "session-codex-stale-maintenance.jsonl");
-    const storePath = path.join(tmpDir, "sessions-codex-stale-maintenance.json");
+    const sessionKey = "agent:main:external-harness-stale-maintenance";
+    const sessionId = "session-external-harness-stale-maintenance";
+    const sessionFile = path.join(tmpDir, "session-external-harness-stale-maintenance.jsonl");
+    const storePath = path.join(tmpDir, "sessions-external-harness-stale-maintenance.json");
     await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
@@ -773,7 +770,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
-      agentHarnessId: "codex",
+      agentHarnessId: "external-harness",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
@@ -824,14 +821,14 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
-      provider: "codex",
-      model: "gpt-5.5",
+      provider: "external-harness",
+      model: "model",
     });
 
     expect(compactCalls).toHaveLength(1);
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "codex", sessionKey }),
+      expect.objectContaining({ provider: "external-harness", sessionKey }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);
   });

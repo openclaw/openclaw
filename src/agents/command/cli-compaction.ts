@@ -181,6 +181,18 @@ function isRecoverableNativeHarnessCompactionFailure(
   );
 }
 
+function isCodexNativeHarnessCompactionSession(
+  sessionEntry: SessionEntry,
+  provider: string,
+): boolean {
+  const harnessId = sessionEntry.agentHarnessId?.trim().toLowerCase();
+  const providerId = provider.trim().toLowerCase();
+  return (
+    harnessId === "codex" &&
+    (providerId === "codex" || providerId === "openai" || providerId === "openai-codex")
+  );
+}
+
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
   const parts = sessionKey.trim().split(":");
   return parts[0] === "agent" && parts[1]?.trim() ? parts[1].trim() : undefined;
@@ -401,8 +413,9 @@ async function compactNativeHarnessCliTranscript(params: {
 
   if (!result?.compacted) {
     const fallbackToContextEngine =
-      isUnsupportedNativeHarnessCompaction(result) ||
-      isRecoverableNativeHarnessCompactionFailure(result);
+      !isCodexNativeHarnessCompactionSession(params.sessionEntry, params.provider) &&
+      (isUnsupportedNativeHarnessCompaction(result) ||
+        isRecoverableNativeHarnessCompactionFailure(result));
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
     );
