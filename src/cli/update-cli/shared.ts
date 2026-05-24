@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
@@ -141,7 +142,7 @@ export function resolveGitInstallDir(): string {
 }
 
 function resolveDefaultGitDir(): string {
-  const home = os.homedir();
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
   if (home.startsWith("/")) {
     return path.posix.join(home, "openclaw");
   }
@@ -221,6 +222,7 @@ export async function ensureGitCheckout(params: {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
+    await fs.mkdir(path.dirname(params.dir), { recursive: true });
     return await runUpdateStep({
       name: "git clone",
       argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],

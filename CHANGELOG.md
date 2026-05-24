@@ -98,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: omit internal stream-error placeholder entries from agent prompt history so failed assistant turns are not replayed as model-authored text. (#85652) Thanks @anyech.
 - Sessions: enforce the session write-lock max-hold policy during lock acquisition so long-held locks can be reclaimed before the stale-lock window. (#85764) Thanks @njuboy11.
 - Sessions/status: preserve user-facing model, fallback, usage, and cost attribution when internal subagent handoff runs use fallback models. (#85726, fixes #85082) Thanks @brokemac79.
+- Install/update: honor `OPENCLAW_HOME` when deriving default dev checkout and installer onboarding paths, while keeping explicit `OPENCLAW_GIT_DIR` and `OPENCLAW_CONFIG_PATH` overrides authoritative. Fixes #54014. Thanks @robertPiro.
 - Models: prune retired Groq, GitHub Copilot, OpenAI, xAI, and old Claude catalog entries, with doctor migration to upgrade existing configs to current provider refs.
 - Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.
 - Channels: honor `/verbose on` for tool/progress summaries across direct chats, groups, channels, and forum topics while preserving quiet default behavior. (#85488) Thanks @kurplunkin.
