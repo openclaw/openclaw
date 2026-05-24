@@ -115,6 +115,7 @@ Docs: https://docs.openclaw.ai
 - Release: align generated config/API baselines and the meeting-notes plugin version so release preflight stays green on native Windows.
 - Install/Windows: run Git hook setup through a Node prepare helper so native Windows installs no longer print POSIX shell errors.
 - Checks/Windows: chunk and serialize extension oxlint shards on native Windows so changed gates avoid Go-backed linter memory spikes.
+- Release/Windows: run installed `openclaw.cmd` verification through explicit `cmd.exe` wrapping so npm prepublish/postpublish checks avoid Node shell-argv warnings.
 - Checks/Windows: route full `pnpm check` stage commands through the managed child runner so Windows avoids Node shell-argv deprecation warnings there too.
 - Agents/fs: allow workspace-only host write/edit tools to write through in-workspace symlink directory parents while preserving outside-workspace symlink rejection. Fixes #84696. Thanks @garbagenetwork.
 - Checks/Windows: run managed child commands through explicit `cmd.exe` wrapping instead of Node shell mode with argv, avoiding Node 24 subprocess deprecation warnings during changed checks.
