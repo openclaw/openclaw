@@ -63,16 +63,17 @@ async function expectSharedOperatorScopesCleared(
   }
 }
 
-async function expectLocalBackendGatewayClientScopesPreserved(
+async function expectBackendSelfDeclaredScopeBypassBlocked(
   port: number,
   auth: { token?: string; password?: string },
+  scope: string,
 ) {
   const ws = await openWs(port);
   try {
     const res = await connectReq(ws, {
       ...auth,
       client: { ...BACKEND_GATEWAY_CLIENT },
-      scopes: ["operator.admin"],
+      scopes: [scope],
       device: null,
     });
     expect(res.ok).toBe(true);
@@ -84,10 +85,11 @@ async function expectLocalBackendGatewayClientScopesPreserved(
           };
         }
       | undefined;
-    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+    expect(helloOk?.auth?.scopes).toEqual([]);
 
-    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
+    const readRes = await rpcReq(ws, "sessions.list", {});
+    expect(readRes.ok).toBe(false);
+    expect(readRes.error?.message ?? "").toContain("missing scope");
   } finally {
     ws.close();
   }
@@ -126,8 +128,15 @@ describe("gateway auth compatibility baseline", () => {
       await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
-    test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
+    test("blocks backend identity self-declared scope bypass with shared token", async () => {
+      for (const scope of [
+        "operator.admin",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+      ]) {
+        await expectBackendSelfDeclaredScopeBypassBlocked(port, { token: "secret" }, scope);
+      }
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -300,8 +309,15 @@ describe("gateway auth compatibility baseline", () => {
       await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
 
-    test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
+    test("blocks backend identity self-declared scope bypass with shared password", async () => {
+      for (const scope of [
+        "operator.admin",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+      ]) {
+        await expectBackendSelfDeclaredScopeBypassBlocked(port, { password: "secret" }, scope);
+      }
     });
   });
 

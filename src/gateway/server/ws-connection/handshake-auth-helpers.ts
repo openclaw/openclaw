@@ -10,6 +10,7 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
+import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
@@ -121,6 +122,7 @@ function isCliContainerLocalEquivalent(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  approvalRuntimeToken?: string;
 }): boolean {
   const isCliClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
@@ -144,6 +146,7 @@ function isSharedSecretLoopbackLocalEquivalent(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  approvalRuntimeToken?: string;
 }): boolean {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
@@ -256,6 +259,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  approvalRuntimeToken?: string;
 }): boolean {
   const isBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -274,8 +278,14 @@ export function shouldSkipLocalBackendSelfPairing(params: {
     return true;
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  if (usesSharedSecretAuth) {
+    if (isOperatorApprovalRuntimeToken(params.approvalRuntimeToken)) {
+      return params.sharedAuthOk;
+    }
+    return params.sharedAuthOk && (params.connectParams.scopes?.length ?? 0) === 0;
+  }
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
+  return usesDeviceTokenAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

@@ -1851,7 +1851,7 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("allows gateway backend loopback shared-auth connections without device pairing", async () => {
+  test("clears scopes for gateway backend loopback shared-auth connections without device pairing", async () => {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     const sockets = [ws];
     try {
@@ -1873,8 +1873,18 @@ export function registerControlUiAndPairingSuite(): void {
         const backendConnect = await connectReq(socket, {
           token: "secret",
           client: BACKEND_GATEWAY_CLIENT,
+          scopes: ["operator.admin", "operator.write", "operator.approvals", "operator.pairing"],
+          device: null,
         });
         expect(backendConnect.ok, backendCase.name).toBe(true);
+        const helloOk = backendConnect.payload as
+          | {
+              auth?: {
+                scopes?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.scopes, backendCase.name).toEqual([]);
       }
     } finally {
       for (const socket of sockets) {

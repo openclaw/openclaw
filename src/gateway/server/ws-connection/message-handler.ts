@@ -766,6 +766,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           hasBrowserOriginHeader,
           sharedAuthOk,
           authMethod,
+          approvalRuntimeToken: connectParams.auth?.approvalRuntimeToken,
         });
         const handleMissingDeviceIdentity = (): boolean => {
           const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({

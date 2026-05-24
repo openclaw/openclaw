@@ -412,7 +412,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
-  it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
+  it("uses device identity for scoped direct-local backend shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -424,7 +424,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("explicit-token");
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
     expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
-    expect(lastClientOptions?.deviceIdentity).toBeNull();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
@@ -655,7 +655,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
     expect(lastClientOptions?.scopes).toEqual(["operator.admin"]);
-    expect(lastClientOptions?.deviceIdentity).toBeNull();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("labels default backend calls with the requested method", async () => {

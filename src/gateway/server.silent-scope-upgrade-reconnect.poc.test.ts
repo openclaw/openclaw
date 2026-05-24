@@ -233,7 +233,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
     }
   });
 
-  test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
+  test("requires scope-upgrade approval for scoped backend callGateway calls with a stale paired identity", async () => {
     const started = await startServerWithClient("secret");
     const identity = loadOrCreateDeviceIdentity();
     const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
@@ -250,14 +250,15 @@ describe("gateway silent scope-upgrade reconnect", () => {
     });
 
     try {
-      const health = await callGateway({
-        url: `ws://127.0.0.1:${started.port}`,
-        token: "secret",
-        method: "health",
-        scopes: ["operator.admin"],
-        timeoutMs: 2_000,
-      });
-      expect(health.ok).toBe(true);
+      await expect(
+        callGateway({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          method: "health",
+          scopes: ["operator.admin"],
+          timeoutMs: 2_000,
+        }),
+      ).rejects.toThrow("more scopes than currently approved");
 
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.approvedScopes).toEqual(["operator.read"]);

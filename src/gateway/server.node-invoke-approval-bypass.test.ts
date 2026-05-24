@@ -11,6 +11,7 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -282,6 +283,7 @@ describe("node.invoke approval bypass", () => {
     await new Promise<void>((resolve) => ws.once("open", resolve));
     const res = await connectReq(ws, {
       token: "secret",
+      approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
       scopes,
       device: null,
       client: {

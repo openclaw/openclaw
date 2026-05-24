@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
@@ -402,7 +403,62 @@ describe("handshake auth helpers", () => {
     ).toBe("shared_secret_loopback_local");
   });
 
-  it("skips backend self-pairing only for direct-local backend clients", () => {
+  it("does not skip backend self-pairing for shared-auth requests with self-declared scopes", () => {
+    for (const scope of [
+      "operator.admin",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+    ]) {
+      const connectParams = {
+        client: {
+          id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        scopes: [scope],
+      } as ConnectParams;
+      expect(
+        shouldSkipLocalBackendSelfPairing({
+          connectParams,
+          locality: "direct_local",
+          hasBrowserOriginHeader: false,
+          sharedAuthOk: true,
+          authMethod: "token",
+        }),
+      ).toBe(false);
+      expect(
+        shouldSkipLocalBackendSelfPairing({
+          connectParams,
+          locality: "shared_secret_loopback_local",
+          hasBrowserOriginHeader: false,
+          sharedAuthOk: true,
+          authMethod: "password",
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("skips backend self-pairing for internal approval runtime shared-auth requests", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      scopes: ["operator.write", "operator.approvals"],
+    } as ConnectParams;
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+        approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps backend self-pairing for direct-local backend clients without admin scope", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -421,10 +477,10 @@ describe("handshake auth helpers", () => {
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
-        locality: "shared_secret_loopback_local",
+        locality: "direct_local",
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
-        authMethod: "token",
+        authMethod: "password",
       }),
     ).toBe(true);
     expect(

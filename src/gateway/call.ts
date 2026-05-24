@@ -325,6 +325,7 @@ function isLoopbackGatewayUrl(rawUrl: string): boolean {
 
 function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
+  scopes: readonly string[];
   url: string;
   token?: string;
   password?: string;
@@ -336,12 +337,14 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
     hasSharedAuth &&
+    params.scopes.length === 0 &&
     isLoopbackGatewayUrl(params.url)
   );
 }
 
 function resolveDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
+  scopes: readonly string[];
   url: string;
   token?: string;
   password?: string;
@@ -773,7 +776,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+          ? resolveDeviceIdentityForGatewayCall({ opts, scopes, url, token, password })
           : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
