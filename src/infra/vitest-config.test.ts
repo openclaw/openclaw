@@ -230,6 +230,10 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe("node scripts/test-projects-serial.mjs");
+    expect(pkg.scripts?.["test:max"]).toBe("node scripts/test-projects-max.mjs");
+    expect(pkg.scripts?.["test:changed:max"]).toBe(
+      "node scripts/test-projects-max.mjs --changed origin/main",
+    );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     );
