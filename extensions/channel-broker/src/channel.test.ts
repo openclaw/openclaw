@@ -10,6 +10,12 @@ describe("channel-broker plugin", () => {
 
   it("declares one generic channel owned by provider capabilities", () => {
     expect(channelBrokerPlugin.id).toBe("channel-broker");
+    expect(channelBrokerPlugin.message?.durableFinal?.capabilities).toMatchObject({
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+    });
     expect(channelBrokerPlugin.message?.receive).toEqual({
       defaultAckPolicy: "after_durable_send",
       supportedAckPolicies: ["after_receive_record", "after_agent_dispatch", "after_durable_send"],
@@ -19,6 +25,19 @@ describe("channel-broker plugin", () => {
       previewFinalization: true,
       progressUpdates: true,
     });
+  });
+
+  it("infers broker-prefixed platform DMs before defaulting to channel semantics", () => {
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "broker:slack:user:U12345678",
+      } as never),
+    ).toBe("direct");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "broker:discord:dm:123456789012345678",
+      } as never),
+    ).toBe("direct");
   });
 
   it("delivers text through the configured provider and maps the provider receipt", async () => {
@@ -126,6 +145,62 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("delivers media through the configured provider without dropping attachments", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-media-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["native-media-1"],
+      }),
+    );
+    setChannelBrokerRuntime({ sendOutboundRequest, createRequestId: () => "broker-media-1" });
+
+    const result = await channelBrokerPlugin.message?.send?.media?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "slack:C123",
+      text: "see attached",
+      mediaUrl: "https://cdn.example.test/image.png",
+      accountId: "acme",
+      threadId: "1716500000.000001",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-media-1",
+        platform: "slack",
+        conversation: {
+          id: "C123",
+          type: "channel",
+          threadId: "1716500000.000001",
+        },
+        mode: "final",
+        payloads: [
+          {
+            text: "see attached",
+            attachments: [{ url: "https://cdn.example.test/image.png", mediaType: "media" }],
+          },
+        ],
+        requirements: { media: true, text: true, thread: true },
+      }),
+    });
+    expect(result?.receipt.parts[0]?.kind).toBe("media");
+  });
+
   it("rejects non-sent provider receipts before reporting send success", async () => {
     setChannelBrokerRuntime({
       createRequestId: () => "broker-send-retryable",
@@ -163,6 +238,36 @@ describe("channel-broker plugin", () => {
     ).rejects.toMatchObject({
       name: "ChannelBrokerProviderReceiptError",
       receipt: { status: "retryable", retryAfterMs: 2500 },
+    });
+  });
+
+  it("rejects targets outside a provider's configured platform set", () => {
+    const result = channelBrokerPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+      to: "broker:slack:C123",
+    } as never);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({
+        message: "Invalid channel broker target: broker:slack:C123",
+        cause: expect.objectContaining({
+          message: "Channel broker provider acme does not support platform slack.",
+        }),
+      }),
     });
   });
 

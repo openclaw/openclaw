@@ -175,6 +175,13 @@ export function normalizeBrokerPlatformId(value: string): string {
   return normalized;
 }
 
+function normalizeBrokerConversationType(value: BrokerConversationType): BrokerConversationType {
+  if (value === "direct" || value === "group" || value === "channel" || value === "thread") {
+    return value;
+  }
+  throw new Error(`invalid broker conversation type: ${String(value)}`);
+}
+
 export function buildBrokerConversationTarget(target: BrokerConversationTarget): string {
   const platform = normalizeBrokerPlatformId(target.platform);
   const conversationId = target.conversationId.trim();
@@ -182,11 +189,17 @@ export function buildBrokerConversationTarget(target: BrokerConversationTarget):
     throw new Error("broker conversation id is required");
   }
   const base = `${platform}:${encodeURIComponent(conversationId)}`;
+  const search = new URLSearchParams();
+  if (target.conversationType) {
+    search.set("conversationType", normalizeBrokerConversationType(target.conversationType));
+  }
   const threadId = target.threadId?.trim();
-  if (!threadId) {
+  if (threadId) {
+    search.set("threadId", threadId);
+  }
+  if (search.size === 0) {
     return base;
   }
-  const search = new URLSearchParams({ threadId });
   return `${base}?${search.toString()}`;
 }
 
@@ -202,10 +215,15 @@ export function parseBrokerConversationTarget(value: string): BrokerConversation
     throw new Error(`invalid broker conversation target: ${value}`);
   }
   const conversationId = decodeURIComponent(encodedConversationId);
-  const threadId = new URLSearchParams(query).get("threadId") ?? undefined;
+  const search = new URLSearchParams(query);
+  const conversationType = search.get("conversationType") as BrokerConversationType | null;
+  const threadId = search.get("threadId") ?? undefined;
   return {
     platform,
     conversationId,
+    ...(conversationType
+      ? { conversationType: normalizeBrokerConversationType(conversationType) }
+      : {}),
     ...(threadId ? { threadId } : {}),
   };
 }

@@ -13,9 +13,17 @@ import {
   resolveDefaultChannelBrokerProviderId,
 } from "./accounts.js";
 import { channelBrokerPluginConfigSchema } from "./config-schema.js";
-import { sendChannelBrokerOutboundText, sendChannelBrokerText } from "./outbound.js";
+import {
+  sendChannelBrokerMedia,
+  sendChannelBrokerOutboundText,
+  sendChannelBrokerText,
+} from "./outbound.js";
 import { channelBrokerStatus } from "./status.js";
-import { normalizeBrokerTarget, parseChannelBrokerTarget } from "./target.js";
+import {
+  inferChannelBrokerTargetChatType,
+  normalizeBrokerTarget,
+  parseChannelBrokerTarget,
+} from "./target.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const CHANNEL_ID = "channel-broker" as const;
@@ -48,22 +56,6 @@ const BROKER_PLATFORM_TARGET_PREFIXES = [
   "twitch",
 ] as const;
 
-function inferBrokerTargetChatType(to: string) {
-  try {
-    const parsed = parseBrokerConversationTarget(to);
-    const [maybeType] = parsed.conversationId.split(":", 1);
-    if (maybeType === "direct" || maybeType === "group" || maybeType === "channel") {
-      return maybeType;
-    }
-    if (maybeType === "thread") {
-      return "channel";
-    }
-    return "channel";
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveBrokerSessionConversation(rawId: string) {
   try {
     const parsed = parseBrokerConversationTarget(rawId);
@@ -86,6 +78,7 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
@@ -122,6 +115,19 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
         silent: ctx.silent,
+        signal: ctx.signal,
+      }),
+    media: async (ctx) =>
+      await sendChannelBrokerMedia({
+        cfg: ctx.cfg as CoreConfig,
+        accountId: ctx.accountId,
+        to: ctx.to,
+        text: ctx.text,
+        mediaUrl: ctx.mediaUrl,
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+        silent: ctx.silent,
+        audioAsVoice: ctx.audioAsVoice,
         signal: ctx.signal,
       }),
   },
@@ -171,7 +177,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
     messaging: {
       targetPrefixes: BROKER_PLATFORM_TARGET_PREFIXES,
       normalizeTarget: normalizeBrokerTarget,
-      inferTargetChatType: ({ to }) => inferBrokerTargetChatType(to),
+      inferTargetChatType: ({ to }) => inferChannelBrokerTargetChatType(to),
       targetResolver: {
         looksLikeId: (raw) => Boolean(normalizeBrokerTarget(raw)),
         hint: "<platform>:<conversationId>[?threadId=<threadId>]",

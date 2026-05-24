@@ -1,5 +1,7 @@
 import {
   createBrokerOutboundRequest,
+  type BrokerMessageAttachment,
+  type BrokerOutboundPayload,
   type BrokerReceiptV1,
 } from "openclaw/plugin-sdk/channel-broker";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
@@ -74,11 +76,19 @@ function buildReceiptSourceResults(params: {
   }));
 }
 
-export async function sendChannelBrokerText(params: {
+async function sendChannelBrokerFinal(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   to: string;
-  text: string;
+  payloads: BrokerOutboundPayload[];
+  requirements: {
+    text?: boolean;
+    media?: boolean;
+    replyTo?: boolean;
+    thread?: boolean;
+    silent?: boolean;
+  };
+  receiptKind: "text" | "media";
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
@@ -103,7 +113,7 @@ export async function sendChannelBrokerText(params: {
       ...(threadId ? { threadId } : {}),
     },
     mode: "final",
-    payloads: [{ text: params.text }],
+    payloads: params.payloads,
     ...(replyToId || params.silent
       ? {
           relation: {
@@ -113,9 +123,10 @@ export async function sendChannelBrokerText(params: {
         }
       : {}),
     requirements: {
-      text: true,
+      ...params.requirements,
       ...(replyToId ? { replyTo: true } : {}),
       ...(threadId ? { thread: true } : {}),
+      ...(params.silent ? { silent: true } : {}),
     },
   });
   const receipt = await sendBrokerOutboundRequest({
@@ -134,13 +145,68 @@ export async function sendChannelBrokerText(params: {
         }),
         threadId,
         replyToId,
-        kind: "text",
+        kind: params.receiptKind,
         sentAt: receipt.timestamp,
       }),
       ...(receipt.editToken ? { editToken: receipt.editToken } : {}),
       ...(receipt.deleteToken ? { deleteToken: receipt.deleteToken } : {}),
     },
   };
+}
+
+export async function sendChannelBrokerText(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  return await sendChannelBrokerFinal({
+    ...params,
+    payloads: [{ text: params.text }],
+    requirements: { text: true },
+    receiptKind: "text",
+  });
+}
+
+export async function sendChannelBrokerMedia(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text?: string | null;
+  mediaUrl: string;
+  audioAsVoice?: boolean;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  const url = params.mediaUrl.trim();
+  if (!url) {
+    throw new Error("Channel broker media send requires a media URL.");
+  }
+  const attachment: BrokerMessageAttachment = {
+    url,
+    mediaType: params.audioAsVoice ? "voice" : "media",
+  };
+  const text = params.text?.trim();
+  return await sendChannelBrokerFinal({
+    ...params,
+    payloads: [
+      {
+        ...(text ? { text } : {}),
+        attachments: [attachment],
+      },
+    ],
+    requirements: {
+      media: true,
+      ...(text ? { text: true } : {}),
+    },
+    receiptKind: "media",
+  });
 }
 
 export async function sendChannelBrokerOutboundText(

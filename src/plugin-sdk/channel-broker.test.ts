@@ -32,6 +32,21 @@ describe("channel-broker SDK", () => {
     });
   });
 
+  it("round-trips broker conversation type separately from provider conversation ids", () => {
+    const target = buildBrokerConversationTarget({
+      platform: "Slack",
+      conversationId: "U123",
+      conversationType: "direct",
+    });
+
+    expect(target).toBe("slack:U123?conversationType=direct");
+    expect(parseBrokerConversationTarget(target)).toEqual({
+      platform: "slack",
+      conversationId: "U123",
+      conversationType: "direct",
+    });
+  });
+
   it("creates a versioned outbound request for provider-owned delivery", () => {
     const request = createBrokerOutboundRequest({
       requestId: "send-1",
