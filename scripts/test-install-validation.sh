@@ -38,9 +38,14 @@ validate_script() {
         ui_error "Downloaded script is empty: ${url}"
         return 1
     fi
-    local first_line
-    first_line="$(head -c 256 "$tmp" | head -1)"
-    if [[ "$first_line" != "#!"* ]]; then
+    # Check the first two raw bytes are '#!' (0x23 0x21) BEFORE command
+    # substitution, which strips NUL/control bytes and could false-accept
+    # a file whose raw content does not actually start with a shebang.
+    local raw_magic
+    raw_magic="$(od -An -tx1 -N2 "$tmp" | tr -d ' ')"
+    if [[ "$raw_magic" != "2321" ]]; then
+        local first_line
+        first_line="$(head -c 256 "$tmp" | head -1)"
         local safe_line
         safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177\200-\237')"
         safe_line="${safe_line//\\/\\\\}"
@@ -99,6 +104,10 @@ ENVSH
 # (g) File with C1 control bytes (0x9B = CSI, could inject terminal escapes)
 printf '\x9b\x33\x31\x6dPWNED\x9b\x30\x6d rest of line\n' > "$TMPDIR_TEST/c1_escape.txt"
 
+# (h) NUL-prefixed shebang: raw bytes are \x00\x00#!/bin/bash but command
+#     substitution strips the NULs, so the old string check would false-accept.
+printf '\x00\x00#!/bin/bash\necho pwned\n' > "$TMPDIR_TEST/nul_prefix.sh"
+
 # ===========================================================================
 #  GREEN tests — WITH validation (new behavior), bad files are REJECTED
 # ===========================================================================
@@ -134,10 +143,19 @@ else
     ko "C1 escape    → should have been rejected"
 fi
 
+# NUL-prefix bypass: command substitution strips NULs, making the content
+# look like it starts with '#!' — the raw byte check catches this.
+if ! validate_script "$TMPDIR_TEST/nul_prefix.sh" 2>/dev/null; then
+    ok "NUL prefix   → rejected (raw byte check caught NUL before #!)"
+else
+    ko "NUL prefix   → false-accepted (raw byte check failed)"
+fi
+
 # Verify C1 bytes are stripped from the "First line:" diagnostic
 c1_first_line="$(validate_script "$TMPDIR_TEST/c1_escape.txt" "https://example.com/c1" 2>&1 \
     | grep 'First line:' | sed 's/.*First line: //' || true)"
-if [ -n "$c1_first_line" ] && ! printf '%s' "$c1_first_line" | LC_ALL=C grep -qP '[\x00-\x1f\x7f\x80-\x9f]'; then
+c1_cleaned="$(printf '%s' "$c1_first_line" | LC_ALL=C tr -d '\000-\037\177\200-\237')"
+if [ -n "$c1_first_line" ] && [ "$c1_cleaned" = "$c1_first_line" ]; then
     ok "C1 diagnostic → C1 bytes stripped from error output"
 else
     ko "C1 diagnostic → C1 bytes leaked into error output"

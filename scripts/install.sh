@@ -94,9 +94,14 @@ validate_downloaded_script() {
         ui_error "Downloaded script is empty: ${url}"
         return 1
     fi
-    local first_line
-    first_line="$(head -c 256 "$file" | head -1)"
-    if [[ "$first_line" != "#!"* ]]; then
+    # Check the first two raw bytes are '#!' (0x23 0x21) BEFORE command
+    # substitution, which strips NUL/control bytes and could false-accept
+    # a file whose raw content does not actually start with a shebang.
+    local raw_magic
+    raw_magic="$(od -An -tx1 -N2 "$file" | tr -d ' ')"
+    if [[ "$raw_magic" != "2321" ]]; then
+        local first_line
+        first_line="$(head -c 256 "$file" | head -1)"
         # Sanitize before logging: strip C0 controls (\000-\037), DEL (\177),
         # and C1 controls (\200-\237) so untrusted content cannot inject
         # terminal escapes through ui_error's echo -e path.
