@@ -186,7 +186,11 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionTarget = sessionTarget;
           }
           if (typeof opts.wake === "string") {
-            patch.wakeMode = opts.wake;
+            const wakeMode = opts.wake.trim();
+            if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
+              throw new Error("--wake must be now or next-heartbeat");
+            }
+            patch.wakeMode = wakeMode;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
@@ -229,10 +233,20 @@ export function registerCronEditCommand(cron: Command) {
           const model = normalizeOptionalString(opts.model);
           const thinking = normalizeOptionalString(opts.thinking);
           const toolsAllow = parseCronToolsAllow(opts.tools);
-          const timeoutSeconds = opts.timeoutSeconds
-            ? Number.parseInt(String(opts.timeoutSeconds), 10)
-            : undefined;
-          const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
+          const rawTimeoutSeconds =
+            opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds).trim();
+          if (rawTimeoutSeconds !== undefined && !/^\d+$/u.test(rawTimeoutSeconds)) {
+            throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+          }
+          const timeoutSeconds =
+            rawTimeoutSeconds === undefined ? undefined : Number(rawTimeoutSeconds);
+          const hasTimeoutSeconds =
+            typeof timeoutSeconds === "number" &&
+            Number.isSafeInteger(timeoutSeconds) &&
+            timeoutSeconds > 0;
+          if (rawTimeoutSeconds !== undefined && !hasTimeoutSeconds) {
+            throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+          }
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
