@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Tests: make startup memory and startup bench smoke scripts build CLI startup artifacts when run from a fresh source checkout.
 - iMessage: mark authorized slash-command turns as text-sourced commands so `/status`, `/new`, and `/restart` acknowledgements return to the source conversation. (#82642) thanks @homer-byte.
 - Crabbox: install Corepack shims into the writable hydration `PNPM_HOME` so local AWS runner hydration no longer tries to overwrite `/usr/local/bin/pnpm`.
+- Live tests: fail Gateway live model sweeps when selected coverage is lost to timeouts or stale high-signal filters instead of reporting false missing-profile coverage, and pin Docker OpenAI gateway coverage to the current `gpt-5.5` lane.
 
 
 ## 2026.5.24
