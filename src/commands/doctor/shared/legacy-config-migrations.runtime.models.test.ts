@@ -24,11 +24,14 @@ describe("stale contextWindow migration", () => {
       },
     };
 
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(true);
+
     migration!.apply(raw, changes);
 
     expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(1_000_000);
     expect(changes).toHaveLength(1);
     expect(changes[0]).toContain("200000 → 1000000");
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
   it("does not modify correct contextWindow values", () => {
@@ -77,6 +80,31 @@ describe("stale contextWindow migration", () => {
 
     expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(500_000);
     expect(changes).toHaveLength(0);
+  });
+
+  it("does not modify bare ids from other providers", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          custom: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                contextWindow: 200_000,
+                maxTokens: 61_440,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    expect(raw.models.providers.custom.models[0].contextWindow).toBe(200_000);
+    expect(changes).toHaveLength(0);
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
   it("handles provider-prefixed model IDs", () => {
