@@ -267,7 +267,9 @@ export function createClaworksRestHandler(
       }
 
       if (method === "GET" && parts[1] === "doctor") {
-        if (!(await requireRead())) return true;
+        if (!(await requireRead())) {
+          return true;
+        }
         const checks = runClaworksDoctor(runtime);
         sendJson(res, 200, { checks, healthy: checks.every((c) => c.status !== "error") });
         return true;
@@ -530,7 +532,9 @@ export function createClaworksRestHandler(
             sandboxRuntime.objectStore = mockStore;
             // 使用沙盒 runtime 直接触发 playbook
             const playbookEngine = runtime.playbookEngine;
-            if (!playbookEngine) throw new Error("PlaybookEngine 未初始化");
+            if (!playbookEngine) {
+              throw new Error("PlaybookEngine 未初始化");
+            }
             const run = await playbookEngine.trigger(
               pid,
               typeof trigEvent === "object" && trigEvent !== null && !Array.isArray(trigEvent)
@@ -642,6 +646,7 @@ export function createClaworksRestHandler(
           source?: string;
           payload?: Record<string, unknown>;
           correlation_id?: string;
+          traceparent?: string;
           idempotency_key?: string;
         };
         if (!body.type) {
@@ -649,6 +654,10 @@ export function createClaworksRestHandler(
           return true;
         }
         const payload = body.payload ?? {};
+        const headerTraceparent = req.headers.traceparent;
+        const traceparent =
+          body.traceparent ??
+          (typeof headerTraceparent === "string" ? headerTraceparent : undefined);
         const { sessionId: eventSessionId, text: eventText } = extractEventSessionAndText(
           body as Record<string, unknown>,
           payload,
@@ -662,6 +671,7 @@ export function createClaworksRestHandler(
           subjectId: auth.subjectId,
           payload,
           correlationId: body.correlation_id,
+          traceparent,
           idempotencyKey: body.idempotency_key,
           subjectType: auth.subjectType,
           publishSource: body.source ?? "rest-api",
@@ -984,9 +994,11 @@ export function createClaworksRestHandler(
 
       // GET /v1/evolution/export?days=30 — 导出近期运行数据供离线强模型生成进化包
       if (method === "GET" && parts[1] === "evolution" && parts[2] === "export") {
-        if (!(await requireRead())) return true;
+        if (!(await requireRead())) {
+          return true;
+        }
         const exportUrl = new URL(req.url ?? "/", "http://localhost");
-        const days = parseInt(String(exportUrl.searchParams.get("days") ?? "30"), 10) || 30;
+        const days = Number.parseInt(String(exportUrl.searchParams.get("days") ?? "30"), 10) || 30;
         const data = await runtime.evolutionSync?.exportEvolutionData(days);
         sendJson(res, 200, data ?? { events: [], cases: [], feedback: [] });
         return true;
@@ -994,22 +1006,30 @@ export function createClaworksRestHandler(
 
       // POST /v1/evolution/import — 将离线生成的进化包（Playbook/规则/Prompt改进）应用到机器人
       if (method === "POST" && parts[1] === "evolution" && parts[2] === "import") {
-        if (!(await requireWrite("evolution:import"))) return true;
-        const pack = await readJsonBody(req);
+        if (!(await requireWrite("evolution:import"))) {
+          return true;
+        }
+        const pack = (await readJsonBody(req)) as Parameters<
+          typeof runtime.evolutionSync.importEvolutionPack
+        >[0] & { sandbox?: boolean; simulate_only?: boolean };
         if (!runtime.evolutionSync) {
           sendJson(res, 503, { error: "evolutionSync 未初始化" });
           return true;
         }
-        const result = await runtime.evolutionSync.importEvolutionPack(
-          pack as Parameters<typeof runtime.evolutionSync.importEvolutionPack>[0],
-        );
+        const { sandbox, simulate_only, ...packBody } = pack;
+        const result = await runtime.evolutionSync.importEvolutionPack(packBody, {
+          sandbox: sandbox === true || simulate_only === true,
+          simulate_only: simulate_only === true,
+        });
         sendJson(res, 200, result);
         return true;
       }
 
       // POST /v1/evolution/simulate — 触发模拟蒸馏流水线（发布 evolution.simulation_requested）
       if (method === "POST" && parts[1] === "evolution" && parts[2] === "simulate") {
-        if (!(await requireWrite("evolution:simulate"))) return true;
+        if (!(await requireWrite("evolution:simulate"))) {
+          return true;
+        }
         let body: { payload?: Record<string, unknown> } = {};
         try {
           body = (await readJsonBody(req)) as { payload?: Record<string, unknown> };
@@ -1028,7 +1048,9 @@ export function createClaworksRestHandler(
 
       // GET /v1/events/stream — SSE 实时事件流（Studio UI / 监控面板）
       if (method === "GET" && parts[1] === "events" && parts[2] === "stream") {
-        if (!(await requireRead())) return true;
+        if (!(await requireRead())) {
+          return true;
+        }
         res.writeHead(200, {
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
@@ -1080,7 +1102,9 @@ export function createClaworksRestHandler(
 
       // POST /v1/hitl/{token}/resolve — 通过 run_id + step_id 提交 HITL 决策（token 即 run_id）
       if (method === "POST" && parts[1] === "hitl" && parts[2] && parts[3] === "resolve") {
-        if (!(await requireWrite(`hitl:${parts[2]}`))) return true;
+        if (!(await requireWrite(`hitl:${parts[2]}`))) {
+          return true;
+        }
         const runId = parts[2];
         const body = (await readJsonBody(req)) as {
           step_id?: string;

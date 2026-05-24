@@ -41,9 +41,13 @@ function makeRuntime(
         { id: "pb_alpha", trigger: { kind: "event", pattern: "alarm.created" }, steps: [{}, {}] },
         { id: "pb_beta", trigger: { kind: "event", pattern: "task.created" }, steps: [{}] },
       ],
+      load: vi.fn((def: unknown) => {
+        loadedPlaybooks.push(def);
+      }),
       loadFromYaml: async (yaml: string, source: string) => {
         loadedPlaybooks.push({ yaml, source });
       },
+      trigger: vi.fn(async () => ({ steps: [], status: "completed" })),
     },
     ruleEngine: {
       listRules: () => [{ id: "im.quick_rules.greeting" }, { id: "safety.rules.hazard" }],
@@ -340,6 +344,79 @@ describe("EvolutionSyncManager.importEvolutionPack", () => {
 
     expect(result.success).toBe(true);
     expect(result.applied).toHaveLength(0);
+  });
+
+  it("sandbox 模式加载 Playbook 并跑回归，通过后发布晋升事件", async () => {
+    const runtime = makeRuntime();
+    const manager = new EvolutionSyncManager(runtime as never);
+
+    const pack = {
+      version: "1.0",
+      generated_at: new Date().toISOString(),
+      generated_by: "claude-sonnet-4-6",
+      source_robot_id: "test-robot-001",
+      improved_playbooks: [{ id: "pb_sandbox_new", name: "沙盒 Playbook", steps: [] }],
+      summary: "沙盒回归测试",
+    };
+
+    const result = await manager.importEvolutionPack(pack, { sandbox: true });
+
+    expect(result.sandbox).toBe(true);
+    expect(result.success).toBe(true);
+    expect(result.pending_promotion).toBe(true);
+    expect(result.simulation_results).toHaveLength(1);
+    expect(result.simulation_results?.[0]?.passed).toBe(true);
+    expect(runtime.playbookEngine.load).toHaveBeenCalled();
+    expect(runtime.kernel.publish).toHaveBeenCalledWith(
+      "evolution.sandbox_imported",
+      "evolution-sync",
+      expect.objectContaining({ regression_passed: true }),
+    );
+    expect(runtime.kernel.publish).toHaveBeenCalledWith(
+      "evolution.sandbox_ready_for_promotion",
+      "evolution-sync",
+      expect.objectContaining({ hitl_required: true, playbook_ids: ["pb_sandbox_new"] }),
+    );
+    expect(runtime.kernel.publish).not.toHaveBeenCalledWith(
+      "evolution.pack_imported",
+      "evolution-sync",
+      expect.anything(),
+    );
+  });
+
+  it("sandbox 回归失败时不发布晋升事件", async () => {
+    const runtime = makeRuntime();
+    runtime.playbookEngine.trigger = vi.fn(async () => ({
+      steps: [{ stepId: "s1", status: "failed", error: "boom" }],
+      status: "failed",
+      error: "boom",
+    }));
+    const manager = new EvolutionSyncManager(runtime as never);
+
+    const pack = {
+      version: "1.0",
+      generated_at: new Date().toISOString(),
+      generated_by: "claude-sonnet-4-6",
+      source_robot_id: "test-robot-001",
+      improved_playbooks: [{ id: "pb_bad", steps: [{ id: "s1" }] }],
+      summary: "应失败",
+    };
+
+    const result = await manager.importEvolutionPack(pack, { simulate_only: true });
+
+    expect(result.sandbox).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.pending_promotion).toBe(false);
+    expect(runtime.kernel.publish).toHaveBeenCalledWith(
+      "evolution.sandbox_imported",
+      "evolution-sync",
+      expect.objectContaining({ regression_passed: false }),
+    );
+    expect(runtime.kernel.publish).not.toHaveBeenCalledWith(
+      "evolution.sandbox_ready_for_promotion",
+      "evolution-sync",
+      expect.anything(),
+    );
   });
 });
 

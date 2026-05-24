@@ -10,6 +10,7 @@
 
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import type { EvolutionPack, EvolutionSyncManager } from "./evolution-sync.js";
+import { createEvolveEngine, hasEvolveLlmBridge, type EvolveEngine } from "./evolve-engine.js";
 
 // ── 公开类型 ──────────────────────────────────────────────────────────────
 
@@ -36,7 +37,9 @@ function buildEvolutionRecordAdder(
   runtime: ClaworksRuntime,
 ): (kind: EvolutionRecordKind, description: string) => void {
   return (kind, description) => {
-    if (!runtime.cbrStore) return;
+    if (!runtime.cbrStore) {
+      return;
+    }
     try {
       runtime.cbrStore.add(`evolution:${kind}`, description, {
         type: "evolution_observation",
@@ -51,6 +54,29 @@ function buildEvolutionRecordAdder(
 // 内存中的负反馈计数（进程内累计，跨重启清零；重要反馈已写入 CBR 持久化）
 const _negativeFeedbackCount = new Map<string, number>();
 const NEGATIVE_FEEDBACK_THRESHOLD = 3;
+
+function getEvolveEngine(runtime: ClaworksRuntime): EvolveEngine | undefined {
+  const rt = runtime as { evolveEngine?: EvolveEngine };
+  if (rt.evolveEngine) {
+    return rt.evolveEngine;
+  }
+  if (!hasEvolveLlmBridge(runtime)) {
+    return undefined;
+  }
+  rt.evolveEngine = createEvolveEngine(runtime);
+  return rt.evolveEngine;
+}
+
+function hasInsufficientCbrCoverage(runtime: ClaworksRuntime, lastInput: string): boolean {
+  if (!lastInput) {
+    return true;
+  }
+  if (!runtime.cbrStore) {
+    return true;
+  }
+  const hits = runtime.cbrStore.search(lastInput, 1);
+  return hits.length === 0 || hits[0]?.outcome !== "success";
+}
 
 // ── 反馈记录 ──────────────────────────────────────────────────────────────
 
@@ -193,6 +219,36 @@ export async function handleAutonomyLearnOpportunity(
     actions.push("evolution_simulation_requested");
   }
 
+  const shouldProposeDraft =
+    hasEvolveLlmBridge(runtime) &&
+    (signal === "knowledge_gap" ||
+      ((signal === "stub_response" || signal === "negative_feedback") &&
+        hasInsufficientCbrCoverage(runtime, lastInput)));
+
+  if (shouldProposeDraft) {
+    const evolveEngine = getEvolveEngine(runtime);
+    if (evolveEngine) {
+      try {
+        await evolveEngine.proposeDraft(
+          {
+            description: lastInput || description,
+            context: [
+              `signal=${signal}`,
+              intent ? `intent=${intent}` : "",
+              gapType ? `gap=${gapType}` : "",
+            ]
+              .filter(Boolean)
+              .join("; "),
+          },
+          { source: "autonomy.learn_handler", signal },
+        );
+        actions.push("evolve_draft_proposed");
+      } catch {
+        // non-critical
+      }
+    }
+  }
+
   await runtime.kernel.publish("autonomy.learn_handled", "autonomy-learn-handler", {
     signal,
     actions_taken: actions,
@@ -253,7 +309,7 @@ export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promis
     });
     addEvolutionRecord(
       "gap",
-      `知识缺口：24h 内 ${recentStubEvents.length} 次兜底，样本：${samples.join(" | ")}`,
+      `知识缺口：24h 内 ${recentStubEvents.length} 次兜底，样本：${samplePayloads.join(" | ")}`,
     );
   }
 

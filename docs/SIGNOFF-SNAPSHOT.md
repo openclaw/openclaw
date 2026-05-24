@@ -23,18 +23,20 @@
 
 ## P1 结果
 
-| #   | 检查项      | 结果                                                                                 |
-| --- | ----------- | ------------------------------------------------------------------------------------ |
-| 8   | Gateway E2E | ⚠️ `pnpm claworks:gateway:e2e` 首次超时；已修复 health 探针免认证 + 错误日志，需复跑 |
-| 7   | CI smoke    | 未在本机跑 GitHub Actions                                                            |
+| #   | 检查项      | 结果                                                                |
+| --- | ----------- | ------------------------------------------------------------------- |
+| 8   | Gateway E2E | ✅ `pnpm claworks:gateway:e2e` 全绿（145 playbooks / MCP 32 tools） |
+| 7   | CI smoke    | 未在本机跑 GitHub Actions                                           |
 
 ---
 
 ## 自学习增强（本批次）
 
 - `handleAutonomyLearnOpportunity`：收到 `autonomy.learn_opportunity` 后自动 KB/CBR 写入、CBR 复用建议、在线规则学习、知识缺口时触发 `evolution.simulation_requested`
+- `EvolveEngine.proposeDraft`：知识缺口 / CBR 覆盖不足时 LLM 生成 Playbook 草稿 → KB `evolution_drafts`（`pending_review`）+ `evolve.playbook_drafted`（不部署）
+- `EvolutionSyncManager.importEvolutionPack({ sandbox | simulate_only })`：沙盒 load + PlaybookSimulator 回归；通过后 `evolution.sandbox_ready_for_promotion`（HITL 晋升，不自动写生产 Pack）
 - `runtime.ts` 订阅 `autonomy.learn_opportunity` 事件
-- 修复 `detectLearnOpportunities` 重复发布 stub 事件风暴
+- 修复 `detectLearnOpportunities` 重复发布 stub 事件风暴；修复 `samples` 未定义引用
 - `/v1/health` 与 `/v1/metrics` 免 Bearer 认证（K8s 探针友好）
 - 更新 `claworks-packs` 中 `autonomy_on_learn_opportunity` Playbook 字段对齐
 
@@ -42,4 +44,4 @@
 
 ## 签收结论
 
-**P0 核心质量门通过**，可进入预发布/内测交付。生产上线前仍需：Gateway E2E 复跑、生产模式 + API Key、OT 连接器实机关 simulate。
+**P0/P1 核心质量门通过**，可进入预发布/内测交付。生产上线前仍需：生产模式 + API Key、OT 连接器实机关 simulate。

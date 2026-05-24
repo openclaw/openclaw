@@ -597,7 +597,9 @@ export function makeMemoryKvCapabilities(runtime: ClaworksRuntime): CapabilityDe
           }
         }
         const entry = _globalMemoryStore.get(fullKey);
-        if (!entry) return { found: false, value: null, key: fullKey };
+        if (!entry) {
+          return { found: false, value: null, key: fullKey };
+        }
         if (entry.expires !== null && entry.expires < Date.now()) {
           _globalMemoryStore.delete(fullKey);
           return { found: false, value: null, key: fullKey };
@@ -662,11 +664,15 @@ export function makeCommsCapabilities(runtime: ClaworksRuntime): CapabilityDescr
 
         // 按渠道 ID 列表构建 cards map（仅在 cwCard 存在时）
         const buildCardsMap = (channelIds: string[]): Record<string, unknown> | undefined => {
-          if (!cwCard || !runtime.cardBuilder) return undefined;
+          if (!cwCard || !runtime.cardBuilder) {
+            return undefined;
+          }
           const map: Record<string, unknown> = {};
           for (const ch of channelIds) {
             const formatted = runtime.cardBuilder.toAuto(cwCard, ch);
-            if (formatted != null) map[ch] = formatted;
+            if (formatted != null) {
+              map[ch] = formatted;
+            }
           }
           return Object.keys(map).length > 0 ? map : undefined;
         };
@@ -1444,8 +1450,12 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
 
 /** 检查事件类型是否匹配 glob 风格 pattern（支持 "alarm.*"、"*"、精确匹配）。 */
 function matchesWatchPattern(pattern: string, eventType: string): boolean {
-  if (pattern === "*") return true;
-  if (pattern === eventType) return true;
+  if (pattern === "*") {
+    return true;
+  }
+  if (pattern === eventType) {
+    return true;
+  }
   if (pattern.endsWith(".*")) {
     const prefix = pattern.slice(0, -2);
     return eventType === prefix || eventType.startsWith(`${prefix}.`);
@@ -1460,7 +1470,9 @@ export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDes
   // 后续所有事件经由此处与已注册的 watches 匹配后触发 playbookEngine。
   let busUnsubscribe: (() => void) | undefined;
   function ensureKernelSubscription(): void {
-    if (busUnsubscribe) return;
+    if (busUnsubscribe) {
+      return;
+    }
     busUnsubscribe = runtime.kernel.subscribe("*", async (payload) => {
       const eventType =
         typeof payload._event_type === "string"
@@ -3115,7 +3127,9 @@ export function makeNotifyCapabilities(runtime: ClaworksRuntime): CapabilityDesc
               }
               if (card) {
                 cardPayload = { card };
-                if (!message) message = cb.toPlainText(card);
+                if (!message) {
+                  message = cb.toPlainText(card);
+                }
               }
             } catch {
               // 卡片构建失败降级为纯文本
@@ -3682,9 +3696,13 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
       },
       handler: async (_ctx, params) => {
         const scriptId = String(params.script_id ?? "");
-        if (!scriptId) return { status: "error", reason: "script_id 参数缺失" };
+        if (!scriptId) {
+          return { status: "error", reason: "script_id 参数缺失" };
+        }
         const script = runtime.scriptLibrary?.get(scriptId);
-        if (!script) return { status: "not_found", script_id: scriptId };
+        if (!script) {
+          return { status: "not_found", script_id: scriptId };
+        }
         const { script_id: _, function: _fn, ...rest } = params;
         try {
           const result = await runtime.scriptLibrary?.invoke(scriptId, rest);
@@ -3717,9 +3735,13 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
         // 委托给 script.execute，仅做参数键名映射（skill_id → script_id）
         const { skill_id, ...rest } = params;
         const scriptId = String(skill_id ?? "");
-        if (!scriptId) return { status: "error", reason: "skill_id 参数缺失" };
+        if (!scriptId) {
+          return { status: "error", reason: "skill_id 参数缺失" };
+        }
         const script = runtime.scriptLibrary?.get(scriptId);
-        if (!script) return { status: "not_found", skill_id: scriptId };
+        if (!script) {
+          return { status: "not_found", skill_id: scriptId };
+        }
         try {
           const result = await runtime.scriptLibrary?.invoke(
             scriptId,
@@ -4175,6 +4197,8 @@ export function makeEvolutionSyncCapabilities(runtime: ClaworksRuntime): Capabil
         required: ["pack"],
         properties: {
           pack: { type: "object", description: "EvolutionPack JSON 对象" },
+          sandbox: { type: "boolean", description: "仅沙盒加载并跑回归，不写入生产 Pack" },
+          simulate_only: { type: "boolean", description: "sandbox 别名" },
         },
       },
       handler: async (_ctx, params) => {
@@ -4186,7 +4210,11 @@ export function makeEvolutionSyncCapabilities(runtime: ClaworksRuntime): Capabil
         if (!pack?.version) {
           return { status: "error", reason: "pack 参数无效或缺少 version 字段" };
         }
-        const result = await mgr.importEvolutionPack(pack);
+        const sandbox = params.sandbox === true || params.simulate_only === true;
+        const result = await mgr.importEvolutionPack(pack, {
+          sandbox: sandbox || undefined,
+          simulate_only: params.simulate_only === true || undefined,
+        });
         return result as unknown as Record<string, unknown>;
       },
     },
@@ -4480,7 +4508,7 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
             )
             .run(eventType, actor, target, payload);
           return { recorded: true, event_type: eventType };
-        } catch (err) {
+        } catch {
           // Table may not exist on older DB schemas — ensure it exists then retry
           try {
             runtime.db.exec(`
@@ -4610,8 +4638,12 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
       },
       handler: async (_ctx, params) => {
         const filter: Record<string, unknown> = {};
-        if (params.status) filter.status = String(params.status);
-        if (params.equipment_id) filter.equipment_id = String(params.equipment_id);
+        if (params.status) {
+          filter.status = String(params.status);
+        }
+        if (params.equipment_id) {
+          filter.equipment_id = String(params.equipment_id);
+        }
         const result = await runtime.objectStore.query("MaintenanceOrder", {
           filter,
           limit: typeof params.limit === "number" ? params.limit : 20,
@@ -4636,7 +4668,9 @@ async function runScaffold(
   requireJson: boolean,
 ): Promise<Record<string, unknown>> {
   const engine = runtime.scaffoldEngine;
-  if (!engine) return { success: false, error: "ScaffoldEngine 未初始化", text: "" };
+  if (!engine) {
+    return { success: false, error: "ScaffoldEngine 未初始化", text: "" };
+  }
 
   const asset = engine.get(scaffoldId);
   if (!asset) {
@@ -4645,8 +4679,9 @@ async function runScaffold(
       const rendered = runtime.promptRegistry.render(scaffoldId, variables);
       if (rendered) {
         const llmFn = runtime.llmComplete ?? runtime.bridges?.get(BRIDGE_LLM)?.complete;
-        if (!llmFn)
+        if (!llmFn) {
           return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+        }
         try {
           const res = await llmFn({ prompt: rendered });
           return { text: res.text, success: true, scaffold_id: scaffoldId };
@@ -4687,7 +4722,9 @@ async function runScaffold(
       .replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), strVal)
       .replace(new RegExp(`\\{${key}\\}`, "g"), strVal);
   }
-  if (extraContext) promptTemplate = `${extraContext}\n\n${promptTemplate}`;
+  if (extraContext) {
+    promptTemplate = `${extraContext}\n\n${promptTemplate}`;
+  }
 
   // 构建系统提示词 + few-shot 示例
   let fullSystem = systemPrompt;
@@ -4717,7 +4754,9 @@ async function runScaffold(
 
   // 普通文本生成
   const llmFn = runtime.llmComplete ?? runtime.bridges?.get(BRIDGE_LLM)?.complete;
-  if (!llmFn) return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+  if (!llmFn) {
+    return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+  }
   try {
     const res = await llmFn({ prompt: fullPrompt });
     engine.recordUsage(scaffoldId, true);
@@ -4904,8 +4943,9 @@ export function makeScaffoldCapabilities(runtime: ClaworksRuntime): CapabilityDe
             const rendered = runtime.promptRegistry.render(scaffoldId, variables);
             if (rendered) {
               const llmFn = runtime.llmComplete ?? runtime.bridges?.get("llm")?.complete;
-              if (!llmFn)
+              if (!llmFn) {
                 return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+              }
               try {
                 const res = await llmFn({ prompt: rendered });
                 return { text: res.text, success: true, scaffold_id: scaffoldId };

@@ -133,9 +133,28 @@ export type EvolveResult = {
   cbr_case_id?: string;
 };
 
+export const EVOLUTION_DRAFTS_NAMESPACE = "evolution_drafts";
+
+/** 运行时是否具备 LLM 桥（structuredOutput / bridge / llmComplete） */
+export function hasEvolveLlmBridge(runtime: ClaworksRuntime): boolean {
+  if (runtime.structuredOutput) {
+    return true;
+  }
+  const bridge = runtime.bridges?.get(BRIDGE_LLM) as { complete?: unknown } | undefined;
+  if (typeof bridge?.complete === "function") {
+    return true;
+  }
+  return typeof runtime.llmComplete === "function";
+}
+
 export interface EvolveEngine {
   /** 分析需求，LLM 生成 Playbook 方案 */
   propose(req: EvolveRequest): Promise<EvolveProposal>;
+  /** LLM 生成 Playbook 草稿，写入 KB evolution_drafts（不部署） */
+  proposeDraft(
+    req: EvolveRequest,
+    opts?: { source?: string; signal?: string },
+  ): Promise<EvolveProposal>;
   /** 部署方案（写文件 + 热重载） */
   deploy(proposal: EvolveProposal, opts?: { packId?: string }): Promise<EvolveResult>;
   /** 发布测试事件，验证 Playbook 是否正确触发 */
@@ -334,6 +353,54 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       }
 
       return { id: `evolved_${Date.now()}`, ...buildFallbackProposal(req.description) };
+    },
+
+    // ── proposeDraft ───────────────────────────────────────────────────────
+    async proposeDraft(req, opts = {}) {
+      const proposal = await this.propose(req);
+      const source = opts.source ?? "evolve.propose_draft";
+      const draftBody = [
+        `# Playbook Draft: ${proposal.title}`,
+        `status: pending_review`,
+        `proposal_id: ${proposal.id}`,
+        `confidence: ${proposal.confidence}`,
+        opts.signal ? `signal: ${opts.signal}` : "",
+        "",
+        proposal.playbook_yaml,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      try {
+        await runtime.kb.ingest(draftBody, {
+          namespace: EVOLUTION_DRAFTS_NAMESPACE,
+          source,
+          title: proposal.title,
+          metadata: {
+            status: "pending_review",
+            proposal_id: proposal.id,
+            signal: opts.signal,
+            confidence: proposal.confidence,
+          },
+        });
+      } catch (err) {
+        runtime.logger?.(
+          `[EvolveEngine] proposeDraft kb ingest failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      await runtime.kernel.publish("evolve.playbook_drafted", source, {
+        id: proposal.id,
+        title: proposal.title,
+        description: proposal.description,
+        confidence: proposal.confidence,
+        status: "pending_review",
+        namespace: EVOLUTION_DRAFTS_NAMESPACE,
+        signal: opts.signal,
+        warnings: proposal.warnings,
+      });
+
+      return proposal;
     },
 
     // ── deploy ─────────────────────────────────────────────────────────────
@@ -538,7 +605,9 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       const unsub = runtime.kernel.subscribe(
         "playbook.run.failed",
         (payload: Record<string, unknown>) => {
-          if (!runtime.cbrStore) return;
+          if (!runtime.cbrStore) {
+            return;
+          }
           const playbookId = String(payload["playbook_id"] ?? "unknown");
           const error = String(payload["error"] ?? "");
           const durationMs = Number(payload["duration_ms"] ?? 0);

@@ -113,10 +113,20 @@ export interface EvolutionPack {
 
 // ── 导入结果 ───────────────────────────────────────────────────────────────
 
+export interface ImportEvolutionPackOptions {
+  /** 仅加载到沙盒并跑回归，不写入生产 Pack */
+  sandbox?: boolean;
+  /** sandbox 别名 */
+  simulate_only?: boolean;
+}
+
 export interface ImportResult {
   success: boolean;
   applied: string[];
   errors?: string[];
+  sandbox?: boolean;
+  simulation_results?: Array<{ playbook_id: string; passed: boolean; error?: string }>;
+  pending_promotion?: boolean;
 }
 
 // ── 进化历史记录 ──────────────────────────────────────────────────────────
@@ -171,8 +181,21 @@ export class EvolutionSyncManager {
   /**
    * 导入进化包（由外部商业模型处理生成后返还给私域机器人）。
    * 支持热更新 Playbook、规则表、提示词模板、KB 条目。
+   * sandbox / simulate_only：仅沙盒加载 + PlaybookSimulator 回归，通过后发布 HITL 晋升事件。
    */
-  async importEvolutionPack(pack: EvolutionPack): Promise<ImportResult> {
+  async importEvolutionPack(
+    pack: EvolutionPack,
+    opts?: ImportEvolutionPackOptions,
+  ): Promise<ImportResult> {
+    if (opts?.sandbox === true || opts?.simulate_only === true) {
+      return this.importEvolutionPackSandbox(pack);
+    }
+
+    return this.importEvolutionPackProduction(pack);
+  }
+
+  /** 生产导入：热更新 Playbook / 规则 / 模板 / KB */
+  private async importEvolutionPackProduction(pack: EvolutionPack): Promise<ImportResult> {
     const applied: string[] = [];
     const errors: string[] = [];
 
@@ -287,6 +310,152 @@ export class EvolutionSyncManager {
       applied,
       errors: errors.length > 0 ? errors : undefined,
     };
+  }
+
+  /**
+   * 沙盒导入：Playbook 仅 load 到运行时（source 标记 sandbox），跑干跑回归；
+   * 全部通过后发布 evolution.sandbox_ready_for_promotion，等待人工晋升。
+   */
+  private async importEvolutionPackSandbox(pack: EvolutionPack): Promise<ImportResult> {
+    const applied: string[] = [];
+    const errors: string[] = [];
+    const playbookIds: string[] = [];
+    const source = `sandbox-evolution:${pack.source_robot_id}`;
+
+    for (const playbook of pack.improved_playbooks ?? []) {
+      try {
+        const yamlContent = this.serializePlaybookToYaml(playbook);
+        const pb = this.runtime.playbookEngine;
+        const pbExt = pb as typeof pb & {
+          loadFromYaml?: (yaml: string, src: string) => Promise<void>;
+        };
+        const playbookDef = parsePlaybookYaml(yamlContent, source);
+        if (typeof pbExt.load === "function") {
+          pbExt.load(playbookDef);
+        } else if (typeof pbExt.loadFromYaml === "function") {
+          await pbExt.loadFromYaml(yamlContent, source);
+        } else {
+          throw new Error("playbookEngine.load / loadFromYaml 不可用");
+        }
+        playbookIds.push(playbook.id);
+        applied.push(`[sandbox] Playbook 已加载: ${playbook.id}`);
+      } catch (err) {
+        errors.push(
+          `[sandbox] Playbook ${playbook.id} 加载失败: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const simulation_results =
+      playbookIds.length > 0 ? await this.runSandboxRegression(playbookIds) : [];
+    const regressionPassed =
+      playbookIds.length === 0 ||
+      (simulation_results.length > 0 && simulation_results.every((r) => r.passed));
+    const success = errors.length === 0 && regressionPassed;
+
+    const entry: EvolutionHistoryEntry = {
+      pack_version: pack.version,
+      pack_generated_at: pack.generated_at,
+      imported_at: new Date().toISOString(),
+      improvements: applied.length,
+      summary: `[sandbox] ${pack.summary}`,
+    };
+    this.history.push(entry);
+
+    await this.runtime.kernel
+      .publish("evolution.sandbox_imported", "evolution-sync", {
+        pack_version: pack.version,
+        pack_generated_at: pack.generated_at,
+        generated_by: pack.generated_by,
+        playbook_ids: playbookIds,
+        simulation_results,
+        regression_passed: regressionPassed,
+        errors: errors.length,
+      })
+      .catch(() => undefined);
+
+    if (regressionPassed && playbookIds.length > 0) {
+      await this.runtime.kernel
+        .publish("evolution.sandbox_ready_for_promotion", "evolution-sync", {
+          pack_version: pack.version,
+          pack_generated_at: pack.generated_at,
+          generated_by: pack.generated_by,
+          source_robot_id: pack.source_robot_id,
+          playbook_ids: playbookIds,
+          simulation_results,
+          summary: pack.summary,
+          hitl_required: true,
+        })
+        .catch(() => undefined);
+    }
+
+    return {
+      success,
+      applied,
+      errors: errors.length > 0 ? errors : undefined,
+      sandbox: true,
+      simulation_results,
+      pending_promotion: regressionPassed && playbookIds.length > 0,
+    };
+  }
+
+  private async runSandboxRegression(
+    playbookIds: string[],
+  ): Promise<Array<{ playbook_id: string; passed: boolean; error?: string }>> {
+    const { createPlaybookSimulator } = await import("../planes/orch/playbook-simulator.js");
+    const playbookEngine = this.runtime.playbookEngine;
+
+    const simulator = createPlaybookSimulator(async (pid, initVars, trigEvent, mockStore) => {
+      const steps: import("../planes/orch/playbook-simulator.js").SimulateStepLog[] = [];
+      if (!playbookEngine?.trigger) {
+        return { steps, error: "playbookEngine.trigger 不可用" };
+      }
+      try {
+        const run = await playbookEngine.trigger(
+          pid,
+          typeof trigEvent === "object" && trigEvent !== null && !Array.isArray(trigEvent)
+            ? (trigEvent as Record<string, unknown>)
+            : {},
+          {
+            variables: { ...initVars, _simulate: true, _sandbox: true },
+          },
+        );
+        if (run?.steps) {
+          for (let i = 0; i < run.steps.length; i++) {
+            const s = run.steps[i]!;
+            const durationMs =
+              s.completedAt && s.startedAt ? s.completedAt.getTime() - s.startedAt.getTime() : 0;
+            steps.push({
+              step: i,
+              type: s.stepId,
+              name: s.stepId,
+              status: s.status === "failed" ? "error" : "ok",
+              durationMs,
+              output: s.output,
+              error: s.error,
+            });
+          }
+        }
+        return { steps, error: run.error };
+      } catch (e) {
+        return { steps, error: String(e) };
+      }
+    });
+
+    const results: Array<{ playbook_id: string; passed: boolean; error?: string }> = [];
+    for (const playbookId of playbookIds) {
+      const result = await simulator.simulate(
+        playbookId,
+        { _sandbox: true },
+        { type: `sandbox.regression.${playbookId}` },
+      );
+      results.push({
+        playbook_id: playbookId,
+        passed: result.status === "ok",
+        error: result.error,
+      });
+    }
+    return results;
   }
 
   /** 查看进化历史（最近导入的进化包记录） */

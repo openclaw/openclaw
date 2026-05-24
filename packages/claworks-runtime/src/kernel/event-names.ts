@@ -77,6 +77,10 @@ export const CW_EVENTS = {
   EVOLUTION_SIMULATION_REQUESTED: "evolution.simulation_requested",
   /** 请求弱模型意图回归测试（import 后自动触发） */
   EVOLUTION_REGRESSION_REQUESTED: "evolution.regression_requested",
+  /** 沙盒导入完成（未晋升生产） */
+  EVOLUTION_SANDBOX_IMPORTED: "evolution.sandbox_imported",
+  /** 沙盒回归通过，等待 HITL 晋升生产 */
+  EVOLUTION_SANDBOX_READY_FOR_PROMOTION: "evolution.sandbox_ready_for_promotion",
   EVOLVE_PLAYBOOK_DEPLOYED: "evolve.playbook_deployed",
   EVOLVE_PLAYBOOK_DRAFTED: "evolve.playbook_drafted",
   EVOLVE_SUGGESTIONS_READY: "evolve.suggestions_ready",

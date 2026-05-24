@@ -30,6 +30,8 @@ IM / Webhook / Schedule / API
 
 私域数据采集 → 导出 → 商业模型分析 → 生成进化包 → 导入热更新 → PlaybookSimulator 验证
 
+- **半自动草稿**：`autonomy.learn_opportunity`（知识缺口 / CBR 覆盖不足）触发 `EvolveEngine.proposeDraft`，YAML 写入 KB `evolution_drafts`（`pending_review`），发布 `evolve.playbook_drafted`，**不自动部署**。
+- **沙盒导入**：`evolution.import_pack` 或 `POST /v1/evolution/import` 传 `sandbox: true` / `simulate_only: true`，Playbook 仅 load 到运行时沙盒源、跑干跑回归；通过后发布 `evolution.sandbox_ready_for_promotion` 等待 HITL 晋升，**不自动写入生产 Pack**。
 - **模拟蒸馏**：`POST /v1/evolution/simulate`（或发布 `evolution.simulation_requested`）触发端到端弱模型回归 + 导出；摘要写入 KB `simulation_runs`。
 - **每周导出**：`evolution_weekly_export` 定时（周日 02:00）调用 `evolution.export_data`，运维在联网环境用商业模型处理后再 `claworks evolution import`。
 - **导入→回归闭环**：`evolution_pack_import_and_verify` 在 pack 热重载后发布 `evolution.regression_requested`，由 `weak_model_regression_suite` 自动跑弱模型意图回归。
