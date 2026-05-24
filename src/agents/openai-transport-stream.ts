@@ -2967,13 +2967,17 @@ function estimateOpenAICompletionsInputTokens(context: {
   }
   if (Array.isArray(context.messages)) {
     for (const message of context.messages) {
-      if (!message || typeof message !== "object") continue;
+      if (!message || typeof message !== "object") {
+        continue;
+      }
       const content = (message as { content?: unknown }).content;
       if (typeof content === "string") {
         chars += content.length;
       } else if (Array.isArray(content)) {
         for (const block of content) {
-          if (!block || typeof block !== "object") continue;
+          if (!block || typeof block !== "object") {
+            continue;
+          }
           const text = (block as { text?: unknown }).text;
           if (typeof text === "string") {
             chars += text.length;
