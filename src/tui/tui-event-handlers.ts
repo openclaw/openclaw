@@ -463,6 +463,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (evt.state === "delta") {
         return;
       }
+      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
+        clearStaleStreamingIfNoTrackedRunRemains();
+        return;
+      }
       if (evt.state === "final") {
         const hasLateDisplayableFinal =
           hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
@@ -699,6 +703,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           const renderedError = formatRawAssistantErrorForUi(errorMessage);
           chatLog.dismissPendingSystem(evt.runId);
           chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+          noteFinalizedRun(evt.runId, { displayedFinal: true });
           terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
           maybeRefreshHistoryForRun(evt.runId);
         } else {

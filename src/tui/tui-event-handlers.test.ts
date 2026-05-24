@@ -239,6 +239,30 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
+  it("deduplicates delayed chat errors after terminal lifecycle errors", () => {
+    const { state, chatLog, tui, handleAgentEvent, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-error" },
+    });
+
+    handleAgentEvent({
+      runId: "run-error",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
+    });
+
+    handleChatEvent({
+      runId: "run-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "provider exploded",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
+    expect(state.activeChatRunId).toBeNull();
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps retryable lifecycle errors active until a terminal lifecycle event arrives", () => {
     const { state, chatLog, setActivityStatus, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-retryable" },
