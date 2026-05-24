@@ -318,6 +318,110 @@ describe("runReplyAgent runtime config", () => {
     );
   });
 
+  it("passes a maintenance ReplyOperation (NOT the completed reply's operation) into the post-reply memory flush", async () => {
+    // ClawSweeper P1 regression guard: the deferred flush dispatched in the
+    // reply orchestrator's finally block must not forward the (already
+    // completed) reply ReplyOperation into runMemoryFlushIfNeeded. The
+    // embedded runner calls attachBackend(...) on whatever ReplyOperation
+    // it receives, and a completed operation cancels the attached handle
+    // with "superseded", so the deferred flush would never reach its LLM
+    // call.
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    followupRun.run.sessionKey = "agent:main:main";
+    replyParams.sessionKey = "agent:main:main";
+
+    // Provide an external ReplyOperation so the test owns the reference
+    // for identity comparison and can observe its result transitions.
+    const externalReplyOperation = (await import("./reply-run-registry.js")).createReplyOperation({
+      sessionId: followupRun.run.sessionId,
+      sessionKey: "agent:main:main",
+      resetTriggered: false,
+    });
+    replyParams.replyOperation = externalReplyOperation;
+
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runAgentTurnWithFallbackMock.mockResolvedValue({
+      kind: "final",
+      payload: { text: "ok" },
+    });
+
+    await runReplyAgent(replyParams);
+
+    // Confirm the reply operation has been terminated (completed or
+    // failed) by the orchestrator before the post-reply flush runs.
+    // Either terminal state engages the attachBackend cancellation
+    // contract, which is exactly the path the maintenance op must not
+    // share.
+    expect(["completed", "failed"]).toContain(externalReplyOperation.result?.kind);
+
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    const memoryCall = runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as {
+      replyOperation: {
+        result: { kind: string } | null;
+        attachBackend: (handle: { cancel: (reason: string) => void }) => void;
+        complete: () => void;
+        sessionId: string;
+        key: string;
+      };
+    };
+    expect(memoryCall.replyOperation).not.toBe(externalReplyOperation);
+    // The maintenance op is not yet completed at the moment of dispatch:
+    // it accepts a backend handle without immediately cancelling it.
+    expect(memoryCall.replyOperation.result).toBe(null);
+
+    const cancelMock = vi.fn();
+    memoryCall.replyOperation.attachBackend({ cancel: cancelMock });
+    expect(cancelMock).not.toHaveBeenCalled();
+
+    // Compare: attaching to the (completed) reply operation would cancel.
+    const cancelMockOnCompleted = vi.fn();
+    externalReplyOperation.attachBackend({
+      cancel: cancelMockOnCompleted,
+      detach: vi.fn(),
+    } as never);
+    expect(cancelMockOnCompleted).toHaveBeenCalledWith("superseded");
+  });
+
+  it("aborts the maintenance ReplyOperation when the original reply operation aborts upstream", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    followupRun.run.sessionKey = "agent:main:main";
+    replyParams.sessionKey = "agent:main:main";
+
+    // Create a reply operation whose upstreamAbortSignal we control.
+    const upstreamController = new AbortController();
+    const externalReplyOperation = (await import("./reply-run-registry.js")).createReplyOperation({
+      sessionId: followupRun.run.sessionId,
+      sessionKey: "agent:main:main",
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamController.signal,
+    });
+    replyParams.replyOperation = externalReplyOperation;
+
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runAgentTurnWithFallbackMock.mockResolvedValue({
+      kind: "final",
+      payload: { text: "ok" },
+    });
+
+    await runReplyAgent(replyParams);
+
+    const memoryCall = runMemoryFlushIfNeededMock.mock.calls[0]?.[0] as {
+      replyOperation: { abortSignal: AbortSignal };
+    };
+    expect(memoryCall.replyOperation.abortSignal.aborted).toBe(false);
+
+    // Aborting the original reply's upstream signal must propagate into
+    // the maintenance operation so a user cancel still stops the flush.
+    upstreamController.abort(new Error("user cancelled"));
+    expect(memoryCall.replyOperation.abortSignal.aborted).toBe(true);
+  });
+
   it("does not block the start of the user-visible reply on a pending memory flush", async () => {
     const { followupRun, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,

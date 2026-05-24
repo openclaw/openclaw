@@ -99,7 +99,13 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createMaintenanceReplyOperation,
+  createReplyOperation,
+  ReplyRunAlreadyActiveError,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -1332,11 +1338,21 @@ export async function runReplyAgent(params: {
   // Near-threshold memory flush dispatch is deferred until after the reply
   // path has fully unwound (after replyOperation.complete()). The flush's
   // embedded run can internally trigger a compaction that mutates
-  // followupRun.run.sessionId and calls replyOperation.updateSessionId(...),
-  // so it must not run concurrently with the post-reply orchestrator work
-  // (usage accounting, auto-compaction handling, payload delivery state).
-  // The flush is registered into a per-sessionKey pending map; the next
-  // turn's preflight compaction awaits it before mutating session state.
+  // followupRun.run.sessionId, so it must not run concurrently with the
+  // post-reply orchestrator work (usage accounting, auto-compaction
+  // handling, payload delivery state). The flush is registered into a
+  // per-sessionKey pending map; the next turn's preflight compaction
+  // awaits it before mutating session state.
+  //
+  // The reply's ReplyOperation has already been `complete()`d by the
+  // outer finally block when this closure runs, so passing it into
+  // `runMemoryFlushIfNeeded` would cancel the embedded runner's
+  // `attachBackend(...)` call via the completed-operation contract in
+  // `reply-run-registry.ts:attachBackend`. Build a flush-scoped
+  // maintenance ReplyOperation per dispatch so the embedded runner sees
+  // a non-completed operation and can run its housekeeping work.
+  // Aborts on the original reply's signal propagate into the maintenance
+  // operation so a user abort still stops the flush.
   let postReplyFlushDispatched = false;
   let replyPathReached = false;
   const ensureMemoryFlushDispatched = (): void => {
@@ -1344,6 +1360,20 @@ export async function runReplyAgent(params: {
       return;
     }
     postReplyFlushDispatched = true;
+    const flushSessionKey = sessionKey ?? followupRun.run.sessionKey;
+    const flushSessionId =
+      activeSessionEntry?.sessionId ?? followupRun.run.sessionId ?? replyOperation.sessionId;
+    if (!flushSessionKey || !flushSessionId) {
+      logVerbose(
+        "post-reply memory flush skipped: missing sessionKey or sessionId at dispatch time",
+      );
+      return;
+    }
+    const maintenanceReplyOperation = createMaintenanceReplyOperation({
+      sessionKey: flushSessionKey,
+      sessionId: flushSessionId,
+      upstreamAbortSignal: replyOperation.abortSignal,
+    });
     const flushPromise = traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
@@ -1360,15 +1390,19 @@ export async function runReplyAgent(params: {
         runtimePolicySessionKey,
         storePath,
         isHeartbeat,
-        replyOperation,
+        replyOperation: maintenanceReplyOperation,
       }),
     );
     if (sessionKey) {
       registerPendingMemoryFlush(sessionKey, flushPromise);
     }
-    void flushPromise.catch((err) => {
-      logVerbose(`post-reply memory flush failed: ${String(err)}`);
-    });
+    void flushPromise
+      .catch((err) => {
+        logVerbose(`post-reply memory flush failed: ${String(err)}`);
+      })
+      .finally(() => {
+        maintenanceReplyOperation.complete();
+      });
   };
 
   try {
