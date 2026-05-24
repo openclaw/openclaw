@@ -2095,6 +2095,25 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
+  it("runs explicit leaf project config targets as whole configs", () => {
+    const args = [
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
+    ];
+
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([]);
+    expect(buildVitestRunPlans(args, process.cwd())).toEqual(
+      args.map((config) => ({
+        config,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      })),
+    );
+  });
+
   it("skips extension project configs when leaf sharding and the aggregate extension shard is disabled", () => {
     const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
     const previousSkipExtensions = process.env.OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD;
