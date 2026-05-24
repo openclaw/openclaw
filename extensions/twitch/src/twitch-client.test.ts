@@ -15,7 +15,11 @@ import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 // Mock @twurple dependencies
-const mockConnect = vi.fn().mockResolvedValue(undefined);
+const mockConnect = vi.fn(() => {
+  for (const handler of authSuccessHandlers) {
+    handler();
+  }
+});
 const mockJoin = vi.fn().mockResolvedValue(undefined);
 const mockSay = vi.fn().mockResolvedValue({ messageId: "test-msg-123" });
 const mockQuit = vi.fn();
@@ -24,10 +28,25 @@ const mockUnbind = vi.fn();
 // Event handler storage for testing
 const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
   [];
+const authSuccessHandlers: Array<() => void> = [];
+const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
+const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnAuthenticationSuccess = vi.fn((handler: () => void) => {
+  authSuccessHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnAuthenticationFailure = vi.fn((handler: (text: string, retryCount: number) => void) => {
+  authFailureHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnDisconnect = vi.fn((handler: (manual: boolean, reason?: Error) => void) => {
+  disconnectHandlers.push(handler);
   return { unbind: mockUnbind };
 });
 
@@ -38,6 +57,9 @@ const mockOnRefreshFailure = vi.fn();
 vi.mock("@twurple/chat", () => ({
   ChatClient: class {
     onMessage = mockOnMessage;
+    onAuthenticationSuccess = mockOnAuthenticationSuccess;
+    onAuthenticationFailure = mockOnAuthenticationFailure;
+    onDisconnect = mockOnDisconnect;
     connect = mockConnect;
     join = mockJoin;
     say = mockSay;
@@ -108,6 +130,9 @@ describe("TwitchClientManager", () => {
 
     // Clear handler arrays
     messageHandlers.length = 0;
+    authSuccessHandlers.length = 0;
+    authFailureHandlers.length = 0;
+    disconnectHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
     resolveTwitchTokenMock.mockReturnValue({
