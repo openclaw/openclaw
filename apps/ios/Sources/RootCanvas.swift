@@ -350,7 +350,7 @@ struct RootCanvas: View {
     private func homeCanvasBadge(for agent: AgentSummary) -> String {
         if let identity = agent.identity,
            let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
+           let normalizedEmoji = normalized(emoji)
         {
             return normalizedEmoji
         }
@@ -471,6 +471,7 @@ private struct CanvasContent: View {
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
     @State private var showGatewayProblemDetails: Bool = false
+    @State private var showTalkPermissionPrompt: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -487,7 +488,11 @@ private struct CanvasContent: View {
     }
 
     private var talkActive: Bool {
-        self.appModel.talkMode.isEnabled || self.talkEnabled
+        (self.appModel.talkMode.isEnabled || self.talkEnabled) && !self.talkPermissionBlocksStart
+    }
+
+    private var talkPermissionBlocksStart: Bool {
+        self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction
     }
 
     var body: some View {
@@ -522,9 +527,7 @@ private struct CanvasContent: View {
                     self.openChat()
                 },
                 onTalkTap: {
-                    let next = !self.talkActive
-                    self.talkEnabled = next
-                    self.appModel.setTalkEnabled(next)
+                    self.handleTalkToolbarTap()
                 },
                 onSettingsTap: {
                     self.openSettings()
@@ -572,9 +575,31 @@ private struct CanvasContent: View {
                     })
             }
         }
+        .sheet(isPresented: self.$showTalkPermissionPrompt) {
+            NavigationStack {
+                TalkPermissionPromptView(
+                    style: .sheet,
+                    onPermissionReady: {
+                        self.showTalkPermissionPrompt = false
+                        self.startTalk()
+                    })
+                    .padding()
+                    .navigationTitle("Enable Talk")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Not Now") {
+                                self.showTalkPermissionPrompt = false
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
+        }
         .onAppear {
             // Keep the runtime talk state aligned with persisted toggle state on cold launch.
-            if self.talkEnabled != self.appModel.talkMode.isEnabled {
+            if self.talkPermissionBlocksStart, self.talkEnabled || self.appModel.talkMode.isEnabled {
+                self.stopTalk()
+            } else if self.talkEnabled != self.appModel.talkMode.isEnabled {
                 self.appModel.setTalkEnabled(self.talkEnabled)
             }
         }
@@ -604,6 +629,35 @@ private struct CanvasContent: View {
         } else {
             self.openSettings()
         }
+    }
+
+    private func handleTalkToolbarTap() {
+        GatewayDiagnostics.log(
+            "talk.timeline tap active=\(self.talkActive) permissionBlocked=\(self.talkPermissionBlocksStart)")
+        if self.talkActive {
+            self.stopTalk()
+            return
+        }
+
+        if self.talkPermissionBlocksStart {
+            self.stopTalk()
+            self.showTalkPermissionPrompt = true
+            return
+        }
+
+        self.startTalk()
+    }
+
+    private func startTalk() {
+        GatewayDiagnostics.log("talk.timeline start requested from toolbar")
+        self.talkEnabled = true
+        self.appModel.setTalkEnabled(true)
+    }
+
+    private func stopTalk() {
+        GatewayDiagnostics.log("talk.timeline stop requested from toolbar")
+        self.talkEnabled = false
+        self.appModel.setTalkEnabled(false)
     }
 }
 

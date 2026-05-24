@@ -87,8 +87,23 @@ import UIKit
         #expect(withoutApprovalScope.scopes.contains("operator.write"))
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
+        #expect(!withoutApprovalScope.scopesAreExplicit)
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
+    }
+
+    @Test @MainActor func operatorTalkPermissionUpgradeUsesExplicitScopes() {
+        let appModel = NodeAppModel()
+        let options = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: false,
+            forceExplicitScopes: true)
+
+        #expect(options.scopesAreExplicit)
+        #expect(options.scopes.contains("operator.read"))
+        #expect(options.scopes.contains("operator.write"))
+        #expect(options.scopes.contains("operator.talk.secrets"))
     }
 
     @Test func operatorApprovalScopeRequestsStayBackwardCompatible() {

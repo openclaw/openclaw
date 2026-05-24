@@ -3,11 +3,13 @@ import SwiftUI
 struct TalkOrbOverlay: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var pulse: Bool = false
+    @State private var showTalkPermissionPrompt: Bool = false
 
     var body: some View {
         let seam = self.appModel.seamColor
         let status = self.appModel.talkMode.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let mic = min(max(self.appModel.talkMode.micLevel, 0), 1)
+        let needsTalkPermission = self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction
 
         VStack(spacing: 14) {
             ZStack {
@@ -46,7 +48,11 @@ struct TalkOrbOverlay: View {
             }
             .contentShape(Circle())
             .onTapGesture {
-                self.appModel.talkMode.userTappedOrb()
+                if needsTalkPermission {
+                    self.showTalkPermissionPrompt = true
+                } else {
+                    self.appModel.talkMode.userTappedOrb()
+                }
             }
 
             let agentName = self.appModel.activeAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,6 +86,21 @@ struct TalkOrbOverlay: View {
         .padding(28)
         .onAppear {
             self.pulse = true
+        }
+        .sheet(isPresented: self.$showTalkPermissionPrompt) {
+            NavigationStack {
+                TalkPermissionPromptView(style: .sheet)
+                    .padding()
+                    .navigationTitle("Enable Talk")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                self.showTalkPermissionPrompt = false
+                            }
+                        }
+                    }
+            }
+            .presentationDetents([.medium, .large])
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Talk Mode \(status)")
