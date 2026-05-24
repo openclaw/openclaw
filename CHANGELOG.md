@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/perf: cache stable install-record, channel-catalog, bundled-channel, and Telegram session-store metadata during process-local hot paths to reduce repeated JSON and manifest reads.
 - Gateway/perf: reuse immutable plugin metadata snapshots across startup, config, model, channel, setup, and secret metadata readers so hot paths avoid repeated plugin file stats and manifest registry reloads.
 - Talk/realtime: let WebUI and Discord voice callers ask for active OpenClaw run status, cancel, steer, or queue follow-up work while a consult is still running. (#84231) Thanks @Solvely-Colin.
+- Discord/voice: add realtime wake-name gating with agent-name defaults and raise profile bootstrap context budget for longer `USER.md`/`SOUL.md` files.
 - Gateway/perf: lazy-load startup-idle plugin work, core gateway method handlers, and the embedded ACPX runtime so Gateway health and ready signals no longer wait on unused handler trees or ACPX probes.
 - Gateway/perf: cache plugin SDK public-surface alias maps and skip irrelevant macOS Linuxbrew PATH probes so Gateway startup avoids repeated filesystem walks and slow missing-directory stats.
 - Image tool: add adaptive model-aware image compression with an `agents.defaults.imageQuality` preference for choosing token-efficient, balanced, or high-detail media handling.
