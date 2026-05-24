@@ -2563,7 +2563,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
-            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            ? withPluginRuntimePluginScope(
+                {
+                  pluginId,
+                  pluginSource: record.source,
+                  pluginOrigin: record.origin,
+                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+                },
+                run,
+              )
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
         const getRuntimeProperty = () => {
@@ -2615,6 +2623,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "nodes") {
+          const nodes = getRuntimeProperty();
+          return {
+            list: (params) => runWithPluginScope(() => nodes.list(params)),
+            invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+          } satisfies PluginRuntime["nodes"];
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();

@@ -126,4 +126,46 @@ describe("plugin registry runtime config scope", () => {
       pluginSource: "/plugins/legacy-plugin/index.js",
     });
   });
+
+  it("runs node helpers with the owning plugin scope", async () => {
+    let listScope = getPluginRuntimeGatewayRequestScope();
+    let invokeScope = getPluginRuntimeGatewayRequestScope();
+    const runtime = createPluginRuntime();
+    runtime.nodes = {
+      list: vi.fn(async () => {
+        listScope = getPluginRuntimeGatewayRequestScope();
+        return { nodes: [] };
+      }),
+      invoke: vi.fn(async () => {
+        invokeScope = getPluginRuntimeGatewayRequestScope();
+        return { ok: true };
+      }),
+    };
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "google-meet",
+      name: "Google Meet",
+      source: "/plugins/google-meet/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    await api.runtime.nodes.list({ connected: true });
+    await api.runtime.nodes.invoke({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      scopes: ["operator.admin"],
+    });
+
+    expect(listScope).toMatchObject({
+      pluginId: "google-meet",
+      pluginSource: "/plugins/google-meet/index.js",
+    });
+    expect(invokeScope).toMatchObject({
+      pluginId: "google-meet",
+      pluginSource: "/plugins/google-meet/index.js",
+    });
+  });
 });
