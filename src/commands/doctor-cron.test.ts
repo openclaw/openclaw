@@ -650,4 +650,20 @@ describe("legacy WhatsApp crontab health check", () => {
 
     expect(noteMock).not.toHaveBeenCalled();
   });
+
+  it("warns and continues when cron store is unreadable", async () => {
+    const storePath = await makeTempStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+    await fs.chmod(storePath, 0o000);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoteContaining("could not be read", "Doctor warnings");
+    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+  });
 });

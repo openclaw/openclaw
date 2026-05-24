@@ -335,7 +335,20 @@ export async function maybeRepairLegacyCronStore(params: {
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  try {
+    store = await loadCronStore(storePath);
+  } catch (err) {
+    note(
+      [
+        `Cron store at ${shortenHomePath(storePath)} could not be read.`,
+        `Error: ${String(err)}`,
+        "Fix the file permissions or ownership and re-run doctor.",
+      ].join("\n"),
+      "Doctor warnings",
+    );
+    return;
+  }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     return;
