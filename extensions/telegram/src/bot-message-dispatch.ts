@@ -235,23 +235,48 @@ type DispatchTelegramMessageParams = {
 type TelegramReasoningLevel = "off" | "on" | "stream";
 
 type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
+type TelegramSessionStore = ReturnType<typeof loadSessionStore>;
+type FreshTelegramSessionStoreLoader = ((agentId: string) => {
+  storePath: string;
+  store: TelegramSessionStore;
+}) & {
+  clear: () => void;
+};
+
+function createFreshTelegramSessionStoreLoader(params: {
+  cfg: OpenClawConfig;
+  telegramDeps: TelegramBotDeps;
+}): FreshTelegramSessionStoreLoader {
+  const storesByPath = new Map<string, TelegramSessionStore>();
+  const load = ((agentId: string) => {
+    const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+    const cachedStore = storesByPath.get(storePath);
+    if (cachedStore) {
+      return { storePath, store: cachedStore };
+    }
+    const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    storesByPath.set(storePath, store);
+    return { storePath, store };
+  }) as FreshTelegramSessionStoreLoader;
+  load.clear = () => storesByPath.clear();
+  return load;
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
-  telegramDeps: TelegramBotDeps;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
 }): TelegramReasoningLevel {
-  const { cfg, sessionKey, agentId, telegramDeps } = params;
+  const { cfg, sessionKey, agentId } = params;
   const configDefault = resolveTelegramConfigReasoningDefault(cfg, agentId);
   if (!sessionKey) {
     return configDefault;
   }
   try {
-    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
-    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-      skipCache: true,
-    });
+    const { store } = params.loadFreshSessionStore(agentId);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
@@ -285,19 +310,14 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   cfg: OpenClawConfig;
   route: TelegramMessageContext["route"];
   sessionKey: string;
-  telegramDeps: TelegramBotDeps;
+  loadFreshSessionStore: FreshTelegramSessionStoreLoader;
   payload: TelegramTranscriptMirrorPayload;
 }) {
   const text = resolveTelegramMirroredTranscriptText(params.payload);
   if (!text) {
     return;
   }
-  const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, {
-    agentId: params.route.agentId,
-  });
-  const store = (params.telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-    skipCache: true,
-  });
+  const { storePath, store } = params.loadFreshSessionStore(params.route.agentId);
   const sessionEntry = resolveSessionStoreEntry({
     store,
     sessionKey: params.sessionKey,
@@ -384,6 +404,7 @@ export const dispatchTelegramMessage = async ({
   const dispatchStartedAt = Date.now();
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
+  const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
   const {
     ctxPayload,
     msg,
@@ -499,7 +520,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
-    telegramDeps,
+    loadFreshSessionStore,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
@@ -960,12 +981,7 @@ export const dispatchTelegramMessage = async ({
       return undefined;
     }
     try {
-      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
-        agentId: route.agentId,
-      });
-      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-        skipCache: true,
-      });
+      const { storePath, store } = loadFreshSessionStore(route.agentId);
       const sessionEntry = resolveSessionStoreEntry({
         store,
         sessionKey,
@@ -1020,7 +1036,7 @@ export const dispatchTelegramMessage = async ({
             cfg,
             route,
             sessionKey,
-            telegramDeps,
+            loadFreshSessionStore,
             payload,
           });
         }
@@ -1285,12 +1301,7 @@ export const dispatchTelegramMessage = async ({
 
     if (isDmTopic) {
       try {
-        const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
-        const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
-          skipCache: true,
-        });
+        const { store } = loadFreshSessionStore(route.agentId);
         const sessionKey = ctxPayload.SessionKey;
         if (sessionKey) {
           const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
@@ -1302,6 +1313,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
       }
     }
+    loadFreshSessionStore.clear();
 
     if (statusReactionController && !isRoomEvent) {
       void statusReactionController.setThinking();
