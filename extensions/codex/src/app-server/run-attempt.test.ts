@@ -2076,7 +2076,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
   });
 
-  it("disables Codex native tool surfaces for restricted runtime allowlists", () => {
+  it("disables Codex native tool surfaces for dynamic-only runtime allowlists", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -2091,6 +2091,53 @@ describe("runCodexAppServerAttempt", () => {
 
     params.toolsAllow = ["message"];
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["message", "web_search"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("enables Codex native tool surfaces for explicit full native runtime allowlists", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    params.toolsAllow = ["exec"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["BASH", "read", "message"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["read", "write", "edit", "message"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["apply-patch", "message"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["exec", "read", "write", "edit", "message", "memory_search", "memory_get"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerUserMcpServers(params)).toBe(false);
+  });
+
+  it("keeps user MCP servers restricted for explicit native runtime allowlists", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    params.toolsAllow = undefined;
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerUserMcpServers(params)).toBe(true);
+
+    params.toolsAllow = ["*"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerUserMcpServers(params)).toBe(true);
+
+    params.toolsAllow = ["exec", "read", "write", "edit"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerUserMcpServers(params)).toBe(false);
+
+    params.toolsAllow = ["exec", "read", "write", "edit", "message", "memory_search"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(testing.shouldEnableCodexAppServerUserMcpServers(params)).toBe(false);
   });
 
   it("disables Codex native tool surfaces when the effective exec target is node", () => {
@@ -2706,6 +2753,51 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(startParams?.config?.apps?.["google-calendar-app"]?.enabled).toBeUndefined();
     expect(request.mock.calls.map(([method]) => method)).not.toContain("app/list");
+  });
+
+  it("enables Codex native tool surfaces for Daily OS-style runtime toolsAllow", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("read"),
+      createRuntimeDynamicTool("edit"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["exec", "read", "write", "edit", "message", "memory_search", "memory_get"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const startParams = startRequest?.params as
+      | {
+          dynamicTools?: Array<{ name?: string }>;
+          config?: {
+            "features.code_mode"?: boolean;
+            "features.code_mode_only"?: boolean;
+          };
+        }
+      | undefined;
+    const dynamicToolNames = startParams?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(startParams?.config?.["features.code_mode"]).toBe(true);
+    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
+    expect(dynamicToolNames).toEqual(["message", "memory_search", "memory_get"]);
+    expect(dynamicToolNames).not.toContain("exec");
+    expect(dynamicToolNames).not.toContain("read");
+    expect(dynamicToolNames).not.toContain("edit");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -8781,6 +8873,9 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
+          startOptions: appServer.start,
+        }),
       }),
       request: async () => ({
         data: [
@@ -8872,6 +8967,28 @@ describe("runCodexAppServerAttempt", () => {
           },
         };
       }
+      if (method === "app/list") {
+        return {
+          data: [
+            {
+              id: "google-calendar-app",
+              name: "Google Calendar",
+              description: null,
+              logoUrl: null,
+              logoUrlDark: null,
+              distributionChannel: null,
+              branding: null,
+              appMetadata: null,
+              labels: null,
+              installUrl: null,
+              isAccessible: true,
+              isEnabled: true,
+              pluginDisplayNames: [],
+            },
+          ],
+          nextCursor: null,
+        };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
@@ -8905,6 +9022,9 @@ describe("runCodexAppServerAttempt", () => {
     params.agentDir = agentDir;
     const run = runCodexAppServerAttempt(params, { pluginConfig });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+    );
 
     const result = await handleRequest?.({
       id: "request-elicitation-1",

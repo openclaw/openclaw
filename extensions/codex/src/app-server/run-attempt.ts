@@ -1069,6 +1069,11 @@ export async function runCodexAppServerAttempt(
     runtimeSessionKey: sandboxSessionKey,
     sandboxExecServerEnabled,
   });
+  const userMcpServersEnabled = shouldEnableCodexAppServerUserMcpServers(params, sandbox, {
+    agentId: sessionAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandboxExecServerEnabled,
+  });
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
@@ -1731,7 +1736,7 @@ export async function runCodexAppServerAttempt(
               finalConfigPatch: nativeHookRelayConfig,
               nativeCodeModeEnabled: nativeToolSurfaceEnabled,
               nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
-              userMcpServersEnabled: nativeToolSurfaceEnabled,
+              userMcpServersEnabled,
               mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
               mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
               environmentSelection: startupEnvironmentSelection,
@@ -4156,15 +4161,39 @@ function shouldEnableCodexAppServerNativeToolSurface(
     return false;
   }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  const canHonorSandbox = canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
   if (toolsAllow === undefined) {
-    return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
+    return canHonorSandbox;
   }
-  // Codex native code mode exposes its shell/file surface as one app-server
-  // capability, so narrow OpenClaw allowlists must fail closed rather than
-  // widening `message` or `web_search` into shell access.
+  // Codex native code mode exposes shell and file tools as one app-server
+  // capability. Keep partial native allowlists fail-closed; only callers that
+  // explicitly request the full native surface receive it.
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
-    canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
+    canHonorSandbox &&
+    (hasWildcardCodexToolsAllow(toolsAllow) || hasFullCodexNativeToolSurfaceAllow(toolsAllow))
+  );
+}
+
+function shouldEnableCodexAppServerUserMcpServers(
+  params: EmbeddedRunAttemptParams,
+  sandbox?: OpenClawSandboxContext,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+    sandboxExecServerEnabled?: boolean;
+  } = {},
+): boolean {
+  if (!shouldEnableCodexAppServerNativeToolSurface(params, sandbox, options)) {
+    return false;
+  }
+  const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
+  return toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow);
+}
+
+function hasFullCodexNativeToolSurfaceAllow(toolsAllow: string[]): boolean {
+  const allowSet = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
+  return (
+    allowSet.has("exec") && allowSet.has("read") && allowSet.has("write") && allowSet.has("edit")
   );
 }
 
@@ -5816,6 +5845,7 @@ export const testing = {
   filterCodexDynamicToolsForAllowlist,
   includeForcedCodexDynamicToolAllow,
   filterToolsForVisionInputs,
+  hasFullCodexNativeToolSurfaceAllow,
   hasWildcardCodexToolsAllow,
   handleDynamicToolCallWithTimeout,
   isInvalidCodexImagePayloadError,
@@ -5830,6 +5860,7 @@ export const testing = {
   resolveOpenClawCodingToolsSessionKeys,
   shouldProjectMirroredHistoryForCodexStart,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldEnableCodexAppServerUserMcpServers,
   shouldForceMessageTool,
   shouldReleaseTurnAfterTerminalDynamicTool,
   resolveTerminalDynamicToolBatchAction,
