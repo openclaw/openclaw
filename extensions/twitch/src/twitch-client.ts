@@ -313,6 +313,11 @@ export class TwitchClientManager {
     };
   }
 
+  private clearMessageHandler(key: string): void {
+    this.messageHandlers.delete(key);
+    this.messageHandlerTokens.delete(key);
+  }
+
   /**
    * Disconnect a client
    */
@@ -325,13 +330,13 @@ export class TwitchClientManager {
       pendingClient.quit();
       this.pendingClients.delete(key);
       this.connectionPromises.delete(key);
+      this.clearMessageHandler(key);
     }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.messageHandlers.delete(key);
-      this.messageHandlerTokens.delete(key);
+      this.clearMessageHandler(key);
       this.logger.info(`Disconnected ${key}`);
     }
   }
