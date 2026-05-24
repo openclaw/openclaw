@@ -132,6 +132,11 @@ describe("scripts/run-vitest", () => {
         "\u001b[33m[PLUGIN_TIMINGS] Warning:\u001b[0m plugin `foo` was slow\n",
       ),
     ).toBe(true);
+    expect(
+      shouldSuppressVitestStderrLine(
+        "\u001b[33m[PLUGIN_TIMINGS] \u001b[0mYour build spent significant time in plugin `externalize-deps`.\n",
+      ),
+    ).toBe(true);
     expect(shouldSuppressVitestStderrLine("real failure output\n")).toBe(false);
   });
 

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
@@ -17,6 +19,38 @@ function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
 
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
+
+  it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
+    const osHome = join(tmp, "os-home");
+    const openclawHome = join(tmp, "openclaw-home");
+    mkdirSync(osHome, { recursive: true });
+    mkdirSync(openclawHome, { recursive: true });
+
+    let result: ReturnType<typeof runInstallCliShell> | undefined;
+    try {
+      result = runInstallCliShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'printf "prefix=%s\\ngit=%s\\n" "$PREFIX" "$GIT_DIR"',
+        ].join("\n"),
+        {
+          HOME: osHome,
+          OPENCLAW_HOME: openclawHome,
+          OPENCLAW_GIT_DIR: undefined,
+          OPENCLAW_PREFIX: undefined,
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    const output = result?.stdout ?? "";
+    expect(output).toContain(`prefix=${join(osHome, ".openclaw")}`);
+    expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
+  });
 
   it("resolves requested git install versions to checkout refs", () => {
     const result = runInstallCliShell(`
@@ -95,5 +129,18 @@ describe("install-cli.sh", () => {
     expect(script).toContain('freshness_flag="--min-release-age=0"');
     expect(script).toContain('freshness_flag="--before=$(date -u');
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
+  });
+
+  it("rejects OpenClaw GitHub source targets for npm installs", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OPENCLAW_VERSION=main
+      install_openclaw
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
+    expect(result.stdout).toContain("--install-method git --version main");
   });
 });

@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "../../infra/restart-sentinel.js";
-import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import {
+  SUPERVISOR_HINT_ENV_VARS,
+  type RespawnSupervisor,
+} from "../../infra/supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -12,6 +15,7 @@ import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "../../infra/update-m
 import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
+const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_SYSTEMD_UNIT",
@@ -21,6 +25,7 @@ const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
 const HANDOFF_SCRIPT = String.raw`
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const params = JSON.parse(fs.readFileSync(process.argv[2], "utf-8"));
@@ -60,6 +65,23 @@ function cleanupSensitiveFiles() {
       // Best effort only.
     }
   }
+}
+
+function resolveExistingDirectory(candidates) {
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "string") {
+      continue;
+    }
+    try {
+      const stat = fs.statSync(candidate);
+      if (stat.isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
 }
 
 function readJsonFile(filePath) {
@@ -170,8 +192,18 @@ function markUpdateSentinelFailureIfPending(reason) {
   let outputFd;
   try {
     outputFd = fs.openSync(params.logPath, "a", 0o600);
+    const commandCwd =
+      resolveExistingDirectory([
+        params.cwd,
+        os.homedir(),
+        os.tmpdir(),
+        path.parse(process.execPath).root,
+      ]) || params.cwd;
+    if (commandCwd !== params.cwd) {
+      appendLog("managed update command cwd fallback: " + params.cwd + " -> " + commandCwd);
+    }
     const child = spawn(params.commandArgv[0], params.commandArgv.slice(1), {
-      cwd: params.cwd,
+      cwd: commandCwd,
       env: process.env,
       detached: true,
       stdio: ["ignore", outputFd, outputFd],
@@ -273,12 +305,113 @@ export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
   return next;
 }
 
+async function resolveManagedServiceHandoffCwd(root: string): Promise<string> {
+  const candidates = [os.homedir(), os.tmpdir(), path.dirname(process.execPath), root];
+  for (const candidate of candidates) {
+    if (!candidate.trim()) {
+      continue;
+    }
+    try {
+      const stat = await fs.stat(candidate);
+      if (stat.isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return root;
+}
+
+async function resolveExecutableOnPath(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  fallbackPaths: readonly string[],
+): Promise<string | null> {
+  const candidates = new Set<string>();
+  const pathValue = env.PATH?.trim();
+  if (pathValue) {
+    for (const dir of pathValue.split(path.delimiter)) {
+      if (dir.trim()) {
+        candidates.add(path.join(dir, name));
+      }
+    }
+  }
+  for (const candidate of fallbackPaths) {
+    candidates.add(candidate);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function sanitizeSystemdUnitFragment(value: string | undefined): string {
+  const normalized = value?.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-") ?? "";
+  return normalized.replace(/^-+|-+$/gu, "").slice(0, 80);
+}
+
+function buildSystemdHandoffUnitName(handoffId: string | undefined): string {
+  const suffix =
+    sanitizeSystemdUnitFragment(handoffId) ||
+    sanitizeSystemdUnitFragment(`${process.pid}-${Date.now()}`) ||
+    "handoff";
+  return `openclaw-update-${suffix}.scope`;
+}
+
+async function resolveHandoffSpawn(params: {
+  supervisor?: RespawnSupervisor | null;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  scriptPath: string;
+  paramsPath: string;
+  handoffId?: string;
+}): Promise<{ command: string; args: string[] }> {
+  if (params.supervisor !== "systemd") {
+    return {
+      command: params.execPath,
+      args: [params.scriptPath, params.paramsPath],
+    };
+  }
+
+  const systemdRunPath = await resolveExecutableOnPath(
+    "systemd-run",
+    params.env,
+    SYSTEMD_RUN_CANDIDATE_PATHS,
+  );
+  if (!systemdRunPath) {
+    throw new Error(
+      "systemd-run is required to start the managed update handoff outside openclaw-gateway.service",
+    );
+  }
+
+  return {
+    command: systemdRunPath,
+    args: [
+      "--user",
+      "--scope",
+      "--collect",
+      `--unit=${buildSystemdHandoffUnitName(params.handoffId)}`,
+      params.execPath,
+      params.scriptPath,
+      params.paramsPath,
+    ],
+  };
+}
+
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
+  supervisor?: RespawnSupervisor | null;
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   argv1?: string;
@@ -295,6 +428,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     argv1: params.argv1 ?? process.argv[1],
   });
   const commandLabel = formatManagedServiceUpdateCommand(params.timeoutMs);
+  const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
     version: 1,
     meta: params.meta,
@@ -302,7 +436,7 @@ export async function startManagedServiceUpdateHandoff(params: {
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
     parentExitTimeoutMs: Math.max(0, params.restartDelayMs ?? 0) + PARENT_EXIT_GRACE_MS,
-    cwd: params.root,
+    cwd: handoffCwd,
     commandArgv,
     commandLabel,
     handoffId: params.handoffId,
@@ -321,8 +455,16 @@ export async function startManagedServiceUpdateHandoff(params: {
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
   };
-  const child = spawn(params.execPath ?? process.execPath, [scriptPath, paramsPath], {
-    cwd: params.root,
+  const spawnTarget = await resolveHandoffSpawn({
+    supervisor: params.supervisor,
+    env,
+    execPath: params.execPath ?? process.execPath,
+    scriptPath,
+    paramsPath,
+    handoffId: params.handoffId,
+  });
+  const child = spawn(spawnTarget.command, spawnTarget.args, {
+    cwd: handoffCwd,
     env,
     detached: true,
     stdio: "ignore",

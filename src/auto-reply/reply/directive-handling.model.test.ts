@@ -10,34 +10,38 @@ const authProfilesStoreMock = vi.hoisted(() => ({
   >,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  clearRuntimeAuthProfileStoreSnapshots: () => {
-    authProfilesStoreMock.profiles = {};
-  },
-  externalCliDiscoveryForProviderAuth: () => ({
-    mode: "scoped",
-    allowKeychainPrompt: false,
-  }),
-  ensureAuthProfileStore: () => ({
+vi.mock("../../agents/auth-profiles.js", () => {
+  const store = () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
-  }),
-  isProfileInCooldown: () => false,
-  listProfilesForProvider: (_store: unknown, provider: string) =>
-    Object.entries(authProfilesStoreMock.profiles)
-      .filter(([, profile]) => profile.provider === provider)
-      .map(([profileId, profile]) => ({ profileId, profile })),
-  replaceRuntimeAuthProfileStoreSnapshots: (
-    snapshots: Array<{
-      store?: { profiles?: Record<string, AuthProfileForTest> };
-    }>,
-  ) => {
-    authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
-  },
-  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-  resolveAuthProfileOrder: () => [],
-  resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
-}));
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    externalCliDiscoveryForProviderAuth: () => ({
+      mode: "scoped",
+      allowKeychainPrompt: false,
+    }),
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreWithoutExternalProfiles: store,
+    isProfileInCooldown: () => false,
+    listProfilesForProvider: (_store: unknown, provider: string) =>
+      Object.entries(authProfilesStoreMock.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId, profile]) => ({ profileId, profile })),
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, AuthProfileForTest> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+    resolveAuthProfileOrder: () => [],
+    resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
+  };
+});
 
 vi.mock("../../agents/auth-profiles/store.js", () => {
   const store = () => ({
@@ -77,6 +81,14 @@ vi.mock("../../agents/model-auth.js", () => {
   const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
     Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
   return {
+    createRuntimeProviderAuthLookup: () => ({
+      envApiKey: {
+        aliasMap: {},
+        candidateMap: {},
+        authEvidenceMap: {},
+      },
+      syntheticAuthProviderRefs: [],
+    }),
     ensureAuthProfileStore: store,
     hasRuntimeAvailableProviderAuth: ({
       provider,

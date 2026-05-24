@@ -6,11 +6,22 @@ import type { ContextEngine, SubagentEndReason } from "../context-engine/types.j
 import { callGateway } from "../gateway/call.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  getDeliveryAttemptCount,
+  getDeliveryLastAttemptAt,
+  getDeliveryLastError,
+  isDeliverySuspended,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -516,18 +527,14 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
-  if (
-    typeof entry.endedAt === "number" &&
-    entry.pendingFinalDelivery === true &&
-    typeof entry.deliverySuspendedAt === "number"
-  ) {
+  if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
   if (entry.pauseReason === "sessions_yield") {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
-  if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  if (getDeliveryAttemptCount(entry) >= MAX_ANNOUNCE_RETRY_COUNT) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
@@ -549,13 +556,10 @@ function resumeSubagentRun(runId: string) {
   }
 
   const now = Date.now();
-  const delayMs = resolveAnnounceRetryDelayMs(entry.announceRetryCount ?? 0);
-  const earliestRetryAt = (entry.lastAnnounceRetryAt ?? 0) + delayMs;
-  if (
-    entry.expectsCompletionMessage === true &&
-    entry.lastAnnounceRetryAt &&
-    now < earliestRetryAt
-  ) {
+  const lastAttemptAt = getDeliveryLastAttemptAt(entry);
+  const delayMs = resolveAnnounceRetryDelayMs(getDeliveryAttemptCount(entry));
+  const earliestRetryAt = (lastAttemptAt ?? 0) + delayMs;
+  if (entry.expectsCompletionMessage === true && lastAttemptAt && now < earliestRetryAt) {
     const waitMs = Math.max(1, earliestRetryAt - now);
     const scheduledEntry = entry;
     const timer = setTimeout(() => {
@@ -676,11 +680,7 @@ function stopSweeper() {
 }
 
 function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
-  return (
-    typeof entry.endedAt === "number" &&
-    entry.pendingFinalDelivery === true &&
-    typeof entry.deliverySuspendedAt === "number"
-  );
+  return typeof entry.endedAt === "number" && isDeliverySuspended(entry);
 }
 
 function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
@@ -700,30 +700,32 @@ async function discardSuspendedPendingFinalDelivery(
   now: number,
   reason: "expired" | "pressure-pruned",
 ): Promise<void> {
-  const payload = entry.pendingFinalDeliveryPayload;
-  entry.deliveryDiscardedAt = now;
-  entry.deliveryDiscardReason = reason;
-  entry.deliveryDiscardedPayloadSummary = {
+  const delivery = ensureDeliveryState(entry);
+  const payload = delivery.payload;
+  delivery.status = "discarded";
+  delivery.discardedAt = now;
+  delivery.discardReason = reason;
+  delivery.discardedPayloadSummary = {
     requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
     childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
     childRunId: payload?.childRunId ?? entry.runId,
     endedAt: payload?.endedAt ?? entry.endedAt,
     status: payload?.outcome?.status ?? entry.outcome?.status,
-    lastError: entry.lastAnnounceDeliveryError ?? entry.pendingFinalDeliveryLastError ?? null,
+    lastError: getDeliveryLastError(entry) ?? null,
   };
-  entry.pendingFinalDelivery = undefined;
-  entry.pendingFinalDeliveryCreatedAt = undefined;
-  entry.pendingFinalDeliveryLastAttemptAt = undefined;
-  entry.pendingFinalDeliveryAttemptCount = undefined;
-  entry.pendingFinalDeliveryLastError = undefined;
-  entry.pendingFinalDeliveryPayload = undefined;
-  entry.deliverySuspendedAt = undefined;
-  entry.deliverySuspendedReason = undefined;
+  delivery.payload = undefined;
+  delivery.createdAt = undefined;
+  delivery.lastAttemptAt = undefined;
+  delivery.attemptCount = undefined;
+  delivery.lastError = undefined;
+  delivery.suspendedAt = undefined;
+  delivery.suspendedReason = undefined;
   entry.wakeOnDescendantSettle = undefined;
-  entry.fallbackFrozenResultText = undefined;
-  entry.fallbackFrozenResultCapturedAt = undefined;
+  const completion = ensureCompletionState(entry);
+  completion.fallbackResultText = undefined;
+  completion.fallbackCapturedAt = undefined;
   entry.cleanupHandled = true;
-  entry.completionAnnouncedAt = undefined;
+  delivery.announcedAt = undefined;
   resumedRuns.delete(runId);
   clearPendingLifecycleError(runId);
   clearPendingLifecycleTimeout(runId);
@@ -737,6 +739,7 @@ async function discardSuspendedPendingFinalDelivery(
   if (shouldDeleteAttachments) {
     await safeRemoveAttachmentsDir(entry);
   }
+  await removeInternalSessionEffectsTranscript(entry.execution?.transcriptFile);
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   completeCleanupBookkeeping({
     runId,
@@ -778,7 +781,7 @@ async function sweepSubagentRuns() {
         suspendedEntries.length - SUSPENDED_DELIVERY_PRESSURE_TARGET,
       );
       for (const [runId] of suspendedEntries
-        .toSorted((a, b) => (a[1].deliverySuspendedAt ?? 0) - (b[1].deliverySuspendedAt ?? 0))
+        .toSorted((a, b) => (a[1].delivery?.suspendedAt ?? 0) - (b[1].delivery?.suspendedAt ?? 0))
         .slice(0, pressureCount)) {
         pressureDiscardRunIds.add(runId);
       }
@@ -792,7 +795,7 @@ async function sweepSubagentRuns() {
     }
     for (const [runId, entry] of subagentRuns.entries()) {
       if (isSuspendedPendingFinalDelivery(entry)) {
-        const suspendedAgeMs = now - (entry.deliverySuspendedAt ?? now);
+        const suspendedAgeMs = now - (entry.delivery?.suspendedAt ?? now);
         const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
         if (expired || pressureDiscardRunIds.has(runId)) {
           await discardSuspendedPendingFinalDelivery(
@@ -985,11 +988,48 @@ function ensureListener() {
       }
       const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
+      const livenessState =
+        typeof evt.data?.livenessState === "string" ? evt.data.livenessState : undefined;
+      const stopReason = typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
       if (phase === "error") {
         schedulePendingLifecycleError({
           runId: evt.runId,
           endedAt,
           error,
+        });
+        return;
+      }
+      if (isAbortedAgentStopReason(stopReason)) {
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        await completeSubagentRun({
+          runId: evt.runId,
+          endedAt,
+          outcome: {
+            status: "error",
+            error: "subagent run terminated",
+          },
+          reason: SUBAGENT_ENDED_REASON_KILLED,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        });
+        return;
+      }
+      if (isBlockedLivenessState(livenessState)) {
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        await completeSubagentRun({
+          runId: evt.runId,
+          endedAt,
+          outcome: {
+            status: "error",
+            error: formatBlockedLivenessError(error),
+          },
+          reason: SUBAGENT_ENDED_REASON_ERROR,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
         });
         return;
       }
@@ -1073,6 +1113,7 @@ export function replaceSubagentRunAfterSteer(params: {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
+  transcriptFile?: string;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }

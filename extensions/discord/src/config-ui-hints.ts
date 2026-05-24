@@ -157,6 +157,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Component Accent Color",
     help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   },
+  "agentComponents.ttlMs": {
+    label: "Discord Component TTL (ms)",
+    help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
+  },
   "intents.presence": {
     label: "Discord Presence Intent",
     help: "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
@@ -228,6 +232,14 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
+  },
+  "voice.realtime.requireWakeName": {
+    label: "Discord Realtime Require Wake Name",
+    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+  },
+  "voice.realtime.wakeNames": {
+    label: "Discord Realtime Wake Names",
+    help: "Names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",

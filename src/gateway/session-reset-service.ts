@@ -48,6 +48,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
+import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -101,6 +102,7 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     model: undefined,
     modelProvider: undefined,
     contextTokens: undefined,
+    contextBudgetStatus: undefined,
     systemPromptReport: undefined,
   };
 }
@@ -111,6 +113,7 @@ export function archiveSessionTranscriptsForSession(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
@@ -121,6 +124,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
     return [];
@@ -131,6 +135,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+    onArchiveError: params.onArchiveError,
   });
 }
 
@@ -555,6 +560,52 @@ async function ensureFreshAcpResetState(params: {
   });
 }
 
+async function closeChildAcpRuntimesForParent(params: {
+  cfg: OpenClawConfig;
+  parentKey: string;
+  reason: "session-reset" | "session-delete";
+}): Promise<void> {
+  // Enumerate across every agent session store, not just the parent's: ACP
+  // spawns create child keys under the target agent (`agent:<targetAgentId>:acp:…`)
+  // whose entries live in that agent's store, which is a different file from the
+  // parent's under the default per-agent layout. The combined gateway store
+  // aggregates all agent stores under canonical keys (same source the dashboard
+  // session list uses).
+  let children: Array<{ sessionKey: string; entry: SessionEntry }>;
+  try {
+    children = findDirectChildSessionsForParent({
+      cfg: params.cfg,
+      parentKey: params.parentKey,
+    }).filter(({ entry }) => entry.acp);
+  } catch (error) {
+    logVerbose(
+      `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
+    );
+    return;
+  }
+  // Close only direct ACP-backed children of the session being mutated; the
+  // parent itself is closed separately by the caller. Without this, child ACP
+  // sessions spawned via sessions_spawn are orphaned on parent reset/delete.
+  // Close children concurrently so total latency is bounded by a single ACP
+  // cleanup timeout window rather than scaling with the number of stuck
+  // children; per-child failures are logged best-effort and never propagated,
+  // so a stuck child cannot block or fail the parent mutation.
+  await Promise.allSettled(
+    children.map(({ sessionKey, entry }) =>
+      closeAcpRuntimeForSession({
+        cfg: params.cfg,
+        sessionKey,
+        entry,
+        reason: params.reason,
+      }).then((childError) => {
+        if (childError) {
+          logVerbose(`sessions.${params.reason}: child ACP cleanup incomplete for ${sessionKey}`);
+        }
+      }),
+    ),
+  );
+}
+
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -584,12 +635,18 @@ export async function cleanupSessionBeforeMutation(params: {
       `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
     );
   }
-  return await closeAcpRuntimeForSession({
+  const parentAcpError = await closeAcpRuntimeForSession({
     cfg: params.cfg,
     sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
     entry: params.entry,
     reason: params.reason,
   });
+  await closeChildAcpRuntimesForParent({
+    cfg: params.cfg,
+    parentKey: params.target.canonicalKey ?? params.canonicalKey ?? params.key,
+    reason: params.reason,
+  });
+  return parentAcpError;
 }
 
 export async function emitGatewayBeforeResetPluginHook(params: {

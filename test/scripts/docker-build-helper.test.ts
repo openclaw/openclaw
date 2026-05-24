@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
 const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
@@ -25,6 +26,7 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_RUNTIME_SMOKE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs";
+const CLEANUP_SMOKE_DOCKERFILE_PATH = "scripts/docker/cleanup-smoke/Dockerfile";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
@@ -105,6 +107,30 @@ describe("docker build helper", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
     expect(dockerfile).toContain("procps");
+  });
+
+  it("copies root lifecycle scripts before cleanup-smoke installs dependencies", () => {
+    const dockerfile = readFileSync(CLEANUP_SMOKE_DOCKERFILE_PATH, "utf8");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+
+    for (const script of [
+      "scripts/preinstall-package-manager-warning.mjs",
+      "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/prepare-git-hooks.mjs",
+    ]) {
+      const copyIndex = dockerfile.indexOf(script);
+
+      expect(copyIndex, script).toBeGreaterThanOrEqual(0);
+      expect(copyIndex, script).toBeLessThan(installIndex);
+    }
+  });
+
+  it("mounts root helper modules imported by bare Docker E2E scripts", () => {
+    const helper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
+
+    expect(helper).toContain(
+      '-v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"',
+    );
   });
 
   it("preserves pnpm lookup paths for scheduled Docker child lanes", () => {

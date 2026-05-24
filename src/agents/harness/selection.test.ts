@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -21,6 +22,14 @@ vi.mock("./builtin-pi.js", () => ({
   createPiAgentHarness: (): AgentHarness => ({
     id: "pi",
     label: "PI embedded agent",
+    contextEngineHostCapabilities: [
+      "bootstrap",
+      "assemble-before-prompt",
+      "after-turn",
+      "maintain",
+      "compact",
+      "runtime-llm-complete",
+    ],
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: piRunAttempt,
   }),
@@ -83,6 +92,29 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
   };
 }
 
@@ -198,6 +230,16 @@ describe("runAgentHarnessAttempt", () => {
 
   it("falls back to the PI harness in auto mode when no plugin harness matches", async () => {
     const result = await runAgentHarnessAttempt(createAttemptParams());
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the selected PI harness to satisfy context-engine pre-prompt assembly", async () => {
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(providerRuntimeConfig("codex", "pi")),
+      contextEngine: createContextEngineRequiringAssembly(),
+    });
 
     expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
@@ -597,7 +639,35 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
-  it("does not compact a plugin-pinned session through PI when the plugin has no compactor", async () => {
+  it("skips harness compaction preflight for claude-cli runtime sessions", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        config: agentModelRuntimeConfig("anthropic/claude-opus-4-7", "claude-cli"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("skips harness compaction preflight for claude-cli provider sessions", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        config: providerRuntimeConfig("claude-cli", "claude-cli"),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
     registerFailingCodexHarness();
 
     await expect(
@@ -606,53 +676,88 @@ describe("selectAgentHarness", () => {
         sessionKey: "agent:main:main",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        model: "gpt-5.4",
+        provider: "ollama",
+        model: "llama3.3",
         agentHarnessId: "codex",
       }),
-    ).resolves.toEqual({
-      ok: false,
-      compacted: false,
-      reason: 'Agent harness "codex" does not support compaction.',
-    });
+    ).resolves.toBeUndefined();
   });
 
-  it("routes CLI backend aliases to the PI harness so in-process compaction works", () => {
-    const claudeCliConfig = agentModelRuntimeConfig("anthropic/claude-sonnet-4-6", "claude-cli");
-    expect(
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        config: claudeCliConfig,
-      }).id,
-    ).toBe("pi");
+  it("does not compact a selected plugin harness through PI when the plugin has no compactor", async () => {
+    registerFailingCodexHarness();
 
-    const geminiCliConfig = agentModelRuntimeConfig("google/gemini-2.5-pro", "google-gemini-cli");
-    expect(
-      selectAgentHarness({
-        provider: "google",
-        modelId: "gemini-2.5-pro",
-        config: geminiCliConfig,
-      }).id,
-    ).toBe("pi");
-  });
-
-  it("lets maybeCompactAgentHarnessSession proceed for claude-cli model runs via PI", async () => {
-    const config = agentModelRuntimeConfig("anthropic/claude-sonnet-4-6", "claude-cli");
-    // PI is mocked to have no `compact`; the function should report no compaction
-    // rather than throwing MissingAgentHarnessError. Regression for #57326-class
-    // bug: compaction path used to throw because `claude-cli` is a CLI backend
-    // alias, not a registered plugin harness.
     await expect(
       maybeCompactAgentHarnessSession({
         sessionId: "session-1",
         sessionKey: "agent:main:main",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",
+        provider: "codex",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      compacted: false,
+      reason: 'Agent harness "codex" does not support compaction.',
+      failure: { reason: "unsupported_harness_compaction" },
+    });
+  });
+
+  it.each([
+    { provider: "anthropic", modelId: "sonnet-4.6", alias: "claude-cli" },
+    { provider: "google", modelId: "gemini-3-pro-preview", alias: "google-gemini-cli" },
+  ])(
+    "returns PI for explicit CLI runtime alias $alias on $provider instead of throwing MissingAgentHarnessError",
+    ({ provider, modelId, alias }) => {
+      expect(
+        selectAgentHarness({
+          provider,
+          modelId,
+          agentHarnessRuntimeOverride: alias,
+        }).id,
+      ).toBe("pi");
+    },
+  );
+
+  it("still throws MissingAgentHarnessError for an explicit configured cliBackends id", () => {
+    const config = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "my-custom-cli": { command: "echo" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      selectAgentHarness({
         provider: "anthropic",
-        model: "claude-sonnet-4-6",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "my-custom-cli",
         config,
       }),
-    ).resolves.toBeUndefined();
+    ).toThrow('Requested agent harness "my-custom-cli" is not registered');
+  });
+
+  it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "clade-cli",
+      }),
+    ).toThrow('Requested agent harness "clade-cli" is not registered');
+  });
+
+  it("still throws MissingAgentHarnessError for an explicit CLI alias owned by another provider", () => {
+    expect(() =>
+      selectAgentHarness({
+        provider: "anthropic",
+        modelId: "sonnet-4.6",
+        agentHarnessRuntimeOverride: "google-gemini-cli",
+      }),
+    ).toThrow('Requested agent harness "google-gemini-cli" is not registered');
   });
 });

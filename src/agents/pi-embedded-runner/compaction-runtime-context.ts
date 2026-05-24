@@ -21,6 +21,7 @@ export type EmbeddedCompactionRuntimeContext = {
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  senderIsOwner?: boolean;
   senderId?: string;
   provider?: string;
   model?: string;
@@ -88,6 +89,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   agentDir: string;
   config?: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
+  senderIsOwner?: boolean;
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
@@ -125,6 +127,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     agentDir: params.agentDir,
     config: params.config,
     skillsSnapshot: params.skillsSnapshot,
+    senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
     model: resolved.model,

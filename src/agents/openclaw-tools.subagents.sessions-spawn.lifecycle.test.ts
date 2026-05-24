@@ -122,7 +122,10 @@ async function executeBoundAccountSpawn(params: {
   setSessionsSpawnConfigOverride({
     session: { mainKey: "main", scope: "per-sender" },
     messages: { queue: { debounceMs: 0 } },
-    agents: { defaults: { subagents: { allowAgents: ["bot-alpha"] } } },
+    agents: {
+      defaults: { subagents: { allowAgents: ["bot-alpha"] } },
+      list: [{ id: "main" }, { id: "bot-alpha" }],
+    },
     bindings: params.bindings,
   });
   setupSessionsSpawnGatewayMock({
@@ -272,8 +275,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(agentCalls).toHaveLength(2);
 
     // First call: subagent spawn
-    const first = agentCalls[0]?.params as { lane?: string } | undefined;
+    const first = agentCalls[0]?.params as
+      | { disableMessageTool?: boolean; lane?: string }
+      | undefined;
     expect(first?.lane).toBe("subagent");
+    expect(first?.disableMessageTool).toBe(true);
 
     // Second call: main agent trigger (not "Sub-agent announce step." anymore)
     const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
