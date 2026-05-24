@@ -311,6 +311,52 @@ the config fields that accept SecretRefs.
     }
     ```
   </Accordion>
+  <Accordion title="Bitwarden CLI (`bw`)">
+    Use the Bitwarden CLI directly for vault items. The `bw get password` command
+    returns a single value, so `jsonOnly: false` and `id: "value"` are used.
+
+    Requirements:
+
+    - Bitwarden CLI (`bw`) installed on the Gateway host.
+    - `BW_SESSION` available to the Gateway service (from `bw unlock --raw`).
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          bitwarden_openai: {
+            source: "exec",
+            command: "/opt/homebrew/bin/bw",
+            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
+            trustedDirs: ["/opt/homebrew"],
+            args: ["get", "password", "OpenClaw QA API Key"],
+            passEnv: ["BW_SESSION", "HOME"],
+            jsonOnly: false,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: { source: "exec", provider: "bitwarden_openai", id: "value" },
+          },
+        },
+      },
+    }
+    ```
+
+    For item IDs instead of names, use `bw list items --search "OpenClaw"` to find
+    the item ID, then reference it: `args: ["get", "password", "<item-id>"]`.
+
+    After updating config, verify the command path:
+
+    ```bash
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
   <Accordion title="Bitwarden Secrets Manager (`bws`)">
     Use a resolver wrapper when you want SecretRef ids to map to Bitwarden
     Secrets Manager item keys. The repository includes
