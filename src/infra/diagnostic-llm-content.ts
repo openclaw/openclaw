@@ -64,13 +64,12 @@ export function resolveDiagnosticModelContentCapturePolicy(
   if (!isRecord(captureContent) || captureContent.enabled !== true) {
     return NO_MODEL_CONTENT_CAPTURE;
   }
-  const inputMessages = captureContent.inputMessages === true;
   return withDerivedFields({
-    inputMessages,
+    inputMessages: captureContent.inputMessages === true,
     outputMessages: captureContent.outputMessages === true,
     toolInputs: captureContent.toolInputs === true,
     toolOutputs: captureContent.toolOutputs === true,
     systemPrompt: captureContent.systemPrompt === true,
-    toolDefinitions: inputMessages,
+    toolDefinitions: captureContent.toolDefinitions === true,
   });
 }

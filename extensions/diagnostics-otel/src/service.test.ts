@@ -3148,6 +3148,7 @@ describe("diagnostics-otel service", () => {
         inputMessages: true,
         outputMessages: true,
         systemPrompt: true,
+        toolDefinitions: true,
       },
     });
     await service.start(ctx);
@@ -3224,6 +3225,58 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(attrs?.["input.mime_type"]).toBe("application/json");
     expect(attrs?.["output.mime_type"]).toBe("application/json");
+    await service.stop?.(ctx);
+  });
+
+  test("exports tool definitions without requiring input message capture", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: false,
+        toolDefinitions: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: [{ role: "user", content: "do not export this prompt" }],
+      toolDefinitions: [
+        { name: "lookup", description: "Lookup data", parameters: { type: "object" } },
+      ],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(Object.hasOwn(attrs ?? {}, "gen_ai.input.messages")).toBe(false);
+    expect(Object.hasOwn(attrs ?? {}, "input.value")).toBe(false);
+    expect(Object.hasOwn(attrs ?? {}, "openclaw.content.input_messages")).toBe(false);
+    expect(JSON.parse(String(attrs?.["gen_ai.tool.definitions"]))).toEqual([
+      {
+        type: "function",
+        name: "lookup",
+        description: "Lookup data",
+        parameters: { type: "object" },
+      },
+    ]);
+    expect(JSON.parse(String(attrs?.["openclaw.content.tool_definitions"]))).toEqual([
+      {
+        name: "lookup",
+        description: "Lookup data",
+        parameters: { type: "object" },
+      },
+    ]);
     await service.stop?.(ctx);
   });
 

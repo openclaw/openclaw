@@ -107,6 +107,7 @@ are exported only when `diagnostics.otel.logs` is explicitly `true`.
         toolInputs: false,
         toolOutputs: false,
         systemPrompt: false,
+        toolDefinitions: false,
       },
     },
   },
@@ -153,6 +154,7 @@ text. Each subkey is opt-in independently:
 - `toolInputs` - tool argument payloads.
 - `toolOutputs` - tool result payloads.
 - `systemPrompt` - assembled system/developer prompt.
+- `toolDefinitions` - model tool names, descriptions, and schemas.
 
 When any subkey is enabled, model and tool spans get bounded, redacted
 `openclaw.content.*` attributes for that class only. Use boolean

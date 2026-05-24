@@ -88,6 +88,7 @@ type OtelContentCapturePolicy = {
   toolInputs: boolean;
   toolOutputs: boolean;
   systemPrompt: boolean;
+  toolDefinitions: boolean;
   logBodies: boolean;
 };
 
@@ -122,6 +123,7 @@ const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   toolInputs: false,
   toolOutputs: false,
   systemPrompt: false,
+  toolDefinitions: false,
   logBodies: false,
 };
 
@@ -429,6 +431,7 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
       toolInputs: true,
       toolOutputs: true,
       systemPrompt: false,
+      toolDefinitions: true,
       logBodies: true,
     };
   }
@@ -446,6 +449,7 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
     toolInputs: config.toolInputs === true,
     toolOutputs: config.toolOutputs === true,
     systemPrompt: config.systemPrompt === true,
+    toolDefinitions: config.toolDefinitions === true,
     logBodies: false,
   };
 }
@@ -665,6 +669,8 @@ function assignGenAiModelContentAttributes(
       assignJsonAttribute(attributes, "input.value", inputMessages);
       attributes["input.mime_type"] = "application/json";
     }
+  }
+  if (policy.toolDefinitions) {
     const toolDefinitions = normalizeGenAiToolDefinitions(event.toolDefinitions);
     if (toolDefinitions.length > 0) {
       assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
@@ -699,6 +705,8 @@ function assignOtelModelContentAttributes(
   assignGenAiModelContentAttributes(attributes, event, policy);
   if (policy.inputMessages) {
     assignOtelContentAttribute(attributes, "openclaw.content.input_messages", event.inputMessages);
+  }
+  if (policy.toolDefinitions) {
     assignOtelContentAttribute(
       attributes,
       "openclaw.content.tool_definitions",

@@ -37,6 +37,7 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
               inputMessages: true,
               outputMessages: false,
               systemPrompt: true,
+              toolDefinitions: true,
             },
           },
         },
@@ -45,6 +46,48 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
       inputMessages: true,
       outputMessages: false,
       systemPrompt: true,
+      toolDefinitions: true,
+      anyModelContent: true,
+    });
+  });
+
+  it("gates tool definitions independently from input messages", () => {
+    expect(
+      resolveDiagnosticModelContentCapturePolicy({
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            captureContent: {
+              enabled: true,
+              inputMessages: true,
+              toolDefinitions: false,
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      inputMessages: true,
+      toolDefinitions: false,
+      anyModelContent: true,
+    });
+
+    expect(
+      resolveDiagnosticModelContentCapturePolicy({
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            captureContent: {
+              enabled: true,
+              inputMessages: false,
+              toolDefinitions: true,
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      inputMessages: false,
       toolDefinitions: true,
       anyModelContent: true,
     });
