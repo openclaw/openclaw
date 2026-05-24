@@ -39,7 +39,7 @@ export const mattermostChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "Mattermost Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "streaming.preview.toolProgress": {
     label: "Mattermost Draft Tool Progress",
@@ -47,7 +47,7 @@ export const mattermostChannelConfigUiHints = {
   },
   "streaming.preview.commandText": {
     label: "Mattermost Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "streaming.block.enabled": {
     label: "Mattermost Block Streaming Enabled",

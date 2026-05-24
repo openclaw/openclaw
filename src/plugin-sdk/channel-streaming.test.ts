@@ -350,6 +350,194 @@ describe("channel-streaming", () => {
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 
+  it("keeps explain-mode command summaries when status mode hides raw command text", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ run tests");
+    expect(line?.detail).toBe("run tests");
+  });
+
+  it("keeps operand-free command summaries without cwd suffixes in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: {
+          command: "pnpm test -- --watch=false",
+          workdir: "/Users/example/private-project",
+        },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ run tests");
+    expect(line?.text).not.toContain("/Users/example");
+    expect(line?.detail).toBe("run tests");
+  });
+
+  it("hides raw command details for command tools in status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+      },
+      { commandText: "status", detailMode: "raw" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.detail).toBe("Exec");
+  });
+
+  it("hides command item meta in status mode", () => {
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "item",
+          itemKind: "command",
+          name: "exec",
+          meta: "run tests, `pnpm test -- --watch=false`",
+        },
+        { commandText: "status" },
+      ),
+    ).toBe("🛠️ Exec");
+  });
+
+  it("hides raw fallback command details for command tools in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "mycli deploy --token super-secret-token" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.text).not.toContain("super-secret-token");
+    expect(line?.detail).toBe("Exec");
+  });
+
+  it("hides known command details with operands in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "rg super-secret-token /Users/example/private-project" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.text).not.toContain("super-secret-token");
+    expect(line?.text).not.toContain("/Users/example");
+    expect(line?.detail).toBe("Exec");
+  });
+
+  it("hides package script operands in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "pnpm run deploy-private-project" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.text).not.toContain("deploy-private-project");
+    expect(line?.detail).toBe("Exec");
+  });
+
+  it("hides unknown git and openclaw subcommands in explain status mode", () => {
+    const gitLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "git super-secret-token" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+    const openClawLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "openclaw super-secret-token" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(gitLine?.text).toBe("🛠️ Exec");
+    expect(gitLine?.text).not.toContain("super-secret-token");
+    expect(openClawLine?.text).toBe("🛠️ Exec");
+    expect(openClawLine?.text).not.toContain("super-secret-token");
+  });
+
+  it("hides urls and script paths in explain status mode", () => {
+    const curlLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "curl https://example.test/private?token=super-secret-token" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+    const nodeLine = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "node /Users/example/private-project/script.js" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(curlLine?.text).toBe("🛠️ Exec");
+    expect(curlLine?.text).not.toContain("example.test");
+    expect(curlLine?.text).not.toContain("super-secret-token");
+    expect(nodeLine?.text).toBe("🛠️ Exec");
+    expect(nodeLine?.text).not.toContain("/Users/example");
+  });
+
+  it("hides raw fallback command details with cwd suffixes in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: { command: "mycli deploy --session abc", workdir: "/tmp/demo" },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.text).not.toContain("mycli deploy");
+    expect(line?.detail).toBe("Exec");
+  });
+
+  it("hides transformed raw fallback command details in explain status mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        args: {
+          command: "mycli deploy /Users/example/private --token super-secret-token",
+        },
+      },
+      { commandText: "status", detailMode: "explain" },
+    );
+
+    expect(line?.text).toBe("🛠️ Exec");
+    expect(line?.text).not.toContain("mycli deploy");
+    expect(line?.text).not.toContain("super-secret-token");
+    expect(line?.detail).toBe("Exec");
+  });
+
   it("formats progress draft lines with shared tool display labels", () => {
     const progressLine = buildChannelProgressDraftLine({
       event: "tool",

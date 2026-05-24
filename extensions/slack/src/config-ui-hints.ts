@@ -139,7 +139,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.preview.commandText": {
     label: "Slack Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "streaming.progress.label": {
     label: "Slack Progress Label",
@@ -167,7 +167,7 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "Slack Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

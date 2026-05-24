@@ -75,7 +75,7 @@ export const telegramChannelConfigUiHints = {
   },
   "streaming.preview.commandText": {
     label: "Telegram Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "streaming.progress.label": {
     label: "Telegram Progress Label",
@@ -99,7 +99,7 @@ export const telegramChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "Telegram Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",

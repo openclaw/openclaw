@@ -2010,11 +2010,17 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const channelOwnsProgressUi =
+      params.replyOptions?.suppressDefaultToolProgressMessages === true && ctx.ChatType !== "group";
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) => {
-      if (options?.requiresToolSummaryVisibility === true && !shouldSendToolSummaries()) {
+      if (
+        options?.requiresToolSummaryVisibility === true &&
+        !shouldSendToolSummaries() &&
+        !channelOwnsProgressUi
+      ) {
         return false;
       }
       return (

@@ -67,7 +67,7 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.preview.commandText": {
     label: "Discord Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "streaming.progress.label": {
     label: "Discord Progress Label",
@@ -91,7 +91,7 @@ export const discordChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "Discord Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",

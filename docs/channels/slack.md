@@ -1098,7 +1098,7 @@ The default scope (`"group-mentions"`) does not fire ack reactions in direct mes
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
 - `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
-- `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text (default: `raw`).
+- `streaming.preview.commandText` / `streaming.progress.commandText`: set to `status` to keep compact tool-progress lines while hiding raw command/exec text; safe command summaries may still render (default: `raw`).
 
 Hide raw command/exec text while keeping compact progress lines:
 

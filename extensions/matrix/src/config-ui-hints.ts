@@ -51,6 +51,6 @@ export const matrixChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "Matrix Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

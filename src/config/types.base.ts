@@ -48,7 +48,7 @@ export type ChannelStreamingProgressConfig = {
   render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
 };
 
@@ -61,7 +61,7 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
-  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
 };
 

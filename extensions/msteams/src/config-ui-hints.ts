@@ -35,6 +35,6 @@ export const msTeamsChannelConfigUiHints = {
   },
   "streaming.progress.commandText": {
     label: "MS Teams Progress Command Text",
-    help: 'Command/exec detail in progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+    help: 'Command/exec detail in progress lines: "raw" preserves released behavior; "status" hides raw command text but may show operand-free safe summaries.',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

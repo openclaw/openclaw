@@ -1,3 +1,4 @@
+import { resolveExecStatusDetail } from "../agents/tool-display-exec.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type {
@@ -276,17 +277,6 @@ function compactStrings(values: readonly (string | undefined | null)[]): string[
   return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
 }
 
-function inferToolMeta(
-  name: string | undefined,
-  args: Record<string, unknown> | undefined,
-  detailMode: "explain" | "raw" = "explain",
-) {
-  if (!name || !args) {
-    return undefined;
-  }
-  return formatToolDetail(resolveToolDisplay({ name, args, detailMode }));
-}
-
 function buildNamedProgressLine(
   kind: ChannelProgressDraftLineKind,
   name: string | undefined,
@@ -344,6 +334,33 @@ function isCommandToolName(name: string | undefined): boolean {
 function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { event: "item" }>) {
   const itemKind = normalizeOptionalLowercaseString(input.itemKind);
   return itemKind === "command" || isCommandToolName(input.name);
+}
+
+function shouldSuppressCommandToolMeta(
+  name: string | undefined,
+  options?: ChannelProgressLineOptions,
+): boolean {
+  return (
+    options?.commandText === "status" && isCommandToolName(name) && options.detailMode === "raw"
+  );
+}
+
+function inferStatusCommandToolMeta(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+  options?: ChannelProgressLineOptions,
+): string | undefined {
+  if (shouldSuppressCommandToolMeta(name, options)) {
+    return undefined;
+  }
+  if (!name || !args) {
+    return undefined;
+  }
+  if (options?.commandText === "status" && isCommandToolName(name)) {
+    return resolveExecStatusDetail(args);
+  }
+  const display = resolveToolDisplay({ name, args, detailMode: options?.detailMode ?? "explain" });
+  return formatToolDetail(display);
 }
 
 function isEmptyReasoningProgressItem(
@@ -412,9 +429,7 @@ export function buildChannelProgressDraftLine(
         input.event,
         input.name,
         [
-          options?.commandText === "status" && isCommandToolName(input.name)
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
+          inferStatusCommandToolMeta(input.name, input.args, options),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
@@ -422,12 +437,10 @@ export function buildChannelProgressDraftLine(
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
-      const meta =
-        input.meta ??
-        input.summary ??
-        (options?.commandText === "status" && isCommandProgressItem(input)
-          ? undefined
-          : input.progressText);
+      const suppressCommandMeta = options?.commandText === "status" && isCommandProgressItem(input);
+      const meta = suppressCommandMeta
+        ? undefined
+        : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }

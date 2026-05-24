@@ -438,6 +438,90 @@ function compactRawCommand(raw: string, maxLength = 120): string {
 
 export type ToolDetailMode = "explain" | "raw";
 
+const SAFE_STATUS_SUMMARIES = new Set([
+  "check git status",
+  "check git diff",
+  "view git history",
+  "show git object",
+  "list git branches",
+  "switch git branch",
+  "create git commit",
+  "pull git changes",
+  "push git changes",
+  "fetch git changes",
+  "merge git changes",
+  "rebase git branch",
+  "stage git changes",
+  "restore git files",
+  "reset git state",
+  "stash git changes",
+  "search text",
+  "find files",
+  "list files",
+  "show output",
+  "show head output",
+  "print text",
+  "copy files",
+  "move files",
+  "remove files",
+  "create folder",
+  "create file",
+  "fetch url",
+  "install dependencies",
+  "run tests",
+  "run build",
+  "start app",
+  "run lint",
+  "run script",
+  "run node",
+  "run node inline script",
+  "run node inline script (heredoc)",
+  "run python",
+  "run python inline script",
+  "run python inline script (heredoc)",
+  "run python3",
+  "run python3 inline script",
+  "run python3 inline script (heredoc)",
+  "run ruby",
+  "run ruby inline script (heredoc)",
+  "run php",
+  "run php inline script (heredoc)",
+  "run sed transform",
+  "run openclaw",
+  "run openclaw config",
+  "run openclaw cron",
+  "run openclaw doctor",
+  "run openclaw gateway",
+  "run openclaw health",
+  "run openclaw plugins",
+  "run openclaw skills",
+  "run openclaw status",
+]);
+
+function isSafeStatusSummary(summary: string): boolean {
+  return SAFE_STATUS_SUMMARIES.has(summary);
+}
+
+export function resolveExecStatusDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const raw = typeof record.command === "string" ? record.command.trim() : undefined;
+  if (!raw) {
+    return undefined;
+  }
+
+  const unwrapped = unwrapShellWrapper(raw);
+  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
+  const summary = result?.text || "run command";
+  if (result?.allGeneric !== false && isGenericSummary(summary)) {
+    return undefined;
+  }
+  return isSafeStatusSummary(summary) ? summary : undefined;
+}
+
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },

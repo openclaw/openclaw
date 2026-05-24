@@ -1807,6 +1807,62 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards channel-owned progress callbacks when verbose summaries are off", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const callbacks = {
+      toolStart: vi.fn(async () => {}),
+      itemEvent: vi.fn(async () => {}),
+      commandOutput: vi.fn(async () => {}),
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      From: "discord:channel:C1",
+      SessionKey: "agent:main:discord:channel:C1",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      await opts?.onItemEvent?.({ progressText: "exec running" });
+      await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "completed" });
+      await opts?.onToolResult?.({ text: "🛠️ exec completed" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        suppressDefaultToolProgressMessages: true,
+        onToolStart: callbacks.toolStart,
+        onItemEvent: callbacks.itemEvent,
+        onCommandOutput: callbacks.commandOutput,
+      },
+    });
+
+    expect(callbacks.toolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
+    expect(callbacks.itemEvent).toHaveBeenCalledWith({ progressText: "exec running" });
+    expect(callbacks.commandOutput).toHaveBeenCalledWith({
+      phase: "end",
+      name: "exec",
+      status: "completed",
+    });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
   it("allows group tool summaries when verbose is enabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
