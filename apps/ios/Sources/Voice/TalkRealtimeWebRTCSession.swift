@@ -56,7 +56,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         super.init()
     }
 
-    func start(model: String?, voice: String?) async throws {
+    func start(model: String?, voice: String?, prefetchedSession: TalkRealtimeClientSession? = nil) async throws {
         self.timelineStartedAt = ProcessInfo.processInfo.systemUptime
         self.seenRealtimeEventTypes.removeAll()
         self.loggedFirstServerSpeech = false
@@ -64,7 +64,16 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.stopped = false
         self.trace("start model=\(model ?? "default") voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
         self.delegate?.realtimeSession(self, didChangeStatus: "Connecting")
-        let session = try await createClientSession(model: model, voice: voice)
+        let session: TalkRealtimeClientSession
+        if let prefetchedSession {
+            self.trace(
+                "gateway talk.client.create skipped prefetched provider=\(prefetchedSession.provider) "
+                    + "transport=\(prefetchedSession.transport) model=\(prefetchedSession.model ?? "unknown") "
+                    + "voice=\(prefetchedSession.voice ?? "unknown")")
+            session = prefetchedSession
+        } else {
+            session = try await self.createClientSession(model: model, voice: voice)
+        }
         let sessionModel = session.model ?? "unknown"
         let sessionVoice = session.voice ?? "unknown"
         Self.logger.info(
@@ -573,15 +582,24 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private static func configureAudioSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [
-            .allowBluetoothA2DP,
+        let config = RTCAudioSessionConfiguration.webRTC()
+        config.category = AVAudioSession.Category.playAndRecord.rawValue
+        config.mode = AVAudioSession.Mode.default.rawValue
+        config.categoryOptions = [
             .allowBluetoothHFP,
             .defaultToSpeaker,
-        ])
-        try session.setPreferredSampleRate(48000)
-        try session.setPreferredIOBufferDuration(0.01)
-        try session.setActive(true)
+        ]
+        config.sampleRate = 48000
+        config.ioBufferDuration = 0.01
+        RTCAudioSessionConfiguration.setWebRTC(config)
+
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        defer { session.unlockForConfiguration() }
+
+        session.ignoresPreferredAttributeConfigurationErrors = true
+        try session.setConfiguration(config, active: true)
+        try? session.overrideOutputAudioPort(.speaker)
     }
 }
 

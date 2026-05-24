@@ -101,6 +101,7 @@ final class TalkModeManager: NSObject {
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
+    private static let realtimePrefetchExpiryLeewaySeconds: TimeInterval = 30
     var isEnabled: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
@@ -143,6 +144,8 @@ final class TalkModeManager: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var silenceTask: Task<Void, Never>?
     private var realtimeSession: TalkRealtimeWebRTCSession?
+    private var prefetchedRealtimeSession: TalkRealtimeClientSession?
+    private var realtimePrefetchTask: Task<Void, Never>?
 
     private var lastHeard: Date?
     private var lastTranscript: String = ""
@@ -178,6 +181,7 @@ final class TalkModeManager: NSObject {
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
+    private var talkConfigLoadedAt: Date?
     private var silenceWindow: TimeInterval = .init(TalkModeManager.defaultSilenceTimeoutMs) / 1000
     private var lastAudioActivity: Date?
     private var noiseFloorSamples: [Double] = []
@@ -227,6 +231,9 @@ final class TalkModeManager: NSObject {
             if self.isEnabled, !self.isSpeaking {
                 self.statusText = "Offline"
             }
+            self.realtimePrefetchTask?.cancel()
+            self.realtimePrefetchTask = nil
+            self.prefetchedRealtimeSession = nil
         }
     }
 
@@ -289,11 +296,7 @@ final class TalkModeManager: NSObject {
             self.statusText = "Microphone permission denied"
             return
         }
-        let configStartedAt = Self.nowSeconds()
-        await reloadConfig()
-        GatewayDiagnostics.log(
-            "talk.timeline config reload elapsedMs=\(Self.elapsedMs(since: configStartedAt)) "
-                + "permission=\(self.gatewayTalkPermissionState.statusLabel)")
+        await self.ensureTalkConfigLoadedForStart()
         if self.gatewayTalkPermissionState.requiresTalkPermissionAction {
             self.statusText = "Gateway permission required"
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway permission")
@@ -1047,6 +1050,11 @@ final class TalkModeManager: NSObject {
     private func startRealtimeIfAvailable() async -> Bool {
         guard let gateway else { return false }
         let startedAt = Self.nowSeconds()
+        if self.prefetchedRealtimeSession == nil, let prefetchTask = self.realtimePrefetchTask {
+            GatewayDiagnostics.log("talk.timeline realtime awaiting in-flight prefetch")
+            await prefetchTask.value
+        }
+        let prefetchedSession = self.consumePrefetchedRealtimeSession()
         GatewayDiagnostics.log("talk.timeline realtime start attempt sessionKey=\(self.mainSessionKey)")
         let session = TalkRealtimeWebRTCSession(
             gateway: gateway,
@@ -1054,7 +1062,7 @@ final class TalkModeManager: NSObject {
             delegate: self)
         self.realtimeSession = session
         do {
-            try await session.start(model: nil, voice: nil)
+            try await session.start(model: nil, voice: nil, prefetchedSession: prefetchedSession)
             guard self.realtimeSession === session, self.isEnabled else {
                 session.stop()
                 return true
@@ -1079,6 +1087,65 @@ final class TalkModeManager: NSObject {
                     + "error=\(error.localizedDescription)")
             return false
         }
+    }
+
+    func prefetchRealtimeSessionIfReady(reason: String) async {
+        guard self.gatewayConnected, self.realtimeSession == nil, !self.isEnabled else { return }
+        guard self.gatewayTalkPermissionState == .ready else { return }
+        guard self.consumePrefetchedRealtimeSession(peekOnly: true) == nil else { return }
+        guard self.realtimePrefetchTask == nil else { return }
+
+        GatewayDiagnostics.log("talk.timeline realtime prefetch scheduled reason=\(reason)")
+        self.realtimePrefetchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let startedAt = Self.nowSeconds()
+            do {
+                let session = try await self.createRealtimeClientSession(model: nil, voice: nil)
+                guard !Task.isCancelled else { return }
+                self.prefetchedRealtimeSession = session
+                GatewayDiagnostics.log(
+                    "talk.timeline realtime prefetch ready elapsedMs=\(Self.elapsedMs(since: startedAt)) "
+                        + "model=\(session.model ?? "unknown") voice=\(session.voice ?? "unknown")")
+            } catch {
+                guard !Task.isCancelled else { return }
+                GatewayDiagnostics.log(
+                    "talk.timeline realtime prefetch failed elapsedMs=\(Self.elapsedMs(since: startedAt)) "
+                        + "error=\(error.localizedDescription)")
+            }
+            self.realtimePrefetchTask = nil
+        }
+    }
+
+    private func createRealtimeClientSession(model: String?, voice: String?) async throws -> TalkRealtimeClientSession {
+        guard let gateway else {
+            throw NSError(domain: "TalkMode", code: 8, userInfo: [
+                NSLocalizedDescriptionKey: "Gateway not connected",
+            ])
+        }
+        let params = TalkRealtimeClientCreateParams(model: model, voice: voice)
+        let data = try JSONEncoder().encode(params)
+        let json = String(data: data, encoding: .utf8)
+        let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
+        return try JSONDecoder().decode(TalkRealtimeClientSession.self, from: res)
+    }
+
+    private func consumePrefetchedRealtimeSession(peekOnly: Bool = false) -> TalkRealtimeClientSession? {
+        guard let session = self.prefetchedRealtimeSession else { return nil }
+        if let expiresAt = session.expiresAt {
+            let usableUntil = expiresAt - Self.realtimePrefetchExpiryLeewaySeconds
+            if Date().timeIntervalSince1970 >= usableUntil {
+                GatewayDiagnostics.log("talk.timeline realtime prefetched session expired")
+                self.prefetchedRealtimeSession = nil
+                return nil
+            }
+        }
+        if !peekOnly {
+            self.prefetchedRealtimeSession = nil
+            GatewayDiagnostics.log(
+                "talk.timeline realtime using prefetched session model=\(session.model ?? "unknown") "
+                    + "voice=\(session.voice ?? "unknown")")
+        }
+        return session
     }
 
     private func stopRealtimeSession() {
@@ -2234,9 +2301,25 @@ extension TalkModeManager {
         }
     }
 
+    private func ensureTalkConfigLoadedForStart() async {
+        if self.gatewayTalkConfigLoaded || self.gatewayTalkPermissionState.requiresTalkPermissionAction {
+            GatewayDiagnostics.log(
+                "talk.timeline config cached permission=\(self.gatewayTalkPermissionState.statusLabel) "
+                    + "loadedAt=\(self.talkConfigLoadedAt?.timeIntervalSince1970 ?? 0)")
+            return
+        }
+
+        let configStartedAt = Self.nowSeconds()
+        await self.reloadConfig()
+        GatewayDiagnostics.log(
+            "talk.timeline config reload elapsedMs=\(Self.elapsedMs(since: configStartedAt)) "
+                + "permission=\(self.gatewayTalkPermissionState.statusLabel)")
+    }
+
     func reloadConfig() async {
         guard let gateway else { return }
         self.pcmFormatUnavailable = false
+        self.prefetchedRealtimeSession = nil
         do {
             func fetchConfig(includeSecrets: Bool) async throws -> [String: Any]? {
                 let paramsJSON = includeSecrets ? "{\"includeSecrets\":true}" : "{}"
@@ -2339,6 +2422,7 @@ extension TalkModeManager {
             self.gatewayTalkApiKeyConfigured = executionMode == .realtimeRelay ||
                 (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
+            self.talkConfigLoadedAt = Date()
             self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
                 ? .ready
                 : .apiKeyMissing
@@ -2371,6 +2455,7 @@ extension TalkModeManager {
             self.gatewayTalkDefaultModelId = nil
             self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
+            self.talkConfigLoadedAt = nil
             self.gatewaySpeechLocaleID = nil
             self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
             if let missingScope = Self.missingTalkScope(from: error) {
