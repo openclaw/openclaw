@@ -275,6 +275,8 @@ function previewRestorableQueueSummaryPrompt(params: {
     prompt,
     restore: () => {
       const currentLines = params.state.summaryLines;
+      // previewQueueSummaryPrompt reads a snapshot clone; the live queue still
+      // contains this snapshot plus any newer drops that arrived before restore.
       const hasSnapshotPrefix =
         params.state.droppedCount >= snapshot.droppedCount &&
         snapshot.summaryLines.every((line, index) => currentLines[index] === line);
