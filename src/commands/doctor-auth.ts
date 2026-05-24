@@ -334,6 +334,7 @@ async function noteAuthProfileHealthForTarget(params: {
           cfg: params.cfg,
           store,
           profileId: profile.profileId,
+          agentDir: params.target.agentDir,
         });
       } catch (err) {
         const message = formatErrorMessage(err);
@@ -388,7 +389,7 @@ export async function noteAuthProfileHealth(params: {
   const targets = listAuthProfileHealthTargets(params.cfg);
   const activeTargets = targets.filter((target) =>
     target.isDefault
-      ? hasAnyAuthProfileStoreSource() || configuredProfiles
+      ? hasAnyAuthProfileStoreSource(target.agentDir) || configuredProfiles
       : hasLocalAuthProfileStoreSource(target.agentDir),
   );
   if (activeTargets.length === 0) {
