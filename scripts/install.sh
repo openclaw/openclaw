@@ -744,6 +744,81 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+expand_npm_config_path() {
+    local path="$1"
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    case "$path" in
+        "\${HOME}/"*) path="${HOME:-}/${path#\$\{HOME\}/}" ;;
+        "\$HOME/"*) path="${HOME:-}/${path#\$HOME/}" ;;
+        [~]/*) path="${HOME:-}/${path#\~/}" ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+npm_config_file_has_key() {
+    local file
+    file="$(expand_npm_config_path "$1")" || return 1
+    local key="$2"
+    [[ -f "$file" ]] || return 1
+    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" >/dev/null 2>&1
+}
+
+npm_command_path() {
+    local npm_cmd="$1"
+    local npm_path="$npm_cmd"
+    if [[ "$npm_path" != */* ]]; then
+        npm_path="$(command -v "$npm_cmd" 2>/dev/null)" || return 1
+    fi
+    if command -v node >/dev/null 2>&1; then
+        node -e 'const fs = require("node:fs"); console.log(fs.realpathSync(process.argv[1]));' "$npm_path" 2>/dev/null && return 0
+    fi
+    printf '%s\n' "$npm_path"
+}
+
+npm_builtin_config_path() {
+    local npm_cmd="$1"
+    local npm_path
+    npm_path="$(npm_command_path "$npm_cmd")" || return 1
+    local npm_root
+    npm_root="$(cd "$(dirname "$npm_path")/.." >/dev/null 2>&1 && pwd -P)" || return 1
+    printf '%s\n' "${npm_root}/npmrc"
+}
+
+npm_raw_config_has_key() {
+    local key="$1"
+    local npm_cmd="${2:-npm}"
+    local user_config="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    local global_config="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+    local prefix="${NPM_CONFIG_PREFIX:-${npm_config_prefix:-}}"
+
+    npm_config_file_has_key ".npmrc" "$key" && return 0
+    if [[ -n "$user_config" ]]; then
+        npm_config_file_has_key "$user_config" "$key" && return 0
+    elif [[ -n "${HOME:-}" ]]; then
+        npm_config_file_has_key "${HOME}/.npmrc" "$key" && return 0
+    fi
+    if [[ -n "$global_config" ]]; then
+        npm_config_file_has_key "$global_config" "$key" && return 0
+    else
+        local resolved_global_config=""
+        resolved_global_config="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get globalconfig 2>/dev/null || true)"
+        if [[ -n "$resolved_global_config" && "$resolved_global_config" != "null" && "$resolved_global_config" != "undefined" ]]; then
+            npm_config_file_has_key "$resolved_global_config" "$key" && return 0
+        fi
+    fi
+    if [[ -n "$prefix" ]]; then
+        npm_config_file_has_key "${prefix}/etc/npmrc" "$key" && return 0
+    fi
+    local builtin_config=""
+    builtin_config="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+    if [[ -n "$builtin_config" ]]; then
+        npm_config_file_has_key "$builtin_config" "$key" && return 0
+    fi
+    return 1
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
@@ -751,7 +826,7 @@ run_npm_global_install() {
     local freshness_flag="--min-release-age=0"
     local min_release_age=""
     min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
-    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    if ! npm_raw_config_has_key "min-release-age" "npm" && [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
         local before_value=""
         before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
         if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then

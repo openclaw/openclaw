@@ -5,6 +5,7 @@ import { buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
+type ProviderAuthChecker = (provider: string) => boolean | Promise<boolean>;
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(
@@ -36,7 +37,7 @@ export async function resolveVisibleModelCatalog(params: {
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
   runtimeAuthDiscovery?: boolean;
-  providerAuthChecker?: (provider: string) => Promise<boolean>;
+  providerAuthChecker?: ProviderAuthChecker;
 }): Promise<ModelCatalogEntry[]> {
   if (params.view === "all") {
     return params.catalog;
