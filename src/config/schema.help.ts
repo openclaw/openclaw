@@ -30,6 +30,24 @@ export const FIELD_HELP: Record<string, string> = {
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.memoryPressureSnapshot":
     "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
+  "diagnostics.memoryPressureThresholds":
+    "Optional byte and interval thresholds for memory pressure diagnostics. Leave unset to use the built-in defaults, or raise thresholds on high-memory hosts to avoid noisy critical alerts while preserving diagnostics.",
+  "diagnostics.memoryPressureThresholds.rssWarningBytes":
+    "Resident-set-size warning threshold in bytes. Must be a positive integer and should stay less than or equal to rssCriticalBytes; leave unset to use the built-in default.",
+  "diagnostics.memoryPressureThresholds.rssCriticalBytes":
+    "Resident-set-size critical threshold in bytes. Must be a positive integer and should be at or above rssWarningBytes; tune for the host or service memory budget.",
+  "diagnostics.memoryPressureThresholds.heapUsedWarningBytes":
+    "V8 heap-used warning threshold in bytes. Must be a positive integer and should stay less than or equal to heapUsedCriticalBytes; leave unset to use the built-in default.",
+  "diagnostics.memoryPressureThresholds.heapUsedCriticalBytes":
+    "V8 heap-used critical threshold in bytes. Must be a positive integer and should be at or above heapUsedWarningBytes; tune for configured Node heap limits on larger hosts.",
+  "diagnostics.memoryPressureThresholds.rssGrowthWarningBytes":
+    "RSS growth warning threshold in bytes within growthWindowMs. Must be a positive integer and should stay less than or equal to rssGrowthCriticalBytes.",
+  "diagnostics.memoryPressureThresholds.rssGrowthCriticalBytes":
+    "RSS growth critical threshold in bytes within growthWindowMs. Must be a positive integer and should be at or above rssGrowthWarningBytes.",
+  "diagnostics.memoryPressureThresholds.growthWindowMs":
+    "Window in milliseconds used to classify rapid RSS growth. Must be a positive integer; leave unset to keep the built-in memory pressure growth window.",
+  "diagnostics.memoryPressureThresholds.pressureRepeatMs":
+    "Minimum milliseconds between repeated memory pressure events for the same level and reason. Must be a positive integer; raise it to reduce repeated diagnostic log noise.",
   "diagnostics.otel":
     "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
   "diagnostics.cacheTrace":

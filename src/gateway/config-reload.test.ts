@@ -404,6 +404,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
   });
 
+  it("treats diagnostics memory pressure thresholds as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan([
+      "diagnostics.memoryPressureThresholds.heapUsedCriticalBytes",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain(
+      "diagnostics.memoryPressureThresholds.heapUsedCriticalBytes",
+    );
+  });
+
   it("hot-reloads diagnostics memory pressure snapshot toggles", () => {
     const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureSnapshot"]);
     expect(plan.restartGateway).toBe(false);

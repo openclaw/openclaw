@@ -1712,12 +1712,46 @@ describe("stuck session diagnostics threshold", () => {
     );
 
     vi.advanceTimersByTime(30_000);
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
+    expect(emitMemorySample).toHaveBeenLastCalledWith({
+      emitSample: false,
+      thresholds: undefined,
+    });
 
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     vi.advanceTimersByTime(30_000);
 
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+    expect(emitMemorySample).toHaveBeenLastCalledWith({
+      emitSample: true,
+      thresholds: undefined,
+    });
+  });
+
+  it("passes configured memory pressure thresholds to heartbeat memory sampling", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+    const memoryPressureThresholds = {
+      rssWarningBytes: 4_000,
+      rssCriticalBytes: 8_000,
+      heapUsedWarningBytes: 2_000,
+      heapUsedCriticalBytes: 6_000,
+      pressureRepeatMs: 120_000,
+    };
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          memoryPressureThresholds,
+        },
+      },
+      { emitMemorySample, sampleLiveness: () => null },
+    );
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(emitMemorySample).toHaveBeenLastCalledWith({
+      emitSample: false,
+      thresholds: memoryPressureThresholds,
+    });
   });
 
   it("records idle liveness samples without warning in the gateway log", () => {
@@ -1756,7 +1790,10 @@ describe("stuck session diagnostics threshold", () => {
 
     expect(events).toContain("diagnostic.liveness.warning");
     expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
-    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+    expect(emitMemorySample).toHaveBeenLastCalledWith({
+      emitSample: true,
+      thresholds: undefined,
+    });
     requireMatchingRecord(
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {

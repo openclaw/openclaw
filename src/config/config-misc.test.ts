@@ -58,6 +58,40 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("diagnostics memory pressure threshold config", () => {
+  it("accepts positive ordered memory pressure thresholds", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        memoryPressureThresholds: {
+          rssWarningBytes: 4_000,
+          rssCriticalBytes: 8_000,
+          heapUsedWarningBytes: 2_000,
+          heapUsedCriticalBytes: 6_000,
+          rssGrowthWarningBytes: 1_000,
+          rssGrowthCriticalBytes: 2_000,
+          growthWindowMs: 60_000,
+          pressureRepeatMs: 120_000,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects inverted memory pressure thresholds", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        memoryPressureThresholds: {
+          heapUsedWarningBytes: 6_000,
+          heapUsedCriticalBytes: 2_000,
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({

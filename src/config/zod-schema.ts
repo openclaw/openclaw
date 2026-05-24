@@ -463,6 +463,40 @@ export const OpenClawSchema = z
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
         memoryPressureSnapshot: z.boolean().optional(),
+        memoryPressureThresholds: z
+          .object({
+            rssWarningBytes: z.number().int().positive().optional(),
+            rssCriticalBytes: z.number().int().positive().optional(),
+            heapUsedWarningBytes: z.number().int().positive().optional(),
+            heapUsedCriticalBytes: z.number().int().positive().optional(),
+            rssGrowthWarningBytes: z.number().int().positive().optional(),
+            rssGrowthCriticalBytes: z.number().int().positive().optional(),
+            growthWindowMs: z.number().int().positive().optional(),
+            pressureRepeatMs: z.number().int().positive().optional(),
+          })
+          .strict()
+          .refine(
+            (thresholds) =>
+              thresholds.rssWarningBytes === undefined ||
+              thresholds.rssCriticalBytes === undefined ||
+              thresholds.rssWarningBytes <= thresholds.rssCriticalBytes,
+            "diagnostics.memoryPressureThresholds.rssWarningBytes must be less than or equal to rssCriticalBytes",
+          )
+          .refine(
+            (thresholds) =>
+              thresholds.heapUsedWarningBytes === undefined ||
+              thresholds.heapUsedCriticalBytes === undefined ||
+              thresholds.heapUsedWarningBytes <= thresholds.heapUsedCriticalBytes,
+            "diagnostics.memoryPressureThresholds.heapUsedWarningBytes must be less than or equal to heapUsedCriticalBytes",
+          )
+          .refine(
+            (thresholds) =>
+              thresholds.rssGrowthWarningBytes === undefined ||
+              thresholds.rssGrowthCriticalBytes === undefined ||
+              thresholds.rssGrowthWarningBytes <= thresholds.rssGrowthCriticalBytes,
+            "diagnostics.memoryPressureThresholds.rssGrowthWarningBytes must be less than or equal to rssGrowthCriticalBytes",
+          )
+          .optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),

@@ -9,7 +9,11 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  emitDiagnosticMemorySample,
+  resetDiagnosticMemoryForTest,
+  type DiagnosticMemoryThresholds,
+} from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
   getRecentDiagnosticPhases,
@@ -142,6 +146,12 @@ function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] |
 
 function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
   return config?.diagnostics?.memoryPressureSnapshot === true;
+}
+
+function getDiagnosticMemoryPressureThresholds(
+  config?: OpenClawConfig,
+): DiagnosticMemoryThresholds | undefined {
+  return config?.diagnostics?.memoryPressureThresholds;
 }
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -1195,11 +1205,16 @@ export function startDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
+    const memoryPressureThresholds = getDiagnosticMemoryPressureThresholds(heartbeatConfig);
     if (opts?.emitMemorySample) {
-      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
+      opts.emitMemorySample({
+        emitSample: shouldRecordMemorySample,
+        thresholds: memoryPressureThresholds,
+      });
     } else {
       emitDiagnosticMemorySample({
         emitSample: shouldRecordMemorySample,
+        thresholds: memoryPressureThresholds,
         writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });

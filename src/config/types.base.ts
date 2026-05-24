@@ -305,6 +305,17 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type DiagnosticsMemoryPressureThresholdsConfig = {
+  rssWarningBytes?: number;
+  rssCriticalBytes?: number;
+  heapUsedWarningBytes?: number;
+  heapUsedCriticalBytes?: number;
+  rssGrowthWarningBytes?: number;
+  rssGrowthCriticalBytes?: number;
+  growthWindowMs?: number;
+  pressureRepeatMs?: number;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -315,6 +326,8 @@ export type DiagnosticsConfig = {
   stuckSessionAbortMs?: number;
   /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
   memoryPressureSnapshot?: boolean;
+  /** Optional memory pressure thresholds. Unset fields use built-in defaults. */
+  memoryPressureThresholds?: DiagnosticsMemoryPressureThresholdsConfig;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

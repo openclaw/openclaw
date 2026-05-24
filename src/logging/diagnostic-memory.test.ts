@@ -136,6 +136,48 @@ describe("diagnostic memory", () => {
     ]);
   });
 
+  it("keeps default heap pressure thresholds when custom thresholds are unset", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      uptimeMs: 0,
+      memoryUsage: memoryUsage({ rss: 1000, heapUsed: 2 * 1024 * 1024 * 1024 }),
+    });
+    stop();
+
+    expect(events.at(-1)).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "critical",
+      reason: "heap_threshold",
+      thresholdBytes: 2 * 1024 * 1024 * 1024,
+    });
+  });
+
+  it("uses custom heap pressure thresholds to avoid noisy critical pressure", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+
+    emitDiagnosticMemorySample({
+      now: 1000,
+      uptimeMs: 0,
+      memoryUsage: memoryUsage({ rss: 1000, heapUsed: 2500 }),
+      thresholds: {
+        heapUsedWarningBytes: 2000,
+        heapUsedCriticalBytes: 5000,
+      },
+    });
+    stop();
+
+    expect(events.at(-1)).toMatchObject({
+      type: "diagnostic.memory.pressure",
+      level: "warning",
+      reason: "heap_threshold",
+      thresholdBytes: 2000,
+    });
+  });
+
   it("can check pressure without recording an idle memory sample", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));

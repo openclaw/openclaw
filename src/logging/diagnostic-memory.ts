@@ -18,7 +18,7 @@ const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 
 const log = createSubsystemLogger("gateway").child("diagnostics/memory");
 
-type DiagnosticMemoryThresholds = {
+export type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
   rssCriticalBytes?: number;
   heapUsedWarningBytes?: number;
