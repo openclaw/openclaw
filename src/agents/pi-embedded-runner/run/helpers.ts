@@ -101,6 +101,31 @@ export function resolveActiveErrorContext(params: {
   return resolveReportedModelRef(params);
 }
 
+export function resolveAssistantForFailover<
+  T extends { provider?: string; model?: string },
+>(params: {
+  provider: string;
+  model: string;
+  currentAttemptAssistant?: T;
+  sessionLastAssistant?: T;
+}): T | undefined {
+  if (params.currentAttemptAssistant) {
+    return params.currentAttemptAssistant;
+  }
+  if (!params.sessionLastAssistant) {
+    return undefined;
+  }
+  const reportedRef = resolveReportedModelRef({
+    provider: params.provider,
+    model: params.model,
+    assistant: params.sessionLastAssistant,
+  });
+  if (reportedRef.provider !== params.provider || reportedRef.model !== params.model) {
+    return undefined;
+  }
+  return params.sessionLastAssistant;
+}
+
 function isEmbeddedHarnessProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "pi";
 }

@@ -154,4 +154,33 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
 
     await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
   });
+
+  it("does not attribute a later candidate failure to stale session history", async () => {
+    setupDeepseekFallbackErrorMatchers();
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You have hit your ChatGPT usage limit (plus plan).",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-cross-provider-stale-session-error-context",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.not.toThrow("ChatGPT usage limit");
+    expect(mockedIsRateLimitAssistantError).not.toHaveBeenCalled();
+    expect(getLastFormattedAssistant()).toBeUndefined();
+  });
 });
