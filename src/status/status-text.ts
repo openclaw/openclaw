@@ -46,6 +46,11 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  type LiveStatusModelIdentity,
+  resolveLiveStatusModelIdentity,
+  withLiveStatusModelIdentity,
+} from "./live-model-reporting.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 export type { BuildStatusTextParams } from "./status-text.types.js";
 
@@ -257,6 +262,68 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
+function formatStatusModelLabel(provider: string | undefined, model: string | undefined): string {
+  const normalizedModel = model?.trim();
+  if (!normalizedModel) {
+    return "";
+  }
+  const normalizedProvider = provider?.trim();
+  return normalizedProvider ? `${normalizedProvider}/${normalizedModel}` : normalizedModel;
+}
+
+function resolveStoredStatusModelLabel(params: {
+  entry?: SessionEntry;
+  fallbackProvider: string;
+  fallbackModel: string;
+}): string {
+  const providerOverride = params.entry?.providerOverride?.trim();
+  const modelOverride = params.entry?.modelOverride?.trim();
+  if (!modelOverride) {
+    return formatStatusModelLabel(
+      providerOverride ?? params.fallbackProvider,
+      params.fallbackModel,
+    );
+  }
+  if (!providerOverride) {
+    const slashIndex = modelOverride.indexOf("/");
+    if (slashIndex > 0) {
+      const embeddedProvider = modelOverride.slice(0, slashIndex).trim();
+      const embeddedModel = modelOverride.slice(slashIndex + 1).trim();
+      if (embeddedProvider && embeddedModel) {
+        return `${embeddedProvider}/${embeddedModel}`;
+      }
+    }
+  }
+  return formatStatusModelLabel(providerOverride ?? params.fallbackProvider, modelOverride);
+}
+
+function shouldApplyLiveStatusModelIdentity(params: {
+  entry?: SessionEntry;
+  fallbackProvider: string;
+  fallbackModel: string;
+  identity: LiveStatusModelIdentity;
+}): boolean {
+  const hasStoredSelection = Boolean(
+    params.entry?.providerOverride?.trim() || params.entry?.modelOverride?.trim(),
+  );
+  if (!hasStoredSelection) {
+    const hasStoredRuntime = Boolean(
+      params.entry?.modelProvider?.trim() || params.entry?.model?.trim(),
+    );
+    return !hasStoredRuntime;
+  }
+  const storedLabel = resolveStoredStatusModelLabel({
+    entry: params.entry,
+    fallbackProvider: params.fallbackProvider,
+    fallbackModel: params.fallbackModel,
+  });
+  const liveLabel = formatStatusModelLabel(
+    params.identity.provider ?? params.fallbackProvider,
+    params.identity.model,
+  );
+  return !storedLabel || !areRuntimeModelRefsEquivalent(storedLabel, liveLabel);
+}
+
 function formatStatusUptimeDuration(ms: number): string {
   return formatDurationCompact(ms, { spaced: true }) ?? "0s";
 }
@@ -290,39 +357,59 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     isGroup,
     defaultGroupActivation,
   } = params;
+  const liveModelIdentity = resolveLiveStatusModelIdentity({
+    provider: params.activeModelProvider,
+    model: params.activeModel,
+  });
+  const applyLiveModelIdentity = liveModelIdentity
+    ? shouldApplyLiveStatusModelIdentity({
+        entry: sessionEntry,
+        fallbackProvider: provider,
+        fallbackModel: model,
+        identity: liveModelIdentity,
+      })
+    : false;
+  const statusSessionEntry =
+    applyLiveModelIdentity && sessionEntry
+      ? withLiveStatusModelIdentity(sessionEntry, liveModelIdentity)
+      : sessionEntry;
+  const statusProvider = applyLiveModelIdentity
+    ? (liveModelIdentity.provider ?? provider)
+    : provider;
+  const statusModel = applyLiveModelIdentity ? liveModelIdentity.model : model;
   const statusAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
   const statusWorkspaceDir =
     params.workspaceDir ??
-    sessionEntry?.spawnedWorkspaceDir ??
+    statusSessionEntry?.spawnedWorkspaceDir ??
     resolveAgentWorkspaceDir(cfg, statusAgentId);
   const modelRefs = resolveSelectedAndActiveModel({
-    selectedProvider: provider,
-    selectedModel: model,
-    sessionEntry,
+    selectedProvider: statusProvider,
+    selectedModel: statusModel,
+    sessionEntry: statusSessionEntry,
   });
   const effectiveHarness =
     params.resolvedHarness ??
     (await resolveStatusHarnessId({
       cfg,
-      provider,
-      model,
+      provider: statusProvider,
+      model: statusModel,
       agentId: statusAgentId,
       sessionKey,
-      sessionEntry,
+      sessionEntry: statusSessionEntry,
     }));
   const selectedStatusProvider = resolveStatusRuntimeProvider({
-    provider,
+    provider: statusProvider,
     effectiveHarness,
   });
   const selectedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider,
+    provider: statusProvider,
     harnessRuntime: effectiveHarness,
     config: cfg,
   });
-  const activeProvider = modelRefs.active.provider || provider;
+  const activeProvider = modelRefs.active.provider || statusProvider;
   const activeStatusProvider = resolveStatusRuntimeProvider({
     provider: activeProvider,
     effectiveHarness,
@@ -338,7 +425,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         provider: selectedStatusProvider,
         acceptedProviderIds: selectedAuthProviders,
         cfg,
-        sessionEntry,
+        sessionEntry: statusSessionEntry,
         agentDir: statusAgentDir,
         workspaceDir: statusWorkspaceDir,
         includeExternalProfiles: false,
@@ -350,7 +437,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           provider: activeStatusProvider,
           acceptedProviderIds: activeAuthProviders,
           cfg,
-          sessionEntry,
+          sessionEntry: statusSessionEntry,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
           includeExternalProfiles: false,
@@ -457,12 +544,14 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const queueSettings = resolveQueueSettings({
     cfg,
     channel: statusChannel,
-    sessionEntry,
+    sessionEntry: statusSessionEntry,
   });
-  const queueKey = sessionKey ?? sessionEntry?.sessionId;
+  const queueKey = sessionKey ?? statusSessionEntry?.sessionId;
   const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
   const queueOverrides = Boolean(
-    sessionEntry?.queueDebounceMs ?? sessionEntry?.queueCap ?? sessionEntry?.queueDrop,
+    statusSessionEntry?.queueDebounceMs ??
+    statusSessionEntry?.queueCap ??
+    statusSessionEntry?.queueDrop,
   );
 
   let subagentsLine: string | undefined;
@@ -489,7 +578,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     });
   }
   const groupActivation = isGroup
-    ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
+    ? (normalizeGroupActivation(statusSessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const agentConfig = resolveAgentConfig(cfg, statusAgentId);
@@ -497,10 +586,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedFastMode ??
     resolveFastModeState({
       cfg,
-      provider,
-      model,
+      provider: statusProvider,
+      model: statusModel,
       agentId: statusAgentId,
-      sessionEntry,
+      sessionEntry: statusSessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -516,7 +605,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
-    model: modelRefs.active.model || model,
+    model: modelRefs.active.model || statusModel,
   });
   return buildStatusMessage({
     config: cfg,
@@ -524,7 +613,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       ...agentDefaults,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
-        primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
+        primary: params.primaryModelLabelOverride ?? `${statusProvider}/${statusModel}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
@@ -540,7 +629,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ? agentDefaults.contextTokens
         : undefined,
     runtimeContextTokens,
-    sessionEntry,
+    sessionEntry: statusSessionEntry,
     sessionKey,
     parentSessionKey,
     sessionScope,

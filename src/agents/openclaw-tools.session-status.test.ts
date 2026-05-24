@@ -1037,6 +1037,10 @@ describe("session_status tool", () => {
     const sessionEntry = statusArg.sessionEntry as Record<string, unknown>;
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(sessionEntry.modelOverride).toBeUndefined();
+    expectRecordFields(sessionEntry, {
+      modelProvider: "openai-codex",
+      model: "gpt-5.2",
+    });
     const agent = statusArg.agent as Record<string, unknown>;
     expectRecordFields(agent.model, { primary: "openai/gpt-5.2" });
   });

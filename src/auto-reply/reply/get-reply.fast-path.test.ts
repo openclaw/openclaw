@@ -582,6 +582,62 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 
+  it("uses the target session model override for native /status", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-status-model-"));
+    const storePath = path.join(home, "sessions.json");
+    const targetSessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [targetSessionKey]: {
+          sessionId: "existing-telegram-session",
+          providerOverride: "deepseek",
+          modelOverride: "deepseek-v4-flash",
+          modelOverrideSource: "user",
+          updatedAt: 1,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "zhipu/glm-4.5-air",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "zhipu",
+      defaultModel: "glm-4.5-air",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(Array.isArray(reply)).toBe(false);
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(reply.text).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(reply.text).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(reply.text).toContain("Clear with: /model default");
+  });
+
   it("handles native slash directives before workspace bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-slash-fast-"));
     const targetSessionKey = "agent:main:telegram:123";
