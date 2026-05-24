@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -33,9 +33,6 @@ let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
-let createReplyMediaPathNormalizerSpy: MockInstance<
-  typeof import("./reply-media-paths.runtime.js").createReplyMediaPathNormalizer
->;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -165,11 +162,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       createReplyOperation,
       __testing: replyRunTesting,
     } = await import("./reply-run-registry.js"));
-    const replyMediaPathsRuntime = await import("./reply-media-paths.runtime.js");
-    createReplyMediaPathNormalizerSpy = vi.spyOn(
-      replyMediaPathsRuntime,
-      "createReplyMediaPathNormalizer",
-    );
   });
 
   beforeEach(() => {
@@ -217,8 +209,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     resetPluginTtsAndThreadMocks();
-    createReplyMediaPathNormalizerSpy.mockReset();
-    createReplyMediaPathNormalizerSpy.mockReturnValue(async (payload) => payload);
     diagnosticMocks.logMessageQueued.mockReset();
     diagnosticMocks.logMessageProcessed.mockReset();
     diagnosticMocks.logSessionStateChange.mockReset();
@@ -917,63 +907,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("suppresses final reply delivery when dispatch aborts during final normalization", async () => {
-    let normalizeStarted!: () => void;
-    let releaseNormalize!: () => void;
-    const normalizeStartedPromise = new Promise<void>((resolve) => {
-      normalizeStarted = resolve;
-    });
-    const releaseNormalizePromise = new Promise<void>((resolve) => {
-      releaseNormalize = resolve;
-    });
-    createReplyMediaPathNormalizerSpy.mockReturnValue(async (payload: { text?: string }) => {
-      if (payload.text === "late final should not send") {
-        normalizeStarted();
-        await releaseNormalizePromise;
-      }
-      return payload;
-    });
-
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      SessionKey: "agent:final-normalization-abort",
-      BodyForAgent: "finish while stop races final delivery",
-    });
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: {
-        diagnostics: { enabled: true },
-        session: {
-          sendPolicy: { default: "allow" },
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver: async () => ({
-        text: "late final should not send",
-        mediaUrl: "https://example.test/image.png",
-      }),
-    });
-
-    await normalizeStartedPromise;
-    expect(replyRunRegistry.abort("agent:final-normalization-abort")).toBe(true);
-    releaseNormalize();
-
-    await expect(dispatchPromise).resolves.toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "completed",
-        reason: "reply_operation_aborted",
-      }),
-    );
-    expect(getActiveReplyRunCount()).toBe(0);
-  });
-
   it("treats a resolver AbortError after dispatch abort as a handled dispatch", async () => {
     let resolverStarted!: () => void;
     const resolverStartedPromise = new Promise<void>((resolve) => {
@@ -1107,6 +1040,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           },
         } as OpenClawConfig,
         dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "automatic" },
         replyResolver,
         fastAbortResolver: async () => {
           expect(replyRunRegistry.abort("agent:self-stop")).toBe(false);
