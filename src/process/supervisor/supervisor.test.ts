@@ -65,12 +65,8 @@ function createStubChildAdapter(options?: {
       stderrListeners.push(listener);
     },
     wait: async () => await waitPromise,
-    kill: (signal, killOptions) => {
-      if (killOptions === undefined) {
-        killMock(signal);
-      } else {
-        killMock(signal, killOptions);
-      }
+    kill: (signal) => {
+      killMock(signal);
       options?.onKill?.(signal, adapter);
     },
     dispose: () => {
@@ -163,7 +159,7 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM", { graceMs: 5_000 });
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
     await vi.advanceTimersByTimeAsync(5_000);
     expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
     expect(exit.reason).toBe("no-output-timeout");
@@ -193,7 +189,7 @@ describe("process supervisor", () => {
     const exitPromise = run.wait();
     run.cancel("manual-cancel");
 
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM", { graceMs: 5_000 });
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
 
     await vi.advanceTimersByTimeAsync(4_999);
@@ -238,7 +234,7 @@ describe("process supervisor", () => {
 
     const firstExit = await firstRun.wait();
     const secondExit = await secondRun.wait();
-    expect(first.killMock).toHaveBeenCalledWith("SIGTERM", { graceMs: 5_000 });
+    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(["manual-cancel", "signal"]).toContain(firstExit.reason);
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
@@ -265,7 +261,7 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM", { graceMs: 5_000 });
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
   });

@@ -63,7 +63,7 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   onStdout: (listener: (chunk: string) => void) => void;
   onStderr: (listener: (chunk: string) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
-  kill: (signal?: NodeJS.Signals, options?: { graceMs?: number }) => void;
+  kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
 

@@ -1,4 +1,4 @@
-import { killProcessTree } from "../../kill-tree.js";
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
@@ -183,20 +183,14 @@ export async function createPtyAdapter(params: {
     return waitPromise;
   };
 
-  const kill = (signal: NodeJS.Signals = "SIGKILL", options?: { graceMs?: number }) => {
+  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        if (options?.graceMs === undefined) {
-          killProcessTree(pty.pid);
-        } else {
-          killProcessTree(pty.pid, { graceMs: options.graceMs });
-        }
-      } else if (signal === "SIGTERM" && typeof pty.pid === "number" && pty.pid > 0) {
-        if (options?.graceMs === undefined) {
-          killProcessTree(pty.pid);
-        } else {
-          killProcessTree(pty.pid, { graceMs: options.graceMs });
-        }
+      if (
+        (signal === "SIGKILL" || signal === "SIGTERM") &&
+        typeof pty.pid === "number" &&
+        pty.pid > 0
+      ) {
+        signalProcessTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {

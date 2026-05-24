@@ -4,10 +4,10 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
+const { spawnMock, ptyKillMock, signalProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   ptyKillMock: vi.fn(),
-  killProcessTreeMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(),
 }));
 
 vi.mock("@lydell/node-pty", () => ({
@@ -15,7 +15,7 @@ vi.mock("@lydell/node-pty", () => ({
 }));
 
 vi.mock("../../kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+  signalProcessTree: (...args: unknown[]) => signalProcessTreeMock(...args),
 }));
 
 function createStubPty(pid = 1234) {
@@ -76,7 +76,7 @@ describe("createPtyAdapter", () => {
   beforeEach(() => {
     spawnMock.mockClear();
     ptyKillMock.mockClear();
-    killProcessTreeMock.mockClear();
+    signalProcessTreeMock.mockClear();
     vi.useRealTimers();
   });
 
@@ -98,7 +98,7 @@ describe("createPtyAdapter", () => {
 
       adapter.kill("SIGINT");
       expect(ptyKillMock).toHaveBeenCalledWith("SIGINT");
-      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
@@ -114,8 +114,8 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "sleep 10"],
     });
 
-    adapter.kill("SIGTERM", { graceMs: 5_000 });
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, { graceMs: 5_000 });
+    adapter.kill("SIGTERM");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGTERM");
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -128,7 +128,7 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill();
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234);
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGKILL");
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -298,7 +298,7 @@ describe("createPtyAdapter", () => {
 
       adapter.kill("SIGINT");
       expect(ptyKillMock).toHaveBeenCalledWith(undefined);
-      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
@@ -318,7 +318,7 @@ describe("createPtyAdapter", () => {
       });
 
       adapter.kill("SIGKILL");
-      expect(killProcessTreeMock).toHaveBeenCalledWith(4567);
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(4567, "SIGKILL");
       expect(ptyKillMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
