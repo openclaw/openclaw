@@ -455,6 +455,9 @@ function resolveModelSupportMatchKind(
 ): ModelSupportMatchKind | undefined {
   const patterns = plugin.modelSupport?.modelPatterns ?? [];
   for (const patternSource of patterns) {
+    // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
+    // and returns null. Rejected patterns are silently skipped: the plugin
+    // will not match via that pattern but other patterns/prefixes still apply.
     const regex = compileSafeRegex(patternSource, "u");
     if (regex?.test(modelId)) {
       return "pattern";
