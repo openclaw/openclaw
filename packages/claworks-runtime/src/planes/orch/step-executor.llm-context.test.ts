@@ -87,4 +87,79 @@ describe("executePlaybookStep llm rich context injection", () => {
       }),
     );
   });
+
+  it("passes domain namespace KB text to llmComplete prompt in rich mode", async () => {
+    const llmComplete = vi.fn().mockResolvedValue({ text: "domain-aware reply" });
+    const kbSearch = vi.fn().mockImplementation(async (_query, opts) => {
+      if (opts?.namespace === "domain") {
+        return [{ text: "alarm escalation SOP: notify on-call within 5 minutes" }];
+      }
+      return [];
+    });
+
+    const ctx = makeCtx();
+    const run = makeRun();
+
+    await executePlaybookStep(
+      {
+        kind: "llm",
+        id: "llm-domain",
+        prompt: "handle alarm event",
+        output: "reply",
+        context_level: "rich",
+        domain: "alarm",
+      },
+      ctx,
+      run,
+      baseDeps({
+        llmComplete,
+        kb: { search: kbSearch, ingest: vi.fn() },
+      }),
+    );
+
+    expect(kbSearch).toHaveBeenCalledWith(
+      "alarm 领域知识",
+      expect.objectContaining({ namespace: "domain" }),
+    );
+    expect(llmComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringMatching(
+          /领域知识 \[alarm\][\s\S]*alarm escalation SOP: notify on-call within 5 minutes/,
+        ),
+      }),
+    );
+  });
+
+  it("passes KB case text to subagentRun prompt in rich mode", async () => {
+    const subagentRun = vi.fn().mockResolvedValue({ text: "subagent analysis" });
+    const kbSearch = vi
+      .fn()
+      .mockResolvedValue([{ title: "Subagent case", text: "prior subagent pump triage flow" }]);
+
+    const ctx = makeCtx();
+    const run = makeRun();
+
+    await executePlaybookStep(
+      {
+        kind: "subagent",
+        id: "sub-rich",
+        prompt: "triage pump alarm",
+        output: "reply",
+        context_level: "rich",
+      },
+      ctx,
+      run,
+      baseDeps({
+        subagentRun,
+        kb: { search: kbSearch, ingest: vi.fn() },
+      }),
+    );
+
+    expect(kbSearch).toHaveBeenCalled();
+    expect(subagentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringMatching(/参考案例[\s\S]*prior subagent pump triage flow/),
+      }),
+    );
+  });
 });
