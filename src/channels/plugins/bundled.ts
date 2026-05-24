@@ -497,6 +497,21 @@ function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
   return !hasExplicitChannelDisable;
 }
 
+function listBundledChannelSetupPluginIdsForRoot(
+  rootScope: BundledChannelRootScope,
+  options: { config?: OpenClawConfig } = {},
+): readonly ChannelId[] {
+  return listBundledChannelMetadata(rootScope)
+    .filter((metadata) =>
+      shouldIncludeBundledChannelSetupFeatureForConfig({
+        metadata,
+        config: options.config,
+      }),
+    )
+    .map((metadata) => metadata.manifest.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function listBundledChannelPluginIdsForSetupFeature(
   rootScope: BundledChannelRootScope,
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
@@ -513,17 +528,7 @@ function listBundledChannelPluginIdsForSetupFeature(
     )
     .map((metadata) => metadata.manifest.id)
     .toSorted((left, right) => left.localeCompare(right));
-  return hinted.length > 0
-    ? hinted
-    : listBundledChannelMetadata(rootScope)
-        .filter((metadata) =>
-          shouldIncludeBundledChannelSetupFeatureForConfig({
-            metadata,
-            config: options.config,
-          }),
-        )
-        .map((metadata) => metadata.manifest.id)
-        .toSorted((left, right) => left.localeCompare(right));
+  return hinted.length > 0 ? hinted : listBundledChannelSetupPluginIdsForRoot(rootScope, options);
 }
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
@@ -808,9 +813,11 @@ export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
   });
 }
 
-export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
+export function listBundledChannelSetupPlugins(
+  options: { config?: OpenClawConfig } = {},
+): readonly ChannelPlugin[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForRoot(rootScope).flatMap((id) => {
+  return listBundledChannelSetupPluginIdsForRoot(rootScope, options).flatMap((id) => {
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
     return plugin ? [plugin] : [];
   });

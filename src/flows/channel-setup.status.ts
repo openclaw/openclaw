@@ -343,7 +343,8 @@ export async function collectChannelStatus(params: {
   installedPlugins?: ChannelSetupPlugin[];
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
-  const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
+  const installedPlugins =
+    params.installedPlugins ?? listChannelSetupPlugins({ config: params.cfg });
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
