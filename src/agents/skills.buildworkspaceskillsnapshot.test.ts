@@ -340,8 +340,9 @@ describe("buildWorkspaceSkillSnapshot", () => {
     // `<workspaceDir>/.agents/skills`. The project-untrusted fixture below
     // covers the `.agents/skills` description-elevation surface, and other
     // suites pin source coverage for the personal lane separately. The trust
-    // policy in `buildTrustedDeveloperSkillsPrompt` excludes both sources by
-    // the same `openclaw-bundled`-only allowlist.
+    // policy in `isTrustedDeveloperSkillEntry` excludes both sources by the
+    // same `openclaw-bundled`-only allowlist that drives the trust partition
+    // inside `resolveWorkspaceSkillPromptState`.
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const managedDir = path.join(workspaceDir, ".managed");
     const bundledDir = path.join(workspaceDir, ".bundled");
@@ -504,6 +505,60 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.trustedDeveloperPrompt).toBeDefined();
     expect(snapshot.trustedDeveloperPrompt).toContain("bundled-only");
     expect(snapshot.untrustedReferencePrompt).toBeUndefined();
+  });
+
+  it("applies the configured maxSkillsPromptChars budget across the combined trusted/untrusted lanes, not per-lane", async () => {
+    // Regression for ClawSweeper P2 (round 4): if the budget were applied
+    // independently to `trustedDeveloperPrompt` and `untrustedReferencePrompt`,
+    // each lane could include the full `maxSkillsInPrompt` count of skill
+    // entries and the model's combined view would exceed the user's
+    // configured budget. The partition must happen on the already-budgeted
+    // set so the union of trusted + untrusted `<skill>` entries equals
+    // what `prompt` would have shown — never more.
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    // 4 bundled trusted + 4 workspace untrusted, each with a long-enough
+    // description that the configured byte cap forces actual entry-level
+    // truncation in `prompt` rather than fitting all 8.
+    for (let i = 0; i < 4; i += 1) {
+      await writeSkill({
+        dir: path.join(workspaceDir, ".bundled", `bundled-${i}`),
+        name: `bundled-${i}`,
+        description: `Trusted bundled skill #${i} ${"x".repeat(200)}`,
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", `workspace-${i}`),
+        name: `workspace-${i}`,
+        description: `Workspace skill #${i} ${"x".repeat(200)}`,
+      });
+    }
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            // Cap so that not all 8 entries fit; both lanes must share the
+            // surviving subset rather than each get the full 8.
+            maxSkillsInPrompt: 4,
+            maxSkillsPromptChars: 1500,
+          },
+        },
+      },
+    });
+
+    const countSkillBlocks = (text: string | undefined): number =>
+      Array.from((text ?? "").matchAll(/<skill>/gi)).length;
+    const promptSkillCount = countSkillBlocks(snapshot.prompt);
+    const trustedSkillCount = countSkillBlocks(snapshot.trustedDeveloperPrompt);
+    const untrustedSkillCount = countSkillBlocks(snapshot.untrustedReferencePrompt);
+
+    // The budget actually bit `prompt`: not all 8 entries are present.
+    expect(promptSkillCount).toBeGreaterThan(0);
+    expect(promptSkillCount).toBeLessThan(8);
+
+    // Combined lanes never exceed what the user's combined budget allowed
+    // in `prompt`. Per-lane budgeting would have let each lane independently
+    // include up to `maxSkillsInPrompt` entries, blowing this invariant.
+    expect(trustedSkillCount + untrustedSkillCount).toBeLessThanOrEqual(promptSkillCount);
   });
 
   it("persists eligibility.remote.note as snapshot.remoteNote for the Codex reference lane", async () => {

@@ -1224,15 +1224,28 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  const trustedDeveloperPrompt = buildTrustedDeveloperSkillsPrompt({
-    promptEntries,
-    config: opts?.config,
-    agentId: opts?.agentId,
+  // Partition the already-budgeted `skillsForPrompt` set into the two
+  // authority lanes instead of re-applying `applySkillsPromptLimits` per
+  // lane. Both lanes share the user's configured `maxSkillsPromptChars` /
+  // `maxSkillsInPrompt` budget — applying each lane independently would
+  // let trusted+untrusted exceed the combined budget that legacy single-
+  // lane builds respected.
+  const trustedNames = new Set(
+    promptEntries
+      .filter((entry) => isTrustedDeveloperSkillEntry(entry))
+      .map((entry) => entry.skill.name),
+  );
+  const trustedDeveloperPrompt = buildLaneSkillsPrompt({
+    skills: skillsForPrompt.filter((skill) => trustedNames.has(skill.name)),
+    totalLaneCount: trustedNames.size,
+    compact,
+    truncationLabel: "Trusted skills",
   });
-  const untrustedReferencePrompt = buildUntrustedReferenceSkillsPrompt({
-    promptEntries,
-    config: opts?.config,
-    agentId: opts?.agentId,
+  const untrustedReferencePrompt = buildLaneSkillsPrompt({
+    skills: skillsForPrompt.filter((skill) => !trustedNames.has(skill.name)),
+    totalLaneCount: promptEntries.length - trustedNames.size,
+    compact,
+    truncationLabel: "User-installed skills",
   });
   return {
     eligible,
@@ -1244,106 +1257,48 @@ function resolveWorkspaceSkillPromptState(
   };
 }
 
-/**
- * Build the skills prompt fragment that is safe to elevate into
- * developer-instruction authority (e.g. Codex
- * `collaborationMode.settings.developer_instructions`).
- *
- * Trust policy: only `openclaw-bundled` skills are eligible. SKILL.md content
- * from workspace, project (`.agents/skills`), personal (`~/.agents/skills`),
- * `openclaw-managed`, `openclaw-extra`, or plugin-generated sources is
- * user/install-controlled and must not be elevated. The trust check is
- * deliberately conservative: when the source is unknown, the entry is dropped.
- *
- * The render path mirrors the full prompt builder so the developer lane sees
- * the same XML shape as the full availability prompt — just with the
- * untrusted entries removed.
- */
-function buildTrustedDeveloperSkillsPrompt(params: {
-  promptEntries: SkillEntry[];
-  config?: OpenClawConfig;
-  agentId?: string;
-}): string | undefined {
-  const trustedEntries = params.promptEntries.filter((entry) =>
-    isTrustedDeveloperSkillEntry(entry),
-  );
-  if (trustedEntries.length === 0) {
-    return undefined;
-  }
-  const trustedSkills = compactSkillPaths(trustedEntries.map((entry) => entry.skill))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, "en"));
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
-    skills: trustedSkills,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  if (skillsForPrompt.length === 0) {
-    return undefined;
-  }
-  const truncationNote = truncated
-    ? `⚠️ Trusted skills truncated: included ${skillsForPrompt.length} of ${trustedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
-    : compact
-      ? `⚠️ Trusted skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
-      : "";
-  return [
-    truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
 function isTrustedDeveloperSkillEntry(entry: SkillEntry): boolean {
   return resolveSkillSource(entry.skill) === "openclaw-bundled";
 }
 
 /**
- * Build the skills prompt fragment that rides the non-authoritative user /
- * reference lane (e.g. Codex per-turn user input under the OpenClaw
- * workspace context wrapper). It carries every skill the trusted
- * developer-instruction lane is not allowed to elevate — workspace, project
- * (`.agents/skills`), personal (`~/.agents/skills`), `openclaw-managed`,
- * `openclaw-extra`, and plugin-generated entries — so native Codex chat
- * turns keep seeing user-installed skills without granting them developer
- * authority.
+ * Render one authority lane (trusted-developer or untrusted-reference) from
+ * a pre-budgeted, pre-sorted subset of `skillsForPrompt`. The combined
+ * budget (`maxSkillsPromptChars` / `maxSkillsInPrompt`) was applied once
+ * upstream in `resolveWorkspaceSkillPromptState`, so this function never
+ * re-applies it — that is the only way to keep trusted + untrusted
+ * combined within the user's configured cap.
  *
- * Render path mirrors the full prompt builder so the reference lane sees
- * the same XML shape as `prompt` — just restricted to the untrusted
- * entries. Returns `undefined` when the untrusted subset is empty (e.g.
- * bundled-only catalogs); callers must treat `undefined` as "no reference
- * skills lane needed" rather than as an error.
+ * - `skills`: this lane's already-budgeted subset.
+ * - `totalLaneCount`: how many of this lane's entries were eligible
+ *   before the budget cut (used in the truncation notice so reviewers can
+ *   see "X of Y" per lane).
+ * - `compact`: the shared format decision from the budget pass.
+ * - `truncationLabel`: human-readable lane name for the warning line.
+ *
+ * Returns `undefined` when no skills survive the budget cut for this lane.
+ * The render shape (XML or compact) mirrors the full prompt builder so
+ * reviewers see the same byte shape as `prompt`, just restricted to the
+ * lane subset.
  */
-function buildUntrustedReferenceSkillsPrompt(params: {
-  promptEntries: SkillEntry[];
-  config?: OpenClawConfig;
-  agentId?: string;
+function buildLaneSkillsPrompt(params: {
+  skills: Skill[];
+  totalLaneCount: number;
+  compact: boolean;
+  truncationLabel: string;
 }): string | undefined {
-  const untrustedEntries = params.promptEntries.filter(
-    (entry) => !isTrustedDeveloperSkillEntry(entry),
-  );
-  if (untrustedEntries.length === 0) {
+  if (params.skills.length === 0) {
     return undefined;
   }
-  const untrustedSkills = compactSkillPaths(untrustedEntries.map((entry) => entry.skill))
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name, "en"));
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
-    skills: untrustedSkills,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  if (skillsForPrompt.length === 0) {
-    return undefined;
-  }
+  const truncated = params.skills.length < params.totalLaneCount;
   const truncationNote = truncated
-    ? `⚠️ User-installed skills truncated: included ${skillsForPrompt.length} of ${untrustedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
-    : compact
-      ? `⚠️ User-installed skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+    ? `⚠️ ${params.truncationLabel} truncated: included ${params.skills.length} of ${params.totalLaneCount}${params.compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    : params.compact
+      ? `⚠️ ${params.truncationLabel} catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
       : "";
   return [
     truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+    params.compact ? formatSkillsCompact(params.skills) : formatSkillsForPrompt(params.skills),
   ]
     .filter(Boolean)
     .join("\n");
