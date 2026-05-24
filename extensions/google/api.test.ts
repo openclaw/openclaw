@@ -108,6 +108,7 @@ describe("google generative ai helpers", () => {
   });
 
   it("normalizes google-vertex model ids without rewriting the OpenAI-compatible baseUrl", () => {
+    // gemini-3.1-flash-lite went GA in May 2026; the -preview suffix is no longer added
     expect(
       normalizeGoogleProviderConfig("google-vertex", {
         api: "openai-completions",
@@ -131,7 +132,7 @@ describe("google generative ai helpers", () => {
         "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
       models: [
         expect.objectContaining({
-          id: "gemini-3.1-flash-lite-preview",
+          id: "gemini-3.1-flash-lite",
         }),
       ],
     });
