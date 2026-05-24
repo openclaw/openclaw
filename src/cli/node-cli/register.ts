@@ -64,15 +64,16 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
+      const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
+      const tlsFingerprint =
+        opts.tlsFingerprint ?? (retargetedGateway ? undefined : existing?.gateway?.tlsFingerprint);
+      const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
         gatewayTls:
-          typeof opts.tls === "boolean"
-            ? opts.tls
-            : Boolean(opts.tlsFingerprint ?? existing?.gateway?.tlsFingerprint) ||
-              existing?.gateway?.tls,
-        gatewayTlsFingerprint: opts.tlsFingerprint ?? existing?.gateway?.tlsFingerprint,
+          typeof opts.tls === "boolean" ? opts.tls : Boolean(tlsFingerprint) || inheritedTls,
+        gatewayTlsFingerprint: tlsFingerprint,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });
