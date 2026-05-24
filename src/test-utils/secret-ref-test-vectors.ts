@@ -21,7 +21,7 @@ export const VALID_EXEC_SECRET_REF_IDS = [
   "vault/openai/api-key",
   "vault:secret/mykey",
   "providers/openai/apiKey",
-  "gravity/shared/slack-gateway/credentials#bot_token",
+  "aws/secret#json_key",
   "a..b/c",
   "a/.../b",
   "a/.well-known/key",
