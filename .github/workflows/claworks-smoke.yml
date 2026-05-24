@@ -6,9 +6,12 @@ on:
     paths:
       - "packages/claworks-runtime/**"
       - "extensions/claworks-robot/**"
+      - "connectors/**"
       - "scripts/claworks-*.mjs"
       - "scripts/claworks-*.ts"
       - "claworks.mjs"
+      - "src/cli/product-surface.ts"
+      - "src/daemon/constants.ts"
       - "package.json"
       - "pnpm-lock.yaml"
 
@@ -38,8 +41,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: ClaWorks runtime tests
+      - name: ClaWorks runtime unit tests
         run: pnpm claworks:runtime:test
+        env:
+          CLAWORKS_PRODUCT: "1"
+
+      - name: ClaWorks connector unit tests
+        run: pnpm test packages/claworks-runtime/src/interfaces/connectors --reporter=verbose
+        env:
+          CLAWORKS_PRODUCT: "1"
 
       - name: ClaWorks smoke (no live gateway)
         run: pnpm claworks:smoke
+        env:
+          CLAWORKS_PRODUCT: "1"
