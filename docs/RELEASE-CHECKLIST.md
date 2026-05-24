@@ -49,6 +49,13 @@
 | 5   | 备份策略       | `ecosystem-backup.sh` + `claworks-data` 卷定期备份         | ☐    |
 | 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                 | ☐    |
 | 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过 | ☐    |
+| 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；CI 见下方说明）  | ☐    |
+
+### Gateway E2E 与 CI
+
+- **脚本**：`pnpm claworks:gateway:e2e`（`scripts/claworks-gateway-e2e.mjs`）会启动真实 Gateway 并探测 `/v1` 与 MCP。
+- **当前 CI**：`.github/workflows/claworks-smoke.yml` 仅跑 `pnpm claworks:smoke`（无 live gateway）；release 分支签收前请在 Testbox/本机补跑 gateway e2e。
+- **后续（P2+）**：若需进 CI，建议在 `claworks-smoke` 增加 optional job（`workflow_dispatch` 或 nightly），避免 PR 默认路径每次起 Gateway。
 
 ---
 
@@ -65,6 +72,9 @@ pnpm lint:core -- packages/claworks-runtime
 pnpm claworks:runtime:test
 pnpm test extensions/claworks-robot
 pnpm claworks:smoke
+
+# 可选：真实 Gateway 闭环（预发布 / 签收前手工跑；约 2–5 分钟）
+# CLAWORKS_PRODUCT=1 pnpm claworks:gateway:e2e
 
 # 产品诊断
 CLAWORKS_INIT_SECURE=1 pnpm claworks:init   # 首次
