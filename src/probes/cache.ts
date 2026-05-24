@@ -230,6 +230,9 @@ export async function executeWithCacheAndStagger<T>(
   if (!options?.forceRefresh) {
     const { entry, isStale } = getCachedProbe<T>(type, id, options?.config);
     if (entry) {
+      if (entry.error) {
+        throw new Error(`Cached ${type} probe ${id} failed: ${entry.error}`);
+      }
       // Return cached result, but mark if stale (caller may choose to background refresh)
       return {
         result: entry.result,
