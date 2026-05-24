@@ -62,7 +62,7 @@ describe("product-surface", () => {
       ),
     ).toContain("claworks config set");
     expect(applyProductSurfaceCopy("https://openclaw.ai/showcase", env)).toBe(
-      "https://openclaw.ai/showcase",
+      "https://docs.claworks.ai/showcase",
     );
   });
 });

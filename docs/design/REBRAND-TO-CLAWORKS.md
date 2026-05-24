@@ -16,18 +16,20 @@
 
 ### Onboarding / configure / doctor（2026-05-24 审计）
 
-| 路径                             | 状态 | 说明                                                                                           |
-| -------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
-| `claworks.mjs`                   | ✅   | `CLAWORKS_PRODUCT=1`，`~/.claworks`，port 18800                                                |
-| `wizardT` + `product-copy`       | ✅   | intro/outro/端口/CLI 名经 `applyClaworksWizardCopy` 重写                                       |
-| `formatCliCommand("openclaw …")` | ✅   | 运行时替换为 `claworks`（含 setup.finalize next steps）                                        |
-| `configure` intro                | ✅   | `resolveProductConfigureIntro`                                                                 |
-| `doctor` intro                   | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                      |
-| `onboard-remote` 默认 WS         | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                     |
-| `pnpm claworks:setup`            | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start`                                       |
-| init OT simulate 提示            | ✅   | `collectClaworksInitWarnings`：echo/simulate 非生产误导 + personal_work repair 指引            |
-| wizard.finalize whatNow/outro    | ✅   | 产品化 override → docs.claworks.ai/showcase                                                    |
-| 遗留（有意保留）                 | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装 |
+| 路径                             | 状态 | 说明                                                                                                               |
+| -------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
+| `claworks.mjs`                   | ✅   | `CLAWORKS_PRODUCT=1`，`~/.claworks`，port 18800                                                                    |
+| `wizardT` + `product-copy`       | ✅   | intro/outro/端口/CLI 名经 `applyClaworksWizardCopy` 重写                                                           |
+| `formatCliCommand("openclaw …")` | ✅   | 运行时替换为 `claworks`（含 setup.finalize next steps）                                                            |
+| `configure` intro                | ✅   | `resolveProductConfigureIntro`                                                                                     |
+| `doctor` intro                   | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                                          |
+| `onboard-remote` 默认 WS         | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                                         |
+| `pnpm claworks:setup`            | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start` + ClaWorks next steps（OT simulate / personal_work 警告） |
+| `setup.finalize` ClaWorks 专项   | ✅   | `collectClaworksInitWarnings` + next steps（start/doctor/configure/repair）                                        |
+| `mergeClaworksProductDefaults`   | ✅   | onboard 写配置前合并 18800 / claworks-robot / plugins.allow                                                        |
+| init OT simulate 提示            | ✅   | `collectClaworksInitWarnings`：echo/simulate 非生产误导 + personal_work repair 指引                                |
+| wizard.finalize whatNow/outro    | ✅   | 产品化 override → docs.claworks.ai/showcase                                                                        |
+| 遗留（有意保留）                 | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装                     |
 
 ## 阶段 B — 发布面
 
