@@ -141,6 +141,8 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/tools-exec-ask-unapproved",
       "policy/tools-exec-host-unapproved",
       "policy/tools-elevated-enabled",
+      "policy/tools-also-allow-missing",
+      "policy/tools-also-allow-unexpected",
       "policy/tools-required-deny-missing",
       "policy/secrets-unmanaged-provider",
       "policy/secrets-denied-provider-source",
@@ -272,9 +274,137 @@ describe("registerPolicyDoctorChecks", () => {
       "oc://policy.jsonc/tools/elevated/allow",
     ],
     [
+      "tools alsoAllow array",
+      { tools: { alsoAllow: ["read"] } },
+      "oc://policy.jsonc/tools/alsoAllow",
+    ],
+    [
       "tools denyTools blank entry",
       { tools: { denyTools: ["exec", " "] } },
       "oc://policy.jsonc/tools/denyTools/#1",
+    ],
+    ["scopes array", { scopes: [] }, "oc://policy.jsonc/scopes"],
+    [
+      "scopes unsupported selector",
+      { scopes: { channels: {} } },
+      "oc://policy.jsonc/scopes/channels",
+    ],
+    ["scopes agents array", { scopes: { agents: [] } }, "oc://policy.jsonc/scopes/agents"],
+    [
+      "scopes agent missing agentIds",
+      { scopes: { agents: { coding: { tools: { exec: { allowHosts: ["sandbox"] } } } } } },
+      "oc://policy.jsonc/scopes/agents/coding/agentIds",
+    ],
+    [
+      "scopes agent empty agentIds",
+      { scopes: { agents: { coding: { agentIds: [] } } } },
+      "oc://policy.jsonc/scopes/agents/coding/agentIds",
+    ],
+    [
+      "scopes agent duplicate normalized agentIds",
+      { scopes: { agents: { coding: { agentIds: ["Sebby", "sebby"] } } } },
+      "oc://policy.jsonc/scopes/agents/coding/agentIds/#1",
+    ],
+    [
+      "scopes agent workspace invalid access",
+      {
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              agents: { workspace: { allowedAccess: ["readonly"] } },
+            },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/agents/workspace/allowedAccess/#0",
+    ],
+    [
+      "scopes agent tools exec allowHosts invalid",
+      {
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: { exec: { allowHosts: ["shell"] } },
+            },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/tools/exec/allowHosts/#0",
+    ],
+    [
+      "scopes agent tools unsupported top-level key",
+      {
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: { requireMetadata: ["owner"] },
+            },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/tools/requireMetadata",
+    ],
+    [
+      "scopes agent tools unsupported nested key",
+      {
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: { exec: { requireMetadata: ["owner"] } },
+            },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/tools/exec/requireMetadata",
+    ],
+    [
+      "scopes agent tools alsoAllow expected invalid",
+      {
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: { alsoAllow: { expected: ["read", ""] } },
+            },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/tools/alsoAllow/expected/#1",
+    ],
+    [
+      "scopes agent tools alsoAllow array",
+      {
+        scopes: {
+          agents: {
+            sebby: { agentIds: ["sebby"], tools: { alsoAllow: ["read"] } },
+          },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/tools/alsoAllow",
+    ],
+    [
+      "scopes agent quoted segment tools invalid",
+      {
+        scopes: {
+          agents: {
+            "team/sebby": { agentIds: ["team/sebby"], tools: { exec: { allowHosts: ["shell"] } } },
+          },
+        },
+      },
+      'oc://policy.jsonc/scopes/agents/"team/sebby"/tools/exec/allowHosts/#0',
+    ],
+    [
+      "scopes agent unsupported section",
+      {
+        scopes: {
+          agents: { sebby: { agentIds: ["sebby"], sandbox: { allow: true } } },
+        },
+      },
+      "oc://policy.jsonc/scopes/agents/sebby/sandbox",
     ],
     ["channels array", { channels: [] }, "oc://policy.jsonc/channels"],
     ["mcp array", { mcp: [] }, "oc://policy.jsonc/mcp"],
@@ -2505,6 +2635,360 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("reports global and agent-scoped workspace claims independently", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+        list: [
+          { id: "sebby", sandbox: { mode: "all", workspaceAccess: "rw" } },
+          { id: "buddy", sandbox: { mode: "all", workspaceAccess: "ro" } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        agents: {
+          workspace: {
+            allowedAccess: ["none", "ro"],
+          },
+        },
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["none"],
+                },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/agents/workspace/allowedAccess",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#1/sandbox/workspaceAccess",
+        }),
+      ]),
+    );
+  });
+
+  it("allows purpose-named agent scopes to target multiple agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          { id: "sebby", sandbox: { mode: "all", workspaceAccess: "rw" } },
+          { id: "buddy", sandbox: { mode: "all", workspaceAccess: "rw" } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            "workspace-lockdown": {
+              agentIds: ["sebby", "buddy"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["ro"],
+                },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          requirement:
+            "oc://policy.jsonc/scopes/agents/workspace-lockdown/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#1/sandbox/workspaceAccess",
+          requirement:
+            "oc://policy.jsonc/scopes/agents/workspace-lockdown/agents/workspace/allowedAccess",
+        }),
+      ]),
+    );
+  });
+
+  it("allows overlapping agent scopes when they govern different fields", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          {
+            id: "sebby",
+            sandbox: { mode: "all", workspaceAccess: "rw" },
+            tools: { exec: { host: "node" } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            "workspace-lockdown": {
+              agentIds: ["sebby"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["ro"],
+                },
+              },
+            },
+            "exec-posture": {
+              agentIds: ["sebby"],
+              tools: {
+                exec: { allowHosts: ["sandbox"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requirement:
+            "oc://policy.jsonc/scopes/agents/workspace-lockdown/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          requirement: "oc://policy.jsonc/scopes/agents/exec-posture/tools/exec/allowHosts",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects overlapping agent scopes that govern the same field", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            "coding-posture": {
+              agentIds: ["Sebby"],
+              tools: {
+                exec: { allowHosts: ["sandbox"] },
+              },
+            },
+            "strict-exec": {
+              agentIds: ["sebby"],
+              tools: {
+                exec: { allowHosts: ["gateway"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/scopes/agents/strict-exec/tools/exec/allowHosts",
+      }),
+    ]);
+  });
+
+  it("does not apply agent-scoped workspace claims to other agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          { id: "sebby", sandbox: { mode: "all", workspaceAccess: "ro" } },
+          { id: "buddy", sandbox: { mode: "all", workspaceAccess: "rw" } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["ro"],
+                },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("matches agent-scoped claims against normalized agent ids", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          {
+            id: "Sebby",
+            sandbox: { mode: "all", workspaceAccess: "rw" },
+            tools: { exec: { host: "node" } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["ro"],
+                },
+              },
+              tools: {
+                exec: { allowHosts: ["sandbox"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-exec-host-unapproved",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/exec/host",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/tools/exec/allowHosts",
+        }),
+      ]),
+    );
+  });
+
+  it("applies main agent-scoped claims to implicit default agent posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { exec: { host: "node" } },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            main: {
+              agentIds: ["main"],
+              agents: {
+                workspace: {
+                  allowedAccess: ["ro"],
+                },
+              },
+              tools: {
+                exec: { allowHosts: ["sandbox"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/scopes/agents/main/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-exec-host-unapproved",
+          ocPath: "oc://openclaw.config/tools/exec/host",
+          requirement: "oc://policy.jsonc/scopes/agents/main/tools/exec/allowHosts",
+        }),
+      ]),
+    );
+  });
+
   it("reports tool posture denied by policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
@@ -2661,6 +3145,201 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports global and agent-scoped tool claims independently", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        exec: { host: "sandbox" },
+      },
+      agents: {
+        list: [
+          { id: "sebby", tools: { exec: { host: "node" } } },
+          { id: "buddy", tools: { exec: { host: "sandbox" } } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          exec: { allowHosts: ["sandbox"] },
+        },
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: {
+                exec: { allowHosts: ["gateway"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-exec-host-unapproved",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/exec/host",
+          requirement: "oc://policy.jsonc/tools/exec/allowHosts",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-exec-host-unapproved",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/exec/host",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/tools/exec/allowHosts",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#1/tools/exec/host",
+        }),
+      ]),
+    );
+  });
+
+  it("does not apply agent-scoped tool claims to other agents", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        list: [
+          { id: "sebby", tools: { exec: { host: "sandbox" } } },
+          { id: "buddy", tools: { exec: { host: "node" } } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: {
+                exec: { allowHosts: ["sandbox"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports global and agent-scoped alsoAllow drift", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { alsoAllow: ["read", "cron"] },
+      agents: {
+        list: [
+          { id: "sebby", tools: { alsoAllow: ["read", "gateway"] } },
+          { id: "buddy", tools: { alsoAllow: ["read"] } },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          alsoAllow: { expected: ["read", "message"] },
+        },
+        scopes: {
+          agents: {
+            sebby: {
+              agentIds: ["sebby"],
+              tools: {
+                alsoAllow: { expected: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-missing",
+          ocPath: "oc://openclaw.config/tools/alsoAllow",
+          requirement: "oc://policy.jsonc/tools/alsoAllow/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-unexpected",
+          ocPath: "oc://openclaw.config/tools/alsoAllow",
+          requirement: "oc://policy.jsonc/tools/alsoAllow/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-missing",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/alsoAllow",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/tools/alsoAllow/expected",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-unexpected",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/alsoAllow",
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/tools/alsoAllow/expected",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requirement: "oc://policy.jsonc/scopes/agents/sebby/tools/alsoAllow/expected",
+          ocPath: "oc://openclaw.config/agents/list/#1/tools/alsoAllow",
+        }),
+      ]),
+    );
+  });
+
+  it("reports unexpected alsoAllow entries when policy expects none", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { alsoAllow: ["read"] },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          alsoAllow: { expected: [] },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-also-allow-unexpected",
+        ocPath: "oc://openclaw.config/tools/alsoAllow",
+        requirement: "oc://policy.jsonc/tools/alsoAllow/expected",
+      }),
+    ]);
   });
 
   it("uses config-level exec defaults and normalizes required deny aliases", async () => {
