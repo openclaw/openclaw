@@ -6,6 +6,7 @@ import {
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
+  codexSandboxPolicyForTurn,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -852,5 +853,78 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(appServerProperties.approvalPolicy?.default).toBeUndefined();
     expect(appServerProperties.sandbox?.default).toBeUndefined();
     expect(appServerProperties.approvalsReviewer?.default).toBeUndefined();
+  });
+});
+
+describe("codexSandboxPolicyForTurn", () => {
+  it("returns cwd-only writableRoots when extraWritableRoots is omitted", () => {
+    expect(codexSandboxPolicyForTurn("workspace-write", "/cwd")).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/cwd"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("appends extraWritableRoots in workspace-write mode", () => {
+    expect(codexSandboxPolicyForTurn("workspace-write", "/cwd", ["/extra1", "/extra2"])).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/cwd", "/extra1", "/extra2"],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("filters empty strings out of extraWritableRoots", () => {
+    expect(codexSandboxPolicyForTurn("workspace-write", "/cwd", ["", "/valid", ""])).toMatchObject({
+      type: "workspaceWrite",
+      writableRoots: ["/cwd", "/valid"],
+    });
+  });
+
+  it("ignores extraWritableRoots for danger-full-access mode", () => {
+    expect(codexSandboxPolicyForTurn("danger-full-access", "/cwd", ["/extra"])).toEqual({
+      type: "dangerFullAccess",
+    });
+  });
+
+  it("ignores extraWritableRoots for read-only mode", () => {
+    expect(codexSandboxPolicyForTurn("read-only", "/cwd", ["/extra"])).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+});
+
+describe("resolveCodexAppServerRuntimeOptions extraWritableRoots", () => {
+  it("propagates extraWritableRoots from pluginConfig.appServer", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          extraWritableRoots: [
+            "/Users/hide/repos/openclaw-source",
+            "/Users/hide/.openclaw/_outbox",
+          ],
+        },
+      },
+    });
+    expect(runtime.extraWritableRoots).toEqual([
+      "/Users/hide/repos/openclaw-source",
+      "/Users/hide/.openclaw/_outbox",
+    ]);
+  });
+
+  it("omits extraWritableRoots when none configured", () => {
+    const runtime = resolveRuntimeForTest();
+    expect(runtime.extraWritableRoots).toBeUndefined();
+  });
+
+  it("omits extraWritableRoots when empty array is configured", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { extraWritableRoots: [] } },
+    });
+    expect(runtime.extraWritableRoots).toBeUndefined();
   });
 });

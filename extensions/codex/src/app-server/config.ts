@@ -106,6 +106,13 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  /**
+   * Additional absolute directories appended to the Codex workspace-write
+   * `writableRoots`. Lets the embedded Codex sandbox write outside `cwd`
+   * (e.g. source repo, inter-agent outbox) without abandoning workspace-write.
+   * Only takes effect when sandbox mode is `workspace-write`.
+   */
+  extraWritableRoots?: readonly string[];
 };
 
 export type CodexPluginConfig = {
@@ -133,6 +140,8 @@ export type CodexPluginConfig = {
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     defaultWorkspaceDir?: string;
+    /** See CodexAppServerRuntimeOptions.extraWritableRoots. */
+    extraWritableRoots?: string[];
   };
 };
 
@@ -152,6 +161,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "approvalsReviewer",
   "serviceTier",
   "defaultWorkspaceDir",
+  "extraWritableRoots",
 ] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
@@ -259,6 +269,7 @@ const codexPluginConfigSchema = z
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         defaultWorkspaceDir: z.string().optional(),
+        extraWritableRoots: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
@@ -386,6 +397,9 @@ export function resolveCodexAppServerRuntimeOptions(
       defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...(config.extraWritableRoots && config.extraWritableRoots.length > 0
+      ? { extraWritableRoots: config.extraWritableRoots }
+      : {}),
   };
 }
 
@@ -473,6 +487,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
+  extraWritableRoots?: readonly string[],
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -480,9 +495,12 @@ export function codexSandboxPolicyForTurn(
   if (mode === "read-only") {
     return { type: "readOnly", networkAccess: false };
   }
+  const extras = (extraWritableRoots ?? []).filter(
+    (root): root is string => typeof root === "string" && root.length > 0,
+  );
   return {
     type: "workspaceWrite",
-    writableRoots: [cwd],
+    writableRoots: extras.length > 0 ? [cwd, ...extras] : [cwd],
     networkAccess: false,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,

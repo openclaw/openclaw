@@ -186,6 +186,10 @@
           "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "extraWritableRoots": {
+            "type": "array",
+            "items": { "type": "string" }
           }
         }
       }
@@ -359,6 +363,11 @@
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.extraWritableRoots": {
+      "label": "Extra Writable Roots",
+      "help": "Additional absolute paths appended to the Codex workspace-write sandbox's writableRoots. Use to let the embedded Codex write outside the agent workspace (for example a source checkout or an inter-agent outbox). Only takes effect when sandbox is workspace-write.",
       "advanced": true
     }
   }

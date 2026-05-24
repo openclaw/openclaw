@@ -392,6 +392,7 @@ async function runBoundTurn(params: {
         sandboxPolicy: codexSandboxPolicyForTurn(
           binding.sandbox ?? runtime.sandbox,
           binding.cwd || params.data.workspaceDir,
+          runtime.extraWritableRoots,
         ),
         ...(binding.model ? { model: binding.model } : {}),
         ...((binding.serviceTier ?? runtime.serviceTier)

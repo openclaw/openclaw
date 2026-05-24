@@ -371,7 +371,11 @@ export function buildTurnStartParams(
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
-    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
+    sandboxPolicy: codexSandboxPolicyForTurn(
+      options.appServer.sandbox,
+      options.cwd,
+      options.appServer.extraWritableRoots,
+    ),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
