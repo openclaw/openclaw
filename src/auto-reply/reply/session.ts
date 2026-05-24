@@ -11,6 +11,10 @@ import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecyc
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import {
+  CLEARED_PENDING_FINAL_DELIVERY_FIELDS,
+  preserveChangedPendingFinalDeliveryFields,
+} from "../../config/sessions/pending-final-delivery-fields.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -788,6 +792,7 @@ export async function initSessionState(params: {
     fallbackSessionFile,
     activeSessionKey: sessionKey,
     maintenanceConfig,
+    allowSessionIdChange: isNewSession,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
@@ -808,14 +813,30 @@ export async function initSessionState(params: {
     // Skills snapshots are prompt/runtime caches. Do not preserve a stale
     // snapshot through /new; the next turn must rebuild the visible skill list.
     sessionEntry.skillsSnapshot = undefined;
+    sessionEntry = {
+      ...sessionEntry,
+      ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS,
+    };
   }
-  // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  let persistedSessionEntry = sessionEntry;
   await updateSessionStore(
     storePath,
     (store) => {
+      const currentEntry = store[sessionKey];
+      if (!isNewSession && freshEntry && entry && currentEntry?.sessionId !== entry.sessionId) {
+        persistedSessionEntry = currentEntry ?? sessionEntry;
+        return;
+      }
+      persistedSessionEntry =
+        !isNewSession && freshEntry
+          ? preserveChangedPendingFinalDeliveryFields({
+              next: sessionEntry,
+              loaded: entry,
+              current: currentEntry,
+            })
+          : sessionEntry;
       // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      store[sessionKey] = { ...currentEntry, ...persistedSessionEntry };
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
@@ -832,6 +853,8 @@ export async function initSessionState(params: {
         }),
     },
   );
+  sessionEntry = persistedSessionEntry;
+  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {

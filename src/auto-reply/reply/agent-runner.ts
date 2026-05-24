@@ -23,6 +23,7 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { FRESH_PENDING_FINAL_DELIVERY_RETRY_FIELDS } from "../../config/sessions/pending-final-delivery-fields.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -2165,6 +2166,7 @@ export async function runReplyAgent(params: {
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
             pendingFinalDeliveryCreatedAt: Date.now(),
+            ...FRESH_PENDING_FINAL_DELIVERY_RETRY_FIELDS,
             updatedAt: Date.now(),
           }),
         });

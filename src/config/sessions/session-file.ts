@@ -1,4 +1,5 @@
 import { resolveSessionFilePath } from "./paths.js";
+import { preserveChangedPendingFinalDeliveryFields } from "./pending-final-delivery-fields.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -14,6 +15,7 @@ export async function resolveAndPersistSessionFile(params: {
   fallbackSessionFile?: string;
   activeSessionKey?: string;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  allowSessionIdChange?: boolean;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const now = Date.now();
@@ -40,13 +42,27 @@ export async function resolveAndPersistSessionFile(params: {
     sessionFile,
   };
   if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
-    sessionStore[sessionKey] = persistedEntry;
+    let storedEntry = persistedEntry;
     await updateSessionStore(
       storePath,
       (store) => {
+        const currentEntry = store[sessionKey];
+        if (
+          !params.allowSessionIdChange &&
+          currentEntry &&
+          currentEntry.sessionId !== baseEntry.sessionId
+        ) {
+          storedEntry = currentEntry;
+          return;
+        }
+        storedEntry = preserveChangedPendingFinalDeliveryFields({
+          next: persistedEntry,
+          loaded: baseEntry,
+          current: currentEntry,
+        });
         store[sessionKey] = {
-          ...store[sessionKey],
-          ...persistedEntry,
+          ...currentEntry,
+          ...storedEntry,
         };
       },
       params.activeSessionKey || params.maintenanceConfig
@@ -56,7 +72,8 @@ export async function resolveAndPersistSessionFile(params: {
           }
         : undefined,
     );
-    return { sessionFile, sessionEntry: persistedEntry };
+    sessionStore[sessionKey] = storedEntry;
+    return { sessionFile: storedEntry.sessionFile ?? sessionFile, sessionEntry: storedEntry };
   }
   sessionStore[sessionKey] = persistedEntry;
   return { sessionFile, sessionEntry: persistedEntry };

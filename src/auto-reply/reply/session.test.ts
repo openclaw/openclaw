@@ -41,6 +41,9 @@ const channelSummaryMocks = vi.hoisted(() => ({
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
+const sessionFileMocks = vi.hoisted(() => ({
+  beforeResolveSessionFile: vi.fn(async () => undefined),
+}));
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
@@ -86,6 +89,21 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../infra/channel-summary.js", () => ({
   buildChannelSummary: channelSummaryMocks.buildChannelSummary,
 }));
+
+vi.mock("../../config/sessions/session-file.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-file.js")>(
+    "../../config/sessions/session-file.js",
+  );
+  return {
+    ...actual,
+    resolveAndPersistSessionFile: async (
+      ...args: Parameters<typeof actual.resolveAndPersistSessionFile>
+    ) => {
+      await sessionFileMocks.beforeResolveSessionFile(...args);
+      return await actual.resolveAndPersistSessionFile(...args);
+    },
+  };
+});
 
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", async () => {
@@ -307,6 +325,7 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
+  sessionFileMocks.beforeResolveSessionFile.mockReset().mockResolvedValue(undefined);
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   sessionForkMocks.nextSessionId = 0;
   sessionForkMocks.resolveParentForkTokenCount.mockReset().mockImplementation(({ parentEntry }) => {
@@ -343,6 +362,166 @@ afterEach(async () => {
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
+
+describe("initSessionState pending final delivery", () => {
+  it("does not carry old pending delivery into a reset session", async () => {
+    const storePath = await makeStorePath("openclaw-pending-final-delivery-reset-");
+    const sessionKey = "agent:main:telegram:123";
+    const oldSessionId = "old-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: oldSessionId,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "old delivery",
+        pendingFinalDeliveryCreatedAt: 100,
+        pendingFinalDeliveryAttemptCount: 9,
+        pendingFinalDeliveryLastError: "old failure",
+        pendingFinalDeliveryIntentId: "old-intent",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.sessionId).not.toBe(oldSessionId);
+    expect(result.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[sessionKey]?.sessionId).toBe(result.sessionEntry.sessionId);
+    expect(store[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("does not overwrite a concurrent reset with old pending delivery", async () => {
+    const storePath = await makeStorePath("openclaw-pending-final-delivery-concurrent-reset-");
+    const sessionKey = "agent:main:telegram:123";
+    const oldSessionId = "old-session";
+    const resetSessionId = "reset-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: oldSessionId,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "old delivery",
+        pendingFinalDeliveryCreatedAt: 100,
+        pendingFinalDeliveryAttemptCount: 9,
+        pendingFinalDeliveryLastError: "old failure",
+        pendingFinalDeliveryIntentId: "old-intent",
+      },
+    });
+
+    sessionFileMocks.beforeResolveSessionFile.mockImplementationOnce(async () => {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: resetSessionId,
+          updatedAt: Date.now() + 1,
+          sessionStartedAt: Date.now() + 1,
+        },
+      });
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.sessionId).toBe(resetSessionId);
+    expect(result.sessionEntry.pendingFinalDelivery).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(result.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[sessionKey]?.sessionId).toBe(resetSessionId);
+    expect(store[sessionKey]?.pendingFinalDelivery).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(store[sessionKey]?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("preserves a newer pending delivery written while session metadata is refreshed", async () => {
+    const storePath = await makeStorePath("openclaw-pending-final-delivery-race-");
+    const sessionKey = "agent:main:telegram:123";
+    const sessionId = "existing-session";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "old delivery",
+        pendingFinalDeliveryCreatedAt: 100,
+        pendingFinalDeliveryAttemptCount: 9,
+        pendingFinalDeliveryLastError: "old failure",
+      },
+    });
+
+    sessionFileMocks.beforeResolveSessionFile.mockImplementationOnce(async () => {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now() + 1,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "new delivery",
+          pendingFinalDeliveryCreatedAt: 200,
+          pendingFinalDeliveryAttemptCount: 0,
+          pendingFinalDeliveryLastError: null,
+        },
+      });
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.pendingFinalDelivery).toBe(true);
+    expect(result.sessionEntry.pendingFinalDeliveryText).toBe("new delivery");
+    expect(result.sessionEntry.pendingFinalDeliveryCreatedAt).toBe(200);
+    expect(result.sessionEntry.pendingFinalDeliveryAttemptCount).toBe(0);
+    expect(result.sessionEntry.pendingFinalDeliveryLastError).toBeNull();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, SessionEntry>;
+    expect(store[sessionKey]?.pendingFinalDelivery).toBe(true);
+    expect(store[sessionKey]?.pendingFinalDeliveryText).toBe("new delivery");
+    expect(store[sessionKey]?.pendingFinalDeliveryCreatedAt).toBe(200);
+    expect(store[sessionKey]?.pendingFinalDeliveryAttemptCount).toBe(0);
+    expect(store[sessionKey]?.pendingFinalDeliveryLastError).toBeNull();
+    expect(store[sessionKey]?.sessionFile).toBe(result.sessionEntry.sessionFile);
+  });
+});
+
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

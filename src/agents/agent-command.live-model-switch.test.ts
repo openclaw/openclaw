@@ -913,6 +913,44 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(stored?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
+  it("resets retry metadata when persisting a fresh pending final delivery", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "old reply",
+      pendingFinalDeliveryCreatedAt: 2,
+      pendingFinalDeliveryLastAttemptAt: 3,
+      pendingFinalDeliveryAttemptCount: 10,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { channel: "tui" },
+      pendingFinalDeliveryIntentId: "intent-1",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      deliver: true,
+    });
+
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+    expect(stored?.pendingFinalDelivery).toBe(true);
+    expect(stored?.pendingFinalDeliveryText).toBe("ok");
+    expect(stored?.pendingFinalDeliveryCreatedAt).toEqual(expect.any(Number));
+    expect(stored?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
   it("keeps internal session-effect CLI runs out of visible session state", async () => {
     setupSingleAttemptFallback();
     const visibleEntry: SessionEntry = {

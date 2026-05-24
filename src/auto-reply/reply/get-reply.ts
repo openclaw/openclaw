@@ -12,6 +12,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -55,6 +56,10 @@ import {
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+type PendingFinalDeliveryClearReason = "heartbeat-ack" | "retry-limit" | "expiry";
+
+const PENDING_FINAL_DELIVERY_MAX_HEARTBEAT_ATTEMPTS = 10;
+const PENDING_FINAL_DELIVERY_HEARTBEAT_TTL_MS = 24 * 60 * 60 * 1000;
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
@@ -75,6 +80,100 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): numb
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function clearPendingFinalDelivery(sessionEntry: SessionEntry) {
+  sessionEntry.pendingFinalDelivery = undefined;
+  sessionEntry.pendingFinalDeliveryText = undefined;
+  sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+  sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+  sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+  sessionEntry.pendingFinalDeliveryLastError = undefined;
+  sessionEntry.pendingFinalDeliveryContext = undefined;
+  sessionEntry.pendingFinalDeliveryIntentId = undefined;
+}
+
+function entryMatchesPendingFinalDeliverySnapshot(
+  entry: SessionEntry,
+  stale: {
+    pendingFinalDeliveryText?: string | null;
+    pendingFinalDeliveryCreatedAt?: number;
+    pendingFinalDeliveryAttemptCount?: number;
+  },
+) {
+  return (
+    entry.pendingFinalDelivery === true &&
+    entry.pendingFinalDeliveryText === stale.pendingFinalDeliveryText &&
+    Object.is(entry.pendingFinalDeliveryCreatedAt, stale.pendingFinalDeliveryCreatedAt) &&
+    Object.is(entry.pendingFinalDeliveryAttemptCount, stale.pendingFinalDeliveryAttemptCount)
+  );
+}
+
+function buildPendingFinalDeliveryClearUpdate(
+  entry: SessionEntry,
+  stale: {
+    pendingFinalDeliveryText?: string | null;
+    pendingFinalDeliveryCreatedAt?: number;
+    pendingFinalDeliveryAttemptCount?: number;
+  },
+) {
+  if (!entryMatchesPendingFinalDeliverySnapshot(entry, stale)) {
+    return null;
+  }
+  return {
+    pendingFinalDelivery: undefined,
+    pendingFinalDeliveryText: undefined,
+    pendingFinalDeliveryCreatedAt: undefined,
+    pendingFinalDeliveryLastAttemptAt: undefined,
+    pendingFinalDeliveryAttemptCount: undefined,
+    pendingFinalDeliveryLastError: undefined,
+    pendingFinalDeliveryContext: undefined,
+    pendingFinalDeliveryIntentId: undefined,
+  };
+}
+
+function buildPendingFinalDeliveryReplayUpdate(
+  entry: SessionEntry,
+  stale: {
+    pendingFinalDeliveryText?: string | null;
+    pendingFinalDeliveryCreatedAt?: number;
+    pendingFinalDeliveryAttemptCount?: number;
+  },
+  update: {
+    replayText: string;
+    lastAttemptAt: number;
+    attemptCount: number;
+  },
+) {
+  if (!entryMatchesPendingFinalDeliverySnapshot(entry, stale)) {
+    return null;
+  }
+  return {
+    pendingFinalDeliveryText: update.replayText,
+    pendingFinalDeliveryLastAttemptAt: update.lastAttemptAt,
+    pendingFinalDeliveryAttemptCount: update.attemptCount,
+    pendingFinalDeliveryLastError: null,
+    updatedAt: update.lastAttemptAt,
+  };
+}
+
+function resolvePendingFinalDeliveryHeartbeatClearReason(params: {
+  pendingFinalDeliveryCreatedAt?: number;
+  nextAttemptCount: number;
+  now: number;
+}): PendingFinalDeliveryClearReason | undefined {
+  if (params.nextAttemptCount > PENDING_FINAL_DELIVERY_MAX_HEARTBEAT_ATTEMPTS) {
+    return "retry-limit";
+  }
+  const createdAt = params.pendingFinalDeliveryCreatedAt;
+  if (
+    typeof createdAt === "number" &&
+    Number.isFinite(createdAt) &&
+    params.now - createdAt > PENDING_FINAL_DELIVERY_HEARTBEAT_TTL_MS
+  ) {
+    return "expiry";
+  }
+  return undefined;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -402,58 +501,82 @@ export async function getReplyFromConfig(
         text,
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
-      if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
-        if (sessionKey && sessionStore) {
-          sessionStore[sessionKey] = sessionEntry;
+      const updatedAt = Date.now();
+      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+      const pendingFinalDeliverySnapshot = {
+        pendingFinalDeliveryText: sessionEntry.pendingFinalDeliveryText,
+        pendingFinalDeliveryCreatedAt: sessionEntry.pendingFinalDeliveryCreatedAt,
+        pendingFinalDeliveryAttemptCount: sessionEntry.pendingFinalDeliveryAttemptCount,
+      };
+      const boundedClearReason = heartbeatPending.shouldClear
+        ? "heartbeat-ack"
+        : resolvePendingFinalDeliveryHeartbeatClearReason({
+            pendingFinalDeliveryCreatedAt: sessionEntry.pendingFinalDeliveryCreatedAt,
+            nextAttemptCount: attemptCount,
+            now: updatedAt,
+          });
+      if (boundedClearReason) {
+        if (boundedClearReason !== "heartbeat-ack") {
+          defaultRuntime.log(
+            `[warn] Pending final delivery heartbeat replay cleared (${boundedClearReason}) session=${sessionKey ?? sessionId ?? "unknown"} attempts=${attemptCount}`,
+          );
         }
         if (sessionKey && storePath) {
           const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          let clearUpdateApplied = false;
           await updateSessionStoreEntry({
             storePath,
             sessionKey,
-            update: async () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            update: async (entry) => {
+              const patch = buildPendingFinalDeliveryClearUpdate(
+                entry,
+                pendingFinalDeliverySnapshot,
+              );
+              clearUpdateApplied = patch !== null;
+              return patch;
+            },
           });
+          if (!clearUpdateApplied) {
+            return undefined;
+          }
+        }
+        clearPendingFinalDelivery(sessionEntry);
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
         }
       } else {
-        const updatedAt = Date.now();
-        const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          let replayUpdateApplied = false;
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async (entry) => {
+              const patch = buildPendingFinalDeliveryReplayUpdate(
+                entry,
+                pendingFinalDeliverySnapshot,
+                {
+                  replayText,
+                  lastAttemptAt: updatedAt,
+                  attemptCount,
+                },
+              );
+              replayUpdateApplied = patch !== null;
+              return patch;
+            },
+          });
+          if (!replayUpdateApplied) {
+            return undefined;
+          }
+        }
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
         sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
         sessionEntry.pendingFinalDeliveryLastError = null;
-        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
         sessionEntry.pendingFinalDeliveryText = replayText;
         sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
-        }
-        if (sessionKey && storePath) {
-          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-          await updateSessionStoreEntry({
-            storePath,
-            sessionKey,
-            update: async () => ({
-              pendingFinalDeliveryText: replayText,
-              pendingFinalDeliveryLastAttemptAt: updatedAt,
-              pendingFinalDeliveryAttemptCount: attemptCount,
-              pendingFinalDeliveryLastError: null,
-              updatedAt,
-            }),
-          });
         }
         return { text: replayText };
       }

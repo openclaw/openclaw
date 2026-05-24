@@ -280,6 +280,211 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
   });
 
+  it("clears heartbeat pending delivery after too many replay attempts", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-limit-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-retry-limit",
+          updatedAt: Date.now(),
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "CRITICAL ALERT: repeated stale delivery",
+          pendingFinalDeliveryCreatedAt: Date.now(),
+          pendingFinalDeliveryAttemptCount: 10,
+          pendingFinalDeliveryLastError: null,
+          pendingFinalDeliveryIntentId: "old-intent",
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("clears expired heartbeat pending delivery before replay", async () => {
+    const now = Date.now();
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-expiry-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-expired",
+          updatedAt: now,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "CRITICAL ALERT: stale for days",
+          pendingFinalDeliveryCreatedAt: now - 24 * 60 * 60 * 1000 - 1,
+          pendingFinalDeliveryAttemptCount: 1,
+          pendingFinalDeliveryLastError: null,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryLastError).toBeUndefined();
+  });
+
+  it("does not clear a newer heartbeat pending delivery under the store lock", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-race-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    const oldCreatedAt = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-old",
+          updatedAt: oldCreatedAt,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "CRITICAL ALERT: old stale delivery",
+          pendingFinalDeliveryCreatedAt: oldCreatedAt,
+          pendingFinalDeliveryAttemptCount: 10,
+          pendingFinalDeliveryLastError: null,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    const sessions = await import("../../config/sessions.js");
+    const newerEntry: import("../../config/sessions.js").SessionEntry = {
+      sessionId: "pending-new",
+      updatedAt: oldCreatedAt + 1,
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "new reply that must not be erased",
+      pendingFinalDeliveryCreatedAt: oldCreatedAt + 1,
+      pendingFinalDeliveryAttemptCount: 0,
+      pendingFinalDeliveryLastError: null,
+    };
+    const updateSpy = vi
+      .spyOn(sessions, "updateSessionStoreEntry")
+      .mockImplementation(async ({ update }) => {
+        const patch = await update(newerEntry);
+        expect(patch).toBeNull();
+        return newerEntry;
+      });
+
+    try {
+      await expect(
+        getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+      ).resolves.toBeUndefined();
+      expect(updateSpy).toHaveBeenCalledOnce();
+      expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    } finally {
+      updateSpy.mockRestore();
+    }
+  });
+
+  it("does not overwrite newer heartbeat pending delivery while replaying stale text", async () => {
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-heartbeat-pending-replay-race-"),
+    );
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    const oldCreatedAt = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-old-replay",
+          updatedAt: oldCreatedAt,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "HEARTBEAT_OK old replay",
+          pendingFinalDeliveryCreatedAt: oldCreatedAt,
+          pendingFinalDeliveryAttemptCount: 0,
+          pendingFinalDeliveryLastError: null,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+    const sessions = await import("../../config/sessions.js");
+    const newerEntry: import("../../config/sessions.js").SessionEntry = {
+      sessionId: "pending-new-replay",
+      updatedAt: oldCreatedAt + 1,
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "new reply that must not be overwritten",
+      pendingFinalDeliveryCreatedAt: oldCreatedAt + 1,
+      pendingFinalDeliveryAttemptCount: 0,
+      pendingFinalDeliveryLastError: null,
+    };
+    const updateSpy = vi
+      .spyOn(sessions, "updateSessionStoreEntry")
+      .mockImplementation(async ({ update }) => {
+        const patch = await update(newerEntry);
+        expect(patch).toBeNull();
+        return newerEntry;
+      });
+
+    try {
+      await expect(
+        getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
+      ).resolves.toBeUndefined();
+      expect(updateSpy).toHaveBeenCalledOnce();
+      expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    } finally {
+      updateSpy.mockRestore();
+    }
+  });
+
   it("sanitizes stale heartbeat pending delivery before replay", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-sanitize-"));
     const storePath = path.join(home, "sessions.json");

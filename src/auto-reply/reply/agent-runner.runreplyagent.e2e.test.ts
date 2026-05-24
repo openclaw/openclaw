@@ -484,6 +484,11 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
+      pendingFinalDeliveryLastAttemptAt: 1,
+      pendingFinalDeliveryAttemptCount: 10,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { channel: "telegram", to: "old-chat" },
+      pendingFinalDeliveryIntentId: "old-intent",
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
@@ -504,6 +509,11 @@ describe("runReplyAgent pending final delivery capture", () => {
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(stored.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(stored.pendingFinalDeliveryContext).toBeUndefined();
+    expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("keeps heartbeat replies with real content in pending final delivery", async () => {

@@ -10,6 +10,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { FRESH_PENDING_FINAL_DELIVERY_RETRY_FIELDS } from "../config/sessions/pending-final-delivery-fields.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
@@ -1675,6 +1676,7 @@ async function agentCommandInternal(
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: combinedPayload,
             pendingFinalDeliveryCreatedAt: now,
+            ...FRESH_PENDING_FINAL_DELIVERY_RETRY_FIELDS,
             updatedAt: now,
           };
           await persistSessionEntry({
