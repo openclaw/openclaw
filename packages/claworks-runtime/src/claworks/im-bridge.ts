@@ -110,6 +110,16 @@ export async function bridgeImMessage(
     ...normalized.extra,
   };
 
+  // 将用户消息追加到对话上下文，供 Playbook 中 _session 变量使用
+  const sessionId = normalized.groupId
+    ? `${normalized.channel}:group:${normalized.groupId}`
+    : `${normalized.channel}:user:${normalized.userId}`;
+  runtime.contextEngine?.append(sessionId, "user", normalized.text, {
+    channel: normalized.channel,
+    userId: normalized.userId,
+    messageId: normalized.messageId,
+  });
+
   const result = await applyIngressPublish(runtime, {
     source,
     eventType,
