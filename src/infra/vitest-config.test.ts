@@ -234,6 +234,12 @@ describe("test scripts", () => {
     expect(pkg.scripts?.["test:changed:max"]).toBe(
       "node scripts/test-projects-max.mjs --changed origin/main",
     );
+    expect(pkg.scripts?.["test:perf:imports"]).toBe(
+      "node scripts/test-projects-imports.mjs",
+    );
+    expect(pkg.scripts?.["test:perf:imports:changed"]).toBe(
+      "node scripts/test-projects-imports.mjs --changed origin/main",
+    );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     );
