@@ -48,6 +48,10 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
+const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
+const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
+const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
@@ -125,10 +129,10 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_CLIENT_VITEST_CONFIG, 178],
   [GATEWAY_METHODS_VITEST_CONFIG, 177],
   [COMMANDS_VITEST_CONFIG, 175],
-  ["test/vitest/vitest.agents-core.config.ts", 170],
-  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
-  ["test/vitest/vitest.agents-support.config.ts", 168],
-  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [AGENTS_CORE_VITEST_CONFIG, 170],
+  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_SUPPORT_VITEST_CONFIG, 168],
+  [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -231,6 +235,10 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentCore: AGENTS_CORE_VITEST_CONFIG,
+  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
   autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,
@@ -747,6 +755,105 @@ function toScopedIncludePattern(arg, cwd) {
     return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
   }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
+}
+
+const EXPLICIT_TEST_TARGET_ROOTS = ["src", "test", "extensions", "ui", "packages", "apps"];
+let cachedExplicitTestTargetFiles = null;
+let cachedExplicitTestTargetFilesCwd = null;
+
+function listExplicitTestTargetFilesFromGit(cwd) {
+  const result = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...EXPLICIT_TEST_TARGET_ROOTS,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\0")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listExplicitTestTargetFilesForCwd(cwd) {
+  if (cachedExplicitTestTargetFiles && cachedExplicitTestTargetFilesCwd === cwd) {
+    return cachedExplicitTestTargetFiles;
+  }
+
+  cachedExplicitTestTargetFiles =
+    listExplicitTestTargetFilesFromGit(cwd) ??
+    EXPLICIT_TEST_TARGET_ROOTS.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedExplicitTestTargetFilesCwd = cwd;
+  return cachedExplicitTestTargetFiles;
+}
+
+function includePatternMatchesAnyFile(pattern, files) {
+  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+}
+
+export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
+  const { targetArgs } = parseTestProjectsArgs(args, cwd);
+  if (targetArgs.length === 0) {
+    return [];
+  }
+
+  const candidateFiles = listExplicitTestTargetFilesForCwd(cwd);
+  const unmatched = [];
+  for (const targetArg of targetArgs) {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (resolveVitestConfigTargetKind(relative)) {
+      continue;
+    }
+    const kind = classifyTarget(targetArg, cwd);
+    if (shouldUseWholeConfigTarget(kind, targetArg, cwd)) {
+      continue;
+    }
+    if (isGlobTarget(relative)) {
+      if (!includePatternMatchesAnyFile(relative, candidateFiles)) {
+        unmatched.push({
+          target: targetArg,
+          reason: "glob-matched-no-files",
+        });
+      }
+      continue;
+    }
+
+    const absolute = path.resolve(cwd, targetArg);
+    if (!fs.existsSync(absolute)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "path-does-not-exist",
+      });
+      continue;
+    }
+
+    if (isTestFileTarget(relative)) {
+      continue;
+    }
+
+    const includePattern = toScopedIncludePattern(targetArg, cwd);
+    if (!includePatternMatchesAnyFile(includePattern, candidateFiles)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "target-matched-no-test-files",
+        includePattern,
+      });
+    }
+  }
+  return unmatched;
 }
 
 function isSkippedImportGraphDirectory(name) {

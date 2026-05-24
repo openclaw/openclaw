@@ -1236,7 +1236,10 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("routes native Codex execution through an OpenClaw sandbox exec-server when opted in", async () => {
-    const appServer = createThreadLifecycleAppServerOptions();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      sandbox: "danger-full-access" as const,
+    };
     const sandbox = {
       ...createSandboxContext({
         runShellCommand: async () => ({
