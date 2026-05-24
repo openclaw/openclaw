@@ -159,6 +159,7 @@ Docs: https://docs.openclaw.ai
 - CLI/agents: default new omitted-account bindings to all accounts when the channel has multiple configured accounts, and clarify account-scope docs. (#49769) Thanks @Gcaufy.
 - Codex app-server: let authorized `/codex` control commands such as `/codex detach` escape plugin-owned conversation bindings while keeping unknown or unauthorized slash text routed to the bound plugin. Fixes #85157. (#85188) Thanks @TurboTheTurtle.
 - Auto-reply/models: keep `/models` browse replies fast by sharing the bounded read-only catalog path with Gateway model listing. (#84735) Thanks @safrano9999.
+- Browser/Doctor: read macOS Chrome app bundle versions from `Info.plist` before spawning Chrome and extend the fallback version probe timeout, avoiding false cold-cache warnings from Gatekeeper latency. Fixes #85418. Thanks @davidcittadini.
 - Codex app-server: disable native Code Mode when the effective exec host is `node` and keep OpenClaw `exec`/`process` available, so `/exec host=node` routes shell commands through the selected node instead of the gateway. Fixes #85012. (#85090) Thanks @sahilsatralkar.
 - Agents: bound embedded auto-compaction session write-lock watchdogs to the compaction timeout instead of the full run timeout, so stuck compaction cannot hold the live session lock for the whole run window. (#84949) Thanks @luoyanglang.
 - Gateway/agents: return phase-aware `agent.wait` timeout attribution and only cool auth profiles on provider-started timeouts. Refs #65504. Thanks @100yenadmin.
