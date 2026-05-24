@@ -301,6 +301,10 @@ export async function startGmailWatcher(
       const oldProcess = watcherProcess;
       watcherProcess = null;
       await settleProcess(oldProcess);
+      // Remove lingering spawnGogServe listeners so a late exit (after the
+      // settleProcess timeout) cannot trigger a duplicate respawn while
+      // watcherProcess is null and shuttingDown is false.
+      oldProcess.removeAllListeners();
     }
     shuttingDown = false;
   }
