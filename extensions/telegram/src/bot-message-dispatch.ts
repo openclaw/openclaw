@@ -59,6 +59,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -89,6 +90,7 @@ import {
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
   buildGroupLabel,
+  buildTypingThreadParams,
   getTelegramTextParts,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
@@ -488,6 +490,33 @@ function buildRecoveredTelegramBody(params: {
   });
 }
 
+function buildRecoveredTelegramChatActionSender(params: {
+  context: TelegramMessageContext;
+  threadId?: number;
+  action: "typing" | "record_voice";
+}): () => Promise<void> {
+  return async () => {
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () =>
+          params.context.sendChatActionHandler.sendChatAction(
+            params.context.chatId,
+            params.action,
+            buildTypingThreadParams(params.threadId),
+          ),
+      });
+    } catch (err) {
+      if (params.action !== "record_voice") {
+        throw err;
+      }
+      logVerbose(
+        `telegram record_voice cue failed for chat ${params.context.chatId}: ${String(err)}`,
+      );
+    }
+  };
+}
+
 function resolveDispatchTelegramContext(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
@@ -532,12 +561,24 @@ function resolveDispatchTelegramContext(params: {
     historyKey: recoveredHistoryKey,
     threadSpec,
   });
+  const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "typing",
+  });
+  const recoveredSendRecordVoice = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "record_voice",
+  });
   return {
     ...params.context,
     historyKey: recoveredHistoryKey,
     threadSpec,
     resolvedThreadId: threadSpec.id,
     replyThreadId: threadSpec.id,
+    sendTyping: recoveredSendTyping,
+    sendRecordVoice: recoveredSendRecordVoice,
     turn: {
       ...params.context.turn,
       record: {

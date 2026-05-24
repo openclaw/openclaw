@@ -386,6 +386,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       skillFilter: undefined,
       sendTyping: vi.fn(),
       sendRecordVoice: vi.fn(),
+      sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
       ackReactionPromise: null,
       reactionApi: null,
       removeAckAfterReply: false,
@@ -570,6 +571,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
         visibleReplySent: true,
       },
     });
+    const sendChatAction = vi.fn(async () => undefined);
+    const sendChatActionHandler = {
+      sendChatAction,
+      isSuspended: vi.fn(() => false),
+      reset: vi.fn(),
+    };
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "topic final" }, { kind: "final" });
       return { queuedFinal: true };
@@ -608,6 +615,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         historyKey: oldHistoryKey,
         historyLimit: 10,
         groupHistories,
+        sendChatActionHandler,
         turn: {
           storePath: "/tmp/openclaw/telegram-sessions.json",
           recordInboundSession,
@@ -656,6 +664,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
         }),
       }),
     );
+    const pipelineArgs = expectRecordFields(mockCallArg(createChannelMessageReplyPipeline), {});
+    const typing = expectRecordFields(pipelineArgs.typing, {});
+    await (typing.start as () => Promise<void>)();
+    expect(sendChatAction).toHaveBeenCalledWith(-1003774691294, "typing", {
+      message_thread_id: 3731,
+    });
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

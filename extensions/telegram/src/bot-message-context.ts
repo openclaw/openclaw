@@ -108,6 +108,7 @@ export type TelegramMessageContext = {
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
   sendRecordVoice: () => Promise<void>;
+  sendChatActionHandler: BuildTelegramMessageContextParams["sendChatActionHandler"];
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   removeAckAfterReply: boolean;
@@ -641,6 +642,7 @@ export const buildTelegramMessageContext = async ({
     skillFilter,
     sendTyping,
     sendRecordVoice,
+    sendChatActionHandler,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
