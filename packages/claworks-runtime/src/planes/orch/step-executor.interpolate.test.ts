@@ -64,4 +64,33 @@ describe("interpolate", () => {
     // Direct variable access also works (from ...input spread)
     expect(interpolate("{{ user_id }}", vars)).toBe("u1");
   });
+
+  it("字面量值：[] | length → 0", () => {
+    expect(interpolate("{{ [] | length }}", {})).toBe("0");
+  });
+
+  it("字面量值：null | default('N/A') → N/A", () => {
+    expect(interpolate("{{ null | default('N/A') }}", {})).toBe("N/A");
+  });
+
+  it("字面量值：'hello' | upper | replace('O', '0') → HELL0", () => {
+    expect(interpolate("{{ 'hello' | upper | replace('O', '0') }}", {})).toBe("HELL0");
+  });
+
+  it("missing step + get(..., []) | length → 0", () => {
+    const vars = { steps: {} };
+    expect(interpolate("{{ steps['x']['result'].get('items', []) | length }}", vars)).toBe("0");
+  });
+
+  it("event.payload.data | tojson → JSON 字符串", () => {
+    const vars = { event: { payload: { data: { a: 1, b: 2 } } } };
+    expect(interpolate("{{ event.payload.data | tojson }}", vars)).toBe('{"a":1,"b":2}');
+  });
+
+  it("存在的 step + get('items', []) | length → 实际数组长度", () => {
+    const vars = { steps: { myStep: { status: "ok", result: { items: [1, 2, 3] } } } };
+    expect(interpolate("{{ steps['myStep']['result'].get('items', []) | length }}", vars)).toBe(
+      "3",
+    );
+  });
 });

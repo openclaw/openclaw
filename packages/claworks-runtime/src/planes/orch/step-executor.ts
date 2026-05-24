@@ -924,6 +924,21 @@ function stepResultField(
   return value != null && value !== "" ? String(value) : fallback;
 }
 
+/** 解析 Jinja 表达式中的字面量值（用于过滤器管道中的 default 参数和 get() 默认值）。 */
+function parseLiteralExpr(expr: string): unknown {
+  const s = expr.trim();
+  if (s === "null" || s === "None") return null;
+  if (s === "[]") return [];
+  if (s === "{}") return {};
+  if (s === "true" || s === "True") return true;
+  if (s === "false" || s === "False") return false;
+  const strMatch = s.match(/^(['"])(.*)\1$/s);
+  if (strMatch) return strMatch[2];
+  const n = Number(s);
+  if (!Number.isNaN(n) && s !== "") return n;
+  return undefined;
+}
+
 export function interpolate(template: string, vars: Record<string, unknown>): string {
   const payload = (vars.payload ?? vars) as Record<string, unknown>;
   const steps = (vars.steps ?? {}) as Record<
@@ -1082,6 +1097,41 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
       // payload.get('key') 支持
       const pgm = trimmedExpr.match(/^payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)$/);
       if (pgm) baseValue = payload[pgm[1]];
+
+      // steps['x']['result'].get('field', default) 在过滤器管道中的支持
+      if (baseValue === undefined) {
+        const stepsGetMatch = trimmedExpr.match(
+          /^steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*(?:,\s*([^)]+))?\s*\)$/,
+        );
+        if (stepsGetMatch) {
+          const [, stepId, field, defaultExprRaw] = stepsGetMatch;
+          const stepResult = steps[stepId]?.result;
+          const dflt = defaultExprRaw ? parseLiteralExpr(defaultExprRaw.trim()) : undefined;
+          baseValue = stepResult != null ? (stepResult[field] ?? dflt) : dflt;
+        }
+      }
+
+      // 字面量值支持：null / 'str' / "str" / [] / 数字
+      if (baseValue === undefined) {
+        if (trimmedExpr === "null") {
+          baseValue = null;
+        } else if (trimmedExpr === "[]") {
+          baseValue = [];
+        } else if (trimmedExpr === "{}") {
+          baseValue = {};
+        } else {
+          const literalStr = trimmedExpr.match(/^(['"])(.*)\1$/s);
+          if (literalStr) {
+            baseValue = literalStr[2];
+          } else if (
+            trimmedExpr !== "" &&
+            !trimmedExpr.includes(" ") &&
+            !Number.isNaN(Number(trimmedExpr))
+          ) {
+            baseValue = Number(trimmedExpr);
+          }
+        }
+      }
 
       if (baseValue === undefined) {
         // 对未知路径先做正常 interpolate 再应用过滤器
