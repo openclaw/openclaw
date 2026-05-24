@@ -97,7 +97,10 @@ import {
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
+import {
+  hydrateResolvedSkillsAsync,
+  isSkillsSnapshotSchemaOutdated,
+} from "./skills/snapshot-hydration.js";
 import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -817,8 +820,17 @@ async function agentCommandInternal(
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
+    // Force-rebuild when the persisted snapshot was written by an older
+    // build whose `schemaVersion` is missing or below the current shape.
+    // Without this, sessions opened before the lane-split fields
+    // (`trustedDeveloperPrompt`, `untrustedReferencePrompt`) existed would
+    // hydrate with only `resolvedSkills`, and the Codex call site would
+    // read `undefined` for both lanes — silently dropping bundled skills
+    // from `developer_instructions` and non-bundled skills from the
+    // reference lane until a workspace bump or new session.
     const shouldRefreshSkillsSnapshot =
       !currentSkillsSnapshot ||
+      isSkillsSnapshotSchemaOutdated(currentSkillsSnapshot) ||
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;

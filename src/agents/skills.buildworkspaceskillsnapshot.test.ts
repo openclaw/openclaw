@@ -411,6 +411,118 @@ describe("buildWorkspaceSkillSnapshot", () => {
     expect(snapshot.trustedDeveloperPrompt).not.toContain("PROJECT-UNTRUSTED-INSTRUCTION");
   });
 
+  it("untrustedReferencePrompt mirrors untrusted skill metadata for the reference lane", async () => {
+    // Regression for ClawSweeper P1 (non-bundled visibility): untrusted
+    // skills must remain discoverable in the non-authoritative user/reference
+    // lane (e.g. Codex turn input under the OpenClaw workspace context
+    // wrapper). The reference fragment must carry every non-bundled source's
+    // name/description/location, and must NOT carry any bundled skill (those
+    // ride the trusted developer lane instead).
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraDir = await fixtureSuite.createCaseDir("extra-skills");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const projectAgentsSkillsDir = path.join(workspaceDir, ".agents", "skills");
+
+    await writeSkill({
+      dir: path.join(bundledDir, "bundled-trusted"),
+      name: "bundled-trusted",
+      description: "Trusted bundled OpenClaw skill description.",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "workspace-helper"),
+      name: "workspace-helper",
+      description: "WORKSPACE-HELPER-MARKER user-installed helper description.",
+    });
+    await writeSkill({
+      dir: path.join(managedDir, "managed-helper"),
+      name: "managed-helper",
+      description: "MANAGED-HELPER-MARKER user-installed helper description.",
+    });
+    await writeSkill({
+      dir: path.join(extraDir, "extra-helper"),
+      name: "extra-helper",
+      description: "EXTRA-HELPER-MARKER user-installed helper description.",
+    });
+    await writeSkill({
+      dir: path.join(projectAgentsSkillsDir, "project-helper"),
+      name: "project-helper",
+      description: "PROJECT-HELPER-MARKER user-installed helper description.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir, {
+      config: {
+        skills: {
+          load: {
+            extraDirs: [extraDir],
+          },
+        },
+      },
+    });
+
+    // Untrusted reference fragment contains every non-bundled source.
+    expect(snapshot.untrustedReferencePrompt).toBeDefined();
+    expect(snapshot.untrustedReferencePrompt).toContain("workspace-helper");
+    expect(snapshot.untrustedReferencePrompt).toContain("WORKSPACE-HELPER-MARKER");
+    expect(snapshot.untrustedReferencePrompt).toContain("managed-helper");
+    expect(snapshot.untrustedReferencePrompt).toContain("MANAGED-HELPER-MARKER");
+    expect(snapshot.untrustedReferencePrompt).toContain("extra-helper");
+    expect(snapshot.untrustedReferencePrompt).toContain("EXTRA-HELPER-MARKER");
+    expect(snapshot.untrustedReferencePrompt).toContain("project-helper");
+    expect(snapshot.untrustedReferencePrompt).toContain("PROJECT-HELPER-MARKER");
+
+    // Bundled skills stay out of the reference fragment — they ride the
+    // trusted developer fragment instead, so they would otherwise be
+    // double-counted at the wire level.
+    expect(snapshot.untrustedReferencePrompt).not.toContain("bundled-trusted");
+    expect(snapshot.untrustedReferencePrompt).not.toContain(
+      "Trusted bundled OpenClaw skill description.",
+    );
+
+    // Trusted developer fragment is the strict complement.
+    expect(snapshot.trustedDeveloperPrompt).toBeDefined();
+    expect(snapshot.trustedDeveloperPrompt).toContain("bundled-trusted");
+    expect(snapshot.trustedDeveloperPrompt).not.toContain("WORKSPACE-HELPER-MARKER");
+    expect(snapshot.trustedDeveloperPrompt).not.toContain("MANAGED-HELPER-MARKER");
+    expect(snapshot.trustedDeveloperPrompt).not.toContain("EXTRA-HELPER-MARKER");
+    expect(snapshot.trustedDeveloperPrompt).not.toContain("PROJECT-HELPER-MARKER");
+  });
+
+  it("omits untrustedReferencePrompt when no non-bundled skills are present", async () => {
+    // Bundled-only catalogs must not synthesize an empty reference fragment.
+    // The Codex call site checks `untrustedReferencePrompt ?? undefined`, so
+    // the reference lane falls back to the workspace-only wrapper.
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, ".bundled", "bundled-only"),
+      name: "bundled-only",
+      description: "Bundled-only catalog with no user-installed skills.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expect(snapshot.trustedDeveloperPrompt).toBeDefined();
+    expect(snapshot.trustedDeveloperPrompt).toContain("bundled-only");
+    expect(snapshot.untrustedReferencePrompt).toBeUndefined();
+  });
+
+  it("stamps schemaVersion so legacy snapshots are force-refreshed", async () => {
+    // Persisted snapshots without `schemaVersion` predate the lane-split
+    // fields. The agent-command reuse path uses this marker to decide
+    // whether to rebuild instead of hydrating, so the snapshot writer must
+    // always set it.
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "any-skill"),
+      name: "any-skill",
+      description: "Any skill description.",
+    });
+
+    const snapshot = buildSnapshot(workspaceDir);
+
+    expect(snapshot.schemaVersion).toBeGreaterThanOrEqual(2);
+  });
+
   it("omits trustedDeveloperPrompt when no bundled skills are present", async () => {
     // Untrusted-only catalogs (workspace-only installs, no bundled skills)
     // must not synthesize a trusted-developer prompt fragment. The Codex

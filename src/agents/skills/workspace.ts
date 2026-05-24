@@ -23,12 +23,13 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import { resolveSkillSource } from "./source.js";
-import type {
-  OpenClawSkillMetadata,
-  ParsedSkillFrontmatter,
-  SkillEligibilityContext,
-  SkillEntry,
-  SkillSnapshot,
+import {
+  SKILL_SNAPSHOT_SCHEMA_VERSION,
+  type OpenClawSkillMetadata,
+  type ParsedSkillFrontmatter,
+  type SkillEligibilityContext,
+  type SkillEntry,
+  type SkillSnapshot,
 } from "./types.js";
 
 const fsp = fs.promises;
@@ -1114,12 +1115,14 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, trustedDeveloperPrompt, resolvedSkills } =
+  const { eligible, prompt, trustedDeveloperPrompt, untrustedReferencePrompt, resolvedSkills } =
     resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
     ...(trustedDeveloperPrompt ? { trustedDeveloperPrompt } : {}),
+    ...(untrustedReferencePrompt ? { untrustedReferencePrompt } : {}),
+    schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
@@ -1172,6 +1175,7 @@ function resolveWorkspaceSkillPromptState(
   eligible: SkillEntry[];
   prompt: string;
   trustedDeveloperPrompt?: string;
+  untrustedReferencePrompt?: string;
   resolvedSkills: Skill[];
 } {
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
@@ -1217,7 +1221,12 @@ function resolveWorkspaceSkillPromptState(
     config: opts?.config,
     agentId: opts?.agentId,
   });
-  return { eligible, prompt, trustedDeveloperPrompt, resolvedSkills };
+  const untrustedReferencePrompt = buildUntrustedReferenceSkillsPrompt({
+    promptEntries,
+    config: opts?.config,
+    agentId: opts?.agentId,
+  });
+  return { eligible, prompt, trustedDeveloperPrompt, untrustedReferencePrompt, resolvedSkills };
 }
 
 /**
@@ -1272,6 +1281,57 @@ function buildTrustedDeveloperSkillsPrompt(params: {
 
 function isTrustedDeveloperSkillEntry(entry: SkillEntry): boolean {
   return resolveSkillSource(entry.skill) === "openclaw-bundled";
+}
+
+/**
+ * Build the skills prompt fragment that rides the non-authoritative user /
+ * reference lane (e.g. Codex per-turn user input under the OpenClaw
+ * workspace context wrapper). It carries every skill the trusted
+ * developer-instruction lane is not allowed to elevate — workspace, project
+ * (`.agents/skills`), personal (`~/.agents/skills`), `openclaw-managed`,
+ * `openclaw-extra`, and plugin-generated entries — so native Codex chat
+ * turns keep seeing user-installed skills without granting them developer
+ * authority.
+ *
+ * Render path mirrors the full prompt builder so the reference lane sees
+ * the same XML shape as `prompt` — just restricted to the untrusted
+ * entries. Returns `undefined` when the untrusted subset is empty (e.g.
+ * bundled-only catalogs); callers must treat `undefined` as "no reference
+ * skills lane needed" rather than as an error.
+ */
+function buildUntrustedReferenceSkillsPrompt(params: {
+  promptEntries: SkillEntry[];
+  config?: OpenClawConfig;
+  agentId?: string;
+}): string | undefined {
+  const untrustedEntries = params.promptEntries.filter(
+    (entry) => !isTrustedDeveloperSkillEntry(entry),
+  );
+  if (untrustedEntries.length === 0) {
+    return undefined;
+  }
+  const untrustedSkills = compactSkillPaths(untrustedEntries.map((entry) => entry.skill))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
+  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+    skills: untrustedSkills,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  if (skillsForPrompt.length === 0) {
+    return undefined;
+  }
+  const truncationNote = truncated
+    ? `⚠️ User-installed skills truncated: included ${skillsForPrompt.length} of ${untrustedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    : compact
+      ? `⚠️ User-installed skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+      : "";
+  return [
+    truncationNote,
+    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function resolveSkillsPromptForRun(params: {

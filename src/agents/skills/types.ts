@@ -98,6 +98,20 @@ export type SkillEligibilityContext = {
   };
 };
 
+/**
+ * Bumped whenever the `SkillSnapshot` field set changes in a way that
+ * persisted snapshots from older builds cannot satisfy. `agent-command.ts`
+ * compares this against the stored `schemaVersion` and force-rebuilds when
+ * the stored value is missing or lower. Keep in sync with
+ * `buildWorkspaceSkillSnapshot`.
+ *
+ * - v1 (implicit, pre-2026-05-25): `prompt`, `skills`, `skillFilter`,
+ *   `resolvedSkills`, `version`.
+ * - v2 (2026-05-25): adds `trustedDeveloperPrompt` and
+ *   `untrustedReferencePrompt` for the Codex skills-lane split.
+ */
+export const SKILL_SNAPSHOT_SCHEMA_VERSION = 2;
+
 export type SkillSnapshot = {
   prompt: string;
   /**
@@ -110,6 +124,24 @@ export type SkillSnapshot = {
    * authority. Undefined when no trusted skills are eligible.
    */
   trustedDeveloperPrompt?: string;
+  /**
+   * Untrusted skills prompt fragment for the user/reference lane (e.g. Codex
+   * per-turn user input under the OpenClaw workspace context wrapper). Built
+   * from every non-bundled source (workspace, project `.agents`, personal
+   * `~/.agents/skills`, `openclaw-managed`, `openclaw-extra`, and
+   * plugin-generated) so native Codex turns keep seeing user-installed
+   * skills without granting them developer authority. Undefined when no
+   * non-bundled skills are eligible.
+   */
+  untrustedReferencePrompt?: string;
+  /**
+   * Schema marker for this `SkillSnapshot` shape. Persisted snapshots written
+   * by older builds will have `schemaVersion === undefined`; the
+   * `agent-command.ts` reuse path treats that as a forced-refresh signal so
+   * the new lane-split fields above are populated before the snapshot is
+   * read. See `SKILL_SNAPSHOT_SCHEMA_VERSION`.
+   */
+  schemaVersion?: number;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];

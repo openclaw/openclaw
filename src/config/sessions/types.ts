@@ -620,6 +620,31 @@ export type SessionSkillSnapshot = {
   prompt: string;
   /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
   promptRef?: SessionSkillPromptRef;
+  /**
+   * Trusted-developer skills fragment (bundled-only) routed into the Codex
+   * `collaborationMode.settings.developer_instructions` lane. Persisted so
+   * subsequent turns of an existing session keep elevating the same trusted
+   * subset without rebuilding the catalog. See `SkillSnapshot` in
+   * `src/agents/skills/types.ts` for the trust policy.
+   */
+  trustedDeveloperPrompt?: string;
+  /**
+   * Untrusted-reference skills fragment (workspace / project / personal /
+   * managed / extra / plugin-generated) routed into the Codex per-turn user
+   * input under the OpenClaw workspace-context wrapper. Persisted so native
+   * Codex turns of an existing session keep seeing user-installed skills
+   * without rebuilding the catalog. See `SkillSnapshot` in
+   * `src/agents/skills/types.ts`.
+   */
+  untrustedReferencePrompt?: string;
+  /**
+   * Persisted schema marker for the `SessionSkillSnapshot` shape. Sessions
+   * stored by older builds will have `schemaVersion === undefined`; the
+   * agent-command reuse path treats that as a force-refresh signal so the
+   * new lane-split fields above are populated before reuse. Keep in sync
+   * with `SKILL_SNAPSHOT_SCHEMA_VERSION` in `src/agents/skills/types.ts`.
+   */
+  schemaVersion?: number;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
