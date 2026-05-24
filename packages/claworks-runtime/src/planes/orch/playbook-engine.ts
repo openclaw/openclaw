@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ModelRouter } from "../../claworks/model-router.js";
 import type { RbacCheckInput, RbacCheckResult } from "../../claworks/robot-identity.js";
+import { buildEventContext } from "../../kernel/event-context.js";
 import { CW_EVENTS } from "../../kernel/event-names.js";
 import { globalMetrics } from "../../kernel/metrics.js";
 import type { KnowledgeBase, RobotInfo } from "../../kernel/types.js";
@@ -272,6 +273,12 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         _session: buildSessionContext(
           String(input.session_id ?? input.sessionId ?? ""),
           deps.contextEngine,
+        ),
+        // 信息流预计算：从触发 payload 自动推断领域/实体/情感，注入 _ctx，
+        // step-executor 中 buildLlmContext 直接消费，无需 LLM 步骤内重新分析
+        _ctx: buildEventContext(
+          input as Record<string, unknown>,
+          def.trigger.kind === "event" ? def.trigger.pattern : undefined,
         ),
       },
       objectStore: deps.objectStore,
