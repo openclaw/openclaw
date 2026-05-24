@@ -1,5 +1,6 @@
 import { createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import channelBrokerEntry from "../index.js";
 import { channelBrokerPlugin } from "./channel.js";
 import { resetChannelBrokerRuntimeForTest, setChannelBrokerRuntime } from "./runtime.js";
 
@@ -25,6 +26,10 @@ describe("channel-broker plugin", () => {
       previewFinalization: true,
       progressUpdates: true,
     });
+  });
+
+  it("exposes the bundled runtime setter declared by the channel entry", () => {
+    expect(() => channelBrokerEntry.setChannelRuntime?.({} as never)).not.toThrow();
   });
 
   it("infers broker-prefixed platform DMs before defaulting to channel semantics", () => {

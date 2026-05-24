@@ -16,3 +16,4 @@ export {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+export { setChannelBrokerRuntime } from "./src/runtime.js";
