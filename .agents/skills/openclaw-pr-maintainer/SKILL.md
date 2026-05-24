@@ -171,7 +171,7 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 - Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
 - For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
 - Provenance must separate roles when they differ: blamed code author username, blamed PR merger/committer username, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
-- For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number; if no PR is traceable, include the blamed commit SHA/date and author username instead of guessing a merger.
+- For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number. If no PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
 - Phrase provenance as `introduced by`, `made visible by`, or `carried forward by`, with confidence (`clear`, `likely`, `unknown`). If unclear, say what evidence is missing instead of guessing. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
 - Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
 
