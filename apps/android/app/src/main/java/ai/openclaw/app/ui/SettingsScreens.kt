@@ -676,7 +676,7 @@ private fun GatewaySettingsScreen(
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          SettingsMetric("Status", statusText),
+          SettingsMetric("Status", gatewayStatusLabel(statusText = statusText, isConnected = isConnected)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -775,6 +775,23 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
   }
 }
 
+private fun gatewayStatusLabel(
+  statusText: String,
+  isConnected: Boolean,
+): String {
+  if (isConnected) return "Ready"
+  val status = statusText.trim().lowercase()
+  return when {
+    status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
+    status.contains("pair") -> "Pairing needed"
+    status.contains("auth") -> "Authentication needed"
+    status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> "Cannot reach gateway"
+    status.isBlank() -> "Not connected"
+    else -> "Not connected"
+  }
+}
+
 @Composable
 private fun AboutSettingsScreen(
   viewModel: MainViewModel,
@@ -850,7 +867,7 @@ internal fun SettingsDetailFrame(
   onBack: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
+  ClawScaffold(contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 20.dp)) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -863,7 +880,9 @@ internal fun SettingsDetailFrame(
         Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
       item {
-        content()
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          content()
+        }
       }
       item {
         Spacer(modifier = Modifier.height(12.dp))

@@ -339,6 +339,14 @@ ui_error() {
 INSTALL_STAGE_TOTAL=3
 INSTALL_STAGE_CURRENT=0
 
+configure_install_stage_total() {
+    INSTALL_STAGE_TOTAL=3
+    INSTALL_STAGE_CURRENT=0
+    if [[ "${VERIFY_INSTALL:-0}" == "1" ]]; then
+        INSTALL_STAGE_TOTAL=4
+    fi
+}
+
 ui_section() {
     local title="$1"
     if [[ -n "$GUM" ]]; then
@@ -3126,6 +3134,7 @@ main() {
 
 if [[ "${OPENCLAW_INSTALL_SH_NO_RUN:-0}" != "1" ]]; then
     parse_args "$@"
+    configure_install_stage_total
     configure_verbose
     main
 fi
