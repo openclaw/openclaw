@@ -556,6 +556,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("recovers forum thread context from a topic-scoped session key", async () => {
+    const recordInboundSession = vi.fn(async () => undefined);
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
       delivery: {
@@ -572,8 +573,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createContext({
         ctxPayload: {
           ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
           MessageThreadId: 1,
+          OriginatingTo: "telegram:-1003774691294",
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+          To: "telegram:-1003774691294",
           TransportThreadId: 1,
         } as unknown as TelegramMessageContext["ctxPayload"],
         msg: {
@@ -589,6 +593,20 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyThreadId: undefined,
         resolvedThreadId: undefined,
         threadSpec: { id: 1, scope: "forum" },
+        turn: {
+          storePath: "/tmp/openclaw/telegram-sessions.json",
+          recordInboundSession,
+          record: {
+            updateLastRoute: {
+              sessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
+              channel: "telegram",
+              to: "telegram:-1003774691294:topic:1",
+              accountId: "default",
+              threadId: "1",
+            },
+            onRecordError: vi.fn(),
+          },
+        } as unknown as TelegramMessageContext["turn"],
       }),
       replyToMode: "off",
       streamMode: "off",
@@ -598,10 +616,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
       threadId: 3731,
     });
     expectRecordFields(outbound.ctxPayload, {
+      From: "telegram:group:-1003774691294:topic:3731",
       MessageThreadId: 3731,
+      OriginatingTo: "telegram:-1003774691294:topic:3731",
       TransportThreadId: 3731,
+      To: "telegram:-1003774691294:topic:3731",
       SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
     });
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateLastRoute: expect.objectContaining({
+          threadId: "3731",
+          to: "telegram:-1003774691294:topic:3731",
+        }),
+      }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 

@@ -47,9 +47,6 @@ export async function admitReplyTurn(params: {
         throw error;
       }
       const activeOperation = replyRunRegistry.get(params.sessionKey);
-      if (activeOperation) {
-        sessionId = activeOperation.sessionId;
-      }
       if (params.kind === "heartbeat" || params.kind === "control_abort") {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
@@ -64,6 +61,9 @@ export async function admitReplyTurn(params: {
           reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
           activeOperation,
         };
+      }
+      if (activeOperation) {
+        sessionId = activeOperation.sessionId;
       }
     }
   }

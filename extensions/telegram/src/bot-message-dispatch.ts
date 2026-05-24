@@ -80,6 +80,8 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import {
+  buildTelegramGroupFrom,
+  buildTelegramInboundOriginTarget,
   getTelegramTextParts,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
@@ -443,17 +445,42 @@ function resolveDispatchTelegramContext(params: {
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
     return params.context;
   }
+  const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
+    params.context.chatId,
+    threadSpec,
+  );
+  const recoveredFrom = params.context.isGroup
+    ? buildTelegramGroupFrom(params.context.chatId, threadSpec.id)
+    : params.context.ctxPayload.From;
+  const recoveredUpdateLastRoute =
+    params.context.turn.record.updateLastRoute && threadSpec.id != null
+      ? {
+          ...params.context.turn.record.updateLastRoute,
+          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          threadId: String(threadSpec.id),
+        }
+      : params.context.turn.record.updateLastRoute;
   return {
     ...params.context,
     threadSpec,
     resolvedThreadId: threadSpec.id,
     replyThreadId: threadSpec.id,
+    turn: {
+      ...params.context.turn,
+      record: {
+        ...params.context.turn.record,
+        updateLastRoute: recoveredUpdateLastRoute,
+      },
+    },
     ctxPayload:
       threadSpec.id == null
         ? params.context.ctxPayload
         : {
             ...params.context.ctxPayload,
+            From: recoveredFrom,
             MessageThreadId: threadSpec.id,
+            OriginatingTo: recoveredRoutingTarget,
+            To: recoveredRoutingTarget,
             TransportThreadId: threadSpec.id,
           },
   };
@@ -1414,7 +1441,7 @@ export const dispatchTelegramMessage = async ({
       const turnResult = await runInboundReplyTurn({
         channel: "telegram",
         accountId: route.accountId,
-        raw: context,
+        raw: dispatchContext,
         adapter: {
           ingest: () => ({
             id: ctxPayload.MessageSid ?? `${chatId}:${Date.now()}`,
@@ -1422,16 +1449,16 @@ export const dispatchTelegramMessage = async ({
             rawText: ctxPayload.RawBody ?? "",
             textForAgent: ctxPayload.BodyForAgent,
             textForCommands: ctxPayload.CommandBody,
-            raw: context,
+            raw: dispatchContext,
           }),
           resolveTurn: () => ({
             channel: "telegram",
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
-            storePath: context.turn.storePath,
+            storePath: dispatchContext.turn.storePath,
             ctxPayload,
-            recordInboundSession: context.turn.recordInboundSession,
-            record: context.turn.record,
+            recordInboundSession: dispatchContext.turn.recordInboundSession,
+            record: dispatchContext.turn.record,
             runDispatch: () => {
               const sentBlockMediaUrls = new Set<string>();
 

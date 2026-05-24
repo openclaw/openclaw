@@ -39,6 +39,33 @@ describe("reply turn admission", () => {
     }
   });
 
+  it("uses the active run's final session id after waiting", async () => {
+    const active = createReplyOperation({
+      sessionKey: "agent:main:telegram:topic:42",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+
+    const admitted = admitReplyTurn({
+      sessionKey: "agent:main:telegram:topic:42",
+      sessionId: "new-session",
+      kind: "visible",
+      resetTriggered: false,
+    });
+
+    await Promise.resolve();
+    active.updateSessionId("post-compact-session");
+    active.complete();
+    const result = await admitted;
+
+    expect(result.status).toBe("owned");
+    if (result.status === "owned") {
+      expect(result.operation.sessionId).toBe("post-compact-session");
+      result.operation.complete();
+    }
+  });
+
   it("skips heartbeat turns while a visible turn owns the lane", async () => {
     const active = createReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
