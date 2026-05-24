@@ -454,16 +454,13 @@ export function removePluginFromConfig(
   }
 
   // Reset slots if this plugin was selected.
-  let slots = pluginsConfig.slots;
+  let slots = pluginsConfig.slots ? { ...pluginsConfig.slots } : undefined;
   if (slots) {
     for (const slotKey of MEMORY_SLOT_KEYS) {
       if (slots[slotKey] !== pluginId) {
         continue;
       }
-      slots = {
-        ...slots,
-        [slotKey]: defaultSlotIdForKey(slotKey),
-      };
+      Object.assign(slots, { [slotKey]: defaultSlotIdForKey(slotKey) });
       actions.memorySlot = true;
     }
   }

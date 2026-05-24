@@ -891,15 +891,12 @@ function resetDisabledPluginSlots(
   if (!slots) {
     return slots;
   }
-  let next = slots;
+  let next = { ...slots };
   for (const slotKey of PLUGIN_SLOT_KEYS) {
     if (next[slotKey] !== pluginId) {
       continue;
     }
-    next = {
-      ...next,
-      [slotKey]: defaultSlotIdForKey(slotKey),
-    };
+    Object.assign(next, { [slotKey]: defaultSlotIdForKey(slotKey) });
   }
   return next;
 }

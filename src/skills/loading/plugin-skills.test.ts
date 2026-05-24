@@ -8,6 +8,7 @@ import {
 } from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type { PluginKind } from "../../plugins/plugin-kind.types.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { testing } from "./plugin-skills.js";
 
@@ -99,7 +100,7 @@ function createSinglePluginRegistry(params: {
   skills: string[];
   format?: "openclaw" | "bundle";
   legacyPluginIds?: string[];
-  kind?: string | string[];
+  kind?: PluginKind | PluginKind[];
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
