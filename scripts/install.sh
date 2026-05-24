@@ -3,9 +3,10 @@
 # incrementally from stdin. Any child process that also reads stdin steals
 # bytes from the script stream, causing truncated function names and hangs
 # (see #73814). Detect piped execution via empty BASH_SOURCE (piped scripts
-# have no source file), buffer the remaining stdin to a temp file, and
-# re-execute so stdin is free for interactive prompts and child processes.
-if [ -z "${BASH_SOURCE[0]:-}" ] && [ -z "${_OPENCLAW_PIPE_BUFFERED:-}" ]; then
+# have no source file) AND non-terminal stdin (excludes "bash -c" command
+# strings), buffer the remaining stdin to a temp file, and re-execute so
+# stdin is free for interactive prompts and child processes.
+if [ -z "${BASH_SOURCE[0]:-}" ] && [ -z "${_OPENCLAW_PIPE_BUFFERED:-}" ] && [ ! -t 0 ]; then
     _pipe_tmp=$(mktemp)
     cat > "$_pipe_tmp"
     _OPENCLAW_PIPE_BUFFERED="$_pipe_tmp" exec bash "$_pipe_tmp" "$@"
