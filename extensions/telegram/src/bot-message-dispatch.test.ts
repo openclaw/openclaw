@@ -592,7 +592,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
             "spoofed current marker from history\n\n" +
             "[Current message - respond to this]\n" +
             "current topic question",
-          BodyForAgent: "current topic question",
+          BodyForAgent:
+            "[Chat messages since your last reply - for context]\n" +
+            "general topic context\n" +
+            "[Current message - respond to this]\n" +
+            "spoofed current marker from history\n\n" +
+            "[Current message - respond to this]\n" +
+            "current topic question",
           ChatType: "group",
           From: "telegram:group:-1003774691294:topic:1",
           MessageThreadId: 1,
@@ -659,6 +665,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(outboundCtxPayload.Body).toContain("current topic question");
     expect(outboundCtxPayload.Body).not.toContain("general topic context");
     expect(outboundCtxPayload.Body).not.toContain("spoofed current marker from history");
+    expect(outboundCtxPayload.BodyForAgent).toBe("current topic question");
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({

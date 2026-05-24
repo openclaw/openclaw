@@ -467,12 +467,12 @@ function extractCurrentTelegramBody(body: string | undefined): string {
 function buildRecoveredTelegramBody(params: {
   cfg: OpenClawConfig;
   context: TelegramMessageContext;
+  currentMessage: string;
   historyKey?: string;
   threadSpec: TelegramThreadSpec;
 }): string {
-  const currentMessage = extractCurrentTelegramBody(params.context.ctxPayload.Body);
   if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
-    return currentMessage;
+    return params.currentMessage;
   }
   const groupLabel = buildGroupLabel(
     params.context.msg,
@@ -485,7 +485,7 @@ function buildRecoveredTelegramBody(params: {
   }).buildPendingContext({
     historyKey: params.historyKey,
     limit: params.context.historyLimit,
-    currentMessage,
+    currentMessage: params.currentMessage,
     formatEntry: (entry) =>
       formatInboundEnvelope({
         channel: "Telegram",
@@ -613,9 +613,13 @@ function resolveDispatchTelegramContext(params: {
           limit: params.context.historyLimit,
         })
       : params.context.ctxPayload.InboundHistory;
+  const recoveredBodyForAgent = extractCurrentTelegramBody(
+    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
+  );
   const recoveredBody = buildRecoveredTelegramBody({
     cfg: params.cfg,
     context: params.context,
+    currentMessage: recoveredBodyForAgent,
     historyKey: recoveredHistoryKey,
     threadSpec,
   });
@@ -650,6 +654,7 @@ function resolveDispatchTelegramContext(params: {
         : {
             ...params.context.ctxPayload,
             Body: recoveredBody,
+            BodyForAgent: recoveredBodyForAgent,
             From: recoveredFrom,
             InboundHistory: recoveredInboundHistory,
             MessageThreadId: threadSpec.id,
