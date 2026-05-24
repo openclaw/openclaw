@@ -19,7 +19,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## ClawSweeper Review Policy
 
-- OpenClaw-specific review rules live here; ClawSweeper prompts stay generic.
+- OpenClaw-specific review rules live here; generic ClawSweeper prompts stay repo-agnostic.
 - ClawSweeper-owned schema, labels, close reasons, protected-label gates, maintainer-item gates, and mutation rules live in `openclaw/clawsweeper`.
 - Review workers read this full root `AGENTS.md` before judging; no reliance on search snippets, `head`, partial ranges, local excerpts, or truncated copies. Then read every scoped `AGENTS.md` that owns touched paths.
 - Optional integrations, providers, channels, skill bundles, MCP surfaces, and service workflows route to plugins, ClawHub, or owner repos when current seams suffice. Keep core items for missing core/plugin APIs, bundled regressions, security/core hardening, or maintainer product decisions.

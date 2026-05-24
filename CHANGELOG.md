@@ -6,8 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Maintainer policy: move OpenClaw-specific ClawSweeper review rules into root `AGENTS.md`, covering ClawHub routing, compatibility and upgrade risk, sibling-surface review, changelog handling, public docs links, and validation expectations. (#86197, refs #86185)
-
 ### Fixes
 
 - Installer: install Node.js through `apk` on Alpine Linux instead of falling through to the NodeSource package-manager path.
