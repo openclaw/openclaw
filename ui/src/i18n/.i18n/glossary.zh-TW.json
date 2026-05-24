@@ -38,5 +38,89 @@
   {
     "source": "iMessage",
     "target": "iMessage"
+  },
+  {
+    "source": "instance",
+    "target": "執行個體"
+  },
+  {
+    "source": "session",
+    "target": "工作階段"
+  },
+  {
+    "source": "settings",
+    "target": "設定"
+  },
+  {
+    "source": "user",
+    "target": "使用者"
+  },
+  {
+    "source": "default",
+    "target": "預設"
+  },
+  {
+    "source": "online",
+    "target": "線上"
+  },
+  {
+    "source": "access",
+    "target": "存取"
+  },
+  {
+    "source": "device",
+    "target": "裝置"
+  },
+  {
+    "source": "refresh",
+    "target": "重新整理"
+  },
+  {
+    "source": "run",
+    "target": "執行"
+  },
+  {
+    "source": "message",
+    "target": "訊息"
+  },
+  {
+    "source": "info",
+    "target": "資訊"
+  },
+  {
+    "source": "information",
+    "target": "資訊"
+  },
+  {
+    "source": "data",
+    "target": "資料"
+  },
+  {
+    "source": "add",
+    "target": "新增"
+  },
+  {
+    "source": "debug",
+    "target": "偵錯"
+  },
+  {
+    "source": "track",
+    "target": "追蹤"
+  },
+  {
+    "source": "audio",
+    "target": "音訊"
+  },
+  {
+    "source": "interface",
+    "target": "介面"
+  },
+  {
+    "source": "wizard",
+    "target": "精靈"
+  },
+  {
+    "source": "click",
+    "target": "點按"
   }
 ]
