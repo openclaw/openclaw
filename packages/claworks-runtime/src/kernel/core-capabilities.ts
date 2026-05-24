@@ -972,8 +972,30 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
         .slice(0, 20)
         .map((c) => c.id);
 
+      // 查询 CBR 案例库：最相似的 2 条历史案例作为 few-shot 上下文
+      // 帮助弱模型从已知成功案例中类比推断当前意图
+      const cbrCases = runtime.cbrStore
+        ? runtime.cbrStore
+            .search(text, 2)
+            .map((c) => {
+              const p = c.problem as Record<string, unknown> | undefined;
+              const prob =
+                typeof p?.problem === "string"
+                  ? p.problem
+                  : typeof c.problem === "string"
+                    ? c.problem
+                    : "";
+              const sol = typeof c.solution === "string" ? c.solution : "";
+              return prob && sol ? `示例：用户说"${prob}"→意图为"${sol}"` : null;
+            })
+            .filter((x): x is string => x !== null)
+        : [];
+
       const contextBlock = new SystemPromptBuilder()
-        .withMemory(history.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`))
+        .withMemory([
+          ...cbrCases,
+          ...history.map((m) => `${m.role === "user" ? "用户" : "助手"}：${m.content}`),
+        ])
         .withUserProfile(
           userProfile
             ? {
@@ -1493,12 +1515,14 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
         content: { type: "string" },
         related_run_id: { type: "string" },
         correction: { type: "string" },
+        intent: { type: "string" },
       },
     },
     handler: async (_ctx, params) => {
       const type = String(params.feedback_type ?? "positive");
       const content = String(params.content ?? "");
       const correction = String(params.correction ?? "");
+      const intent = params.intent ? String(params.intent) : undefined;
 
       const entry = correction
         ? `[feedback:${type}] ${content}\n\nCorrection: ${correction}`
@@ -1506,6 +1530,15 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
 
       await runtime.kb.ingest(entry, { source: "learn.from_feedback" });
       const id = "ingested";
+
+      // 通知 AutonomyEngine 记录反馈，负反馈累积到阈值时触发学习机会检测
+      const { recordFeedback } = await import("./autonomy-engine.js");
+      await recordFeedback(runtime, {
+        input: content,
+        intent,
+        feedback: type === "negative" ? "negative" : "positive",
+        note: correction || undefined,
+      });
 
       await runtime.kernel.publish("learn.feedback_recorded", "learn.from_feedback", {
         id,

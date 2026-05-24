@@ -249,6 +249,19 @@ export async function createClaworksRuntime(
     onOutboxExhausted: async (payload) => {
       await publishAnomaly({ kind: "outbox_exhausted", ...payload });
     },
+    // 每个事件发布后触发 HookEngine（事件推送 / IM 通知 / Webhook）
+    // runtime 用懒引用（createEventKernel 早于 runtime 赋值，但 onEventPublished 在运行时调用）
+    onEventPublished: (event) => {
+      runtime.hookEngine
+        ?.process(event.type, event.payload as Record<string, unknown>, async (t, s, p) => {
+          await kernel.publish(t, s, p);
+        })
+        .catch((err: unknown) => {
+          opts?.logger?.(
+            `[claworks:hook] error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    },
   });
   kernel.matcher.load(playbookEngine.list());
   // 延迟绑定 publishAnomaly 到 playbookEngine（kernel 创建后才有完整引用）
