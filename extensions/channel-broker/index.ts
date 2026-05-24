@@ -6,7 +6,7 @@ export default defineBundledChannelEntry({
   description: "Provider-owned universal messaging channel broker",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "channelBrokerPlugin",
   },
   secrets: {
@@ -14,7 +14,7 @@ export default defineBundledChannelEntry({
     exportName: "channelSecrets",
   },
   runtime: {
-    specifier: "./api.js",
+    specifier: "./runtime-api.js",
     exportName: "setChannelBrokerRuntime",
   },
 });

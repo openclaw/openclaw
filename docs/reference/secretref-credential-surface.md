@@ -40,7 +40,6 @@ Scope intent:
 - `talk.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
-- `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
@@ -54,6 +53,7 @@ Scope intent:
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
+- `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`

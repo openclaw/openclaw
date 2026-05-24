@@ -26,10 +26,7 @@ function resolveMergedBrokerProviderConfig(
   accountId: string,
 ): ChannelBrokerProviderConfig {
   const channelConfig = getChannelBrokerConfig(cfg);
-  const accounts = {
-    ...(channelConfig?.providers ?? {}),
-    ...(channelConfig?.accounts ?? {}),
-  };
+  const accounts = Object.assign({}, channelConfig?.providers, channelConfig?.accounts);
   return resolveMergedAccountConfig<ChannelBrokerProviderConfig>({
     channelConfig,
     accounts,

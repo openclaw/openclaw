@@ -56,6 +56,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
 // Plugin-owned surfaces that are intentionally public and documented for third-party plugins.
 export const publicPluginOwnedSdkEntrypoints = [
   "browser-config",
+  "channel-broker",
   "image-generation-core",
   "memory-core",
   "memory-core-host-engine-embeddings",
