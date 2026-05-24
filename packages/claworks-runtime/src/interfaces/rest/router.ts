@@ -193,6 +193,42 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // /v1/observe/audit_log — merged view: in-memory decision log + DB audit records
+      // Decision log entries are the authoritative audit trail for Playbook decisions.
+      // DB entries (cw_audit_log) capture explicit business operation writes via observe.audit_log.
+      if (method === "GET" && parts[1] === "audit_log") {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
+        const memEntries = listDecisionLog(limit).map((e) => ({
+          ...e,
+          source: "decision_log",
+        }));
+        let dbEntries: unknown[] = [];
+        try {
+          const auditCap = runtime.capabilities.get("security.audit_log");
+          if (auditCap) {
+            const ctx = { runId: "observe/audit_log", playbookId: "", stepId: "" };
+            const result = (await auditCap.handler(ctx as never, { limit })) as Record<
+              string,
+              unknown
+            >;
+            const items = result.events ?? result.entries ?? result.items ?? [];
+            dbEntries = Array.isArray(items) ? (items as unknown[]) : [];
+          }
+        } catch {
+          // DB not available — return only in-memory entries
+        }
+        sendJson(res, 200, {
+          audit_log: {
+            query: { limit },
+            in_memory_count: memEntries.length,
+            db_count: dbEntries.length,
+            entries: [...memEntries, ...(dbEntries as object[])],
+          },
+        });
+        return true;
+      }
+
       if (method === "GET" && parts[1] === "observation-events") {
         const url = new URL(req.url ?? "/", "http://localhost");
         const limit = Number(url.searchParams.get("limit") ?? 50);
