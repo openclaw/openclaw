@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -17,6 +17,7 @@ import {
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
+  collectSkillShellScriptExecutableErrors,
   collectPackUnpackedSizeErrors,
   collectPackedInstalledPackageVerificationErrors,
   createPackedCompletionSmokeEnv,
@@ -118,12 +119,12 @@ describe("packed CLI smoke", () => {
           : `${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: "/tmp/smoke-home",
       USERPROFILE: "/tmp/smoke-home",
-      ComSpec: "C:\\Windows/System32/cmd.exe",
-      APPDATA: "/tmp/smoke-home/AppData/Roaming",
-      LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
+      ComSpec: join("C:\\Windows", "System32", "cmd.exe"),
+      APPDATA: join("/tmp/smoke-home", "AppData", "Roaming"),
+      LOCALAPPDATA: join("/tmp/smoke-home", "AppData", "Local"),
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/smoke-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/smoke-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/smoke-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/smoke-home", ".aws", "config"),
       TMPDIR: "/tmp/original-tmp",
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
@@ -185,8 +186,8 @@ describe("workspace bootstrap smoke", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/bootstrap-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/bootstrap-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/bootstrap-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/bootstrap-home", ".aws", "config"),
     });
   });
 });
@@ -334,6 +335,41 @@ describe("bundled plugin package dependency checks", () => {
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
+// Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
+// statSync().mode never reports execute bits, so these tests are meaningless there.
+describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
+  it("flags non-executable shell scripts under skills/*/scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o644);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
+        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts executable shell scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o755);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -489,6 +525,7 @@ describe("collectMissingPackPaths", () => {
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       "dist/control-ui/index.html",
       "scripts/npm-runner.mjs",
+      "scripts/prepare-git-hooks.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
@@ -508,6 +545,7 @@ describe("collectMissingPackPaths", () => {
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
     expect(
       collectMissingPackPaths([
+        "npm-shrinkwrap.json",
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
@@ -518,6 +556,7 @@ describe("collectMissingPackPaths", () => {
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
+        "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",

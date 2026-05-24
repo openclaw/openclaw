@@ -92,12 +92,14 @@ describe("Dockerfile", () => {
   it("uses the Docker target platform for pnpm install and prune", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
-    const storeAddIndex = dockerfile.indexOf("pnpm store add source-map@0.6.1");
+    const storeSeedIndex = dockerfile.indexOf(
+      "pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
+    );
     const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
 
     expect(installIndex).toBeGreaterThan(-1);
-    expect(storeAddIndex).toBeGreaterThan(installIndex);
-    expect(storeAddIndex).toBeLessThan(pruneIndex);
+    expect(storeSeedIndex).toBeGreaterThan(installIndex);
+    expect(storeSeedIndex).toBeLessThan(pruneIndex);
     expect(pruneIndex).toBeGreaterThan(-1);
     expect(dockerfile).toContain("--config.offline=true");
     expect(dockerfile.split("--config.supportedArchitectures.os=linux").length - 1).toBe(2);
@@ -125,6 +127,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
+    const prepareIndex = dockerfile.indexOf("scripts/prepare-git-hooks.mjs");
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
@@ -136,6 +139,7 @@ describe("Dockerfile", () => {
     );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(prepareIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
@@ -144,9 +148,40 @@ describe("Dockerfile", () => {
       `if [ -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
+    expect(prepareIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
+  });
+
+  it("copies root package lifecycle scripts before pnpm install", async () => {
+    const [dockerfile, packageJsonText] = await Promise.all([
+      readFile(dockerfilePath, "utf8"),
+      readFile(join(repoRoot, "package.json"), "utf8"),
+    ]);
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const packageJson = JSON.parse(packageJsonText) as {
+      scripts?: Record<string, string>;
+    };
+    const installLifecycleScripts = ["preinstall", "install", "postinstall", "prepare"] as const;
+
+    for (const lifecycleScript of installLifecycleScripts) {
+      const command = packageJson.scripts?.[lifecycleScript];
+      const scriptPath = command?.match(/\bnode\s+(scripts\/[^\s]+)/)?.[1];
+      if (!scriptPath) {
+        continue;
+      }
+
+      const copyIndex = dockerfile.indexOf(scriptPath);
+      expect(
+        copyIndex,
+        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
+      ).toBeGreaterThan(-1);
+      expect(
+        copyIndex,
+        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
+      ).toBeLessThan(installIndex);
+    }
   });
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {
@@ -184,9 +219,7 @@ describe("Dockerfile", () => {
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
     );
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
-    expect(
-      dockerfile.indexOf("CI=true pnpm prune --prod \\"),
-    ).toBeLessThan(
+    expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
         'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
       ),
@@ -291,11 +324,11 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+  it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      "RUN install -d -m 0700 -o node -g node \\",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
@@ -306,8 +339,16 @@ describe("Dockerfile", () => {
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain("/home/node/.openclaw/workspace");
+    expect(dockerfile).toContain("/home/node/.config/openclaw");
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
     );
   });
 });

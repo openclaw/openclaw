@@ -1,11 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
-  refreshChat,
-  refreshChatAvatar,
-} from "./app-chat.ts";
+import { createChatSessionsLoadOverrides, refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
@@ -144,6 +139,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
@@ -257,7 +254,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession);
+  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -561,7 +558,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession)}
+          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
             ${renderChatAutoScrollToggle(state)}
             <button
@@ -635,7 +632,9 @@ export function renderChatMobileToggle(state: AppViewState) {
 
 export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   const previousSessionKey = state.sessionKey;
-  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const nextSessionRow =
+    state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
+    state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {
@@ -669,6 +668,7 @@ export function dismissChatError(state: AppViewState) {
     state.realtimeTalkStatus = "idle";
     state.realtimeTalkDetail = null;
     state.realtimeTalkTranscript = null;
+    state.resetRealtimeTalkConversation?.();
   }
 }
 
@@ -700,11 +700,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
-      showArchived: state.sessionsShowArchived,
+      ...createChatSessionsLoadOverrides(state),
     },
   );
   if (
@@ -732,11 +728,7 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    limit: CHAT_SESSIONS_REFRESH_LIMIT,
-    includeGlobal: true,
-    includeUnknown: true,
-    showArchived: state.sessionsShowArchived,
+    ...createChatSessionsLoadOverrides(state),
   });
 }
 

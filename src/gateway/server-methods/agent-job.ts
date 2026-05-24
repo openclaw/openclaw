@@ -1,3 +1,9 @@
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../../shared/agent-liveness.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -33,6 +39,8 @@ type AgentRunSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   ts: number;
 };
 
@@ -142,16 +150,24 @@ function createSnapshotFromLifecycleEvent(params: {
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   const blocked = isBlockedLivenessState(livenessState);
-  const status = phase === "error" || blocked ? "error" : data?.aborted ? "timeout" : "ok";
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const status =
+    phase === "error" || blocked || abortedStopReason ? "error" : data?.aborted ? "timeout" : "ok";
+  const resolvedError = abortedStopReason && !error ? AGENT_RUN_ABORTED_ERROR : error;
+  const timeoutPhase =
+    status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
+  const providerStarted = normalizeProviderStarted(data?.providerStarted);
   return {
     runId,
     status,
     startedAt,
     endedAt,
-    error: blocked ? formatBlockedLivenessError(error) : error,
+    error: blocked ? formatBlockedLivenessError(resolvedError) : resolvedError,
     stopReason,
     livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
+    ...(timeoutPhase ? { timeoutPhase } : {}),
+    ...(providerStarted !== undefined ? { providerStarted } : {}),
     ts: Date.now(),
   };
 }

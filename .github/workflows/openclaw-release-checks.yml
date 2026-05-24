@@ -91,7 +91,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
@@ -192,11 +191,21 @@ jobs:
         working-directory: source
         env:
           RELEASE_REF: ${{ inputs.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           SELECTED_SHA="$(git rev-parse HEAD)"
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --tags origin '+refs/tags/*:refs/tags/*'
+          git_fetch_with_checkout_auth() {
+            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              git fetch "$@"
+              return
+            fi
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
 
           if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
             exit 0
@@ -239,6 +248,7 @@ jobs:
         env:
           SELECTED_SHA: ${{ steps.ref.outputs.sha }}
           WORKFLOW_REF: ${{ github.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
@@ -246,7 +256,16 @@ jobs:
             exit 1
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          git_fetch_with_checkout_auth() {
+            if git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              git fetch "$@"
+              return
+            fi
+            local auth_header
+            auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
           if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
             echo "Alpha release target ${SELECTED_SHA} must be reachable from ${alpha_branch}." >&2
             exit 1
@@ -475,7 +494,7 @@ jobs:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
@@ -487,7 +506,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "false"
 
@@ -598,6 +616,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -672,14 +691,14 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
-      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      advisory: false
       workflow_ref: ${{ github.ref_name }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       suite_profile: custom
-      docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update
+      docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
@@ -690,6 +709,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -765,7 +785,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -773,7 +793,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -837,7 +856,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -845,7 +864,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download parity lane artifacts
@@ -903,7 +921,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -911,7 +929,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -1019,7 +1036,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1027,7 +1044,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download runtime parity artifacts
@@ -1072,7 +1088,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1080,7 +1096,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -1152,7 +1167,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1160,7 +1175,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1248,7 +1262,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1256,7 +1270,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1347,7 +1360,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1355,7 +1368,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1443,7 +1455,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
@@ -1451,7 +1463,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -1577,7 +1588,7 @@ jobs:
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               if [[ "$tideclaw_alpha" == "true" ]]; then
                 case "$name" in
-                  prepare_release_package|install_smoke_release_checks) ;;
+                  prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
                   *)
                     echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
                     continue

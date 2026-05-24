@@ -6,13 +6,14 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import {
-  getCurrentPluginMetadataSnapshot,
+  clearCurrentPluginMetadataSnapshot,
+  isReusableCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -68,16 +69,12 @@ export function resolvePluginRuntimeLoadContext(
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
   const metadataSnapshot = options?.manifestRegistry
     ? undefined
-    : (getCurrentPluginMetadataSnapshot({
+    : resolvePluginMetadataSnapshot({
         config: rawConfig,
         env,
         workspaceDir: rawWorkspaceDir,
-      }) ??
-      loadPluginMetadataSnapshot({
-        config: rawConfig,
-        env,
-        workspaceDir: rawWorkspaceDir,
-      }));
+        allowWorkspaceScopedCurrent: true,
+      });
   const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
@@ -95,12 +92,16 @@ export function resolvePluginRuntimeLoadContext(
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   if (metadataSnapshot) {
-    setCurrentPluginMetadataSnapshot(metadataSnapshot, {
-      config: rawConfig,
-      compatibleConfigs: [config, activationSourceConfig],
-      env,
-      workspaceDir,
-    });
+    if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
+      setCurrentPluginMetadataSnapshot(metadataSnapshot, {
+        config: rawConfig,
+        compatibleConfigs: [config, activationSourceConfig],
+        env,
+        workspaceDir,
+      });
+    } else {
+      clearCurrentPluginMetadataSnapshot();
+    }
   }
   return {
     rawConfig,

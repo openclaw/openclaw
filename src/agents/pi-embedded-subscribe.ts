@@ -46,6 +46,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
@@ -184,6 +185,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTargets: [],
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
+    messagingToolSourceReplyPayloads: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
@@ -201,6 +203,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
+    reasoningTokens: 0,
     total: 0,
   };
   let compactionCount = 0;
@@ -213,6 +216,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
+  const messagingToolSourceReplyPayloads = state.messagingToolSourceReplyPayloads;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const pendingBlockReplyTasks = new Set<Promise<void>>();
@@ -373,6 +377,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
   const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
+  const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
@@ -386,6 +391,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
       const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
       messagingToolSentMediaUrls.splice(0, overflow);
+    }
+    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_SOURCE_REPLY_PAYLOADS) {
+      const overflow =
+        messagingToolSourceReplyPayloads.length - MAX_MESSAGING_SOURCE_REPLY_PAYLOADS;
+      messagingToolSourceReplyPayloads.splice(0, overflow);
     }
   };
 
@@ -470,6 +480,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     usageTotals.output += usage.output ?? 0;
     usageTotals.cacheRead += usage.cacheRead ?? 0;
     usageTotals.cacheWrite += usage.cacheWrite ?? 0;
+    usageTotals.reasoningTokens += usage.reasoningTokens ?? 0;
     const usageTotal =
       usage.total ??
       (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
@@ -492,6 +503,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       usageTotals.output > 0 ||
       usageTotals.cacheRead > 0 ||
       usageTotals.cacheWrite > 0 ||
+      usageTotals.reasoningTokens > 0 ||
       usageTotals.total > 0;
     if (!hasUsage) {
       return undefined;
@@ -503,6 +515,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       output: usageTotals.output || undefined,
       cacheRead: usageTotals.cacheRead || undefined,
       cacheWrite: usageTotals.cacheWrite || undefined,
+      ...(usageTotals.reasoningTokens > 0 ? { reasoningTokens: usageTotals.reasoningTokens } : {}),
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
@@ -963,6 +976,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
+    messagingToolSourceReplyPayloads.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
@@ -1103,6 +1117,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       livenessState?: EmbeddedRunLivenessState;
       stopReason?: string;
       yielded?: boolean;
+      timeoutPhase?: AgentRunTimeoutPhase;
+      providerStarted?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1116,12 +1132,19 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       if (typeof meta.yielded === "boolean") {
         state.yielded = meta.yielded;
       }
+      if (meta.timeoutPhase) {
+        state.timeoutPhase = meta.timeoutPhase;
+      }
+      if (typeof meta.providerStarted === "boolean") {
+        state.providerStarted = meta.providerStarted;
+      }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),

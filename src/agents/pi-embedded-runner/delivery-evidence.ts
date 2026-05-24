@@ -82,6 +82,16 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
       }
     }
   }
+  for (const url of collectMessagingToolDeliveredMediaUrls(result)) {
+    urls.add(url);
+  }
+  return Array.from(urls);
+}
+
+export function collectMessagingToolDeliveredMediaUrls(
+  result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
+): string[] {
+  const urls = new Set<string>();
   collectStringValues(result.messagingToolSentMediaUrls, urls);
   if (Array.isArray(result.messagingToolSentTargets)) {
     for (const target of result.messagingToolSentTargets) {

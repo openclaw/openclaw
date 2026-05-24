@@ -1,5 +1,9 @@
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
-import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type {
+  CliSessionBinding,
+  SessionContextBudgetStatus,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
@@ -7,6 +11,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../pi-embedded-messaging.types.js";
+import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -35,6 +40,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
   /**
@@ -49,8 +55,10 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
+  contextBudgetStatus?: SessionContextBudgetStatus;
 };
 
 export type TraceAttempt = {
@@ -135,6 +143,8 @@ export type EmbeddedPiRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   yielded?: boolean;

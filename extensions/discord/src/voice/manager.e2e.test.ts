@@ -1,4 +1,5 @@
 import { PassThrough, type Readable } from "node:stream";
+import type { RealtimeVoiceAgentControlResult } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -20,6 +21,7 @@ const {
   logVerboseMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
+  controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
@@ -145,6 +147,20 @@ const {
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     })),
     createRealtimeVoiceBridgeSessionMock: vi.fn((_params?: unknown) => realtimeSessionMock),
+    controlRealtimeVoiceAgentRunMock: vi.fn<() => Promise<RealtimeVoiceAgentControlResult>>(
+      async () => ({
+        ok: false,
+        mode: "steer",
+        sessionKey: "discord:g1:c1",
+        active: false,
+        queued: false,
+        reason: "no_active_run",
+        message: "There is no active OpenClaw run to steer.",
+        speak: true,
+        show: true,
+        suppress: false,
+      }),
+    ),
     realtimeSessionMock,
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
@@ -219,6 +235,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   return {
     ...actual,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
+    controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
   };
 });
@@ -334,6 +351,19 @@ describe("DiscordVoiceManager", () => {
     realtimeSessionMock.submitToolResult.mockClear();
     createRealtimeVoiceBridgeSessionMock.mockClear();
     createRealtimeVoiceBridgeSessionMock.mockReturnValue(realtimeSessionMock);
+    controlRealtimeVoiceAgentRunMock.mockReset();
+    controlRealtimeVoiceAgentRunMock.mockResolvedValue({
+      ok: false,
+      mode: "steer",
+      sessionKey: "discord:g1:c1",
+      active: false,
+      queued: false,
+      reason: "no_active_run",
+      message: "There is no active OpenClaw run to steer.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
     resolveConfiguredRealtimeVoiceProviderMock.mockClear();
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
       provider: { id: "openai" },
@@ -579,6 +609,358 @@ describe("DiscordVoiceManager", () => {
     oldDestroyed?.();
 
     expectConnectedStatus(manager, "1002");
+  });
+
+  it("attaches meeting notes capture to an existing voice session", async () => {
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const onUtterance = vi.fn();
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+    };
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-1",
+      onUtterance,
+    });
+  });
+
+  it("does not leave a newer meeting-notes-only session for a stale stop", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+    const firstUtterance = vi.fn();
+    const secondUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance: firstUtterance,
+        },
+      },
+    );
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-2",
+          onUtterance: secondUtterance,
+        },
+      },
+    );
+
+    const result = await manager.leave(
+      { guildId: "g1", channelId: "1001" },
+      { meetingNotesSessionId: "notes-1" },
+    );
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof secondUtterance };
+    };
+
+    expect(result.ok).toBe(false);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-2",
+      onUtterance: secondUtterance,
+    });
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("upgrades a meeting-notes-only session to realtime on a normal join", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
+
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      realtime?: unknown;
+    };
+    let resolveRealtimeReady!: () => void;
+    const realtimeReady = new Promise<undefined>((resolve) => {
+      resolveRealtimeReady = () => resolve(undefined);
+    });
+    realtimeSessionMock.connect.mockImplementationOnce(async () => realtimeReady);
+
+    const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
+
+    await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
+    expect(entry.realtime).toBeUndefined();
+
+    resolveRealtimeReady();
+    const result = await upgrade;
+
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1);
+    expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
+    expect(entry.meetingNotes).toEqual({
+      sessionId: "notes-1",
+      onUtterance,
+    });
+    expect(entry.realtime).toBeTruthy();
+
+    const stopNotesResult = await manager.leave(
+      { guildId: "g1", channelId: "1001" },
+      { meetingNotesSessionId: "notes-1" },
+    );
+
+    expect(stopNotesResult.ok).toBe(true);
+    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.realtime).toBeTruthy();
+    expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("closes a pending realtime upgrade if the voice entry stops before connect resolves", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    const entry = getSessionEntry(manager) as {
+      pendingRealtime?: unknown;
+      realtime?: unknown;
+      stop: () => void;
+    };
+    let resolveRealtimeReady!: () => void;
+    const realtimeReady = new Promise<undefined>((resolve) => {
+      resolveRealtimeReady = () => resolve(undefined);
+    });
+    realtimeSessionMock.connect.mockImplementationOnce(async () => realtimeReady);
+
+    const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
+
+    await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
+    expect(entry.pendingRealtime).toBeTruthy();
+    expect(entry.realtime).toBeUndefined();
+
+    entry.stop();
+    expect(realtimeSessionMock.close).toHaveBeenCalled();
+    expect(entry.pendingRealtime).toBeUndefined();
+    expect(entry.realtime).toBeUndefined();
+
+    resolveRealtimeReady();
+    const result = await upgrade;
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("stopped before startup completed");
+    expect(entry.realtime).toBeUndefined();
+  });
+
+  it("detaches meeting notes without leaving voice during pending realtime upgrade", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      pendingRealtime?: unknown;
+      realtime?: unknown;
+    };
+    let resolveRealtimeReady!: () => void;
+    const realtimeReady = new Promise<undefined>((resolve) => {
+      resolveRealtimeReady = () => resolve(undefined);
+    });
+    realtimeSessionMock.connect.mockImplementationOnce(async () => realtimeReady);
+
+    const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
+
+    await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
+    const stopNotesResult = await manager.leave(
+      { guildId: "g1", channelId: "1001" },
+      { meetingNotesSessionId: "notes-1" },
+    );
+
+    expect(stopNotesResult.ok).toBe(true);
+    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.pendingRealtime).toBeTruthy();
+    expect(entry.realtime).toBeUndefined();
+
+    resolveRealtimeReady();
+    const result = await upgrade;
+
+    expect(result.ok).toBe(true);
+    expect(entry.pendingRealtime).toBeUndefined();
+    expect(entry.realtime).toBeTruthy();
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("does not start realtime upgrade if the voice entry leaves during bootstrap", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    let resolveBootstrap!: () => void;
+    const bootstrapReady = new Promise<undefined>((resolve) => {
+      resolveBootstrap = () => resolve(undefined);
+    });
+    resolveRealtimeBootstrapContextInstructionsMock.mockImplementationOnce(
+      async () => bootstrapReady,
+    );
+
+    const upgrade = manager.join({ guildId: "g1", channelId: "1001" });
+    await Promise.resolve();
+
+    const leaveResult = await manager.leave({ guildId: "g1" });
+    resolveBootstrap();
+    const result = await upgrade;
+
+    expect(leaveResult.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("stopped before startup completed");
+    expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps realtime playback alive when meeting notes attaches to an existing voice session", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai", consultPolicy: "auto" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager) as {
+      meetingNotes?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    const stopCallsBeforeMeetingNotes = player.stop.mock.calls.length;
+    const onUtterance = vi.fn(async () => undefined);
+
+    const result = await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        meetingNotes: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(entry.meetingNotes?.sessionId).toBe("notes-1");
+    expect(realtimeSessionMock.close).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeMeetingNotes);
+
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(3840));
+    bridgeParams?.onTranscript?.("user", "meeting note transcript", true);
+
+    await vi.waitFor(() =>
+      expect(onUtterance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          final: true,
+          sessionId: "notes-1",
+          speaker: { id: "u-owner", label: "Owner" },
+          text: "meeting note transcript",
+          metadata: expect.objectContaining({
+            channel: "discord",
+            channelId: "1001",
+            guildId: "g1",
+            voiceSessionKey: "discord:g1:c1",
+          }),
+        }),
+      ),
+    );
+    turn?.close();
   });
 
   it("destroys stale tracked voice connections before joining", async () => {
@@ -1533,6 +1915,167 @@ describe("DiscordVoiceManager", () => {
     expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 30_000);
   });
 
+  it("deduplicates concurrent joins for the same guild and channel", async () => {
+    const connection = createConnectionMock();
+    let resolveReady!: () => void;
+    const readyPromise = new Promise<undefined>((resolve) => {
+      resolveReady = () => resolve(undefined);
+    });
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    entersStateMock.mockImplementationOnce(async () => readyPromise);
+    const manager = createManager();
+
+    const firstJoin = manager.join({ guildId: "g1", channelId: "1001" });
+    await Promise.resolve();
+    const secondJoin = manager.join({ guildId: "g1", channelId: "1001" });
+    await Promise.resolve();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+
+    resolveReady();
+    const [firstResult, secondResult] = await Promise.all([firstJoin, secondJoin]);
+
+    expect(firstResult.ok).toBe(true);
+    expect(secondResult.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(entersStateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes queued joins after an active guild join settles", async () => {
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    const thirdConnection = createConnectionMock();
+    let resolveFirstReady!: () => void;
+    let resolveSecondReady!: () => void;
+    let resolveThirdReady!: () => void;
+    const firstReady = new Promise<undefined>((resolve) => {
+      resolveFirstReady = () => resolve(undefined);
+    });
+    const secondReady = new Promise<undefined>((resolve) => {
+      resolveSecondReady = () => resolve(undefined);
+    });
+    const thirdReady = new Promise<undefined>((resolve) => {
+      resolveThirdReady = () => resolve(undefined);
+    });
+    joinVoiceChannelMock
+      .mockReturnValueOnce(firstConnection)
+      .mockReturnValueOnce(secondConnection)
+      .mockReturnValueOnce(thirdConnection);
+    entersStateMock
+      .mockImplementationOnce(async () => firstReady)
+      .mockImplementationOnce(async () => secondReady)
+      .mockImplementationOnce(async () => thirdReady);
+    const manager = createManager();
+
+    const firstJoin = manager.join({ guildId: "g1", channelId: "1001" });
+    await Promise.resolve();
+    const secondJoin = manager.join({ guildId: "g1", channelId: "1002" });
+    const thirdJoin = manager.join({ guildId: "g1", channelId: "1003" });
+    await Promise.resolve();
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+
+    resolveFirstReady();
+    await firstJoin;
+    await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+    expect(entersStateMock).toHaveBeenCalledTimes(2);
+
+    resolveSecondReady();
+    await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(3));
+    resolveThirdReady();
+    const [secondResult, thirdResult] = await Promise.all([secondJoin, thirdJoin]);
+
+    expect(secondResult.ok).toBe(true);
+    expect(thirdResult.ok).toBe(true);
+    expect(entersStateMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not start queued joins after the voice manager is destroyed", async () => {
+    const connection = createConnectionMock();
+    let resolveReady!: () => void;
+    const readyPromise = new Promise<undefined>((resolve) => {
+      resolveReady = () => resolve(undefined);
+    });
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    entersStateMock.mockImplementationOnce(async () => readyPromise);
+    const manager = createManager();
+
+    const firstJoin = manager.join({ guildId: "g1", channelId: "1001" });
+    await Promise.resolve();
+    const queuedJoin = manager.join({ guildId: "g1", channelId: "1002" });
+    await Promise.resolve();
+
+    await manager.destroy();
+    resolveReady();
+    const [firstResult, queuedResult] = await Promise.all([firstJoin, queuedJoin]);
+
+    expect(firstResult.ok).toBe(false);
+    expect(queuedResult.ok).toBe(false);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an aborted initial voice connection readiness wait", async () => {
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
+    entersStateMock
+      .mockRejectedValueOnce(new Error("The operation was aborted"))
+      .mockResolvedValueOnce(undefined);
+    const manager = createManager();
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(true);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+    expect(entersStateMock).toHaveBeenCalledTimes(2);
+    expect(firstConnection.destroy).toHaveBeenCalledTimes(1);
+    expect(secondConnection.destroy).not.toHaveBeenCalled();
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("does not retry an aborted voice connection readiness wait after the timeout budget is spent", async () => {
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(30_000);
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    entersStateMock.mockRejectedValueOnce(new Error("The operation was aborted"));
+    const manager = createManager();
+
+    try {
+      const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+      expect(result.ok).toBe(false);
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+      expect(entersStateMock).toHaveBeenCalledTimes(1);
+      expect(connection.destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("does not retry an aborted voice connection readiness wait after destroy", async () => {
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
+    let manager!: InstanceType<typeof managerModule.DiscordVoiceManager>;
+    entersStateMock.mockImplementationOnce(async () => {
+      await manager.destroy();
+      throw new Error("The operation was aborted");
+    });
+    manager = createManager();
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(false);
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+    expect(firstConnection.destroy).toHaveBeenCalledTimes(1);
+    expect(secondConnection.destroy).not.toHaveBeenCalled();
+  });
+
   it("uses configured voice connection and reconnect timeouts", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -1681,6 +2224,7 @@ describe("DiscordVoiceManager", () => {
     });
     const bridgeParams = lastRealtimeBridgeParams() as
       | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
           autoRespondToAudio?: boolean;
           instructions?: string;
           tools?: Array<{ name: string }>;
@@ -1698,6 +2242,11 @@ describe("DiscordVoiceManager", () => {
     expect(bridgeParams?.autoRespondToAudio).toBe(false);
     expect(bridgeParams?.instructions).toContain("same OpenClaw agent");
     expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_consult");
+    expect(bridgeParams?.tools?.map((tool) => tool.name)).toContain("openclaw_agent_control");
+    const player = getLastAudioPlayer();
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    expect(player.play).toHaveBeenCalled();
+    const stopCallsBeforeConsult = player.stop.mock.calls.length;
 
     bridgeParams?.onToolCall?.(
       {
@@ -1708,6 +2257,7 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeConsult);
     await vi.waitFor(() =>
       expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
         text: "agent proxy answer",
@@ -1718,16 +2268,70 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
     expect(commandArgs.messageProvider).toBe("discord-voice");
     expect(commandArgs.toolsAllow).toBeUndefined();
-    const workingToolResultCall = mockCall(
-      realtimeSessionMock.submitToolResult as unknown as MockCallSource,
-      0,
-      "working tool result",
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles semantic realtime agent-control tool calls in Discord VC", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "discord:g1:c1",
+      sessionId: "embedded-active",
+      active: true,
+      queued: true,
+      target: "embedded_run",
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onToolCall?.(
+      {
+        itemId: "item-control",
+        callId: "call-control",
+        name: "openclaw_agent_control",
+        args: { text: "revísalo en WebUI", mode: "steer" },
+      },
+      realtimeSessionMock,
     );
-    expect(workingToolResultCall?.[0]).toBe("call-1");
-    expect(requireRecord(workingToolResultCall?.[1], "working tool result payload").status).toBe(
-      "working",
+
+    await vi.waitFor(() =>
+      expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        sessionKey: "discord:g1:c1",
+        text: "revísalo en WebUI",
+        mode: "steer",
+      }),
     );
-    expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+        "call-control",
+        expect.objectContaining({ mode: "steer", queued: true }),
+      ),
+    );
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {
@@ -1839,6 +2443,146 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
     expect(player.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears stale realtime playback when stream close and player idle do not fire", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+      expect(result.ok).toBe(true);
+      const player = getLastAudioPlayer();
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: {
+              sendAudio: (audio: Buffer) => void;
+            };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+          }
+        | undefined;
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const stream = lastAudioResourceInput() as PassThrough | undefined;
+      stream?.removeAllListeners("close");
+
+      await vi.advanceTimersByTimeAsync(1_509);
+      expect(player.stop).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(player.stop).toHaveBeenCalledWith(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an old realtime playback watchdog stop a later response", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const player = getLastAudioPlayer();
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: {
+              sendAudio: (audio: Buffer) => void;
+            };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+          }
+        | undefined;
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const firstStream = lastAudioResourceInput() as PassThrough | undefined;
+      firstStream?.emit("close");
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      await vi.advanceTimersByTimeAsync(1_510);
+
+      expect(player.stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drains queued exact speech when stream close arrives without player idle", async () => {
+    vi.useFakeTimers();
+    try {
+      agentCommandMock
+        .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager) as {
+        realtime?: {
+          beginSpeakerTurn: (
+            context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+            userId: string,
+          ) => { sendInputAudio: (audio: Buffer) => void };
+        };
+      };
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: { sendAudio: (audio: Buffer) => void };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+            onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          }
+        | undefined;
+
+      const firstTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      firstTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "first question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+      const secondTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      secondTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "second question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      expectUserMessageNotIncludes("second answer");
+
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const firstStream = lastAudioResourceInput() as PassThrough | undefined;
+      firstStream?.emit("close");
+
+      await vi.advanceTimersByTimeAsync(1_510);
+      expectUserMessageIncludes("second answer");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prebuffers realtime output before starting Discord playback", async () => {
@@ -2004,6 +2748,347 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("non-owner answer");
   });
 
+  it("routes active-run realtime transcripts to voice control before forced consults", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "discord:g1:c1",
+      sessionId: "embedded-active",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const player = getLastAudioPlayer();
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "cancel that", true);
+
+    await vi.waitFor(() =>
+      expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+        sessionKey: "discord:g1:c1",
+        text: "cancel that",
+      }),
+    );
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledWith({
+        audioPlaybackActive: true,
+        force: true,
+      }),
+    );
+    await vi.waitFor(() => expectUserMessageIncludes("Cancelled the active OpenClaw run."));
+    expect(textToSpeechMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Cancelled the active OpenClaw run." }),
+    );
+
+    const stopCallsAfterControl = player.stop.mock.calls.length;
+    bridgeParams?.onTranscript?.("assistant", "Cancelled the active OpenClaw run.", true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl);
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
+    bridgeParams?.onTranscript?.("assistant", "Cancelled the active OpenClaw run.", true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsAfterControl + 1);
+  });
+
+  it("preserves realtime forced consults when no active run accepts steering", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "normal answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "normal question", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("normal question");
+    expectUserMessageIncludes("normal answer");
+  });
+
+  it("requires the agent wake name before realtime agent-proxy consults", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          autoRespondToAudio?: boolean;
+          interruptResponseOnInputAudio?: boolean;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    expect(bridgeParams?.autoRespondToAudio).toBe(false);
+    expect(bridgeParams?.interruptResponseOnInputAudio).toBe(false);
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(48_000));
+
+    const guestTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
+      "u-guest",
+    );
+    guestTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "agent-1 how is it going", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Hey, Molty, how is it going", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "how is it going",
+    });
+    expect(lastAgentCommandArgs().message).toContain("how is it going");
+    expect(lastAgentCommandArgs().message).not.toContain("Molty");
+    expect(lastAgentCommandArgs().message).not.toContain("Hey");
+  });
+
+  it("accepts OpenClaw as a default wake name before realtime agent-proxy consults", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "openclaw wake answer" }] });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "OpenClaw, how is it going", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "how is it going",
+    });
+    expect(lastAgentCommandArgs().message).toContain("how is it going");
+    expect(lastAgentCommandArgs().message).not.toContain("OpenClaw");
+    expectUserMessageIncludes("openclaw wake answer");
+  });
+
+  it("leaves non-OpenAI agent-proxy realtime auto-response enabled when wake names are requested", async () => {
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
+      provider: { id: "google" },
+      providerConfig: { model: "gemini-live", voice: "default" },
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "google", consultPolicy: "auto", requireWakeName: true },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          autoRespondToAudio?: boolean;
+          interruptResponseOnInputAudio?: boolean;
+        }
+      | undefined;
+
+    expect(bridgeParams?.autoRespondToAudio).toBe(true);
+    expect(bridgeParams?.interruptResponseOnInputAudio).toBe(true);
+  });
+
+  it("uses configured wake names before realtime agent-proxy consults", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "configured wake answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: {
+          provider: "openai",
+          consultPolicy: "auto",
+          requireWakeName: true,
+          wakeNames: ["Claw", "Claw Bot"],
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "Claw Bot, ship it", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("ship it");
+    expect(lastAgentCommandArgs().message).not.toContain("Claw");
+    expect(lastAgentCommandArgs().message).not.toContain("Bot");
+    expectUserMessageIncludes("configured wake answer");
+  });
+
+  it("lets status questions fall back to normal realtime handling when no run is active", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "status answer" }] });
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "status",
+      sessionKey: "discord:g1:c1",
+      active: false,
+      message: "I'm not working on an active request right now.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "how is it going", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "how is it going",
+    });
+    expect(lastAgentCommandArgs().message).toContain("how is it going");
+    expectUserMessageIncludes("status answer");
+  });
+
   it("keeps separate forced agent-proxy fallback timers for rapid transcripts", async () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "guest answer" }] })
@@ -2111,6 +3196,47 @@ describe("DiscordVoiceManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 260));
     expect(lastAgentCommandArgs().message).toContain("ship it.");
     expectUserMessageIncludes("valid answer");
+  });
+
+  it("keeps forced agent-proxy fallback diagnostics out of agent prompts", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Could you repeat that?" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "What?", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toBe("What?");
+    expect(lastAgentCommandArgs().message).not.toContain("consultPolicy");
+    expect(lastAgentCommandArgs().message).not.toContain("openclaw_agent_consult");
+    expectUserMessageIncludes("Could you repeat that?");
   });
 
   it("queues forced agent-proxy answers until current realtime playback idles", async () => {
@@ -2799,6 +3925,7 @@ describe("DiscordVoiceManager", () => {
           voice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          requireWakeName: true,
           providers: {
             openai: {
               interruptResponseOnInputAudio: false,
@@ -2862,16 +3989,7 @@ describe("DiscordVoiceManager", () => {
       }),
     );
 
-    const workingToolResultCall = mockCall(
-      realtimeSessionMock.submitToolResult as unknown as MockCallSource,
-      0,
-      "working tool result",
-    );
-    expect(workingToolResultCall?.[0]).toBe("call-1");
-    expect(requireRecord(workingToolResultCall?.[1], "working tool result payload").status).toBe(
-      "working",
-    );
-    expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledTimes(1);
     const commandArgs = lastAgentCommandArgs();
     expect(commandArgs.toolsAllow).toEqual([
       "read",
@@ -3467,6 +4585,43 @@ describe("DiscordVoiceManager", () => {
       commands: { useAccessGroups: false },
     });
     await processVoiceSegment(manager, "u-guest");
+  });
+
+  it("routes active-run STT/TTS transcripts to voice control before agent turns", async () => {
+    controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
+      ok: true,
+      mode: "steer",
+      sessionKey: "discord:g1:1001",
+      sessionId: "embedded-active",
+      active: true,
+      queued: true,
+      target: "embedded_run",
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    });
+    transcribeAudioFileMock.mockResolvedValueOnce({ text: "use the smaller implementation" });
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Owner Nick",
+      user: {
+        id: "u-owner",
+        username: "owner",
+        globalName: "Owner",
+        discriminator: "1234",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
+
+    await processVoiceSegment(manager, "u-owner");
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:1001",
+      text: "use the smaller implementation",
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(lastTtsArgs().text).toBe("Got it. I steered the active run.");
   });
 
   it("passes configured model override to agent command in voice flow", async () => {

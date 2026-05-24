@@ -95,6 +95,8 @@ type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
+const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
+
 function mockObjectArg(
   source: MockCallSource,
   label: string,
@@ -155,8 +157,17 @@ function makeBot() {
 
 function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] = [0, 0]) {
   let watchdog: (() => void) | undefined;
-  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
-    watchdog = fn as () => void;
+  let resolveWatchdog: ((fn: () => void) => void) | undefined;
+  const watchdogReady = new Promise<() => void>((resolve) => {
+    resolveWatchdog = resolve;
+  });
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn, delay) => {
+    if (delay === POLLING_TEST_WATCHDOG_INTERVAL_MS) {
+      watchdog = fn as () => void;
+      resolveWatchdog?.(watchdog);
+    }
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
@@ -173,15 +184,24 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
 
   return {
     async waitForWatchdog() {
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        if (watchdog) {
-          break;
-        }
-        await Promise.resolve();
-        await new Promise<void>((resolve) => setImmediate(resolve));
+      if (watchdog) {
+        return watchdog;
       }
-      expect(watchdog).toBeTypeOf("function");
-      return watchdog;
+      return await new Promise<() => void>((resolve, reject) => {
+        const timeout = realSetTimeout(() => {
+          reject(new Error("Timed out waiting for polling watchdog interval registration"));
+        }, 5_000);
+        watchdogReady.then(
+          (fn) => {
+            realClearTimeout(timeout);
+            resolve(fn);
+          },
+          (error: unknown) => {
+            realClearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
     },
     setNow(now: number) {
       dateNowSpy.mockReset();
@@ -949,6 +969,121 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(() => expect(events).toEqual(["topic10:first", "topic11"]));
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 44]);
       expectLogIncludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters missing harness failures so later same-lane updates can drain", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "missing harness turn"),
+        topicUpdate(43, 11, "other topic turn"),
+        topicUpdate(44, 10, "same topic after missing harness"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            events.push("topic10:first");
+            const err = new Error(
+              'Requested agent harness "missing-harness-85470" is not registered.',
+            );
+            err.name = "MissingAgentHarnessError";
+            throw err;
+          }
+          if (update.update_id === 43) {
+            events.push("topic11");
+            return;
+          }
+          if (update.update_id === 44) {
+            events.push("topic10:second");
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(events).toEqual(["topic10:first", "topic11", "topic10:second"]),
+      );
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogIncludes(log, "dead-lettered");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters wrapped missing harness failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wrapped missing harness")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error(
+            'Requested agent harness "missing-harness-85470" is not registered.',
+          );
+          const err = new Error("Agent turn failed", { cause });
+          throw err;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters grammY BotError-wrapped missing harness failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "bot error wrapped missing harness"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error(
+            'Requested agent harness "missing-harness-85470" is not registered.',
+          );
+          const middlewareError = new Error("Agent turn failed", { cause });
+          const botError = Object.assign(new Error("Error in middleware: Agent turn failed"), {
+            name: "BotError",
+            error: middlewareError,
+          });
+          throw botError;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
       abort.abort();
       stopWorker();
       await runPromise;
@@ -2388,6 +2523,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
           spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
@@ -2402,7 +2538,7 @@ describe("TelegramPollingSession", () => {
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(25 * 60_000 + 100);
+      await vi.advanceTimersByTimeAsync(250);
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(

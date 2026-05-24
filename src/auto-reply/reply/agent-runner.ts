@@ -35,6 +35,7 @@ import {
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -49,6 +50,7 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -922,11 +924,7 @@ function buildInlineRawTracePayload(params: {
 function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
   return payloads
     .filter(
-      (payload) =>
-        !payload.isError &&
-        !payload.isReasoning &&
-        !payload.isCompactionNotice &&
-        !payload.isFallbackNotice,
+      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
     )
     .map((payload) => payload.text?.trim())
     .filter((text): text is string => Boolean(text))
@@ -1537,6 +1535,9 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const verboseEnabled = resolvedVerboseLevel !== "off";
+    const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+      followupRun.run.inputProvenance,
+    );
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
     const configuredFallbackModel = resolveConfiguredFallbackModel({
@@ -1553,7 +1554,7 @@ export async function runReplyAgent(params: {
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
     });
-    if (fallbackTransition.stateChanged) {
+    if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -1610,6 +1611,7 @@ export async function runReplyAgent(params: {
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
       isHeartbeat,
+      preserveUserFacingSessionModelState: preserveUserFacingSessionState,
       modelUsed,
       providerUsed,
       contextTokensUsed,
@@ -1652,7 +1654,7 @@ export async function runReplyAgent(params: {
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
-    if (fallbackTransition.fallbackTransitioned) {
+    if (!preserveUserFacingSessionState && fallbackTransition.fallbackTransitioned) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -1684,7 +1686,7 @@ export async function runReplyAgent(params: {
         );
       }
     }
-    if (fallbackTransition.fallbackCleared) {
+    if (!preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
       emitAgentEvent({
         runId,
         sessionKey,
@@ -1753,7 +1755,7 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
-      (payload) => !payload.isFallbackNotice,
+      (payload) => !isReplyPayloadStatusNotice(payload),
     );
     const hasDeliveredBlockStream = Boolean(
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
@@ -1775,7 +1777,7 @@ export async function runReplyAgent(params: {
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
-        !payload.isFallbackNotice &&
+        !isReplyPayloadStatusNotice(payload) &&
         typeof payload.text === "string" &&
         hasUnbackedReminderCommitment(payload.text),
     );
@@ -1862,18 +1864,14 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
-    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
-        workspaceDir: followupRun.run.workspaceDir,
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage) && !preserveUserFacingSessionState) {
+      const costConfig = resolveModelCostConfig({
+        provider: providerUsed,
+        model: modelUsed,
+        config: cfg,
+        allowPluginNormalization: false,
       });
-      const showCost = authMode === "api-key";
-      const costConfig = showCost
-        ? resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          })
-        : undefined;
+      const showCost = responseUsageMode === "full" && costConfig !== undefined;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,

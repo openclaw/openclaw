@@ -61,6 +61,7 @@ import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -525,6 +526,21 @@ const CLI_BACKEND_NO_OUTPUT_STALL_RE =
 const CLI_BACKEND_OVERALL_TIMEOUT_RE =
   /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
 const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+
+function buildCodexAppServerFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
+    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
+  }
+  return null;
+}
 
 function buildCliBackendTimeoutFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -612,6 +628,10 @@ function buildExternalRunFailureReply(
   const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
+  }
+  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  if (codexAppServerFailure) {
+    return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
@@ -1169,6 +1189,9 @@ export async function runAgentTurnWithFallback(params: {
           ...runnableRun,
           config: runtimeConfig,
         };
+  const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+    effectiveRun.inputProvenance,
+  );
   const resolveRunForFallbackCandidate = (provider: string, model: string): FollowupRun["run"] => {
     const probe = effectiveRun.autoFallbackPrimaryProbe;
     const isPrimaryProbeCandidate = probe && provider === probe.provider && model === probe.model;
@@ -1353,12 +1376,10 @@ export async function runAgentTurnWithFallback(params: {
     model: string,
     candidateRun: FollowupRun["run"],
   ): Promise<(() => Promise<void>) | undefined> => {
-    if (effectiveRun.hasOneTurnModelOverride === true) {
-      return undefined;
-    }
     if (
       !params.sessionKey ||
       !params.activeSessionStore ||
+      preserveUserFacingSessionState ||
       (provider === effectiveRun.provider && model === effectiveRun.model)
     ) {
       return undefined;
@@ -1465,6 +1486,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string;
     model: string;
   }): Promise<void> => {
+    if (preserveUserFacingSessionState) {
+      return;
+    }
     const probe = effectiveRun.autoFallbackPrimaryProbe;
     if (!probe) {
       return;
@@ -1887,7 +1911,9 @@ export async function runAgentTurnWithFallback(params: {
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
                 toolProgressDetail: params.toolProgressDetail,
-                suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings:
+                  params.opts?.shouldSuppressToolErrorWarnings ??
+                  params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,
