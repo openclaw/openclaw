@@ -49,6 +49,7 @@ interface OpenRouterApiModel {
   max_completion_tokens?: number;
   max_output_tokens?: number;
   top_provider?: {
+    context_length?: number;
     max_completion_tokens?: number;
   };
   pricing?: {
@@ -174,7 +175,7 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
     input,
     reasoning: supportedParameters?.includes("reasoning") ?? false,
     ...(supportedParameters ? { supportsTools: supportedParameters.includes("tools") } : {}),
-    contextWindow: model.context_length || 128_000,
+    contextWindow: model.top_provider?.context_length ?? model.context_length ?? 128_000,
     maxTokens:
       model.top_provider?.max_completion_tokens ??
       model.max_completion_tokens ??
