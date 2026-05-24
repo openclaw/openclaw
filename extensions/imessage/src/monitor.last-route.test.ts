@@ -324,6 +324,101 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
+  it("repairs anchorless group watch payloads before routing or cursor updates", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-anchor-repair-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return { chats: [{ id: 349 }] };
+        }
+        if (method === "messages.history") {
+          expect(params?.chat_id).toBe(349);
+          return {
+            messages: [
+              {
+                id: 9500,
+                guid: "ANCHORLESS-GROUP-GUID",
+                chat_id: 349,
+                chat_guid: "iMessage;+;chat349",
+                chat_identifier: "chat349",
+                chat_name: "Project group",
+                participants: ["+15550001111", "+15550002222"],
+                is_group: true,
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {
+        onNotification?.({
+          method: "message",
+          params: {
+            message: {
+              id: 9500,
+              guid: "ANCHORLESS-GROUP-GUID",
+              chat_id: 0,
+              sender: "+15550001111",
+              is_from_me: false,
+              text: "@openclaw check this https://example.com",
+              is_group: false,
+              chat_guid: "",
+              chat_identifier: "",
+              chat_name: "",
+              participants: null,
+              created_at: "2026-05-22T15:30:00.000Z",
+            },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            catchup: { enabled: true },
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: {
+          groupChat: { mentionPatterns: ["@openclaw"] },
+          inbound: { debounceMs: 0 },
+        },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+    const dispatchParams = dispatchInboundMessageMock.mock.calls.at(0)?.[0];
+    expect(dispatchParams?.ctx.To).toBe("chat_id:349");
+    expect(dispatchParams?.ctx.From).toBe("imessage:group:349");
+    expect(dispatchParams?.ctx.ChatType).toBe("group");
+    expect(dispatchParams?.ctx.SessionKey).toBe("agent:main:imessage:group:349");
+    expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550001111");
+  });
+
   it("does not advance the live cursor after partial startup catchup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-22T15:31:00.000Z"));
