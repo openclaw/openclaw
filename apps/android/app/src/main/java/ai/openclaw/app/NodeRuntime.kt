@@ -1443,7 +1443,7 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    if (operatorConnected || operatorStatusText == "Connecting…") {
+    if (operatorConnected) {
       return
     }
     val operatorAuth =
