@@ -1212,13 +1212,13 @@ describe("runCodexAppServerAttempt", () => {
           },
         },
       } as never;
-      const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+      const { requests } = createStartedThreadHarness(async (method) =>
+        method === "turn/start" ? turnStartResult("turn-1", "completed") : undefined,
+      );
 
       const run = runCodexAppServerAttempt(params, {
         pluginConfig: { appServer: { mode: "yolo" } },
       });
-      await waitForMethod("turn/start");
-      await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
 
       const startRequest = requests.find((request) => request.method === "thread/start");
