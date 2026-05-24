@@ -7,7 +7,9 @@
     "url": "https://github.com/slimelab-ai/openclaw-evennia"
   },
   "type": "module",
-  "dependencies": {},
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
   "devDependencies": {
     "openclaw": "workspace:*"
   },

@@ -5,6 +5,12 @@
   "name": "Evennia",
   "description": "OpenClaw channel bridge for Evennia MUD characters.",
   "entry": "./index.js",
+  "contracts": {
+    "tools": ["evennia_command"]
+  },
+  "toolMetadata": {
+    "evennia_command": {}
+  },
   "setupEntry": "./setup-entry.js",
   "configSchema": {
     "type": "object",
@@ -34,7 +40,10 @@
                 "triggerName": { "type": "string" },
                 "startRoom": { "type": "string" },
                 "allowFrom": { "type": "array", "items": { "type": "string" } },
-                "allowedRooms": { "type": "array", "items": { "type": "string" } },
+                "allowedRooms": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
                 "respondToAmbientMentions": { "type": "boolean" },
                 "autonomy": {
                   "type": "object",
@@ -42,8 +51,15 @@
                   "properties": {
                     "enabled": { "type": "boolean" },
                     "intervalMs": { "type": "number" },
-                    "idleChance": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "commands": { "type": "array", "items": { "type": "string" } }
+                    "idleChance": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "commands": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
                   }
                 }
               },
@@ -53,7 +69,10 @@
         }
       },
       "uiHints": {
-        "accounts.*.passwordFile": { "label": "Password file", "sensitive": true }
+        "accounts.*.passwordFile": {
+          "label": "Password file",
+          "sensitive": true
+        }
       }
     }
   }
