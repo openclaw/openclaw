@@ -173,7 +173,14 @@ export function buildEventContext(
     (eventType ? domainFromEventType(eventType) : undefined) ??
     domainFromText(text);
 
-  const sentiment = inferSentiment(payload, text);
+  const pendingRuns = typeof payload.pending_runs === "number" ? payload.pending_runs : undefined;
+  const playbookCount =
+    typeof payload.playbook_count === "number" ? payload.playbook_count : undefined;
+
+  let sentiment = inferSentiment(payload, text);
+  if (sentiment === "normal" && pendingRuns !== undefined && pendingRuns > 5) {
+    sentiment = "warning";
+  }
 
   const source_id =
     (typeof payload["source"] === "string" ? payload["source"] : undefined) ??
@@ -195,5 +202,11 @@ export function buildEventContext(
   if (event_ts) ctx.event_ts = event_ts;
   if (entities.length) ctx.entities = entities;
   if (keywords.length) ctx.keywords = keywords;
+  if (pendingRuns !== undefined || playbookCount !== undefined) {
+    ctx.meta = {
+      pending_runs: pendingRuns,
+      playbook_count: playbookCount,
+    };
+  }
   return ctx;
 }
