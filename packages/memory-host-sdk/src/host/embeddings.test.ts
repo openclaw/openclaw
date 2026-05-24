@@ -378,7 +378,7 @@ process.on("message", (message) => {
     await expect(provider.close?.()).resolves.toBeUndefined();
   });
 
-  it("does not pass stdin-only exec args to the file-backed worker", async () => {
+  it("does not pass inline-source exec args to the file-backed worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
     await fs.writeFile(
@@ -397,7 +397,15 @@ process.on("message", (message) => {
     const originalExecArgv = [...process.execArgv];
     let provider: Awaited<ReturnType<typeof createLocalEmbeddingWorkerProvider>> | undefined;
     try {
-      process.execArgv.splice(0, process.execArgv.length, "--input-type=module");
+      process.execArgv.splice(
+        0,
+        process.execArgv.length,
+        "--eval",
+        "setInterval(() => {}, 1000)",
+        "--print",
+        "1 + 1",
+        "--input-type=module",
+      );
       provider = await createLocalEmbeddingWorkerProvider(
         {
           config: {} as never,

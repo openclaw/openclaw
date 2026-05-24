@@ -106,6 +106,16 @@ function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: f
   return new Error(error.error || "Local embedding worker failed");
 }
 
+const WORKER_UNSAFE_EXEC_ARGV_FLAGS_WITH_VALUE = new Set([
+  "--eval",
+  "-e",
+  "--print",
+  "-p",
+  "--input-type",
+]);
+
+const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = ["--eval=", "--print=", "--input-type="];
+
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
   let skipNext = false;
@@ -114,11 +124,11 @@ function resolveWorkerExecArgv(): string[] {
       skipNext = false;
       continue;
     }
-    if (arg === "--input-type") {
+    if (WORKER_UNSAFE_EXEC_ARGV_FLAGS_WITH_VALUE.has(arg)) {
       skipNext = true;
       continue;
     }
-    if (arg.startsWith("--input-type=")) {
+    if (WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
       continue;
     }
     args.push(arg);

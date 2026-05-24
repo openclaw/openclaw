@@ -430,6 +430,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
 
+    if (!this.provider && this.providerLifecycle.mode === "degraded") {
+      const activatedFallback = await this.activateFallbackProvider(
+        this.providerLifecycle.reason,
+      ).catch((fallbackErr: unknown) => {
+        log.warn(
+          `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+        );
+        return false;
+      });
+      if (activatedFallback) {
+        await this.runSafeReindex({ reason: "fallback", force: true });
+      }
+    }
+
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
       if (!this.fts.enabled || !this.fts.available) {

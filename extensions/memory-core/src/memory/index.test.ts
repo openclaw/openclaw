@@ -681,6 +681,58 @@ describe("memory index", () => {
     ).toBe("fallback-provider");
   });
 
+  it("activates configured fallback after probe-time local degradation", async () => {
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-probe-degraded-fallback.sqlite"),
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test" });
+    (
+      manager as unknown as {
+        provider: {
+          id: string;
+          model: string;
+          embedQuery: () => Promise<number[]>;
+          embedBatch: () => Promise<number[][]>;
+          close: () => Promise<void>;
+        };
+      }
+    ).provider = {
+      id: "local",
+      model: "mock-embed",
+      embedQuery: async () => {
+        throw createLocalWorkerExitError();
+      },
+      embedBatch: async () => {
+        throw createLocalWorkerExitError();
+      },
+      close: async () => {},
+    };
+    const callsBeforeSearch = providerCalls.length;
+
+    await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("Local embedding worker exited"),
+    });
+
+    const results = await manager.search("alpha");
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
+      "fallback-provider",
+    );
+    expect(
+      (
+        manager as unknown as {
+          provider: { id: string } | null;
+        }
+      ).provider?.id,
+    ).toBe("fallback-provider");
+  });
+
   it("streams embedding cache rows during safe reindex", async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     type EmbeddingCacheRow = {
