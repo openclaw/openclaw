@@ -278,6 +278,23 @@ function makeTaskRunDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
         _source: ctx.source,
         _correlationId: ctx.correlationId,
       });
+
+      // 改进3：Playbook 成功完成后非阻塞地写入 CBR，闭合学习循环
+      if (run.status === "completed" && runtime.cbrStore) {
+        const inputText = typeof input.text === "string" ? input.text : id;
+        const intentHint = typeof input.intent === "string" ? input.intent : id;
+        try {
+          runtime.cbrStore.add(inputText, intentHint, {
+            outcome: "success",
+            playbookId: id,
+            runId: run.id,
+            confidence: 0.8,
+          });
+        } catch {
+          // 非关键路径，忽略写入失败
+        }
+      }
+
       return { run_id: run.id, status: run.status };
     },
   };
@@ -1511,7 +1528,10 @@ function makeLearnObserveDescriptor(runtime: ClaworksRuntime): CapabilityDescrip
   return {
     id: "learn.observe",
     verb: "acquire",
-    description: "将一次观察（事件/现象）记录到知识库，作为未来学习的材料",
+    description:
+      "将机器人主动观察到的现象（事件、异常、规律）写入知识库。" +
+      "适用于：运行时发现异常需要记录、Playbook 步骤中捕获中间状态、定时观察任务写入环境数据。" +
+      "与 learn.from_feedback 的区别：observe 是机器人主动记录，feedback 是用户主动评价。",
     owner: { kind: "core" },
     paramsSchema: {
       type: "object",
@@ -1551,17 +1571,24 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
   return {
     id: "learn.from_feedback",
     verb: "acquire",
-    description: "根据用户反馈（好/坏/纠正）更新知识库或调整行为",
+    description:
+      "处理用户对机器人回复的显式反馈（好/坏/纠正）。" +
+      "correction 类型会立即写入 RuleEngine 规则（秒级生效）和 CBR 案例库，无需等待进化包。" +
+      "negative 类型累计 3 次会触发 AutonomyEngine 学习机会检测。" +
+      "与 learn.observe 区别：feedback 是用户主动评价，observe 是机器人被动记录观察。",
     owner: { kind: "core" },
     paramsSchema: {
       type: "object",
       required: ["feedback_type", "content"],
       properties: {
         feedback_type: { type: "string", enum: ["positive", "negative", "correction"] },
-        content: { type: "string" },
+        content: { type: "string", description: "用户原始输入或被评价的内容" },
         related_run_id: { type: "string" },
-        correction: { type: "string" },
-        intent: { type: "string" },
+        correction: {
+          type: "string",
+          description: "用户给出的正确意图/答案（correction 类型必填）",
+        },
+        intent: { type: "string", description: "被纠正的原始意图标识" },
       },
     },
     handler: async (_ctx, params) => {
@@ -1585,6 +1612,32 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
         });
       }
 
+      // 快速在线规则学习：correction 时立即将关键词→意图映射写入 RuleEngine
+      // 下次相同/相似输入直接命中规则，跳过 LLM，秒级生效
+      let ruleAdded = false;
+      if (type === "correction" && correction && content && runtime.ruleEngine?.addRule) {
+        const ruleId = `learned-${Date.now()}`;
+        const trigger = content.slice(0, 50);
+        runtime.ruleEngine.addRule("im.quick_rules", {
+          id: ruleId,
+          name: `用户纠正学习：${trigger.slice(0, 20)}`,
+          priority: 900,
+          condition: { field: "text", op: "contains", value: trigger },
+          action: {
+            kind: "publish_event",
+            params: { event_type: `im.intent.${correction.replace(/[^a-z0-9_.]/gi, "_")}` },
+          },
+          stopOnMatch: true,
+        });
+        ruleAdded = true;
+        await runtime.kernel.publish("learn.rule_added", "learn.from_feedback", {
+          rule_id: ruleId,
+          trigger,
+          intent: correction,
+          source: "user_correction",
+        });
+      }
+
       // 通知 AutonomyEngine 记录反馈，负反馈累积到阈值时触发学习机会检测
       const { recordFeedback } = await import("./autonomy-engine.js");
       await recordFeedback(runtime, {
@@ -1601,7 +1654,7 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
         related_run_id: params.related_run_id,
       });
 
-      return { status: "ok", id, feedback_type: type };
+      return { status: "ok", id, feedback_type: type, rule_added: ruleAdded };
     },
   };
 }

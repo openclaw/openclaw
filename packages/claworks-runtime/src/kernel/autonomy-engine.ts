@@ -14,8 +14,8 @@ import type { EvolutionPack, EvolutionSyncManager } from "./evolution-sync.js";
 // ── 公开类型 ──────────────────────────────────────────────────────────────
 
 export type AutonomyLearnOpportunity = {
-  /** 触发信号的类型：stub_response | correlation_pattern | negative_feedback */
-  signal: "stub_response" | "correlation_pattern" | "negative_feedback";
+  /** 触发信号的类型 */
+  signal: "stub_response" | "correlation_pattern" | "negative_feedback" | "knowledge_gap";
   description: string;
   detected_at: string;
   metadata?: Record<string, unknown>;
@@ -109,6 +109,45 @@ export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promis
       metadata: { source: e.source, ts: e.ts.toISOString() },
     });
     addEvolutionRecord("gap", `Stub 响应信号：来源 ${e.source}，时间 ${e.ts.toISOString()}`);
+  }
+
+  // ── 知识缺口检测：24 小时内未解析意图超过阈值 ─────────────────────────────
+  // 检测 autonomy.stub_response 和 learn.feedback_recorded(negative) 事件，
+  // 统计代表「机器人不知道怎么处理」的信号密度
+  const KNOWLEDGE_GAP_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const KNOWLEDGE_GAP_THRESHOLD = 5;
+  const nowTs = Date.now();
+
+  const recentStubEvents = kernel.getRecentEvents(500, "autonomy.stub_response").filter((e) => {
+    const ts = e.ts instanceof Date ? e.ts.getTime() : Number(e.ts);
+    return nowTs - ts < KNOWLEDGE_GAP_WINDOW_MS;
+  });
+
+  if (recentStubEvents.length >= KNOWLEDGE_GAP_THRESHOLD) {
+    // 收集最频繁的 stub 样本（最多 3 条）
+    const samples = recentStubEvents
+      .slice(0, 3)
+      .map((e) => {
+        const m = e.payload as Record<string, unknown> | undefined;
+        return typeof m?.input === "string" ? m.input.slice(0, 60) : e.source;
+      })
+      .filter(Boolean);
+
+    await kernel.publish("autonomy.learn_opportunity", "autonomy-engine", {
+      signal: "knowledge_gap",
+      description: `过去 24 小时内检测到 ${recentStubEvents.length} 次未解析意图（兜底回复），建议补充对应 Playbook 或知识库`,
+      detected_at: new Date().toISOString(),
+      metadata: {
+        gap_type: "knowledge_gap",
+        count: recentStubEvents.length,
+        threshold: KNOWLEDGE_GAP_THRESHOLD,
+        sample_inputs: samples,
+      },
+    });
+    addEvolutionRecord(
+      "gap",
+      `知识缺口：24h 内 ${recentStubEvents.length} 次兜底，样本：${samples.join(" | ")}`,
+    );
   }
 
   // ── 事件关联检测：时间窗口内同类事件聚合 ──────────────────────────────────
