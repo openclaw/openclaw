@@ -243,7 +243,7 @@ function evaluateSendPolicyMatch(params: {
   const finalMatches = match.invert === true ? !matches : matches;
   return {
     matches: finalMatches,
-    ...(finalMatches && match.invert === true && cancelReason ? { cancelReason } : {}),
+    ...(finalMatches && cancelReason ? { cancelReason } : {}),
   };
 }
 

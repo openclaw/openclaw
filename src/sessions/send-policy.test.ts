@@ -221,4 +221,40 @@ describe("resolveSendPolicy", () => {
       }),
     ).toBe("allow");
   });
+
+  it("preserves peer mismatch metadata through composed matches", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [
+            {
+              action: "deny",
+              match: {
+                allOf: [{ channel: "telegram" }, { peerEquals: "inboundPeer", invert: true }],
+              },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicyDetailed({
+        cfg,
+        channel: "telegram",
+        inboundPeer: ["user-1", "alias-1"],
+        outboundPeer: "user-2",
+      }),
+    ).toEqual({
+      decision: "deny",
+      cancelReason: {
+        code: "send_policy_peer_mismatch",
+        peerEquals: "inboundPeer",
+        expectedPeer: "user-1",
+        expectedPeers: ["user-1", "alias-1"],
+        actualPeer: "user-2",
+      },
+    });
+  });
 });
