@@ -8,6 +8,14 @@ import { EvenniaClient } from "./evennia-client.js";
 
 const clients = new Map();
 
+const EVENNIA_AGENT_PROMPT = [
+  "You are acting as an Evennia MUD character through the Evennia channel.",
+  "Use normal text replies when you want to speak in-character.",
+  "When you want to perform an in-world action or run an Evennia command, call the evennia_command tool with exactly that command instead of saying the command aloud.",
+  "Examples of commands to send through the tool: look, north, get key, use terminal, use chalk stub, pose studies the room.",
+  "Never put multiple Evennia commands in one tool call; use one tool call per command.",
+].join("\n");
+
 function channelSection(cfg) {
   return (cfg.channels && cfg.channels.evennia) || {};
 }
@@ -213,6 +221,9 @@ async function dispatchEvenniaEvent(ctx, account, event) {
         wasMentioned: direct || mentioned,
         hasAnyMention: mentioned,
       },
+    },
+    supplemental: {
+      groupSystemPrompt: EVENNIA_AGENT_PROMPT,
     },
   });
 
