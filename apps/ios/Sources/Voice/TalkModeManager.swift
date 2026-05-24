@@ -2644,6 +2644,19 @@ extension TalkModeManager {
         try session.setActive(true, options: [])
     }
 
+    static func configureRealtimeAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        // Realtime Talk is full duplex. `.voiceChat` enables iOS voice processing so speaker
+        // output is less likely to be captured as fresh microphone input.
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [
+            .allowBluetoothHFP,
+            .defaultToSpeaker,
+        ])
+        try? session.setPreferredSampleRate(48000)
+        try? session.setPreferredIOBufferDuration(0.02)
+        try session.setActive(true, options: [])
+    }
+
     private static func describeAudioSession() -> String {
         let session = AVAudioSession.sharedInstance()
         let inputs = session.currentRoute.inputs
