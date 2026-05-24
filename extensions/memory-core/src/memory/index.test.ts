@@ -654,7 +654,7 @@ describe("memory index", () => {
       }
     ).provider = {
       id: "local",
-      model: "local-model",
+      model: "mock-embed",
       embedQuery: async () => {
         throw createLocalWorkerExitError();
       },
@@ -665,6 +665,10 @@ describe("memory index", () => {
     const results = await manager.search("alpha");
 
     expect(results.length).toBeGreaterThan(0);
+    const resultKeys = results.map(
+      (result) => `${result.source}:${result.path}:${result.startLine}:${result.endLine}`,
+    );
+    expect(new Set(resultKeys).size).toBe(resultKeys.length);
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
       "fallback-provider",
     );

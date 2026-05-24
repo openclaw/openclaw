@@ -497,7 +497,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
-    const keywordResults =
+    const loadKeywordResults = async () =>
       hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(
             cleaned,
@@ -509,6 +509,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             return [];
           })
         : [];
+    let keywordResults = await loadKeywordResults();
 
     let queryVec: number[];
     try {
@@ -525,6 +526,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : false;
       if (activatedFallback) {
         await this.runSafeReindex({ reason: "fallback", force: true });
+        keywordResults = await loadKeywordResults();
         queryVec = await this.embedQueryWithTimeout(cleaned);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
