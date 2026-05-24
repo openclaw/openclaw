@@ -94,40 +94,59 @@ export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spaw
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
-/**
- * Linear-time case-insensitive glob matcher.  Splits the pattern on `*` and
- * checks that all segments appear in order inside `value` with the first
- * anchored to the start and the last anchored to the end.  O(n·k) where
- * n = value length and k = segment count, avoiding the polynomial
- * backtracking that `new RegExp("^.*a.*b.*$")` causes with multiple wildcards.
- */
-function matchesWildcardCaseInsensitive(pattern: string, value: string): boolean {
-  const parts = pattern.toLowerCase().split("*");
-  const lower = value.toLowerCase();
+type CompiledAgentAllowPattern =
+  | { kind: "all" }
+  | { kind: "exact"; value: string }
+  | {
+      kind: "wildcard";
+      first: string;
+      last: string;
+      interior: string[];
+    };
 
-  // First part must be a prefix.
-  const first = parts[0];
+function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern | null {
+  const raw = normalizeOptionalString(pattern) ?? "";
+  if (!raw) {
+    return null;
+  }
+  if (raw === "*") {
+    return { kind: "all" };
+  }
+  if (!raw.includes("*")) {
+    return { kind: "exact", value: raw };
+  }
+  const parts = raw.toLowerCase().split("*");
+  return {
+    kind: "wildcard",
+    first: parts[0] ?? "",
+    last: parts[parts.length - 1] ?? "",
+    interior: parts.slice(1, -1).filter(Boolean),
+  };
+}
+
+/**
+ * Linear-time case-insensitive glob matcher for precompiled `*` patterns.
+ * Checks prefix, suffix, then ordered interior segments without entering the
+ * regex engine, avoiding polynomial backtracking on repeated wildcards.
+ */
+function matchesCompiledWildcard(
+  pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
+  lower: string,
+): boolean {
   let pos = 0;
-  if (first) {
-    if (!lower.startsWith(first)) {
+  if (pattern.first) {
+    if (!lower.startsWith(pattern.first)) {
       return false;
     }
-    pos = first.length;
+    pos = pattern.first.length;
   }
 
-  // Last part must be a suffix.
-  const last = parts[parts.length - 1];
-  const endBound = last ? lower.length - last.length : lower.length;
-  if (last && (!lower.endsWith(last) || endBound < pos)) {
+  const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
+  if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
     return false;
   }
 
-  // Interior parts must appear in order between prefix end and suffix start.
-  for (let i = 1; i < parts.length - 1; i++) {
-    const part = parts[i];
-    if (!part) {
-      continue;
-    }
+  for (const part of pattern.interior) {
     const idx = lower.indexOf(part, pos);
     if (idx === -1 || idx + part.length > endBound) {
       return false;
@@ -141,25 +160,24 @@ function matchesWildcardCaseInsensitive(pattern: string, value: string): boolean
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const allowPatterns = rawAllowPatterns
+    .map((pattern) => compileAgentAllowPattern(pattern))
+    .filter((pattern): pattern is CompiledAgentAllowPattern => pattern !== null);
+  const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
     }
+    const lowerAgentId = hasWildcardPatterns ? agentId.toLowerCase() : "";
     return allowPatterns.some((pattern) => {
-      const raw =
-        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
-        "";
-      if (!raw) {
-        return false;
-      }
-      if (raw === "*") {
+      if (pattern.kind === "all") {
         return true;
       }
-      if (!raw.includes("*")) {
-        return raw === agentId;
+      if (pattern.kind === "exact") {
+        return pattern.value === agentId;
       }
-      return matchesWildcardCaseInsensitive(raw, agentId);
+      return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
   const isAllowed = (requesterAgentId: string, targetAgentId: string) => {

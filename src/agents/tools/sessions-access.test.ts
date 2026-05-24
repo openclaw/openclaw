@@ -123,6 +123,20 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.matchesAllow("guest")).toBe(false);
   });
 
+  it("keeps exact allow patterns case-sensitive", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["Ops"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("Ops")).toBe(true);
+    expect(policy.matchesAllow("ops")).toBe(false);
+  });
+
   it("handles interior wildcards", () => {
     const policy = createAgentToAgentPolicy({
       tools: {
@@ -175,6 +189,20 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.matchesAllow("abcxyz")).toBe(true);
     expect(policy.matchesAllow("abc-middle-xyz")).toBe(true);
     expect(policy.matchesAllow("ab")).toBe(false);
+  });
+
+  it("treats regex syntax as literal text in wildcard patterns", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["ops.[prod]*"],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("OPS.[PROD]-worker")).toBe(true);
+    expect(policy.matchesAllow("opsXprod-worker")).toBe(false);
   });
 });
 
