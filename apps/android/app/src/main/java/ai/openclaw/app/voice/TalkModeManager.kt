@@ -480,6 +480,19 @@ class TalkModeManager internal constructor(
     pendingRunId = null
   }
 
+  internal suspend fun runE2eRealtimeTurn(
+    userText: String,
+    assistantText: String,
+    timeoutMs: Long,
+  ) {
+    if (!_isEnabled.value) {
+      setEnabled(true)
+    }
+    val sessionId = awaitRealtimeSessionId(timeoutMs)
+    handleGatewayEvent("talk.event", realtimeTranscriptPayload(sessionId = sessionId, role = "user", text = userText))
+    handleGatewayEvent("talk.event", realtimeTranscriptPayload(sessionId = sessionId, role = "assistant", text = assistantText))
+  }
+
   fun setPlaybackEnabled(enabled: Boolean) {
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
@@ -596,6 +609,19 @@ class TalkModeManager internal constructor(
     }
     shutdownTextToSpeech()
   }
+
+  private suspend fun awaitRealtimeSessionId(timeoutMs: Long): String =
+    withTimeout(timeoutMs) {
+      while (true) {
+        realtimeSessionId?.let { return@withTimeout it }
+        val status = _statusText.value
+        if (!_isEnabled.value && status.startsWith("Talk failed")) {
+          throw IllegalStateException(status)
+        }
+        delay(100L)
+      }
+      error("unreachable")
+    }
 
   private suspend fun startRealtimeRelay(generation: Long) {
     if (!isConnected()) {
@@ -851,6 +877,19 @@ class TalkModeManager internal constructor(
       }
     }
   }
+
+  private fun realtimeTranscriptPayload(
+    sessionId: String,
+    role: String,
+    text: String,
+  ): String =
+    buildJsonObject {
+      put("relaySessionId", JsonPrimitive(sessionId))
+      put("type", JsonPrimitive("transcript"))
+      put("role", JsonPrimitive(role))
+      put("text", JsonPrimitive(text))
+      put("final", JsonPrimitive(true))
+    }.toString()
 
   private fun playRealtimeAudio(bytes: ByteArray) {
     if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
