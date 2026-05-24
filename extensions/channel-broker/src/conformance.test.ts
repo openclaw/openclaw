@@ -5,6 +5,7 @@ import {
   createBrokerOutboundRequest,
   createBrokerReceipt,
 } from "openclaw/plugin-sdk/channel-broker";
+import type { BrokerProviderCapabilities } from "openclaw/plugin-sdk/channel-broker";
 import {
   createDurableInboundReceiveJournal,
   resolveChannelMessageSourceReplyDeliveryMode,
@@ -359,7 +360,7 @@ describe("channel-broker conformance baseline", () => {
   });
 
   it("keeps official/app channel differences in broker capability declarations", () => {
-    const capabilities = {
+    const capabilities: BrokerProviderCapabilities = {
       providerId: "acme-official",
       delivery: { text: true },
       receive: { webhook: true, ackAfterDurableSend: true },

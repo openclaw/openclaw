@@ -102,12 +102,14 @@ Provider keys:
   Use the nested SDK shape:
 
 ```json5
-capabilities: {
-  "google-chat": {
-    delivery: { text: true, media: true, replyTo: true, thread: true },
-    live: { draftPreview: false, previewFinalization: false, progressUpdates: false },
-    receive: { webhook: true, ackAfterDurableSend: true },
-    native: { appApi: true, workspaceHosted: true },
+{
+  capabilities: {
+    "google-chat": {
+      delivery: { text: true, media: true, replyTo: true, thread: true },
+      live: { draftPreview: false, previewFinalization: false, progressUpdates: false },
+      receive: { webhook: true, ackAfterDurableSend: true },
+      native: { appApi: true, workspaceHosted: true },
+    },
   },
 }
 ```
