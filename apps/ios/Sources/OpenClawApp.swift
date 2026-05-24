@@ -626,6 +626,7 @@ struct OpenClawApp: App {
                 .task {
                     self.appDelegate.appModel = self.appModel
                     self.applyAppearancePreference()
+                    self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onOpenURL { url in
                     Task { await self.handleOpenURL(url) }

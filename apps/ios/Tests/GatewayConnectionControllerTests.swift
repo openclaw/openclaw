@@ -130,6 +130,40 @@ import UIKit
                 storedOperatorScopes: []))
     }
 
+    @Test @MainActor func savedManualEndpointFallbackUsesOnboardingHostWhenAutoConnectIsEnabled() {
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 0,
+            "gateway.manual.tls": false,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let endpoint = controller._test_savedManualEndpointFallback()
+
+            #expect(endpoint?.host == "forges-mac-mini.taila96df5.ts.net")
+            #expect(endpoint?.port == 443)
+            #expect(endpoint?.useTLS == true)
+        }
+    }
+
+    @Test @MainActor func savedManualEndpointFallbackRequiresAutoConnect() {
+        withUserDefaults([
+            "gateway.autoconnect": false,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            #expect(controller._test_savedManualEndpointFallback() == nil)
+        }
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {
