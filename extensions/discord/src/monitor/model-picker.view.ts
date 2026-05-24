@@ -324,6 +324,7 @@ function buildProviderRows(params: {
   userId: string;
   page: DiscordModelPickerPage<DiscordModelPickerProviderItem>;
   currentProvider?: string;
+  providerBucket?: string;
 }): Row<Button>[] {
   const rows = chunkProvidersForRows(params.page.items).map(
     (providers) =>
@@ -340,6 +341,7 @@ function buildProviderRows(params: {
               view: "models",
               provider: provider.id,
               page: params.page.page,
+              providerBucket: params.providerBucket,
               userId: params.userId,
             }),
           });
@@ -428,6 +430,7 @@ function buildModelRows(params: {
   pendingModelIndex?: number;
   pendingRuntime?: string;
   quickModels?: string[];
+  providerBucket?: string;
 }): { rows: DiscordModelPickerRow[]; buttonRow: Row<Button> } {
   const parsedCurrentModel = parseCurrentModelRef(params.currentModel);
   const parsedPendingModel = parseCurrentModelRef(params.pendingModel);
@@ -435,15 +438,22 @@ function buildModelRows(params: {
 
   const hasQuickModels = (params.quickModels ?? []).length > 0;
 
+  // Preserve the active provider bucket inside the model view so the
+  // "switch provider" select shows the same letter range the user picked
+  // when entering the model view. Without this the select always falls
+  // back to the first bucket and silently jumps the user out of "H–N".
   const providerPage = getDiscordModelPickerProviderPage({
     data: params.data,
     page: params.providerPage,
+    bucket: params.providerBucket,
   });
   const providerOptions: APISelectMenuOption[] = providerPage.items.map((provider) => ({
     label: provider.id,
     value: provider.id,
     default: provider.id === params.modelPage.provider,
   }));
+  const activeProviderBucket =
+    providerPage.bucket && providerPage.bucket.id !== "all" ? providerPage.bucket.id : undefined;
 
   rows.push(
     new Row([
@@ -455,6 +465,7 @@ function buildModelRows(params: {
           provider: params.modelPage.provider,
           page: providerPage.page,
           providerPage: providerPage.page,
+          providerBucket: activeProviderBucket,
           userId: params.userId,
         }),
         options: providerOptions,
@@ -678,12 +689,14 @@ export function renderDiscordModelPickerProvidersView(
     rows.push(bucketRow);
   }
 
+  const activeProviderBucket = page.bucket && page.bucket.id !== "all" ? page.bucket.id : undefined;
   rows.push(
     ...buildProviderRows({
       command: params.command,
       userId: params.userId,
       page,
       currentProvider: parsedCurrent?.provider,
+      providerBucket: activeProviderBucket,
     }),
   );
 
@@ -772,6 +785,7 @@ export function renderDiscordModelPickerModelsView(
     pendingModelIndex: params.pendingModelIndex,
     pendingRuntime: params.pendingRuntime,
     quickModels: params.quickModels,
+    providerBucket: params.providerBucket,
   });
 
   const rows: DiscordModelPickerRow[] = [];

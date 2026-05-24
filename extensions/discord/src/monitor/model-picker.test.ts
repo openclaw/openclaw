@@ -560,6 +560,38 @@ describe("Discord model picker rendering", () => {
     expect(modelActionIds[0]).toContain("mb=21-30");
   });
 
+  it("provider buttons carry providerBucket so non-first-bucket picks survive the round trip", () => {
+    // Regression for Codex review #2 P2: clicking a provider from bucket
+    // "21-30" previously encoded the provider action customId without
+    // providerBucket, so the next "back" or re-render fell back to the
+    // first bucket and the user's letter range was lost.
+    const entries: Record<string, string[]> = {};
+    for (let i = 1; i <= 30; i += 1) {
+      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
+    }
+    const data = createModelsProviderData(entries);
+
+    const rendered = renderDiscordModelPickerProvidersView({
+      command: "models",
+      userId: "42",
+      data,
+      providerBucket: "21-30",
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      components?: SerializedComponent[];
+    };
+    const rows = extractContainerRows(payload.components);
+    const allComponents = rows.flatMap((row) => row.components ?? []);
+    const customIds = allComponents.map((component) => component.custom_id ?? "");
+
+    const providerActionIds = customIds.filter((customId) => customId.includes(";a=provider;"));
+    expect(providerActionIds.length).toBeGreaterThan(0);
+    for (const customId of providerActionIds) {
+      expect(customId).toContain("pb=21-30");
+    }
+  });
+
   it("supports classic fallback rendering with content + action rows", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o"], anthropic: ["claude-sonnet-4-5"] });
 
