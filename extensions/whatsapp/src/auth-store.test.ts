@@ -283,6 +283,46 @@ describe("auth-store", () => {
     });
   });
 
+  it("restores valid backup before clearing partial phone-code pairing credentials", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-clear-pairing-with-backup", async (authDir) => {
+      const credsPath = path.join(authDir, "creds.json");
+      const backupPath = path.join(authDir, "creds.json.bak");
+      const backupCreds = {
+        account: { details: "present" },
+        me: { id: "15551234567@s.whatsapp.net" },
+        platform: "chrome",
+        registered: false,
+      };
+      fsSync.writeFileSync(
+        credsPath,
+        JSON.stringify({
+          me: { id: "15551234567@s.whatsapp.net" },
+          pairingCode: "ABCDEFGH",
+          registered: false,
+        }),
+        "utf-8",
+      );
+      fsSync.writeFileSync(backupPath, JSON.stringify(backupCreds), "utf-8");
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({ authDir, runtime: runtime as never }),
+      ).resolves.toBe(true);
+
+      expect(fsSync.existsSync(authDir)).toBe(true);
+      expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual(backupCreds);
+      expect(JSON.parse(fsSync.readFileSync(backupPath, "utf-8"))).toEqual(backupCreds);
+      expect(hasWebCredsSync(authDir)).toBe(true);
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Restored WhatsApp Web credentials from backup"),
+      );
+    });
+  });
+
   it("keeps fully linked credentials during partial-pairing cleanup", async () => {
     await withOwnedOAuthAuthDir("openclaw-wa-auth-keep-linked", async (authDir) => {
       fsSync.writeFileSync(
