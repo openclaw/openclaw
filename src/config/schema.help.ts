@@ -1494,6 +1494,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
     'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+  "agents.defaults.compaction.maxActiveTranscriptTokens":
+    'Codex app-server native-thread token reuse guard. When truncateAfterCompaction is enabled, OpenClaw starts a fresh thread if the bound native transcript reaches this many tokens. Leave unset to use Codex\'s reported model context window, with a 300000-token fallback recovery fuse. Set a positive value such as "120k" to override that fuse, or 0 to disable this token guard while preserving semantic binding invalidation and byte limits.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":

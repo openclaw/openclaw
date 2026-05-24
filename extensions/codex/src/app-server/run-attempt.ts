@@ -712,6 +712,12 @@ const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   tb: 1024 * 1024 * 1024 * 1024,
   tib: 1024 * 1024 * 1024 * 1024,
 };
+const CODEX_APP_SERVER_TOKEN_UNITS: Record<string, number> = {
+  k: 1_000,
+  kt: 1_000,
+  m: 1_000_000,
+  mt: 1_000_000,
+};
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -734,6 +740,39 @@ function parseCodexAppServerByteLimit(value: unknown): number | undefined {
     return undefined;
   }
   return Math.max(1, Math.round(amount * multiplier));
+}
+
+function parseCodexAppServerTokenLimit(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
+  if (!match) {
+    return undefined;
+  }
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0) {
+    return undefined;
+  }
+  const unit = (match[2] ?? "").toLowerCase();
+  const multiplier = unit === "" ? 1 : CODEX_APP_SERVER_TOKEN_UNITS[unit];
+  if (multiplier === undefined) {
+    return undefined;
+  }
+  const tokens = amount * multiplier;
+  return Number.isSafeInteger(tokens) ? tokens : undefined;
+}
+
+function resolveCodexAppServerTokenLimitOverride(value: unknown): number | undefined {
+  const parsed = parseCodexAppServerTokenLimit(value);
+  return parsed !== undefined && parsed > 0 ? parsed : undefined;
+}
+
+function isCodexAppServerTokenLimitDisabled(value: unknown): boolean {
+  return parseCodexAppServerTokenLimit(value) === 0;
 }
 
 async function listCodexAppServerRolloutFilesForThread(
@@ -948,10 +987,16 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
     );
     return binding;
   }
-  const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const maxBytes = parseCodexAppServerByteLimit(
     params.config?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
   );
+  const configuredTokenLimit =
+    params.config?.agents?.defaults?.compaction?.maxActiveTranscriptTokens;
+  const maxTokensOverride = resolveCodexAppServerTokenLimitOverride(configuredTokenLimit);
+  const tokenGuardDisabled = isCodexAppServerTokenLimitDisabled(configuredTokenLimit);
+  if (maxBytes === undefined && tokenGuardDisabled) {
+    return binding;
+  }
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
@@ -972,6 +1017,9 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
       return undefined;
     }
   }
+  if (tokenGuardDisabled) {
+    return binding;
+  }
   const nativeTokenSnapshots = await Promise.all(
     rolloutFiles.map(async (file) => readCodexAppServerRolloutTokenSnapshot(file.path)),
   );
@@ -981,7 +1029,9 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
   const nativeModelContextWindow = maxFiniteNumber(
     nativeTokenSnapshots.map((snapshot) => snapshot?.modelContextWindow),
   );
-  const maxTokens = resolveCodexAppServerNativeThreadTokenFuse(nativeModelContextWindow);
+  const maxTokens =
+    maxTokensOverride ?? resolveCodexAppServerNativeThreadTokenFuse(nativeModelContextWindow);
+  const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const sessionTokens =
     sessionRecord?.totalTokensFresh !== false &&
     typeof sessionRecord?.totalTokens === "number" &&

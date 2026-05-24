@@ -26,6 +26,33 @@ const NonNegativeByteSizeSchema = z.union([
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
 ]);
 
+const TokenCountUnits: Record<string, number> = {
+  k: 1_000,
+  kt: 1_000,
+  m: 1_000_000,
+  mt: 1_000_000,
+};
+const NonNegativeTokenCountSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().refine((value) => {
+    const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
+    if (!match) {
+      return false;
+    }
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return false;
+    }
+    const unit = match[2]?.toLowerCase();
+    const multiplier = unit === undefined ? 1 : TokenCountUnits[unit];
+    if (multiplier === undefined) {
+      return false;
+    }
+    const tokens = amount * multiplier;
+    return Number.isSafeInteger(tokens);
+  }, "Expected token count string like 120k"),
+]);
+
 const OptionalBootstrapFileNameSchema = z.enum([
   "SOUL.md",
   "USER.md",
@@ -206,6 +233,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         truncateAfterCompaction: z.boolean().optional(),
         maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
+        maxActiveTranscriptTokens: NonNegativeTokenCountSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()

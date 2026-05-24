@@ -420,6 +420,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.model",
   "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
+  "agents.defaults.compaction.maxActiveTranscriptTokens",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.model",
@@ -884,6 +885,14 @@ describe("config help copy quality", () => {
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
     expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
+
+    const transcriptTokens = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptTokens"];
+    expect(/Codex app-server|native-thread/i.test(transcriptTokens)).toBe(true);
+    expect(/fresh thread/i.test(transcriptTokens)).toBe(true);
+    expect(/model context window/i.test(transcriptTokens)).toBe(true);
+    expect(/300000-token fallback/i.test(transcriptTokens)).toBe(true);
+    expect(/0.*disable/i.test(transcriptTokens)).toBe(true);
+    expect(/byte limits/i.test(transcriptTokens)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
