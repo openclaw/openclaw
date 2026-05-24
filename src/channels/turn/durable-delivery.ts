@@ -81,6 +81,21 @@ function resolveDurableInboundReplyThreadId(
   return params.ctxPayload.MessageThreadId;
 }
 
+function resolveDurableInboundReplyPeerCandidates(
+  ctxPayload: FinalizedMsgContext,
+): string[] | undefined {
+  const candidates = [
+    ctxPayload.From,
+    ctxPayload.SenderId,
+    ctxPayload.SenderUsername,
+    ctxPayload.SenderE164,
+    ctxPayload.OriginatingTo,
+  ]
+    .map((value) => normalizeOptionalString(value))
+    .filter((value): value is string => Boolean(value));
+  return candidates.length > 0 ? candidates : undefined;
+}
+
 function stringifyThreadId(value: string | number | null | undefined): string | undefined {
   return value == null ? undefined : String(value);
 }
@@ -175,6 +190,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     sessionKey: params.ctxPayload.SessionKey,
     policySessionKey: params.ctxPayload.RuntimePolicySessionKey,
     conversationType: params.ctxPayload.ChatType,
+    inboundPeer: resolveDurableInboundReplyPeerCandidates(params.ctxPayload),
     agentId: params.agentId,
     requesterAccountId: params.accountId ?? params.ctxPayload.AccountId,
     requesterSenderId: params.ctxPayload.SenderId ?? params.ctxPayload.From,
