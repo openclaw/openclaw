@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Installer: install Node.js through `apk` on Alpine Linux instead of falling through to the NodeSource package-manager path.
 - Agents/perf: cache manifest-backed CLI provider descriptors and fallback provider resolution so model fallback retries avoid repeated bundled provider runtime scans while still invalidating across plugin reloads.
 - Installer: detect musl Linux shells such as Alpine as Linux instead of rejecting them before npm install.
+- Scripts: run direct Node package scripts with env overrides through a cross-platform launcher so gateway, TUI, and Docker-all entrypoints work on native Windows.
 - Tests: run Vitest import timing entrypoints through a Node wrapper so native Windows package scripts can collect import diagnostics.
 - Control UI: split large build-time runtime dependencies into stable chunks so Linux/Docker install and package builds stay below the app chunk warning threshold.
 - Tests: run `test:max` and `test:changed:max` through a Node wrapper so high-worker Vitest entrypoints work on native Windows.
