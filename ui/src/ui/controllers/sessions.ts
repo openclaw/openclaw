@@ -41,6 +41,7 @@ export type SessionsState = SessionsChatRunState & {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
+  chatSessionMessageSubscriptionKey?: string | null;
 };
 
 export type LoadSessionsOverrides = {
@@ -482,6 +483,35 @@ export async function subscribeSessions(state: SessionsState) {
   }
   try {
     await state.client.request("sessions.subscribe", {});
+  } catch (err) {
+    state.sessionsError = String(err);
+  }
+}
+
+export async function syncSelectedSessionMessageSubscription(
+  state: SessionsState & { sessionKey: string },
+  opts?: { force?: boolean },
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const nextKey = state.sessionKey.trim();
+  const previousKey = state.chatSessionMessageSubscriptionKey?.trim() || null;
+  if (!nextKey) {
+    return;
+  }
+  try {
+    if (previousKey && previousKey !== nextKey) {
+      await state.client.request("sessions.messages.unsubscribe", { key: previousKey });
+      state.chatSessionMessageSubscriptionKey = null;
+    }
+    if (opts?.force || state.chatSessionMessageSubscriptionKey !== nextKey) {
+      const result = (await state.client.request("sessions.messages.subscribe", {
+        key: nextKey,
+      })) as { key?: unknown } | undefined;
+      state.chatSessionMessageSubscriptionKey =
+        typeof result?.key === "string" && result.key.trim() ? result.key : nextKey;
+    }
   } catch (err) {
     state.sessionsError = String(err);
   }

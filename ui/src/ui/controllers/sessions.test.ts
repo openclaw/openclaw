@@ -5,6 +5,7 @@ import {
   deleteSessionsAndRefresh,
   loadSessions,
   subscribeSessions,
+  syncSelectedSessionMessageSubscription,
   type SessionsState,
 } from "./sessions.ts";
 
@@ -52,6 +53,42 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("syncSelectedSessionMessageSubscription", () => {
+  it("subscribes to the selected session message stream", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "agent:main:main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:main",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+  });
+
+  it("unsubscribes the previous selected session before switching streams", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:next" }));
+    const state = createState(request, {
+      sessionKey: "agent:main:next",
+      chatSessionMessageSubscriptionKey: "agent:main:previous",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & {
+      sessionKey: string;
+    };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.unsubscribe", {
+      key: "agent:main:previous",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      key: "agent:main:next",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:next");
   });
 });
 

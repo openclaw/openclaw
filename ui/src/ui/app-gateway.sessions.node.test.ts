@@ -56,6 +56,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
   GatewayBrowserClient: function GatewayBrowserClient() {},

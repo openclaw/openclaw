@@ -670,6 +670,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!sessionMatches && !activeRunMatches) {
     return null;
   }
+  if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
+    state.chatRunId = payload.runId;
+    state.chatStreamStartedAt ??= Date.now();
+  }
 
   // Terminal events for the active client run carry runId; missing-runId events are unowned.
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.

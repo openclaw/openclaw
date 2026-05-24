@@ -11,7 +11,11 @@ import {
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
+import {
+  createSessionAndRefresh,
+  loadSessions,
+  syncSelectedSessionMessageSubscription,
+} from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
@@ -650,6 +654,9 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
     true,
+  );
+  void syncSelectedSessionMessageSubscription(
+    state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);

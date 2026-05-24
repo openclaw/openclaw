@@ -56,6 +56,7 @@ import {
   applySessionsChangedEvent,
   loadSessions,
   subscribeSessions,
+  syncSelectedSessionMessageSubscription,
   type SessionsState,
 } from "./controllers/sessions.ts";
 import {
@@ -588,6 +589,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         );
       }
       void subscribeSessions(host as unknown as SessionsState);
+      void syncSelectedSessionMessageSubscription(
+        host as unknown as SessionsState & { sessionKey: string },
+        { force: true },
+      );
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
       if (host.tab !== "chat") {
         void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
