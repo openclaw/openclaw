@@ -37,6 +37,8 @@ export type EventTrigger =
   | { kind: "manual" };
 
 export interface RobotInfo {
+  /** 机器人实例 ID；未配置时回退为 name */
+  id?: string;
   name: string;
   role: "monolith" | "twin" | "ops" | "nexus";
   version: string;

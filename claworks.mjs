@@ -3,13 +3,29 @@
  * ClaWorks standalone CLI entry.
  * Isolated from OpenClaw: ~/.claworks state, claworks.json config, default port 18800.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const home = os.homedir();
+
+const runtimeDistIndex = path.join(root, "packages/claworks-runtime/dist/index.mjs");
+if (!existsSync(runtimeDistIndex)) {
+  const build = spawnSync(
+    process.execPath,
+    [path.join(root, "scripts/build-claworks-runtime.mjs")],
+    {
+      cwd: root,
+      stdio: "inherit",
+    },
+  );
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
+}
 
 // CLAWORKS_STATE_DIR takes precedence over the legacy OPENCLAW_STATE_DIR alias.
 const stateDir =

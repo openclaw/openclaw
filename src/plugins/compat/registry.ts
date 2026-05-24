@@ -1,3 +1,4 @@
+import { productizeUserCopy } from "../../cli/product-surface.js";
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_RUNTIME_SDK_SURFACE = ["openclaw/plugin-sdk/channel", "runtime"].join("-");
@@ -945,6 +946,11 @@ export function getPluginCompatRecord(code: PluginCompatCode): KnownPluginCompat
 
 export function isPluginCompatCode(code: string): code is PluginCompatCode {
   return pluginCompatRecordByCode.has(code as PluginCompatCode);
+}
+
+/** User-visible compat replacement (canonical records keep openclaw for policy hashing). */
+export function formatPluginCompatReplacement(replacement: string): string {
+  return productizeUserCopy(replacement);
 }
 
 export function listDeprecatedPluginCompatRecords(): readonly KnownPluginCompatRecord[] {

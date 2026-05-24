@@ -1,3 +1,4 @@
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -42,7 +43,7 @@ type SearchProviderSetupContribution = FlowContribution & {
 };
 
 const SEARCH_INSTALL_CATALOG_ENTRY = Symbol("search-install-catalog-entry");
-const WEB_SEARCH_DOCS_URL = "https://docs.openclaw.ai/tools/web";
+const WEB_SEARCH_DOCS_URL = resolveProductDocUrl("/tools/web");
 
 type SearchProviderEntryWithInstall = PluginWebSearchProviderEntry & {
   [SEARCH_INSTALL_CATALOG_ENTRY]?: WebSearchInstallCatalogEntry;
@@ -481,7 +482,7 @@ export async function runSearchSetupFlow(
       [
         `${entry.label} works without an API key.`,
         "OpenClaw will enable the plugin and use it as your web_search provider.",
-        `Docs: ${entry.docsUrl ?? "https://docs.openclaw.ai/tools/web"}`,
+        `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
       ].join("\n"),
       "Web search",
     );
@@ -517,7 +518,7 @@ export async function runSearchSetupFlow(
         "Secret references enabled — OpenClaw will store a reference instead of the API key.",
         `Env var: ${ref.id}${envAvailable ? " (detected)" : ""}.`,
         ...(envAvailable ? [] : [`Set ${ref.id} in the Gateway environment.`]),
-        "Docs: https://docs.openclaw.ai/tools/web",
+        `Docs: ${WEB_SEARCH_DOCS_URL}`,
       ].join("\n"),
       "Web search",
     );
@@ -580,7 +581,7 @@ export async function runSearchSetupFlow(
     [
       `No ${credentialLabel} stored — web_search won't work until a key is available.`,
       `Get your key at: ${entry.signupUrl}`,
-      "Docs: https://docs.openclaw.ai/tools/web",
+      `Docs: ${WEB_SEARCH_DOCS_URL}`,
     ].join("\n"),
     "Web search",
   );

@@ -9,7 +9,10 @@ import {
   hasLegacyStreamingAliases,
   normalizeLegacyChannelAliases,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 function hasLegacySlackStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
@@ -70,14 +73,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
   {
     path: ["channels", "slack"],
-    message:
-      'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: hasLegacySlackChannelAllowAlias,
   },
   {
     path: ["channels", "slack", "accounts"],
-    message:
-      'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: (value) => {
       const accounts = asObjectRecord(value);
       if (!accounts) {

@@ -331,7 +331,13 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
     },
     subscribe(type: string, handler: (payload: Record<string, unknown>) => void): () => void {
       return bus.subscribe(type, async (event) => {
-        handler(event.payload);
+        handler({
+          ...event.payload,
+          _event_type: event.type,
+          _event_source: event.source,
+          _event_id: event.id,
+          _event: event,
+        });
       });
     },
     async callCapability(

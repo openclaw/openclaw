@@ -1,9 +1,9 @@
-/** MES production dispatch — webhook or simulate per CLAWTWIN_MES_PRODUCTION_* env. */
+/** MES production dispatch — webhook or simulate per CLAWORKS_MES_* env. */
 export async function mesProductionDispatch(
   params: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const webhook =
-    process.env.CLAWTWIN_MES_PRODUCTION_WEBHOOK_URL?.trim() ||
+    process.env.CLAWORKS_MES_PRODUCTION_WEBHOOK_URL?.trim() ||
     process.env.CLAWORKS_MES_WEBHOOK_URL?.trim();
 
   const body = {
@@ -19,7 +19,7 @@ export async function mesProductionDispatch(
       status: "ok",
       mode: "simulate",
       ...body,
-      message: "MES webhook not configured (set CLAWTWIN_MES_PRODUCTION_WEBHOOK_URL)",
+      message: "MES webhook not configured (set CLAWORKS_MES_PRODUCTION_WEBHOOK_URL)",
     };
   }
 

@@ -1,3 +1,4 @@
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { ConfigValidationIssue } from "./types.js";
 
@@ -59,7 +60,7 @@ export function formatConfigIssueLine(
 ): string {
   const prefix = marker ? `${marker} ` : "";
   const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
-  const message = sanitizeTerminalText(issue.message);
+  const message = sanitizeTerminalText(productizeUserCopy(issue.message));
   return `${prefix}${path}: ${message}`;
 }
 

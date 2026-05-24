@@ -528,7 +528,7 @@ export function registerClaworksOpsTools(
       name: "cw_update_config",
       label: "Update ClaWorks config",
       description:
-        "更新 openclaw.json 中 claworks-robot 插件的配置段（如 notify.targets、packs、data.kb_provider 等）。" +
+        "更新 claworks.json 中 claworks-robot 插件的配置段（如 notify.targets、packs、data.kb_provider 等）。" +
         "写入后 Gateway 热重载配置，ClaWorks runtime 在下次重启后生效。",
       parameters: Type.Object({
         path: Type.Array(Type.String(), {

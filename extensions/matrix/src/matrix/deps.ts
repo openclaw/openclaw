@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 
 const REQUIRED_MATRIX_PACKAGES = [
   "matrix-js-sdk",
@@ -42,9 +43,11 @@ export function isMatrixSdkAvailable(): boolean {
 }
 
 function buildMatrixDepsMissingMessage(missing: string[]): string {
+  const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const pluginsUpdateCommand = formatCliCommand("openclaw plugins update matrix");
   return [
     `Matrix plugin dependencies are missing: ${missing.join(", ")}.`,
-    "Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`.",
+    `Repair this plugin with \`${pluginsUpdateCommand}\` or run \`${doctorFixCommand}\`.`,
   ].join(" ");
 }
 

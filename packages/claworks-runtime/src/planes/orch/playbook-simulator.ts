@@ -12,7 +12,7 @@
  */
 
 import type { CwObject, ObjectStore } from "../data/object-store.js";
-import type { PlaybookStepContext } from "./playbook-engine.js";
+import type { PlaybookStepContext } from "./playbook-types.js";
 
 // ── MockObjectStore（纯内存）──────────────────────────────────────────────
 

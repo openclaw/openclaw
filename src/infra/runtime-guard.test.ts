@@ -99,6 +99,39 @@ describe("runtime-guard", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("uses claworks cli name in product mode", () => {
+    const previous = process.env.CLAWORKS_PRODUCT;
+    process.env.CLAWORKS_PRODUCT = "1";
+    try {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(() => {
+          throw new Error("exit");
+        }),
+      };
+      const details: RuntimeDetails = {
+        kind: "node",
+        version: "20.0.0",
+        execPath: "/usr/bin/node",
+        pathEnv: "/usr/bin",
+      };
+      expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("claworks requires Node >=22.19.0."),
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Upgrade Node and re-run claworks."),
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAWORKS_PRODUCT;
+      } else {
+        process.env.CLAWORKS_PRODUCT = previous;
+      }
+    }
+  });
+
   it("returns silently when runtime meets requirements", () => {
     const runtime = {
       log: vi.fn(),

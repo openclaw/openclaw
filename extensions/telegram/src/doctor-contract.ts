@@ -9,7 +9,10 @@ import {
   hasLegacyStreamingAliases,
   normalizeLegacyChannelAliases,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
@@ -37,7 +40,8 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram", "groupMentionsOnly"],
     message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
+      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. ' +
+      DOCTOR_FIX_HINT,
   },
   {
     path: ["channels", "telegram"],

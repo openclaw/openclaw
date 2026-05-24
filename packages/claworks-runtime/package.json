@@ -9,31 +9,31 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "import": "./dist/index.mjs"
     },
     "./kernel": {
       "types": "./src/kernel/index.ts",
-      "import": "./src/kernel/index.ts"
+      "import": "./dist/kernel/index.mjs"
     },
     "./pack-loader": {
       "types": "./src/pack-loader/index.ts",
-      "import": "./src/pack-loader/index.ts"
+      "import": "./dist/pack-loader/index.mjs"
     },
     "./claworks": {
       "types": "./src/claworks/index.ts",
-      "import": "./src/claworks/index.ts"
+      "import": "./dist/claworks/index.mjs"
     },
     "./planes/data": {
       "types": "./src/planes/data/index.ts",
-      "import": "./src/planes/data/index.ts"
+      "import": "./dist/planes/data/index.mjs"
     },
     "./planes/orch": {
       "types": "./src/planes/orch/index.ts",
-      "import": "./src/planes/orch/index.ts"
+      "import": "./dist/planes/orch/index.mjs"
     },
     "./interfaces": {
       "types": "./src/interfaces/index.ts",
-      "import": "./src/interfaces/index.ts"
+      "import": "./dist/interfaces/index.mjs"
     },
     "./package.json": "./package.json"
   },

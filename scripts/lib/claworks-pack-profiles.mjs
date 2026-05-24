@@ -16,6 +16,8 @@ const PROFILE_ALIASES = {
   industrial: "industrial-new",
   /** @deprecated → industrial-new */
   "industrial-robot": "industrial-new",
+  /** daily-report 飞书日报分析 */
+  "daily-report": "daily-report",
   /** @deprecated → enterprise-full-new */
   "enterprise-robot": "enterprise-full-new",
   /** @deprecated → enterprise-full-new */

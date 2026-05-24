@@ -3,6 +3,9 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
 
@@ -137,14 +140,12 @@ function normalizeZalouserCompatibilityConfig(cfg: OpenClawConfig): ChannelDocto
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "zalouser", "groups"],
-    message:
-      'channels.zalouser.groups.<id>.allow is legacy; use channels.zalouser.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.zalouser.groups.<id>.allow is legacy; use channels.zalouser.groups.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: hasLegacyZalouserGroupAllowAliases,
   },
   {
     path: ["channels", "zalouser", "accounts"],
-    message:
-      'channels.zalouser.accounts.<id>.groups.<id>.allow is legacy; use channels.zalouser.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.zalouser.accounts.<id>.groups.<id>.allow is legacy; use channels.zalouser.accounts.<id>.groups.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: hasLegacyZalouserAccountGroupAllowAliases,
   },
 ];

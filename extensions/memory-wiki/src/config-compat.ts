@@ -1,4 +1,7 @@
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import type { OpenClawConfig } from "../api.js";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -19,8 +22,7 @@ function hasLegacyBridgeArtifactToggle(value: unknown): boolean {
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "memory-wiki", "config", "bridge"],
-    message:
-      'plugins.entries.memory-wiki.config.bridge.readMemoryCore is legacy; use plugins.entries.memory-wiki.config.bridge.readMemoryArtifacts. Run "openclaw doctor --fix".',
+    message: `plugins.entries.memory-wiki.config.bridge.readMemoryCore is legacy; use plugins.entries.memory-wiki.config.bridge.readMemoryArtifacts. ${DOCTOR_FIX_HINT}`,
     match: hasLegacyBridgeArtifactToggle,
   },
 ];

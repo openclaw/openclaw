@@ -1,4 +1,11 @@
+import { isClaworksCliProduct } from "./cli-name.js";
+
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
+const CLAWORKS_DEFAULT_TAGLINE = "Enterprise robots, one gateway.";
+
+function resolveDefaultTagline(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksCliProduct(env) ? CLAWORKS_DEFAULT_TAGLINE : DEFAULT_TAGLINE;
+}
 export type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
@@ -254,7 +261,7 @@ export interface TaglineOptions {
 
 function activeTaglines(options: TaglineOptions = {}): string[] {
   if (TAGLINES.length === 0) {
-    return [DEFAULT_TAGLINE];
+    return [resolveDefaultTagline(options.env)];
   }
   const today = options.now ? options.now() : new Date();
   const filtered = TAGLINES.filter((tagline) => isTaglineActive(tagline, today));
@@ -266,14 +273,14 @@ export function pickTagline(options: TaglineOptions = {}): string {
     return "";
   }
   if (options.mode === "default") {
-    return DEFAULT_TAGLINE;
+    return resolveDefaultTagline(options.env);
   }
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
     const parsed = Number.parseInt(override, 10);
     if (!Number.isNaN(parsed) && parsed >= 0) {
-      const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
+      const pool = TAGLINES.length > 0 ? TAGLINES : [resolveDefaultTagline(env)];
       return pool[parsed % pool.length];
     }
   }

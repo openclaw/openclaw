@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 type LegacyConfigRule = {
   path: string[];
@@ -20,8 +23,7 @@ function hasRetiredDynamicToolsProfile(value: unknown): boolean {
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config"],
-    message:
-      'plugins.entries.codex.config.codexDynamicToolsProfile is retired; Codex app-server always keeps Codex-native workspace tools native. Run "openclaw doctor --fix".',
+    message: `plugins.entries.codex.config.codexDynamicToolsProfile is retired; Codex app-server always keeps Codex-native workspace tools native. ${DOCTOR_FIX_HINT}`,
     match: hasRetiredDynamicToolsProfile,
   },
 ];

@@ -93,6 +93,10 @@ export type CapabilityContext = {
   userId?: string;
   /** correlationId 用于跟踪链路 */
   correlationId?: string;
+  /** Playbook run ID（从 stepCtx 或 HITL 等场景注入） */
+  runId?: string;
+  /** Playbook ID（从 stepCtx 或 HITL 等场景注入） */
+  playbookId?: string;
   /** Playbook step 上下文（从 Playbook 触发时注入） */
   stepCtx?: PlaybookStepContext;
   /** 向下调用其他能力（避免直接访问 registry） */

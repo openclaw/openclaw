@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -123,7 +125,7 @@ function stripPreservedLegacyRootKeysForValidation(
 }
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
-const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
+const SECRETREF_POLICY_DOC_URL = resolveProductDocUrl("/reference/secretref-credential-surface");
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
     (entry) => [entry.channelId, entry.schema] as const,
@@ -151,9 +153,17 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
+function formatDoctorFixCommand(env?: NodeJS.ProcessEnv): string {
+  return formatCliCommand("openclaw doctor --fix", env);
+}
+
+function formatPluginsInstallCommand(installSpec: string, env?: NodeJS.ProcessEnv): string {
+  return formatCliCommand(`openclaw plugins install ${installSpec}`, env);
+}
+
 function formatMissingOfficialExternalPluginWarning(
   pluginId: string,
-  opts?: { selectedMissingMemorySlot?: boolean },
+  opts?: { selectedMissingMemorySlot?: boolean; env?: NodeJS.ProcessEnv },
 ): string | null {
   const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
   if (!catalogEntry) {
@@ -167,10 +177,11 @@ function formatMissingOfficialExternalPluginWarning(
   if (!installSpec) {
     return null;
   }
+  const installCommand = formatPluginsInstallCommand(installSpec, opts?.env);
   if (pluginId === "memory-lancedb" && opts?.selectedMissingMemorySlot) {
-    return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install ${installSpec}`;
+    return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: ${installCommand}`;
   }
-  return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
+  return `plugin not installed: ${pluginId} — install the official external plugin with: ${installCommand}`;
 }
 
 function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
@@ -946,6 +957,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  const validationEnv = opts.env;
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
@@ -1241,6 +1253,8 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const validateWebSearchProvider = () => {
+    const env = validationEnv ?? process.env;
+    const doctorFixCommand = formatDoctorFixCommand(env);
     const provider = config.tools?.web?.search?.provider;
     if (typeof provider !== "string") {
       return;
@@ -1261,13 +1275,13 @@ function validateConfigObjectWithPluginsBase(
     if (installCatalogEntry) {
       const issue = {
         path,
-        message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
+        message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run ${doctorFixCommand})`,
         allowedValues: collectKnownWebSearchProviderIds(),
       };
       if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
         warnings.push({
           ...issue,
-          message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
+          message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or ${doctorFixCommand} repairs the config)`,
         });
         return;
       }
@@ -1286,7 +1300,7 @@ function validateConfigObjectWithPluginsBase(
     if (hasStalePluginEvidenceForUnknownWebSearchProvider(trimmed)) {
       warnings.push({
         ...issue,
-        message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+        message: `${issue.message} (stale web search plugin config ignored; run ${doctorFixCommand} to remove stale config, or install the plugin)`,
       });
       return;
     }
@@ -1410,6 +1424,7 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
+        const doctorFixCommand = formatDoctorFixCommand(validationEnv);
         const issue = {
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
@@ -1417,7 +1432,7 @@ function validateConfigObjectWithPluginsBase(
         if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
           warnings.push({
             ...issue,
-            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+            message: `${issue.message} (stale channel plugin config ignored; run ${doctorFixCommand} to remove stale config, or install the plugin)`,
           });
         } else {
           issues.push(issue);
@@ -1609,7 +1624,12 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean; officialInstallHint?: boolean; missingMessage?: string | null },
+    opts?: {
+      warnOnly?: boolean;
+      officialInstallHint?: boolean;
+      missingMessage?: string | null;
+      env?: NodeJS.ProcessEnv;
+    },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1631,7 +1651,10 @@ function validateConfigObjectWithPluginsBase(
     }
     if (opts?.warnOnly && opts.officialInstallHint !== false) {
       const externalInstallWarning =
-        opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
+        opts.missingMessage ??
+        formatMissingOfficialExternalPluginWarning(pluginId, {
+          env: opts?.env ?? validationEnv,
+        });
       if (externalInstallWarning) {
         const normalizedPluginId = normalizePluginId(pluginId);
         if (!opts.missingMessage && normalizedPluginId) {
@@ -1724,12 +1747,14 @@ function validateConfigObjectWithPluginsBase(
       Boolean(
         formatMissingOfficialExternalPluginWarning(memorySlot, {
           selectedMissingMemorySlot: true,
+          env: validationEnv,
         }),
       );
     pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
       warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
       missingMessage: formatMissingOfficialExternalPluginWarning(memorySlot, {
         selectedMissingMemorySlot: true,
+        env: validationEnv,
       }),
     });
   }

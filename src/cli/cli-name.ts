@@ -54,3 +54,10 @@ export function replaceCliName(command: string, cliName = resolveCliName()): str
     return `${runner ?? ""}${cliName}`;
   });
 }
+
+/** Replace embedded `openclaw <subcommand>` tokens in user-visible copy. */
+const EMBEDDED_CLI_NAME_RE = /(^|[\s`'"])openclaw(?=[\s`]|$|[.,;:!?])/g;
+
+export function replaceEmbeddedCliNames(value: string, cliName = resolveCliName()): string {
+  return value.replace(EMBEDDED_CLI_NAME_RE, `$1${cliName}`);
+}

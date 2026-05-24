@@ -1,6 +1,8 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { resolveCliName } from "./cli-name.js";
 import { formatCliCommand } from "./command-format.js";
+import { productizeUserCopy } from "./product-surface.js";
 
 type FormatCliFailureOptions = {
   title: string;
@@ -18,31 +20,37 @@ function shouldShowStack(argv: string[] | undefined, env: NodeJS.ProcessEnv): bo
   return hasDebugArg(argv) || isTruthyEnvValue(env.OPENCLAW_DEBUG);
 }
 
-function pushPrefixed(out: string[], value: string): void {
+function cliTag(env: NodeJS.ProcessEnv): string {
+  return `[${resolveCliName([], env)}]`;
+}
+
+function pushPrefixed(out: string[], value: string, env: NodeJS.ProcessEnv): void {
+  const tag = cliTag(env);
   for (const line of value.split("\n")) {
     if (line.trim().length > 0) {
-      out.push(`[openclaw] ${line}`);
+      out.push(`${tag} ${line}`);
     }
   }
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   const env = options.env ?? process.env;
+  const tag = cliTag(env);
   const lines = [
-    `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatErrorMessage(options.error)}`,
+    `${tag} ${productizeUserCopy(options.title, env)}`,
+    `${tag} Reason: ${formatErrorMessage(options.error)}`,
   ];
 
   if (shouldShowStack(options.argv, env)) {
-    lines.push("[openclaw] Stack:");
-    pushPrefixed(lines, formatUncaughtError(options.error));
+    lines.push(`${tag} Stack:`);
+    pushPrefixed(lines, formatUncaughtError(options.error), env);
   } else {
-    lines.push("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
+    lines.push(`${tag} Debug: set OPENCLAW_DEBUG=1 to include the stack trace.`);
   }
 
   if (options.includeDoctorHint !== false) {
-    lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
+    lines.push(`${tag} Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
-  lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);
+  lines.push(`${tag} Help: ${formatCliCommand("openclaw --help", env)}`);
   return lines;
 }

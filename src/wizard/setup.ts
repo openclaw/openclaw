@@ -1,7 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { commitConfigWriteWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
-import { productizeUserCopy } from "../cli/product-surface.js";
+import { productizeUserCopy, resolveProductDocUrl } from "../cli/product-surface.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -22,6 +22,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { mergeClaworksProductDefaults } from "./setup.claworks-defaults.js";
 import { detectSetupMigrationSources, runSetupMigrationImport } from "./setup.migration-import.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
@@ -206,7 +207,7 @@ export async function runSetupWizard(
         [
           ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
           "",
-          "Docs: https://docs.openclaw.ai/gateway/configuration",
+          `Docs: ${resolveProductDocUrl("/gateway/configuration")}`,
         ].join("\n"),
         "Config issues",
       );

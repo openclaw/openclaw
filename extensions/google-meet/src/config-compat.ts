@@ -1,4 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -31,8 +34,7 @@ function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "google-meet", "config", "realtime"],
-    message:
-      'plugins.entries.google-meet.config.realtime.provider="google" is legacy for Gemini Live bidi mode; use realtime.voiceProvider="google" and realtime.transcriptionProvider="openai". Run "openclaw doctor --fix".',
+    message: `plugins.entries.google-meet.config.realtime.provider="google" is legacy for Gemini Live bidi mode; use realtime.voiceProvider="google" and realtime.transcriptionProvider="openai". ${DOCTOR_FIX_HINT}`,
     match: hasLegacyGoogleRealtimeProvider,
   },
 ];

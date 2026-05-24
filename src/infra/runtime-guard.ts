@@ -1,4 +1,5 @@
 import process from "node:process";
+import { resolveCliName } from "../cli/cli-name.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 type RuntimeKind = "node" | "unknown";
@@ -108,14 +109,15 @@ export function assertSupportedRuntime(
   const runtimeLabel =
     details.kind === "unknown" ? "unknown runtime" : `${details.kind} ${versionLabel}`;
   const execLabel = details.execPath ?? "unknown";
+  const cliName = resolveCliName();
 
   runtime.error(
     [
-      "openclaw requires Node >=22.19.0.",
+      `${cliName} requires Node >=22.19.0.`,
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
       "Install Node: https://nodejs.org/en/download",
-      "Upgrade Node and re-run openclaw.",
+      `Upgrade Node and re-run ${cliName}.`,
     ].join("\n"),
   );
   runtime.exit(1);

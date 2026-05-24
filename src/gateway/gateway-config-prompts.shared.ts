@@ -1,3 +1,4 @@
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
@@ -25,11 +26,11 @@ export const TAILSCALE_MISSING_BIN_NOTE_LINES = [
   "You can continue setup, but serve/funnel will fail at runtime.",
 ] as const;
 
-export const TAILSCALE_DOCS_LINES = [
+export const TAILSCALE_DOCS_LINES: readonly string[] = [
   "Docs:",
-  "https://docs.openclaw.ai/gateway/tailscale",
-  "https://docs.openclaw.ai/web",
-] as const;
+  resolveProductDocUrl("/gateway/tailscale"),
+  resolveProductDocUrl("/web"),
+];
 
 function normalizeTailnetHostForUrl(rawHost: string): string | null {
   const trimmed = rawHost.trim().replace(/\.$/, "");

@@ -127,10 +127,7 @@ export async function detectLearnOpportunities(runtime: ClaworksRuntime): Promis
     // 收集最频繁的 stub 样本（最多 3 条）
     const samples = recentStubEvents
       .slice(0, 3)
-      .map((e) => {
-        const m = e.payload as Record<string, unknown> | undefined;
-        return typeof m?.input === "string" ? m.input.slice(0, 60) : e.source;
-      })
+      .map((e) => e.type || e.source)
       .filter(Boolean);
 
     await kernel.publish("autonomy.learn_opportunity", "autonomy-engine", {

@@ -5,6 +5,7 @@ import {
   formatPluginInstallPathIssue,
   removePluginFromConfig,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
@@ -18,6 +19,9 @@ import {
   resolveMatrixMigrationStatus,
 } from "./matrix-migration.runtime.js";
 import { isRecord } from "./record-shared.js";
+
+const DOCTOR_FIX_COMMAND = formatCliCommand("openclaw doctor --fix");
+const MATRIX_INSTALL_COMMAND = formatCliCommand("openclaw plugins install @openclaw/matrix");
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -55,7 +59,7 @@ export function formatMatrixLegacyStatePreview(
     `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
     `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
     ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
-    '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
+    `- Run "${DOCTOR_FIX_COMMAND}" to migrate this Matrix state now.`,
   ].join("\n");
 }
 
@@ -73,7 +77,7 @@ export function formatMatrixLegacyCryptoPreview(
         `- Legacy crypto store: ${plan.legacyCryptoPath}`,
         `- New recovery key file: ${plan.recoveryKeyPath}`,
         `- Migration state file: ${plan.statePath}`,
-        '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
+        `- Run "${DOCTOR_FIX_COMMAND}" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.`,
       ].join("\n"),
     );
   }
@@ -91,7 +95,7 @@ export async function collectMatrixInstallPathWarnings(cfg: OpenClawConfig): Pro
   return formatPluginInstallPathIssue({
     issue,
     pluginLabel: "Matrix",
-    defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
+    defaultInstallCommand: MATRIX_INSTALL_COMMAND,
   }).map((entry) => `- ${entry}`);
 }
 
@@ -155,7 +159,7 @@ export async function applyMatrixDoctorRepair(params: {
         `- Failed creating a Matrix migration snapshot before repair: ${String(error)}`,
       );
       warnings.push(
-        '- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".',
+        `- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "${DOCTOR_FIX_COMMAND}".`,
       );
     }
   } else if (migrationStatus.pending) {

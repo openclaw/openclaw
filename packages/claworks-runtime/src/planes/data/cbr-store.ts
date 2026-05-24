@@ -22,7 +22,11 @@ export interface CbrCase {
 }
 
 export interface CbrStore {
-  add(problem: string, solution: string, meta?: Partial<CbrCase>): CbrCase;
+  add(
+    problem: string,
+    solution: string,
+    meta?: Partial<CbrCase> & Record<string, unknown>,
+  ): CbrCase;
   /** 关键词相似度匹配搜索 */
   search(query: string, limit?: number): CbrCase[];
   recordOutcome(caseId: string, outcome: CbrCase["outcome"]): void;
@@ -112,21 +116,27 @@ export function createCbrStore(): CbrStore {
 
   return {
     add(problem, solution, meta = {}) {
-      const id = meta.id ?? randomUUID();
+      const id = typeof meta.id === "string" ? meta.id : randomUUID();
       const now = new Date();
-      const keys = [...tokenize(problem), ...(meta.tags ?? []).flatMap(tokenize)];
+      const tags = Array.isArray(meta.tags)
+        ? meta.tags.filter((t): t is string => typeof t === "string")
+        : undefined;
+      const keys = [...tokenize(problem), ...(tags ?? []).flatMap(tokenize)];
       const entry: CbrCase = {
         id,
         problem,
         solution,
-        outcome: meta.outcome ?? "success",
+        outcome:
+          meta.outcome === "failed" || meta.outcome === "partial" || meta.outcome === "success"
+            ? meta.outcome
+            : "success",
         similarity_keys: [...new Set(keys)],
-        useCount: meta.useCount ?? 0,
-        lastUsedAt: meta.lastUsedAt ?? now,
-        createdAt: meta.createdAt ?? now,
-        tags: meta.tags,
-        playbookId: meta.playbookId,
-        runId: meta.runId,
+        useCount: typeof meta.useCount === "number" ? meta.useCount : 0,
+        lastUsedAt: meta.lastUsedAt instanceof Date ? meta.lastUsedAt : now,
+        createdAt: meta.createdAt instanceof Date ? meta.createdAt : now,
+        tags,
+        playbookId: typeof meta.playbookId === "string" ? meta.playbookId : undefined,
+        runId: typeof meta.runId === "string" ? meta.runId : undefined,
       };
       cases.set(id, entry);
       return entry;

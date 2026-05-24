@@ -1032,7 +1032,7 @@ describe("discoverOpenClawPlugins", () => {
       level: "warn",
       pluginId: "guardrail-bridge",
       source: path.join(pluginDir, "openclaw.extension.json"),
-      messageIncludes: 'run "openclaw doctor --fix"',
+      messageIncludes: "run openclaw doctor --fix",
     });
   });
 

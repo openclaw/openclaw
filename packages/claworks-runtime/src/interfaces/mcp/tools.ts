@@ -426,10 +426,10 @@ export async function callClaworksMcpTool(
       case "cw_check_constitution":
         return {
           capability_id: String(args.capability_id ?? ""),
-          ...runtime.constitution.check(String(args.capability_id ?? ""), {
+          ...(runtime.constitution?.check(String(args.capability_id ?? ""), {
             source: args.source ? String(args.source) : undefined,
             userId: args.user_id ? String(args.user_id) : undefined,
-          }),
+          }) ?? { action: "allow", tier: 0, reason: "constitution unavailable" }),
         };
     }
   }

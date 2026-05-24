@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,7 +17,7 @@ export async function setupInternalHooks(
       "Hooks let you automate actions when agent commands are issued.",
       "Example: Save session context to memory when you issue /new or /reset.",
       "",
-      "Learn more: https://docs.openclaw.ai/automation/hooks",
+      `Learn more: ${resolveProductDocUrl("/automation/hooks")}`,
     ].join("\n"),
     t("wizard.hooks.introTitle"),
   );

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
@@ -894,7 +895,7 @@ async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: 
     domain,
     serviceTarget: `${domain}/${label}`,
     plistPath: params.plistPath,
-    actionHint: "openclaw gateway install --force",
+    actionHint: formatCliCommand("openclaw gateway install --force"),
   });
 }
 
@@ -976,7 +977,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
       domain: params.domain,
       serviceTarget: params.serviceTarget,
       plistPath: params.plistPath,
-      actionHint: "openclaw gateway start",
+      actionHint: formatCliCommand("openclaw gateway start"),
     });
   } catch {
     // Best-effort only. Preserve the original kickstart failure below.
@@ -1046,7 +1047,7 @@ export async function restartLaunchAgent({
       domain,
       serviceTarget,
       plistPath,
-      actionHint: "openclaw gateway restart",
+      actionHint: formatCliCommand("openclaw gateway restart"),
     });
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
@@ -1068,7 +1069,7 @@ export async function restartLaunchAgent({
     domain,
     serviceTarget,
     plistPath,
-    actionHint: "openclaw gateway restart",
+    actionHint: formatCliCommand("openclaw gateway restart"),
   });
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
   return { outcome: "completed" };

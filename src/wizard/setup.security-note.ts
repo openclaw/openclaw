@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import { t } from "./i18n/index.js";
 
 const heading = (text: string) => chalk.bold(text);
@@ -38,6 +39,6 @@ export function getSecurityNoteMessage(): string {
     formatCliCommand("openclaw security audit --fix"),
     "",
     heading(t("wizard.security.learnMore")),
-    "- https://docs.openclaw.ai/gateway/security",
+    `- ${resolveProductDocUrl("/gateway/security")}`,
   ].join("\n");
 }

@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { isClaworksProduct } from "../config/paths.js";
 import {
@@ -63,7 +64,7 @@ export async function runDoctorLintCli(
       runtime.error("doctor --lint: config file exists but does not parse cleanly.");
       for (const issue of snapshot.issues) {
         const path = issue.path || "<root>";
-        runtime.error(`- ${path}: ${issue.message}`);
+        runtime.error(`- ${path}: ${productizeUserCopy(issue.message)}`);
       }
     }
     return exitCodeFromFindings(findings, sevMin);
@@ -102,9 +103,11 @@ export async function runDoctorLintCli(
       for (const f of visible) {
         const where = f.path !== undefined ? ` ${f.path}` : "";
         const line = f.line !== undefined ? `:${f.line}` : "";
-        process.stdout.write(`  [${f.severity}] ${f.checkId}${where}${line} - ${f.message}\n`);
+        process.stdout.write(
+          `  [${f.severity}] ${f.checkId}${where}${line} - ${productizeUserCopy(f.message)}\n`,
+        );
         if (f.fixHint !== undefined) {
-          process.stdout.write(`    fix: ${f.fixHint}\n`);
+          process.stdout.write(`    fix: ${productizeUserCopy(f.fixHint)}\n`);
         }
       }
     }

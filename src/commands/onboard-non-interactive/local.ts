@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveProductDocUrl } from "../../cli/product-surface.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -263,7 +264,7 @@ export async function runNonInteractiveLocalSetup(params: {
           daemonInstall.skippedReason === "systemd-user-unavailable"
             ? [
                 "Fix: rerun without `--install-daemon` for one-shot setup, or enable a working user-systemd session and retry.",
-                "If your auth profile uses env-backed refs, keep those env vars set in the shell that runs `openclaw gateway run` or `openclaw agent --local`.",
+                `If your auth profile uses env-backed refs, keep those env vars set in the shell that runs \`${formatCliCommand("openclaw gateway run")}\` or \`${formatCliCommand("openclaw agent --local")}\`.`,
               ]
             : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
       });
@@ -365,7 +366,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   if (!opts.json) {
     runtime.log(
-      `Tip: run \`${formatCliCommand("openclaw configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.openclaw.ai/tools/web`,
+      `Tip: run \`${formatCliCommand("openclaw configure --section web")}\` to store your Brave API key for web_search. Docs: ${resolveProductDocUrl("/tools/web")}`,
     );
   }
 }

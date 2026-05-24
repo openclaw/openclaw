@@ -4,6 +4,9 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+
+const DOCTOR_FIX_HINT = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
 
 type GoogleChatChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
 
@@ -104,14 +107,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
   {
     path: ["channels", "googlechat"],
-    message:
-      'channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: hasLegacyGoogleChatGroupAllowAlias,
   },
   {
     path: ["channels", "googlechat", "accounts"],
-    message:
-      'channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead. Run "openclaw doctor --fix".',
+    message: `channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyAccountAliases(value, hasLegacyGoogleChatGroupAllowAlias),
   },
 ];

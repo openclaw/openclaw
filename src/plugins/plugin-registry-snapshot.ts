@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -51,8 +52,18 @@ export type PluginRegistrySnapshotResult = {
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 
+function formatPersistedRegistryRefreshCommand(): string {
+  return formatCliCommand("openclaw plugins registry --refresh");
+}
+
+function formatPersistedRegistryStaleMessage(detail: string): string {
+  return `${detail} Run \`${formatPersistedRegistryRefreshCommand()}\` to update the persisted registry.`;
+}
+
 function formatDeprecatedPersistedRegistryDisableWarning(): string {
-  return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
+  const refresh = formatPersistedRegistryRefreshCommand();
+  const doctorFix = formatCliCommand("openclaw doctor --fix");
+  return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`${refresh}\` or \`${doctorFix}\` to repair registry state.`;
 }
 
 export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
@@ -301,36 +312,41 @@ export function loadPluginRegistrySnapshotWithMetadata(
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-policy",
-          message:
-            "Persisted plugin registry policy does not match current config; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry policy does not match current config; using derived plugin index.",
+          ),
         });
       } else if (hasMissingPersistedPluginSource(persistedIndex)) {
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry points at missing plugin files; using derived plugin index.",
+          ),
         });
       } else if (hasMismatchedPersistedBundledPluginRoot(persistedIndex, env)) {
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index.",
+          ),
         });
       } else if (hasStalePersistedPluginDiagnostics(persistedIndex)) {
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry contains diagnostics referencing missing paths; using derived plugin index.",
+          ),
         });
       } else if (hasStalePersistedPluginMetadata(persistedIndex)) {
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index.",
+          ),
         });
       } else if (
         hasRecoveredInstallRecordsMissingFromPersistedIndex(
@@ -342,8 +358,9 @@ export function loadPluginRegistrySnapshotWithMetadata(
         diagnostics.push({
           level: "warn",
           code: "persisted-registry-stale-source",
-          message:
-            "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+          message: formatPersistedRegistryStaleMessage(
+            "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index.",
+          ),
         });
       } else {
         return {

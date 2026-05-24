@@ -1,3 +1,5 @@
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
@@ -82,8 +84,8 @@ export function buildGatewayConnectionDetailsWithResolvers(
         allowPrivateWs
           ? undefined
           : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
-        "Doctor: openclaw doctor --fix",
-        "Docs: https://docs.openclaw.ai/gateway/remote",
+        `Doctor: ${formatCliCommand("openclaw doctor --fix")}`,
+        `Docs: ${resolveProductDocUrl("/gateway/remote")}`,
       ].join("\n"),
     );
   }

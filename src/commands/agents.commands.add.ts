@@ -19,6 +19,8 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../cli/plugins-install-record-commit.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
+import { resolveProductDisplayName } from "../cli/product-surface.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { saveJsonFile } from "../infra/json-file.js";
@@ -267,12 +269,12 @@ export async function agentsAddCommand(
 
   const prompter = createClackPrompter();
   try {
-    await prompter.intro("Add OpenClaw agent");
+    await prompter.intro(`Add ${resolveProductDisplayName()} agent`);
     const name =
       nameInput ??
       (await prompter.text({
         message: "Agent name",
-        validate: (value) => {
+        validate: (value: string) => {
           if (!value?.trim()) {
             return "Required";
           }
@@ -308,7 +310,7 @@ export async function agentsAddCommand(
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      validate: (value: string) => (value?.trim() ? undefined : "Required"),
     });
     const workspaceDir = resolveUserPath(
       normalizeOptionalString(workspaceInput) || workspaceDefault,
@@ -464,7 +466,7 @@ export async function agentsAddCommand(
         await prompter.note(
           [
             "Routing unchanged. Add bindings when you're ready.",
-            "Docs: https://docs.openclaw.ai/concepts/multi-agent",
+            `Docs: ${resolveProductDocUrl("/concepts/multi-agent")}`,
           ].join("\n"),
           "Routing",
         );

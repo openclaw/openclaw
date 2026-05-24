@@ -1,3 +1,8 @@
+import {
+  resolveProductDefaultGatewayPort,
+  resolveProductDocUrl,
+  resolveProductLocalGatewayWsUrl,
+} from "../cli/product-surface.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { isSecureWebSocketUrl } from "../gateway/net.js";
@@ -15,16 +20,18 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+function resolveDefaultGatewayUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveProductLocalGatewayWsUrl(env);
+}
 
 function buildLabel(beacon: GatewayBonjourBeacon): string {
   return buildGatewayDiscoveryLabel(beacon);
 }
 
-function ensureWsUrl(value: string): string {
+function ensureWsUrl(value: string, env: NodeJS.ProcessEnv = process.env): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    return DEFAULT_GATEWAY_URL;
+    return resolveDefaultGatewayUrl(env);
   }
   return trimmed;
 }
@@ -50,7 +57,7 @@ export async function promptRemoteGatewayConfig(
   options?: { secretInputMode?: SecretInputMode },
 ): Promise<OpenClawConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
-  let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
+  let suggestedUrl = cfg.gateway?.remote?.url ?? resolveDefaultGatewayUrl();
   let discoveryTlsFingerprint: string | undefined;
   let trustedDiscoveryUrl: string | undefined;
 
@@ -66,7 +73,7 @@ export async function promptRemoteGatewayConfig(
     await prompter.note(
       [
         "Bonjour discovery requires dns-sd (macOS) or avahi-browse (Linux).",
-        "Docs: https://docs.openclaw.ai/gateway/discovery",
+        `Docs: ${resolveProductDocUrl("/gateway/discovery")}`,
       ].join("\n"),
       "Discovery",
     );
@@ -140,15 +147,16 @@ export async function promptRemoteGatewayConfig(
           );
         } else {
           // Clear the discovered endpoint so the manual prompt falls back to a safe default.
-          suggestedUrl = DEFAULT_GATEWAY_URL;
+          suggestedUrl = resolveDefaultGatewayUrl();
         }
       } else {
-        suggestedUrl = DEFAULT_GATEWAY_URL;
+        suggestedUrl = resolveDefaultGatewayUrl();
+        const gatewayPort = resolveProductDefaultGatewayPort();
         await prompter.note(
           [
             "Start a tunnel before using the CLI:",
-            `ssh -N -L 18789:127.0.0.1:18789 <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
-            "Docs: https://docs.openclaw.ai/gateway/remote",
+            `ssh -N -L ${gatewayPort}:127.0.0.1:${gatewayPort} <user>@${host}${target.sshPort ? ` -p ${target.sshPort}` : ""}`,
+            `Docs: ${resolveProductDocUrl("/gateway/remote")}`,
           ].join("\n"),
           t("wizard.remote.sshTunnelTitle"),
         );

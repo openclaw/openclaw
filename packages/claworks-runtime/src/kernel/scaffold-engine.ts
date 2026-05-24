@@ -444,7 +444,9 @@ ${examplesText || "（无示例，请基于场景推断典型规则）"}
               Array.isArray(tableData.rules)
             ) {
               for (const rule of tableData.rules as Array<Record<string, unknown>>) {
-                runtime.ruleEngine.addRule({ ...rule, table_id: tableData.id });
+                runtime.ruleEngine.addRule(String(tableData.id ?? "default"), {
+                  ...(rule as import("./rule-engine.js").Rule),
+                });
               }
             }
           } catch {

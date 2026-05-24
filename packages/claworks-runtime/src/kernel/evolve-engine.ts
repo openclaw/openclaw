@@ -544,15 +544,15 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
           const durationMs = Number(payload["duration_ms"] ?? 0);
           try {
             runtime.cbrStore.add(
+              `Playbook '${playbookId}' 执行失败: ${error.slice(0, 300)}`,
+              "失败案例已记录，供下次 propose/分析时参考。",
               {
-                problem: `Playbook '${playbookId}' 执行失败: ${error.slice(0, 300)}`,
                 category: "playbook_failure",
                 playbook_id: playbookId,
                 duration_ms: durationMs,
                 failed_at: new Date().toISOString(),
+                auto_learned: true,
               },
-              `失败案例已记录，供下次 propose/分析时参考。`,
-              { auto_learned: true },
             );
           } catch {
             // 记录失败不影响主流程

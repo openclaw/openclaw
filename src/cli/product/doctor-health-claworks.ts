@@ -3,6 +3,7 @@ import { discoverPackSourceDir, repairClaworksJsonConfig } from "@claworks/runti
 import type { DoctorOptions } from "../../commands/doctor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { productizeUserCopy } from "../product-surface.js";
 
 export async function runClaworksProductDoctorHealth(ctx: {
   configPath: string;
@@ -42,9 +43,9 @@ export async function runClaworksProductDoctorHealth(ctx: {
   });
   for (const finding of isolationFindings) {
     const prefix = finding.severity === "error" ? "✗" : finding.severity === "warning" ? "⚠" : "•";
-    lines.push(`${prefix} ${finding.message}`);
+    lines.push(`${prefix} ${productizeUserCopy(finding.message)}`);
     if (finding.fixHint) {
-      lines.push(`  Fix: ${finding.fixHint}`);
+      lines.push(`  Fix: ${productizeUserCopy(finding.fixHint)}`);
     }
   }
 

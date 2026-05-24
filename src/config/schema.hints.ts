@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
@@ -134,7 +135,9 @@ export function buildBaseHints(): ConfigUiHints {
       continue;
     }
     const current = hints[path];
-    hints[path] = current ? { ...current, help } : { help };
+    hints[path] = current
+      ? { ...current, help: productizeUserCopy(help) }
+      : { help: productizeUserCopy(help) };
   }
   for (const [path, placeholder] of Object.entries(FIELD_PLACEHOLDERS)) {
     if (isPluginOwnedChannelHintPath(path)) {

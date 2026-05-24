@@ -1,7 +1,10 @@
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ELEVENLABS_TALK_PROVIDER_ID, migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
+
+const DOCTOR_FIX_HINT = `Run ${formatCliCommand("openclaw doctor --fix")}.`;
 
 export function hasLegacyTalkFields(value: unknown): boolean {
   const talk = isRecord(value) ? value : null;
@@ -16,8 +19,7 @@ export function hasLegacyTalkFields(value: unknown): boolean {
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["talk"],
-    message:
-      "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> and run openclaw doctor --fix.",
+    message: `talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> and ${DOCTOR_FIX_HINT}`,
     match: hasLegacyTalkFields,
   },
 ];

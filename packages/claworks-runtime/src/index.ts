@@ -6,6 +6,7 @@
 
 export * from "./claworks/index.js";
 export { registerClaworksPacksCli } from "./claworks/packs-cli.js";
+export { registerClaworksInitCli } from "./claworks/init-cli.js";
 
 export {
   createIngressRouter,

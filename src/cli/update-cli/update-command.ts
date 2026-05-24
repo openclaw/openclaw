@@ -99,7 +99,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveUserPath } from "../../utils.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { isClaworksCliProduct, replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
@@ -113,6 +113,7 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
+import { productizeUserCopy } from "../product-surface.js";
 import {
   convergenceWarningsToOutcomes,
   runPostCorePluginConvergence,
@@ -162,7 +163,28 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
 ] as const;
-const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
+const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = () =>
+  `Run ${formatCliCommand("openclaw doctor --fix")} to attempt automatic repair.`;
+
+function formatGlobalPackageInstallHints(): string[] {
+  if (isClaworksCliProduct()) {
+    return [
+      "Bare `npm i -g claworks` may not match your fork checkout; prefer `git pull && pnpm install && pnpm build`.",
+      `After upgrading Node, rerun \`${formatCliCommand("claworks update")}\` from the checkout.`,
+    ];
+  }
+  return [
+    "Bare `npm i -g openclaw` can silently install an older compatible release.",
+    "After upgrading Node, use `npm i -g openclaw@latest`.",
+  ];
+}
+
+function formatNonGitInstallUpdateExamples(): string {
+  if (isClaworksCliProduct()) {
+    return "Examples: `git pull && pnpm install && pnpm build`, or follow your fork release install docs.";
+  }
+  return `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``;
+}
 
 async function createUpdateConfigSnapshot(): Promise<void> {
   await createPreUpdateConfigSnapshot({
@@ -510,7 +532,7 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
 }
 
 function formatPostUpdatePluginInspectGuidance(pluginId: string): string {
-  return `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`;
+  return `Run ${formatCliCommand(`openclaw plugins inspect ${pluginId} --runtime --json`)} for details.`;
 }
 
 function createPostUpdatePluginWarning(params: {
@@ -519,7 +541,7 @@ function createPostUpdatePluginWarning(params: {
 }): PostUpdatePluginWarning {
   const reason = params.reason.trim() || "unknown plugin post-update failure";
   const guidance = [
-    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
+    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE(),
     ...(params.pluginId ? [formatPostUpdatePluginInspectGuidance(params.pluginId)] : []),
   ];
   return {
@@ -572,8 +594,8 @@ export function buildInvalidConfigPostCoreUpdateResult(): {
   result: PostCorePluginUpdateResult;
 } {
   const guidance = [
-    "Run `openclaw doctor` to inspect the config validation errors.",
-    "Once the config parses, rerun `openclaw update`.",
+    `Run \`${formatCliCommand("openclaw doctor")}\` to inspect the config validation errors.`,
+    `Once the config parses, rerun \`${formatCliCommand("openclaw update")}\`.`,
   ];
   const message =
     "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.";
@@ -761,7 +783,7 @@ type ManagedServiceRootRedirect = {
 };
 
 function formatGatewayAncestryBlockMessage(pid: number): string {
-  return `openclaw update detected it is running inside the gateway process tree.
+  return `${replaceCliName("openclaw update", CLI_NAME)} detected it is running inside the gateway process tree.
 Gateway PID ${pid} is an ancestor of this process, so this updater cannot safely stop or restart the gateway that owns it.
 Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
 }
@@ -969,14 +991,14 @@ async function resolvePackageRuntimePreflightError(params: {
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
+  const pkgName = isClaworksCliProduct() ? "claworks" : "openclaw";
   return [
-    `${runtimeLabel} is too old for openclaw@${targetLabel}.`,
+    `${runtimeLabel} is too old for ${pkgName}@${targetLabel}.`,
     `The requested package requires ${status.nodeEngine}.`,
     runtime.nodeRunner
-      ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-      : "Upgrade Node to 22.19+ or Node 24, then rerun `openclaw update`.",
-    "Bare `npm i -g openclaw` can silently install an older compatible release.",
-    "After upgrading Node, use `npm i -g openclaw@latest`.",
+      ? `Upgrade the Node runtime that owns the managed Gateway service, then rerun \`${formatCliCommand("openclaw update")}\`.`
+      : `Upgrade Node to 22.19+ or Node 24, then rerun \`${formatCliCommand("openclaw update")}\`.`,
+    ...formatGlobalPackageInstallHints(),
   ].join("\n");
 }
 
@@ -3327,20 +3349,20 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         ),
       );
       defaultRuntime.log(
-        theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
+        theme.muted(
+          `Commit, stash, or discard the local changes, then rerun \`${formatCliCommand("openclaw update")}\`.`,
+        ),
       );
     }
     if (result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
+          productizeUserCopy(
+            `Skipped: this OpenClaw install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${replaceCliName(formatCliCommand("openclaw doctor"), CLI_NAME)}\` and \`${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}\`.`,
+          ),
         ),
       );
-      defaultRuntime.log(
-        theme.muted(
-          `Examples: \`${replaceCliName("npm i -g openclaw@latest", CLI_NAME)}\` or \`${replaceCliName("pnpm add -g openclaw@latest", CLI_NAME)}\``,
-        ),
-      );
+      defaultRuntime.log(theme.muted(formatNonGitInstallUpdateExamples()));
     }
     defaultRuntime.exit(0);
     return;

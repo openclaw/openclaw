@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy, resolveProductDocUrl } from "../cli/product-surface.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -69,7 +70,7 @@ export async function setupWizardCommand(
     runtime.error(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
-        "Read: https://docs.openclaw.ai/security",
+        `Read: ${resolveProductDocUrl("/security")}`,
         `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
@@ -88,12 +89,14 @@ export async function setupWizardCommand(
 
   if (process.platform === "win32") {
     runtime.log(
-      [
-        "Windows detected - OpenClaw runs great on WSL2!",
-        "Native Windows might be trickier.",
-        "Quick setup: wsl --install (one command, one reboot)",
-        "Guide: https://docs.openclaw.ai/windows",
-      ].join("\n"),
+      productizeUserCopy(
+        [
+          "Windows detected - OpenClaw runs great on WSL2!",
+          "Native Windows might be trickier.",
+          "Quick setup: wsl --install (one command, one reboot)",
+          `Guide: ${resolveProductDocUrl("/windows")}`,
+        ].join("\n"),
+      ),
     );
   }
 

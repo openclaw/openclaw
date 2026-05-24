@@ -10,6 +10,7 @@ import {
   resolveChannelAccountStatusRows,
   type RuntimeChannelStatusPayload,
 } from "../../channels/status/read-model.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -338,7 +339,7 @@ export async function channelsListCommand(
   runtime.log("");
   runtime.log(
     theme.muted(
-      "Model provider usage moved out of `channels list` — see `openclaw status` or `openclaw models list`.",
+      `Model provider usage moved out of \`channels list\` — see \`${formatCliCommand("openclaw status")}\` or \`${formatCliCommand("openclaw models list")}\`.`,
     ),
   );
   runtime.log(`Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`);

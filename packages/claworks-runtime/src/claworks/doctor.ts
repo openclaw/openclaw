@@ -158,7 +158,7 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     id: "openclaw_bridge_llm",
     status: hasLlmRoute ? "ok" : "warn",
     message: hasLlmRoute
-      ? "model_router configured for OpenClaw LLM bridge"
+      ? "model_router configured for Gateway LLM bridge"
       : "No model_router — Playbook llm/subagent steps need agents.defaults.model + bridge at runtime",
   });
 

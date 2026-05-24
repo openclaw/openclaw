@@ -2,6 +2,7 @@ import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-st
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveProductDocUrl } from "../cli/product-surface.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
@@ -237,7 +238,7 @@ export async function collectSecurityWarnings(
   const saferRemoteAccessLines = [
     "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
     "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
-    "  Docs: https://docs.openclaw.ai/gateway/remote",
+    `  Docs: ${resolveProductDocUrl("/gateway/remote")}`,
   ];
 
   if (isExposed) {

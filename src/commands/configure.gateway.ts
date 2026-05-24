@@ -1,5 +1,5 @@
 import { formatPortRangeHint } from "../cli/error-format.js";
-import { productizeUserCopy } from "../cli/product-surface.js";
+import { productizeUserCopy, resolveProductDocUrl } from "../cli/product-surface.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -264,7 +264,7 @@ export async function promptGatewayConfig(
         "Only requests from specified proxy IPs will be trusted.",
         "",
         "Common use cases: Pomerium, Caddy + OAuth, Traefik + forward auth",
-        "Docs: https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+        `Docs: ${resolveProductDocUrl("/gateway/trusted-proxy-auth")}`,
       ].join("\n"),
       "Trusted Proxy Auth",
     );
