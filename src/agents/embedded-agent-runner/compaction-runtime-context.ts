@@ -118,7 +118,7 @@ export function resolveEmbeddedCompactionTarget(params: {
 export function resolveEmbeddedCompactionThinkingLevel(params: {
   config?: OpenClawConfig;
   agentId?: string | null;
-  thinkLevel?: ThinkLevel | string | null;
+  thinkLevel?: ThinkLevel | null;
 }): ThinkLevel {
   const configured = normalizeThinkLevel(
     resolveAgentCompactionConfig(params.config, params.agentId)?.thinkingLevel,
