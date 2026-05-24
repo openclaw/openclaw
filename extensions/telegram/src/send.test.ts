@@ -19,7 +19,7 @@ import {
   recordSentMessage,
   resetSentMessageCacheForTest,
   wasSentByBot,
-  __testing as sentMessageCacheTesting,
+  sentMessageCacheTestInternals,
 } from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
@@ -259,7 +259,7 @@ describe("sent-message-cache", () => {
   it("keeps legacy timestamp-only sent-message cache entries readable", () => {
     const now = Date.now();
 
-    expect(sentMessageCacheTesting.normalizePersistedRecord(now, now)).toMatchObject({
+    expect(sentMessageCacheTestInternals.normalizePersistedRecord(now, now)).toMatchObject({
       timestamp: now,
     });
   });

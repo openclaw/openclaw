@@ -263,6 +263,6 @@ export function resetSentMessageCacheForTest(): void {
   getSentMessageState().bucketsByPath.clear();
 }
 
-export const __testing = {
+export const sentMessageCacheTestInternals = {
   normalizePersistedRecord,
 };
