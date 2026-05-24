@@ -16,9 +16,12 @@ function resolveStaleContextWindowFix(params: {
   modelId: string;
   contextWindow: number;
 }): { stale: number; correct: number } | undefined {
+  if (params.providerId !== "deepseek") {
+    return undefined;
+  }
   const scopedModelId = params.modelId.includes("/")
     ? params.modelId
-    : `${params.providerId}/${params.modelId}`;
+    : `deepseek/${params.modelId}`;
   const fix = STALE_CONTEXT_WINDOW_FIXES[scopedModelId];
   return fix && params.contextWindow === fix.stale ? fix : undefined;
 }

@@ -107,12 +107,12 @@ describe("stale contextWindow migration", () => {
     expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
-  it("handles provider-prefixed model IDs", () => {
+  it("handles provider-prefixed model IDs under the native provider", () => {
     const changes: string[] = [];
     const raw = {
       models: {
         providers: {
-          opencode: {
+          deepseek: {
             models: [
               {
                 id: "deepseek/deepseek-v4-flash",
@@ -127,8 +127,33 @@ describe("stale contextWindow migration", () => {
 
     migration!.apply(raw, changes);
 
-    expect(raw.models.providers.opencode.models[0].contextWindow).toBe(1_000_000);
+    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(1_000_000);
     expect(changes).toHaveLength(1);
+  });
+
+  it("does not modify provider-prefixed ids from other providers", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                id: "deepseek/deepseek-v4-flash",
+                contextWindow: 200_000,
+                maxTokens: 61_440,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    expect(raw.models.providers.openrouter.models[0].contextWindow).toBe(200_000);
+    expect(changes).toHaveLength(0);
+    expect(migration!.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
   });
 
   it("skips models not in the stale fixes registry", () => {
