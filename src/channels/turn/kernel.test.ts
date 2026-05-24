@@ -241,6 +241,7 @@ describe("channel turn kernel", () => {
       requesterAccountId: "acct",
       requesterSenderId: "sender-1",
       conversationType: "group",
+      inboundPeer: ["sender", "sender-1", "123"],
     });
     expect(resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
     const supportRequest = latestDurableSupportRequest();
