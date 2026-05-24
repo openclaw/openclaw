@@ -4769,9 +4769,9 @@ describe("openai transport stream", () => {
   it("clamps max_completion_tokens to the remaining context budget for proxy-like endpoints when prompt + output would exceed contextWindow (covers #83086)", () => {
     // StepFun-style shape: large context window, max_tokens equal to context,
     // and a substantial prompt that should leave well under the context budget.
-    // 1_000_000 chars ~= 250_000 estimated tokens (with the 1.25x safety margin
-    // applied inside the estimator). The clamp should leave room for that input.
-    const systemPrompt = "x".repeat(1_000_000);
+    // 200_000 chars → estimated 62_500 input tokens (chars/4 * 1.25).
+    // That leaves remaining budget of 262_144 - 62_500 - 1 = 199_643 tokens.
+    const systemPrompt = "x".repeat(200_000);
     const params = buildOpenAICompletionsParams(
       {
         id: "step-router-v1",
@@ -4795,10 +4795,9 @@ describe("openai transport stream", () => {
 
     expect(typeof params.max_completion_tokens).toBe("number");
     const cap = params.max_completion_tokens as number;
-    expect(cap).toBeGreaterThan(0);
-    // Bounded strictly below contextWindow minus input estimate.
     const estimatedInputTokens = Math.ceil((systemPrompt.length / 4) * 1.25);
-    expect(cap).toBeLessThanOrEqual(262_144 - estimatedInputTokens - 1);
+    expect(cap).toBe(262_144 - estimatedInputTokens - 1);
+    expect(cap).toBeLessThan(262_144);
   });
 
   it("clamps max_completion_tokens for proxy-like endpoints when configured maxTokens >= contextWindow and prompt is small", () => {
