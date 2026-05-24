@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: split large build-time runtime dependencies into stable chunks so Linux/Docker install and package builds stay below the app chunk warning threshold.
 - Scripts: run the optional Discord native opus installer through the shared pnpm launcher and Windows CI coverage so native Windows installs avoid shell-mode package-manager shims.
 - Agents/MCP: bound bundled MCP `tools/list` catalog discovery so hung MCP servers do not block session tool materialization. (#85063) Thanks @nxmxbbd.
 - Scripts: run generated-module formatting through the shared pnpm launcher and Windows CI coverage so native Windows generator checks avoid shell-mode package-manager shims.
