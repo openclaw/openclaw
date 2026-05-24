@@ -227,8 +227,7 @@ HTTP servers connect over `sse` by default, or `streamable-http` when requested:
       "headers": {
         "Authorization": "Bearer local-dev-token"
       },
-      "connectionTimeoutMs": 30000,
-      "toolsListTimeoutMs": 30000
+      "connectionTimeoutMs": 30000
     }
   }
 }
@@ -249,9 +248,6 @@ Rules:
   descriptions and logs.
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   stdio and HTTP transports.
-- `toolsListTimeoutMs` optionally bounds post-connect MCP `tools/list` catalog
-  requests; when omitted, OpenClaw leaves the SDK request timeout in place so
-  slow-but-valid catalogs keep their previous behavior.
 
 For stdio startup safety, unsupported environment-variable entries are ignored
 with diagnostics instead of being passed through blindly.

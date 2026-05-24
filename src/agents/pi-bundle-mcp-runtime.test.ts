@@ -26,28 +26,28 @@ type RuntimeFactoryOptions = NonNullable<
 >;
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
 
-async function writeHangingListToolsMcpServer(params: {
+async function writeListToolsMcpServer(params: {
   filePath: string;
-  pidPath: string;
   logPath: string;
+  delayMs?: number;
+  hang?: boolean;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
     `#!/usr/bin/env node
 import fs from "node:fs/promises";
 
-const pidPath = ${JSON.stringify(params.pidPath)};
 const logPath = ${JSON.stringify(params.logPath)};
-
-await fs.writeFile(pidPath, String(process.pid), "utf8");
+const delayMs = ${params.delayMs ?? 0};
+const hang = ${params.hang === true};
 
 let buffer = "";
+let pendingTimer;
 let keepAlive;
 function log(line) {
   void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
 }
 function send(message) {
-  log("send " + String(message?.id ?? "") + " " + String(message?.method ?? "response"));
   process.stdout.write(JSON.stringify(message) + "\\n");
 }
 function handle(message) {
@@ -62,18 +62,43 @@ function handle(message) {
       result: {
         protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
         capabilities: { tools: {} },
-        serverInfo: { name: "hanging-list-tools", version: "1.0.0" },
+        serverInfo: { name: "test-list-tools", version: "1.0.0" },
       },
     });
     return;
   }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
   if (message.method === "tools/list") {
-    log("hang tools/list");
-    keepAlive ??= setInterval(() => {}, 1000);
+    if (hang) {
+      log("hang tools/list");
+      keepAlive = setInterval(() => {}, 1000);
+      return;
+    }
+    log("delay tools/list " + delayMs);
+    pendingTimer = setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [
+            {
+              name: "slow_tool",
+              description: "Returned after a slow catalog response.",
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+        },
+      });
+    }, delayMs);
   }
 }
 process.stdin.setEncoding("utf8");
 function shutdown() {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+  }
   if (keepAlive) {
     clearInterval(keepAlive);
   }
@@ -99,108 +124,6 @@ process.on("SIGINT", shutdown);`,
   );
 }
 
-async function writeDelayedListToolsMcpServer(params: {
-  filePath: string;
-  pidPath: string;
-  logPath: string;
-  delayMs: number;
-}): Promise<void> {
-  await writeExecutable(
-    params.filePath,
-    `#!/usr/bin/env node
-import fs from "node:fs/promises";
-
-const pidPath = ${JSON.stringify(params.pidPath)};
-const logPath = ${JSON.stringify(params.logPath)};
-const delayMs = ${JSON.stringify(params.delayMs)};
-
-await fs.writeFile(pidPath, String(process.pid), "utf8");
-
-let buffer = "";
-let pendingTimer;
-function log(line) {
-  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
-}
-function send(message) {
-  log("send " + String(message?.id ?? "") + " " + String(message?.method ?? "response"));
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
-function handle(message) {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  log("recv " + String(message.method ?? "unknown"));
-  if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-        capabilities: { tools: {} },
-        serverInfo: { name: "delayed-list-tools", version: "1.0.0" },
-      },
-    });
-    return;
-  }
-  if (message.method === "tools/list") {
-    log("delay tools/list " + delayMs);
-    pendingTimer = setTimeout(() => {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          tools: [
-            {
-              name: "slow_tool",
-              description: "Returned after a slow catalog response.",
-              inputSchema: { type: "object", properties: {} },
-            },
-          ],
-        },
-      });
-    }, delayMs);
-  }
-}
-process.stdin.setEncoding("utf8");
-function shutdown() {
-  if (pendingTimer) {
-    clearTimeout(pendingTimer);
-  }
-  process.exit(0);
-}
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) {
-      return;
-    }
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) {
-      handle(JSON.parse(line));
-    }
-  }
-});
-process.stdin.on("end", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);`,
-  );
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      await fs.access(filePath);
-      return;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  throw new Error(`Timed out waiting for ${filePath}`);
-}
-
 async function waitForFileText(
   filePath: string,
   expectedText: string,
@@ -215,7 +138,7 @@ async function waitForFileText(
         return;
       }
     } catch {
-      // File may not exist yet.
+      // The server may not have written the log file yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -383,21 +306,19 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
-  it("keeps slow but valid MCP tools/list responses when no list timeout is configured", async () => {
+  it("keeps MCP tools/list responses that finish within the internal list timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
-    const pidPath = path.join(tempDir, "server.pid");
     const logPath = path.join(tempDir, "server.log");
-    await writeDelayedListToolsMcpServer({
+    await writeListToolsMcpServer({
       filePath: serverPath,
-      pidPath,
       logPath,
-      delayMs: 450,
+      delayMs: 750,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-slow-listtools-default",
-      sessionKey: "agent:test:session-slow-listtools-default",
+      sessionId: "session-slow-listtools-internal-timeout",
+      sessionKey: "agent:test:session-slow-listtools-internal-timeout",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
@@ -412,102 +333,30 @@ describe("session MCP runtime", () => {
       },
     });
 
-    const catalogResult = runtime.getCatalog().then(
-      (catalog) => ({ status: "resolved" as const, catalog }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-
     try {
-      const startup = await Promise.race([
-        waitForFile(pidPath, 1000).then(() => ({ status: "started" as const })),
-        catalogResult,
-      ]);
-      expect(startup.status).toBe("started");
+      const catalog = await runtime.getCatalog();
 
-      const result = await catalogResult;
-      expect(result.status).toBe("resolved");
-      if (result.status === "resolved") {
-        expect(result.catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
-        expect(result.catalog.servers.slowListTools).toMatchObject({
-          serverName: "slowListTools",
-          toolCount: 1,
-        });
-      }
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 450");
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      expect(catalog.servers.slowListTools).toMatchObject({
+        serverName: "slowListTools",
+        toolCount: 1,
+      });
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 750");
     } finally {
       await runtime.dispose();
-      await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps MCP tools/list responses that complete within the configured list timeout", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-budget-"));
-    const serverPath = path.join(tempDir, "budgeted-list-tools.mjs");
-    const pidPath = path.join(tempDir, "server.pid");
-    const logPath = path.join(tempDir, "server.log");
-    await writeDelayedListToolsMcpServer({
-      filePath: serverPath,
-      pidPath,
-      logPath,
-      delayMs: 50,
-    });
-
-    const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-listtools-budget",
-      sessionKey: "agent:test:session-listtools-budget",
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            budgetedListTools: {
-              command: process.execPath,
-              args: [serverPath],
-              connectionTimeoutMs: 30_000,
-              toolsListTimeoutMs: 1_000,
-            },
-          },
-        },
-      },
-    });
-
-    const catalogResult = runtime.getCatalog().then(
-      (catalog) => ({ status: "resolved" as const, catalog }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-
-    try {
-      const startup = await Promise.race([
-        waitForFile(pidPath, 1000).then(() => ({ status: "started" as const })),
-        catalogResult,
-      ]);
-      expect(startup.status).toBe("started");
-
-      const result = await catalogResult;
-      expect(result.status).toBe("resolved");
-      if (result.status === "resolved") {
-        expect(result.catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
-        expect(result.catalog.servers.budgetedListTools).toMatchObject({
-          serverName: "budgetedListTools",
-          toolCount: 1,
-        });
-      }
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 50");
-    } finally {
-      await runtime.dispose();
-      await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
-    }
-  });
-
-  it("times out bundle MCP tools/list after a successful connection when list timeout is configured", async () => {
+  it("times out hung bundle MCP tools/list after a successful connection", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
-    const pidPath = path.join(tempDir, "server.pid");
     const logPath = path.join(tempDir, "server.log");
-    await writeHangingListToolsMcpServer({ filePath: serverPath, pidPath, logPath });
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
     const runtime = await getOrCreateSessionMcpRuntime({
-      sessionId: "session-listtools-timeout",
-      sessionKey: "agent:test:session-listtools-timeout",
+      sessionId: "session-listtools-internal-timeout",
+      sessionKey: "agent:test:session-listtools-internal-timeout",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
@@ -516,30 +365,22 @@ describe("session MCP runtime", () => {
               command: process.execPath,
               args: [serverPath],
               connectionTimeoutMs: 30_000,
-              toolsListTimeoutMs: 250,
             },
           },
         },
       },
     });
-
     const catalogResult = runtime.getCatalog().then(
       (catalog) => ({ status: "resolved" as const, catalog }),
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
 
     try {
-      const startup = await Promise.race([
-        waitForFile(pidPath, 1000).then(() => ({ status: "started" as const })),
-        catalogResult,
-      ]);
-      expect(startup.status).toBe("started");
       await waitForFileText(logPath, "recv tools/list", 1000);
-
       const result = await Promise.race([
         catalogResult,
         new Promise<{ status: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ status: "pending" }), 3500);
+          setTimeout(() => resolve({ status: "pending" }), 2500);
         }),
       ]);
 
@@ -551,6 +392,7 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 

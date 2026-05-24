@@ -15,7 +15,6 @@ import {
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;
-  toolsListTimeoutMs?: number;
 };
 
 type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
@@ -38,29 +37,16 @@ type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttp
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 
-function getPositiveTimeoutMs(rawServer: unknown, key: string): number | undefined {
-  if (!rawServer || typeof rawServer !== "object") {
-    return undefined;
-  }
-  const value = (rawServer as Record<string, unknown>)[key];
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return value;
-  }
-  return undefined;
-}
-
 function getConnectionTimeoutMs(rawServer: unknown): number {
-  return getPositiveTimeoutMs(rawServer, "connectionTimeoutMs") ?? DEFAULT_CONNECTION_TIMEOUT_MS;
-}
-
-function getBaseTimeoutConfig(
-  rawServer: unknown,
-): Pick<ResolvedBaseMcpTransportConfig, "connectionTimeoutMs" | "toolsListTimeoutMs"> {
-  const toolsListTimeoutMs = getPositiveTimeoutMs(rawServer, "toolsListTimeoutMs");
-  return {
-    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
-    ...(toolsListTimeoutMs === undefined ? {} : { toolsListTimeoutMs }),
-  };
+  if (
+    rawServer &&
+    typeof rawServer === "object" &&
+    typeof (rawServer as { connectionTimeoutMs?: unknown }).connectionTimeoutMs === "number" &&
+    (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs > 0
+  ) {
+    return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
+  }
+  return DEFAULT_CONNECTION_TIMEOUT_MS;
 }
 
 function getRequestedTransport(rawServer: unknown): string {
@@ -112,7 +98,7 @@ function resolveHttpTransportConfig(
     url: launch.config.url,
     headers: launch.config.headers,
     description: describeHttpMcpServerLaunchConfig(launch.config),
-    ...getBaseTimeoutConfig(rawServer),
+    connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
   };
 }
 
@@ -140,7 +126,7 @@ export function resolveMcpTransportConfig(
       env: stdioLaunch.config.env,
       cwd: stdioLaunch.config.cwd,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
-      ...getBaseTimeoutConfig(rawServer),
+      connectionTimeoutMs: getConnectionTimeoutMs(rawServer),
     };
   }
 

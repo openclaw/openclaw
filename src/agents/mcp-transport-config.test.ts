@@ -14,7 +14,6 @@ describe("resolveMcpTransportConfig", () => {
       command: "node",
       args: ["./server.mjs"],
       connectionTimeoutMs: 12_345,
-      toolsListTimeoutMs: 6_789,
     });
 
     expect(resolved).toEqual({
@@ -26,25 +25,6 @@ describe("resolveMcpTransportConfig", () => {
       cwd: undefined,
       description: "node ./server.mjs",
       connectionTimeoutMs: 12_345,
-      toolsListTimeoutMs: 6_789,
-    });
-  });
-
-  it("ignores non-positive MCP tools/list timeouts", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      command: "node",
-      toolsListTimeoutMs: 0,
-    });
-
-    expect(resolved).toEqual({
-      kind: "stdio",
-      transportType: "stdio",
-      command: "node",
-      args: undefined,
-      env: undefined,
-      cwd: undefined,
-      description: "node",
-      connectionTimeoutMs: 30_000,
     });
   });
 
@@ -143,24 +123,6 @@ describe("resolveMcpTransportConfig", () => {
       },
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
-    });
-  });
-
-  it("threads tools/list timeout through HTTP MCP config", () => {
-    const resolved = resolveMcpTransportConfig("probe", {
-      url: "https://mcp.example.com/sse",
-      connectionTimeoutMs: 12_345,
-      toolsListTimeoutMs: 6_789,
-    });
-
-    expect(resolved).toEqual({
-      kind: "http",
-      transportType: "sse",
-      url: "https://mcp.example.com/sse",
-      headers: undefined,
-      description: "https://mcp.example.com/sse",
-      connectionTimeoutMs: 12_345,
-      toolsListTimeoutMs: 6_789,
     });
   });
 

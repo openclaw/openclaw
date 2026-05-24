@@ -47,6 +47,7 @@ const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeMa
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
+const BUNDLE_MCP_TOOLS_LIST_TIMEOUT_MS = 1_500;
 
 type Ajv2020Like = {
   compile: (schema: JsonSchemaType) => ValidateFunction;
@@ -119,15 +120,12 @@ function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
 }
 
-async function listAllTools(client: Client, timeoutMs?: number) {
+async function listAllTools(client: Client) {
   const tools: ListedTool[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page =
-      timeoutMs === undefined
-        ? await client.listTools(params)
-        : await client.listTools(params, { timeout: timeoutMs });
+    const page = await client.listTools(params, { timeout: BUNDLE_MCP_TOOLS_LIST_TIMEOUT_MS });
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -264,7 +262,7 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
             failIfDisposed();
-            const listedTools = await listAllTools(client, resolved.toolsListTimeoutMs);
+            const listedTools = await listAllTools(client);
             failIfDisposed();
             servers[serverName] = {
               serverName,
