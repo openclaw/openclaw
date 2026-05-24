@@ -63,6 +63,7 @@ const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
+const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 1_500;
 const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
@@ -364,6 +365,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private outputAudioRealtimeBytes = 0;
   private outputAudioChunks = 0;
   private outputAudioStartedAt: number | undefined;
+  private outputPlaybackWatchdog: ReturnType<typeof setTimeout> | undefined;
   private outputStreamEnding = false;
   private outputPacedBuffer: Buffer = Buffer.alloc(0);
   private outputPlaybackStarted = false;
@@ -760,6 +762,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   private resetOutputStream(reason = "reset"): void {
     const stream = this.outputStream;
+    this.clearOutputPlaybackWatchdog();
     this.logOutputAudioStopped(reason);
     this.outputStream = null;
     this.outputPacedBuffer = Buffer.alloc(0);
@@ -783,6 +786,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     );
     if (playBuffered) {
       this.startOutputPlayback(stream);
+      this.scheduleOutputPlaybackWatchdog(reason, stream);
     } else {
       this.resetOutputStream(reason);
       this.params.entry.player.stop(true);
@@ -790,6 +794,41 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     stream.end();
+  }
+
+  private scheduleOutputPlaybackWatchdog(reason: string, stream: PassThrough): void {
+    this.clearOutputPlaybackWatchdog();
+    if (!this.outputAudioStartedAt || this.outputAudioTimestampMs <= 0) {
+      return;
+    }
+    const elapsedMs = Date.now() - this.outputAudioStartedAt;
+    const timeoutMs = Math.max(
+      1_000,
+      this.outputAudioTimestampMs - elapsedMs + DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS,
+    );
+    this.outputPlaybackWatchdog = setTimeout(() => {
+      this.outputPlaybackWatchdog = undefined;
+      if (this.outputStream && this.outputStream !== stream) {
+        return;
+      }
+      if (!this.outputStream && !this.isOutputAudioActive()) {
+        this.completeExactSpeechResponse("playback-watchdog");
+        return;
+      }
+      logger.warn(
+        `discord voice: realtime audio playback watchdog fired reason=${reason} guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} audioMs=${Math.floor(this.outputAudioTimestampMs)} elapsedMs=${this.outputAudioStartedAt ? Date.now() - this.outputAudioStartedAt : 0}`,
+      );
+      this.clearOutputAudio("playback-watchdog");
+      this.completeExactSpeechResponse("playback-watchdog");
+    }, timeoutMs);
+  }
+
+  private clearOutputPlaybackWatchdog(): void {
+    if (!this.outputPlaybackWatchdog) {
+      return;
+    }
+    clearTimeout(this.outputPlaybackWatchdog);
+    this.outputPlaybackWatchdog = undefined;
   }
 
   private enqueueExactSpeechMessage(text: string): void {

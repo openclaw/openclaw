@@ -2031,6 +2031,146 @@ describe("DiscordVoiceManager", () => {
     expect(player.play).toHaveBeenCalledTimes(2);
   });
 
+  it("clears stale realtime playback when stream close and player idle do not fire", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+      expect(result.ok).toBe(true);
+      const player = getLastAudioPlayer();
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: {
+              sendAudio: (audio: Buffer) => void;
+            };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+          }
+        | undefined;
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const stream = lastAudioResourceInput() as PassThrough | undefined;
+      stream?.removeAllListeners("close");
+
+      await vi.advanceTimersByTimeAsync(1_509);
+      expect(player.stop).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(player.stop).toHaveBeenCalledWith(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an old realtime playback watchdog stop a later response", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      const player = getLastAudioPlayer();
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: {
+              sendAudio: (audio: Buffer) => void;
+            };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+          }
+        | undefined;
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const firstStream = lastAudioResourceInput() as PassThrough | undefined;
+      firstStream?.emit("close");
+
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      await vi.advanceTimersByTimeAsync(1_510);
+
+      expect(player.stop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drains queued exact speech when stream close arrives without player idle", async () => {
+    vi.useFakeTimers();
+    try {
+      agentCommandMock
+        .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+      const manager = createManager({
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai" },
+        },
+      });
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const entry = getSessionEntry(manager) as {
+        realtime?: {
+          beginSpeakerTurn: (
+            context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+            userId: string,
+          ) => { sendInputAudio: (audio: Buffer) => void };
+        };
+      };
+      const bridgeParams = lastRealtimeBridgeParams() as
+        | {
+            audioSink?: { sendAudio: (audio: Buffer) => void };
+            onEvent?: (event: { direction: "server"; type: string }) => void;
+            onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          }
+        | undefined;
+
+      const firstTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      firstTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "first question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+      const secondTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      secondTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "second question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      expectUserMessageNotIncludes("second answer");
+
+      bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+      const firstStream = lastAudioResourceInput() as PassThrough | undefined;
+      firstStream?.emit("close");
+
+      await vi.advanceTimersByTimeAsync(1_510);
+      expectUserMessageIncludes("second answer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("prebuffers realtime output before starting Discord playback", async () => {
     const manager = createManager({
       groupPolicy: "open",
