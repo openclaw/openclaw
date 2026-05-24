@@ -45,6 +45,45 @@ class ChatControllerMessageIdentityTest {
   }
 
   @Test
+  fun reconcileMessageIdsPreservesDuplicateMatchOrderAcrossHistoryReload() {
+    val previous =
+      listOf(
+        ChatMessage(
+          id = "msg-1",
+          role = "assistant",
+          content = listOf(ChatMessageContent(type = "text", text = "same")),
+          timestampMs = 1000L,
+        ),
+        ChatMessage(
+          id = "msg-2",
+          role = "assistant",
+          content = listOf(ChatMessageContent(type = "text", text = "same")),
+          timestampMs = 1000L,
+        ),
+      )
+
+    val incoming =
+      listOf(
+        ChatMessage(
+          id = "new-1",
+          role = "assistant",
+          content = listOf(ChatMessageContent(type = "text", text = "same")),
+          timestampMs = 1000L,
+        ),
+        ChatMessage(
+          id = "new-2",
+          role = "assistant",
+          content = listOf(ChatMessageContent(type = "text", text = "same")),
+          timestampMs = 1000L,
+        ),
+      )
+
+    val reconciled = reconcileMessageIds(previous = previous, incoming = incoming)
+
+    assertEquals(listOf("msg-1", "msg-2"), reconciled.map { it.id })
+  }
+
+  @Test
   fun reconcileMessageIdsLeavesNewMessagesUntouched() {
     val previous =
       listOf(
@@ -80,89 +119,82 @@ class ChatControllerMessageIdentityTest {
   }
 
   @Test
-  fun mergeOptimisticMessagesKeepsOutgoingUserTurnWhenHistoryOmitsIt() {
-    val optimistic =
+  fun messageIdentityKeyNormalizesRoleAndTextWhitespace() {
+    val a =
       ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "Testing testing 1 2 3")),
-        timestampMs = 1000L,
+        id = "a",
+        role = " Assistant ",
+        content = listOf(ChatMessageContent(type = "text", text = " hello ")),
+        timestampMs = 1234L,
       )
-    val assistant =
+    val b =
       ChatMessage(
-        id = "remote-assistant",
+        id = "b",
         role = "assistant",
-        content = listOf(ChatMessageContent(type = "text", text = "Received.")),
+        content = listOf(ChatMessageContent(type = "text", text = "hello")),
+        timestampMs = 1234L,
+      )
+
+    assertEquals(messageIdentityKey(a), messageIdentityKey(b))
+  }
+
+  @Test
+  fun messageIdentityKeyDiffersForDistinctAttachmentMetadata() {
+    val imageA =
+      ChatMessage(
+        id = "img-a",
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              mimeType = "image/png",
+              fileName = "a.png",
+              base64 = "abc",
+            ),
+          ),
+        timestampMs = 2000L,
+      )
+    val imageB =
+      ChatMessage(
+        id = "img-b",
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              mimeType = "image/jpeg",
+              fileName = "b.jpg",
+              base64 = "abc",
+            ),
+          ),
         timestampMs = 2000L,
       )
 
-    val merged = mergeOptimisticMessages(incoming = listOf(assistant), optimistic = listOf(optimistic))
-
-    assertEquals(listOf("local-user", "remote-assistant"), merged.map { it.id })
+    assertNotEquals(messageIdentityKey(imageA), messageIdentityKey(imageB))
   }
 
   @Test
-  fun mergeOptimisticMessagesDoesNotDuplicateHistoryTurns() {
-    val user =
+  fun messageIdentityKeyIncludesSourceIdAndToolCallId() {
+    val a =
       ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
+        id = "a",
+        role = "toolResult",
+        sourceId = "server-1",
+        toolCallId = "call-1",
+        content = listOf(ChatMessageContent(type = "toolresult", text = "ok")),
+        timestampMs = 1234L,
       )
-    val remoteUser = user.copy(id = "remote-user")
-
-    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(user))
-
-    assertEquals(listOf("remote-user"), merged.map { it.id })
-  }
-
-  @Test
-  fun mergeOptimisticMessagesDoesNotDuplicateGatewayPersistedUserTurnWithDifferentTimestamp() {
-    val optimistic =
+    val b =
       ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
+        id = "b",
+        role = "toolResult",
+        sourceId = "server-2",
+        toolCallId = "call-1",
+        content = listOf(ChatMessageContent(type = "toolresult", text = "ok")),
+        timestampMs = 1234L,
       )
-    val remoteUser = optimistic.copy(id = "remote-user", timestampMs = 2000L)
 
-    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(optimistic))
-
-    assertEquals(listOf("remote-user"), merged.map { it.id })
-  }
-
-  @Test
-  fun mergeOptimisticMessagesKeepsRepeatedOptimisticTurnWhenHistoryOnlyHasOneMatch() {
-    val first =
-      ChatMessage(
-        id = "local-user-1",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "hello")),
-        timestampMs = 1000L,
-      )
-    val second = first.copy(id = "local-user-2", timestampMs = 1100L)
-    val remoteUser = first.copy(id = "remote-user", timestampMs = 2000L)
-
-    val merged = mergeOptimisticMessages(incoming = listOf(remoteUser), optimistic = listOf(first, second))
-
-    assertEquals(listOf("local-user-2", "remote-user"), merged.map { it.id })
-  }
-
-  @Test
-  fun mergeOptimisticMessagesDoesNotConsumeOlderIdenticalHistoryTurn() {
-    val optimistic =
-      ChatMessage(
-        id = "local-user",
-        role = "user",
-        content = listOf(ChatMessageContent(type = "text", text = "ok")),
-        timestampMs = 2000L,
-      )
-    val oldHistoryUser = optimistic.copy(id = "remote-old-user", timestampMs = 1000L)
-
-    val merged = mergeOptimisticMessages(incoming = listOf(oldHistoryUser), optimistic = listOf(optimistic))
-
-    assertEquals(listOf("remote-old-user", "local-user"), merged.map { it.id })
+    assertNotEquals(messageIdentityKey(a), messageIdentityKey(b))
   }
 }

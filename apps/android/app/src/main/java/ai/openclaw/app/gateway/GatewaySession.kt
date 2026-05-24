@@ -1299,3 +1299,42 @@ internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
   val normalized = invokeTimeoutMs?.takeIf { it > 0L } ?: 15_000L
   return normalized.coerceIn(15_000L, 120_000L)
 }
+
+internal fun shouldUseStoredTokenForConnect(
+  storedEntry: DeviceAuthEntry?,
+  requestedScopes: List<String>,
+  explicitBootstrapToken: String?,
+  explicitPassword: String?,
+): Boolean {
+  val storedToken = storedEntry?.token?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+  if (explicitPassword != null) return false
+  if (explicitBootstrapToken == null) return storedToken.isNotEmpty()
+
+  val normalizedRole = storedEntry.role.trim().lowercase()
+  if (normalizedRole != "operator") {
+    return true
+  }
+
+  return gatewayScopesSatisfyRequestedScopes(storedEntry.scopes, requestedScopes)
+}
+
+internal fun gatewayScopesSatisfyRequestedScopes(
+  grantedScopes: List<String>,
+  requestedScopes: List<String>,
+): Boolean {
+  val normalizedRequested = normalizeGatewayScopes(requestedScopes)
+  if (normalizedRequested.isEmpty()) return true
+  val normalizedGranted = normalizeGatewayScopes(grantedScopes).toSet()
+  if (normalizedGranted.isEmpty()) return false
+  return normalizedRequested.all { scope ->
+    normalizedGranted.contains(scope) ||
+      (scope.startsWith("operator.") && normalizedGranted.contains("operator.admin"))
+  }
+}
+
+private fun normalizeGatewayScopes(scopes: List<String>): List<String> =
+  scopes
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .sorted()

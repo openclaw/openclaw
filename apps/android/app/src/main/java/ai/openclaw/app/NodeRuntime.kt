@@ -3,6 +3,11 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatTimelineItem
+import ai.openclaw.app.chat.ChatSessionDefaults
+import ai.openclaw.app.chat.ChatModelCatalogEntry
+import ai.openclaw.app.chat.ChatFallbackStatus
+import ai.openclaw.app.chat.ChatCompactionStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.DeviceAuthStore
@@ -858,13 +863,19 @@ class NodeRuntime(
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatTimeline: StateFlow<List<ChatTimelineItem>> = chat.timeline
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSessionDefaults: StateFlow<ChatSessionDefaults> = chat.sessionDefaults
+  val chatModelCatalog: StateFlow<List<ChatModelCatalogEntry>> = chat.modelCatalog
+  val chatCompactionStatus: StateFlow<ChatCompactionStatus?> = chat.compactionStatus
+  val chatFallbackStatus: StateFlow<ChatFallbackStatus?> = chat.fallbackStatus
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val chatSessionActionInFlight: StateFlow<Boolean> = chat.sessionActionInFlight
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
@@ -1574,12 +1585,28 @@ class NodeRuntime(
     chat.refreshSessions(limit = limit)
   }
 
+  fun refreshChatModelCatalog() {
+    chat.refreshModelCatalog()
+  }
+
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
   }
 
+  fun setChatModel(model: String?) {
+    chat.setModel(model)
+  }
+
   fun switchChatSession(sessionKey: String) {
     chat.switchSession(sessionKey)
+  }
+
+  fun createChatSession() {
+    chat.createSession()
+  }
+
+  fun deleteCurrentChatSession() {
+    chat.deleteCurrentSession()
   }
 
   fun abortChat() {

@@ -40,6 +40,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -220,8 +221,13 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  if (normalizeOptionalString(entry.displayName)) {
-    return normalizeOptionalString(entry.displayName);
+  const sanitizedDisplayName = normalizeOptionalString(
+    typeof entry.displayName === "string"
+      ? stripInboundMetadata(entry.displayName).trim()
+      : entry.displayName,
+  );
+  if (sanitizedDisplayName) {
+    return sanitizedDisplayName;
   }
 
   if (normalizeOptionalString(entry.subject)) {

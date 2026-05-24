@@ -2,6 +2,11 @@ package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatTimelineItem
+import ai.openclaw.app.chat.ChatSessionDefaults
+import ai.openclaw.app.chat.ChatModelCatalogEntry
+import ai.openclaw.app.chat.ChatFallbackStatus
+import ai.openclaw.app.chat.ChatCompactionStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -159,13 +164,19 @@ class MainViewModel(
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
+  val chatTimeline: StateFlow<List<ChatTimelineItem>> = runtimeState(initial = emptyList()) { it.chatTimeline }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
   val chatThinkingLevel: StateFlow<String> = runtimeState(initial = "off") { it.chatThinkingLevel }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatSessionDefaults: StateFlow<ChatSessionDefaults> = runtimeState(initial = ChatSessionDefaults()) { it.chatSessionDefaults }
+  val chatModelCatalog: StateFlow<List<ChatModelCatalogEntry>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
+  val chatCompactionStatus: StateFlow<ChatCompactionStatus?> = runtimeState(initial = null) { it.chatCompactionStatus }
+  val chatFallbackStatus: StateFlow<ChatFallbackStatus?> = runtimeState(initial = null) { it.chatFallbackStatus }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+  val chatSessionActionInFlight: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionActionInFlight }
 
   init {
     if (prefs.onboardingCompleted.value) {
@@ -394,6 +405,11 @@ class MainViewModel(
     ensureRuntime().refreshHomeCanvasOverviewIfConnected()
   }
 
+  fun openChatCanvasPreview(url: String) {
+    ensureRuntime().canvas.navigate(url)
+    _requestedHomeDestination.value = HomeDestination.Screen
+  }
+
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
   }
@@ -442,12 +458,28 @@ class MainViewModel(
     ensureRuntime().refreshChatSessions(limit = limit)
   }
 
+  fun refreshChatModelCatalog() {
+    ensureRuntime().refreshChatModelCatalog()
+  }
+
   fun setChatThinkingLevel(level: String) {
     ensureRuntime().setChatThinkingLevel(level)
   }
 
+  fun setChatModel(model: String?) {
+    ensureRuntime().setChatModel(model)
+  }
+
   fun switchChatSession(sessionKey: String) {
     ensureRuntime().switchChatSession(sessionKey)
+  }
+
+  fun createChatSession() {
+    ensureRuntime().createChatSession()
+  }
+
+  fun deleteCurrentChatSession() {
+    ensureRuntime().deleteCurrentChatSession()
   }
 
   fun abortChat() {

@@ -8,7 +8,7 @@ import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
-import ai.openclaw.app.ui.chat.ChatScreen
+import ai.openclaw.app.ui.chat.ChatSheetContent
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -629,7 +629,7 @@ private fun ChatShellScreen(
   onVoice: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    ChatScreen(viewModel = viewModel, onBack = onBack, onVoice = onVoice)
+    ChatSheetContent(viewModel = viewModel, hideCronSessions = false)
   }
 }
 

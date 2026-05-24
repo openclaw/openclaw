@@ -431,6 +431,30 @@ describe("initSessionState thread forking", () => {
     warn.mockRestore();
   });
 
+  it("sanitizes inbound metadata wrappers out of persisted thread displayName", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-sanitize-");
+    const storePath = path.join(root, "sessions.json");
+    const threadSessionKey = "agent:main:telegram:group:chat123:thread:216303";
+    const threadLabel =
+      'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nSender (untrusted metadata):\n```json\n{"label":"Dmitry Kuznetsov"}\n```\n\nActual Telegram thread';
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: threadSessionKey,
+        ThreadLabel: threadLabel,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.displayName).toBe("Actual Telegram thread");
+  });
+
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
