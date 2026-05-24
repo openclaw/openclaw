@@ -55,7 +55,7 @@ import { resolveA2aTarget } from "../claworks/a2a-peers.js";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { buildA2aAgentCard } from "../interfaces/a2a/agent-card.js";
 import { A2aClient } from "../interfaces/a2a/client.js";
-import { BRIDGE_LLM, BRIDGE_NOTIFY } from "./bridge-registry.js";
+import { BRIDGE_LLM, BRIDGE_NOTIFY, BRIDGE_SKILL } from "./bridge-registry.js";
 import type { CapabilityDescriptor } from "./capability-registry.js";
 import { CW_EVENTS } from "./event-names.js";
 import type { ConstitutionV2 } from "./robot-constitution-v2.js";
@@ -1546,6 +1546,38 @@ export function makeNexusCapabilities(runtime: ClaworksRuntime): CapabilityDescr
         } catch {
           return { status: "error", packages: [] };
         }
+      },
+    },
+
+    {
+      id: "nexus.publish_capabilities",
+      verb: "write",
+      description:
+        "将当前机器人的能力清单发布到 KB 的 nexus_registry 命名空间，供其他智能体通过 nexus.search 发现和克隆",
+      owner: { kind: "core" },
+      handler: async () => {
+        const caps = runtime.capabilities?.list() ?? [];
+        const playbooks = runtime.playbookEngine?.list() ?? [];
+        const robotId = (runtime.robot as unknown as { id?: string })?.id ?? "unknown";
+        const manifest = {
+          robot_id: robotId,
+          robot_name: runtime.identity?.name ?? "ClaWorks",
+          capabilities: caps.map((c) => ({ id: c.id, verb: c.verb, description: c.description })),
+          playbooks: playbooks.map((p) => ({ id: p.id, name: p.name, description: p.description })),
+          published_at: new Date().toISOString(),
+        };
+        await runtime.kb.ingest(JSON.stringify(manifest), {
+          source: `nexus:${robotId}`,
+          namespace: "nexus_registry",
+        });
+        await runtime.kernel
+          .publish("nexus.capabilities_published", "nexus.publish_capabilities", {
+            robot_id: robotId,
+            capability_count: caps.length,
+            playbook_count: playbooks.length,
+          })
+          .catch(() => undefined);
+        return { status: "ok", capability_count: caps.length, playbook_count: playbooks.length };
       },
     },
 
@@ -3424,6 +3456,104 @@ export function makeSystemCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         return { available, skill_id: skillId };
       },
     },
+
+    {
+      id: "system.self_test",
+      verb: "execute",
+      description: "使用强模型自动检查机器人各项核心能力（感知/执行/记忆/学习），返回能力评估报告",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          scope: {
+            type: "string",
+            description: "检查范围：all/perceive/memory/execute/learn（默认 all）",
+          },
+          model: { type: "string", description: "使用的模型（默认当前 llmComplete）" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const scope = String(params.scope ?? "all");
+        const results: Record<string, unknown> = {};
+
+        const llmBridge = runtime.bridges?.get(BRIDGE_LLM);
+        const llmFn = llmBridge?.complete ?? runtime.llmComplete;
+        if (!llmFn) {
+          return { status: "error", reason: "llmComplete 未配置，无法进行自检" };
+        }
+
+        // 1. 感知能力自检：调用 perceive.intent 测试意图分类
+        if (scope === "all" || scope === "perceive") {
+          try {
+            const r = await runtime.capabilities.call(
+              "perceive.intent",
+              { text: "泵1号振动超标，需要处理" },
+              {
+                source: "system.self_test",
+                sourceKind: "capability",
+                correlationId: undefined,
+                userId: undefined,
+                sessionKey: undefined,
+              },
+            );
+            const intent = (r as Record<string, unknown>).intent as string | undefined;
+            results.perceive_intent = {
+              status: intent && intent !== "unknown" ? "ok" : "degraded",
+              intent,
+              confidence: (r as Record<string, unknown>).confidence,
+            };
+          } catch (e) {
+            results.perceive_intent = { status: "error", reason: String(e) };
+          }
+        }
+
+        // 2. 记忆能力自检：测试 KB 写入和检索
+        if (scope === "all" || scope === "memory") {
+          try {
+            const testContent = `自检测试内容_${Date.now()}`;
+            await runtime.kb.ingest(testContent, { source: "self_test" });
+            const hits = await runtime.kb.search("自检测试", { limit: 1 });
+            results.memory_kb = {
+              status: hits.length > 0 ? "ok" : "degraded",
+              ingest_ok: true,
+              search_hit: hits.length > 0,
+            };
+          } catch (e) {
+            results.memory_kb = { status: "error", reason: String(e) };
+          }
+        }
+
+        // 3. 执行能力自检：验证 capability registry 和 Playbook 数量
+        if (scope === "all" || scope === "execute") {
+          const capCount = runtime.capabilities?.list().length ?? 0;
+          const pbCount = runtime.playbookEngine?.list().length ?? 0;
+          results.execute_capabilities = {
+            status: capCount > 100 ? "ok" : "degraded",
+            capability_count: capCount,
+            playbook_count: pbCount,
+          };
+        }
+
+        // 4. 学习能力自检：验证 CBR 和 EvolveEngine
+        if (scope === "all" || scope === "learn") {
+          results.learn_cbr = {
+            status: runtime.cbrStore ? "ok" : "not_configured",
+            cbr_available: !!runtime.cbrStore,
+            evolution_available: !!runtime.evolutionSync,
+          };
+        }
+
+        const allOk = Object.values(results).every(
+          (r) => (r as Record<string, unknown>).status === "ok",
+        );
+        return {
+          status: allOk ? "healthy" : "degraded",
+          scope,
+          checks: results,
+          checked_at: new Date().toISOString(),
+        };
+      },
+    },
   ];
 }
 
@@ -3544,25 +3674,22 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
         },
       },
       handler: async (_ctx, params) => {
-        const skillId = String(params.skill_id ?? "");
-        if (!skillId) {
-          return { status: "error", reason: "skill_id 参数缺失" };
-        }
-        const script = runtime.scriptLibrary?.get(skillId);
-        if (!script) {
-          return { status: "not_found", skill_id: skillId };
-        }
-        const { skill_id: _, ...skillParams } = params;
+        // 委托给 script.execute，仅做参数键名映射（skill_id → script_id）
+        const { skill_id, ...rest } = params;
+        const scriptId = String(skill_id ?? "");
+        if (!scriptId) return { status: "error", reason: "skill_id 参数缺失" };
+        const script = runtime.scriptLibrary?.get(scriptId);
+        if (!script) return { status: "not_found", skill_id: scriptId };
         try {
           const result = await runtime.scriptLibrary?.invoke(
-            skillId,
-            skillParams as Record<string, unknown>,
+            scriptId,
+            rest as Record<string, unknown>,
           );
           return { status: "ok", ...(result as Record<string, unknown>) };
         } catch (err) {
           return {
             status: "error",
-            skill_id: skillId,
+            skill_id: scriptId,
             reason: err instanceof Error ? err.message : String(err),
           };
         }
@@ -3585,24 +3712,17 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
           source: "local" as const,
         }));
 
-        // OpenClaw harness skill list（如果 harness bridge 存在）
-        const harnessListFn = (
-          runtime as unknown as {
-            skillRun?: unknown;
-            harnessSkillList?: () => Promise<
-              Array<{ id: string; name?: string; description?: string }>
-            >;
-          }
-        ).harnessSkillList;
+        // OpenClaw harness skill list（via BRIDGE_SKILL）
         let harnessSkills: Array<{
           id: string;
           name: string;
           description: string;
           source: "harness";
         }> = [];
-        if (harnessListFn) {
+        const skillBridge = runtime.bridges?.get(BRIDGE_SKILL);
+        if (skillBridge?.list) {
           try {
-            const raw = await harnessListFn();
+            const raw = await skillBridge.list();
             harnessSkills = raw.map((s) => ({
               id: s.id,
               name: s.name ?? s.id,
@@ -3676,15 +3796,11 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
           }
         }
 
-        // 2. 本地未找到，fallthrough 到 OpenClaw harness bridge
-        const skillRunFn = (
-          runtime as unknown as {
-            skillRun?: (args: {
-              skillId: string;
-              input: Record<string, unknown>;
-            }) => Promise<unknown>;
-          }
-        ).skillRun;
+        // 2. 本地未找到，fallthrough 到 OpenClaw harness（BRIDGE_SKILL 优先，兼容 runtime.skillRun）
+        const skillBridge = runtime.bridges?.get(BRIDGE_SKILL);
+        const skillRunFn = skillBridge
+          ? (args: { skillId: string; input: Record<string, unknown> }) => skillBridge.run(args)
+          : runtime.skillRun;
         if (!skillRunFn) {
           return {
             status: "not_found",
@@ -4456,6 +4572,112 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
 //
 // 核心思想：强模型（离线/初始化时）预生成 Prompt/DecisionTable/Skill，
 // 弱模型（在线/实时时）只需填空+规则匹配，无需自由推理。
+
+/** llm.scaffold 核心执行逻辑（从 handler 提取以控制行数）*/
+async function runScaffold(
+  runtime: ClaworksRuntime,
+  scaffoldId: string,
+  variables: Record<string, unknown>,
+  extraContext: string,
+  requireJson: boolean,
+): Promise<Record<string, unknown>> {
+  const engine = runtime.scaffoldEngine;
+  if (!engine) return { success: false, error: "ScaffoldEngine 未初始化", text: "" };
+
+  const asset = engine.get(scaffoldId);
+  if (!asset) {
+    // 降级：尝试 promptRegistry
+    if (runtime.promptRegistry) {
+      const rendered = runtime.promptRegistry.render(scaffoldId, variables);
+      if (rendered) {
+        const llmFn = runtime.llmComplete ?? runtime.bridges?.get(BRIDGE_LLM)?.complete;
+        if (!llmFn)
+          return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+        try {
+          const res = await llmFn({ prompt: rendered });
+          return { text: res.text, success: true, scaffold_id: scaffoldId };
+        } catch (err) {
+          return {
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+            text: "",
+          };
+        }
+      }
+    }
+    return {
+      success: false,
+      error: `scaffold not found: ${scaffoldId}`,
+      text: "",
+      scaffold_id: scaffoldId,
+    };
+  }
+
+  // 解析 scaffold 内容（支持工业 JSON 格式与 ScaffoldAsset 两种结构）
+  let scaffoldData: Record<string, unknown> = {};
+  try {
+    scaffoldData = JSON.parse(asset.content) as Record<string, unknown>;
+  } catch {
+    /* empty */
+  }
+
+  let promptTemplate = String(scaffoldData.prompt_template ?? scaffoldData.user_template ?? "");
+  const systemPrompt = String(scaffoldData.system ?? scaffoldData.system_prompt ?? "");
+  const examples = Array.isArray(scaffoldData.examples) ? scaffoldData.examples : [];
+  const outputSchema = scaffoldData.output_schema ?? scaffoldData.outputSchema;
+
+  // 替换占位符（同时支持 {var} 和 {{var}} 两种语法）
+  for (const [key, value] of Object.entries(variables)) {
+    const strVal = String(value ?? "");
+    promptTemplate = promptTemplate
+      .replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), strVal)
+      .replace(new RegExp(`\\{${key}\\}`, "g"), strVal);
+  }
+  if (extraContext) promptTemplate = `${extraContext}\n\n${promptTemplate}`;
+
+  // 构建系统提示词 + few-shot 示例
+  let fullSystem = systemPrompt;
+  if (examples.length > 0) {
+    fullSystem += "\n\n示例：\n";
+    for (const ex of (examples as Array<{ input: unknown; output: unknown }>).slice(0, 3)) {
+      fullSystem += `输入：${JSON.stringify(ex.input)}\n输出：${JSON.stringify(ex.output)}\n\n`;
+    }
+  }
+  const fullPrompt = fullSystem ? `${fullSystem}\n\n${promptTemplate}` : promptTemplate;
+
+  // 有 outputSchema 或要求 JSON → 使用结构化输出引擎
+  if ((requireJson || outputSchema) && runtime.structuredOutput && outputSchema) {
+    try {
+      const result = await runtime.structuredOutput.complete(
+        fullPrompt,
+        outputSchema as import("./structured-output.js").OutputSchema,
+        { maxRetries: 2, fallback: {} },
+      );
+      engine.recordUsage(scaffoldId, !result.fallback);
+      return { ...result.data, success: true, fallback: result.fallback, scaffold_id: scaffoldId };
+    } catch (err) {
+      engine.recordUsage(scaffoldId, false);
+      return { success: false, error: err instanceof Error ? err.message : String(err), text: "" };
+    }
+  }
+
+  // 普通文本生成
+  const llmFn = runtime.llmComplete ?? runtime.bridges?.get(BRIDGE_LLM)?.complete;
+  if (!llmFn) return { success: false, error: "LLM 未配置", text: "", scaffold_id: scaffoldId };
+  try {
+    const res = await llmFn({ prompt: fullPrompt });
+    engine.recordUsage(scaffoldId, true);
+    return { text: res.text, success: true, scaffold_id: scaffoldId };
+  } catch (err) {
+    engine.recordUsage(scaffoldId, false);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      text: "",
+      scaffold_id: scaffoldId,
+    };
+  }
+}
 
 export function makeScaffoldCapabilities(runtime: ClaworksRuntime): CapabilityDescriptor[] {
   return [
@@ -5504,6 +5726,93 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
 
         await walk(folderPath);
         return { status: "ok", total, ingested, errors };
+      },
+    },
+
+    {
+      id: "evolve.generate_simulations",
+      verb: "execute",
+      description: "用强模型生成模拟业务场景（用于弱模型对比测试和进化验证）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          domain: {
+            type: "string",
+            description: "业务领域：industrial/enterprise/general（默认 industrial）",
+          },
+          count: { type: "number", description: "生成场景数量（默认 10）" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const llmBridge = runtime.bridges?.get(BRIDGE_LLM);
+        const llmFn = llmBridge?.complete ?? runtime.llmComplete;
+        if (!llmFn) {
+          return { status: "error", reason: "需要 llmComplete 才能生成模拟场景" };
+        }
+
+        const domain = String(params.domain ?? "industrial");
+        const count = Math.max(1, Math.min(50, Number(params.count ?? 10)));
+
+        const domainLabel =
+          domain === "industrial"
+            ? "工业生产（巡检、告警、工单、设备维护）"
+            : domain === "enterprise"
+              ? "通用企业办公（审批、汇报、查询、协作）"
+              : "通用场景";
+
+        const prompt = `你是一个工业机器人系统的测试专家。
+请生成 ${count} 个真实的用户输入场景，用于测试意图分类准确性。
+
+领域：${domainLabel}
+
+输出严格 JSON 格式：
+{
+  "scenarios": [
+    {
+      "user_input": "用户说的话",
+      "expected_intent": "期望识别的意图名（knowledge_query/alarm_report/workorder_create/workorder_query/equipment_status/system_status/help/chat）",
+      "difficulty": "easy|medium|hard",
+      "notes": "为何这个场景有挑战性（可选）"
+    }
+  ]
+}
+
+要求：
+- 包含简单直白的输入（easy）和模糊/口语化输入（hard）
+- hard 场景模拟弱模型容易混淆的情况
+- 全部用中文`;
+
+        try {
+          const response = await llmFn({ prompt, temperature: 0.7 });
+          const text =
+            typeof response === "string"
+              ? response
+              : (((response as Record<string, unknown>).text as string | undefined) ?? "");
+
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            return { status: "error", reason: "LLM 未返回有效 JSON" };
+          }
+
+          const parsed = JSON.parse(jsonMatch[0]) as { scenarios: unknown[] };
+          const scenarios = Array.isArray(parsed.scenarios) ? parsed.scenarios : [];
+
+          await runtime.kb.ingest(JSON.stringify(scenarios, null, 2), {
+            source: `simulation_scenarios_${domain}`,
+            namespace: "test_scenarios",
+          });
+
+          return {
+            status: "ok",
+            domain,
+            count: scenarios.length,
+            scenarios,
+            stored_in_kb: true,
+          };
+        } catch (e) {
+          return { status: "error", reason: String(e) };
+        }
       },
     },
   ];
