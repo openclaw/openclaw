@@ -22,7 +22,7 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -1598,10 +1598,11 @@ export function createConfigIO(
           effectiveConfigRaw,
         );
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+        pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
+          allowWorkspaceScopedCurrent: true,
         });
         return pluginMetadataSnapshot;
       };
@@ -1817,10 +1818,11 @@ export function createConfigIO(
           effectiveConfigRaw,
         );
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+        pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
+          allowWorkspaceScopedCurrent: true,
         });
         return pluginMetadataSnapshot;
       };

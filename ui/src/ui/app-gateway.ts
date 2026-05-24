@@ -772,6 +772,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
 
 function flushChatQueueAfterSessionRunReconcile(
   host: GatewayHost,
+  result: ReturnType<typeof applySessionsChangedEvent>,
   payload: { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown } | undefined,
   fallbackRunId?: string | null,
 ): boolean {
@@ -787,6 +788,17 @@ function flushChatQueueAfterSessionRunReconcile(
   );
   const flushQueue = () =>
     void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+  const publishRunStatus = () => {
+    if (!result.applied || !result.clearedChatRunStatus || host.chatRunId) {
+      return;
+    }
+    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+      outcome: result.clearedChatRunStatus.phase,
+      runId: result.clearedChatRunStatus.runId,
+      sessionKey: result.clearedChatRunStatus.sessionKey,
+      clearIndicators: false,
+    });
+  };
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const pendingSessionKey = deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim();
   const eventSessionKey = typeof payload?.sessionKey === "string" ? payload.sessionKey.trim() : "";
@@ -799,11 +811,13 @@ function flushChatQueueAfterSessionRunReconcile(
     const reloadSessionKey = pendingSessionKey;
     void Promise.resolve(loadChatHistory(host as unknown as ChatState)).finally(() => {
       if (host.sessionKey === reloadSessionKey) {
+        publishRunStatus();
         flushQueue();
       }
     });
     return true;
   }
+  publishRunStatus();
   flushQueue();
   return false;
 }
@@ -820,7 +834,7 @@ function handleSessionMessageGatewayEvent(
     if (sessionKey && sessionKey === host.sessionKey) {
       deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
     }
-    if (flushChatQueueAfterSessionRunReconcile(host, payload, runIdBeforeApply)) {
+    if (flushChatQueueAfterSessionRunReconcile(host, result, payload, runIdBeforeApply)) {
       return;
     }
   }
@@ -838,6 +852,7 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
+      publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
         host,
@@ -883,7 +898,28 @@ function replayDeferredSessionMessageReloadAfterSessionsRefresh(
     }
     return;
   }
-  flushChatQueueAfterSessionRunReconcile(host, { sessionKey }, completedRunId);
+  const row = (host as unknown as SessionsState).sessionsResult?.sessions.find(
+    (session) => session.key === sessionKey,
+  );
+  flushChatQueueAfterSessionRunReconcile(
+    host,
+    {
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      ...(row
+        ? {
+            clearedChatRunStatus: {
+              phase: row.status === "done" ? "done" : "interrupted",
+              runId: completedRunId ?? null,
+              sessionKey,
+            },
+          }
+        : {}),
+    },
+    { sessionKey },
+    completedRunId,
+  );
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
@@ -968,6 +1004,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       if (result.clearedChatRun) {
         flushChatQueueAfterSessionRunReconcile(
           host,
+          result,
           evt.payload as
             | { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown }
             | undefined,

@@ -15,7 +15,9 @@ import {
   createPnpmManagedCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunShrinkwrapGuard,
+  createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
+import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -71,6 +73,23 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
+  it("detects direct script execution from Windows argv paths", () => {
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "c:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\changed-lanes.mjs",
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(false);
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -828,7 +847,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
-      "deps:shrinkwrap:check",
+      "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
@@ -861,8 +880,13 @@ describe("scripts/changed-lanes", () => {
 
     const result = detectChangedLanes(["extensions/slack/package.json"]);
     const plan = createChangedCheckPlan(result);
+    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("deps:shrinkwrap:check");
+    expect(
+      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+    ).toBe(true);
+    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

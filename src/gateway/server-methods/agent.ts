@@ -56,7 +56,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatUncaughtError } from "../../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
@@ -767,8 +767,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
       internalEvents?: AgentInternalEvent[];
+      suppressPromptPersistence?: boolean;
+      sessionEffects?: "visible" | "internal";
       idempotencyKey: string;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+      disableMessageTool?: boolean;
       timeout?: number;
       bestEffortDeliver?: boolean;
       cleanupBundleMcpOnRunEnd?: boolean;
@@ -781,6 +784,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const canResetSession = resolveCanResetSessionFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const requestedModelOverride = Boolean(request.provider || request.model);
+    const requestedInternalSessionEffects = request.sessionEffects === "internal";
+    const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
     const isRawModelRun = request.modelRun === true || request.promptMode === "none";
     if (requestedModelOverride && !allowModelOverride) {
       respond(
@@ -789,6 +794,20 @@ export const agentHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "provider/model overrides are not authorized for this caller.",
+        ),
+      );
+      return;
+    }
+    if (
+      (requestedInternalSessionEffects || requestedPromptPersistenceSuppression) &&
+      !canUseInternalRuntimeHandoff
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "internal session-effect controls are reserved for backend callers.",
         ),
       );
       return;
@@ -820,6 +839,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
     let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+    const sessionEffects = requestedInternalSessionEffects ? "internal" : request.sessionEffects;
+    const suppressVisibleSessionEffects = sessionEffects === "internal";
     const agentDedupeKeys = resolveAgentDedupeKeys({
       idempotencyKey: idem,
       execApprovalFollowupApprovalId,
@@ -1444,7 +1465,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 agentId,
               }).sessionStartedAt
             : undefined;
-        if (storePath) {
+        if (storePath && !suppressVisibleSessionEffects) {
           const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
           const persisted = await updateSessionStore(storePath, (store) => {
@@ -1513,7 +1534,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             return;
           }
         }
-        if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
+        if (
+          !suppressVisibleSessionEffects &&
+          (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global")
+        ) {
           context.addChatRun(idem, {
             sessionKey: canonicalSessionKey,
             clientRunId: idem,
@@ -1522,7 +1546,12 @@ export const agentHandlers: GatewayRequestHandlers = {
             bestEffortDeliver = true;
           }
         }
-        registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+        registerAgentRunContext(
+          idem,
+          suppressVisibleSessionEffects
+            ? { isControlUiVisible: false }
+            : { sessionKey: canonicalSessionKey },
+        );
       }
 
       const connId = typeof client?.connId === "string" ? client.connId : undefined;
@@ -1549,7 +1578,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       const turnSourceChannel = normalizeOptionalString(request.channel);
       const turnSourceTo = normalizeOptionalString(request.to);
       const turnSourceAccountId = normalizeOptionalString(request.accountId);
-      const deliveryPlan = resolveAgentDeliveryPlan({
+      const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+        cfg: cfgForAgent ?? cfg,
+        agentId: resolvedSessionKey
+          ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+          : (agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg)),
+        currentSessionKey: resolvedSessionKey,
         sessionEntry,
         requestedChannel: request.replyChannel ?? request.channel,
         explicitTo,
@@ -1915,11 +1949,15 @@ export const agentHandlers: GatewayRequestHandlers = {
               acpTurnSource: request.acpTurnSource,
               internalEvents: request.internalEvents,
               inputProvenance,
+              sessionEffects,
               sourceReplyDeliveryMode: request.sourceReplyDeliveryMode,
-              suppressPromptPersistence: shouldSuppressAgentPromptPersistence({
-                inputProvenance,
-                internalEvents: request.internalEvents,
-              }),
+              disableMessageTool: request.disableMessageTool,
+              suppressPromptPersistence:
+                requestedPromptPersistenceSuppression ||
+                shouldSuppressAgentPromptPersistence({
+                  inputProvenance,
+                  internalEvents: request.internalEvents,
+                }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
               abortSignal: activeRunAbort.controller.signal,
               onActiveModelSelected: ({ provider }) => {

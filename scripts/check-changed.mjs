@@ -8,8 +8,10 @@ import {
   listStagedChangedPaths,
   normalizeChangedPath,
 } from "./changed-lanes.mjs";
+import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -128,6 +130,28 @@ export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
 }
 
+export function createShrinkwrapGuardCommand(paths) {
+  if (!shouldRunShrinkwrapGuard(paths)) {
+    return null;
+  }
+  const packageDirs = shrinkwrapPackageDirsForChangedPaths(paths);
+  if (packageDirs.length === 0) {
+    return null;
+  }
+  return {
+    name:
+      packageDirs.length === 1
+        ? "npm shrinkwrap guard"
+        : `npm shrinkwrap guard (${packageDirs.length} packages)`,
+    bin: "node",
+    args: [
+      "scripts/generate-npm-shrinkwrap.mjs",
+      "--check",
+      ...packageDirs.flatMap((packageDir) => ["--package-dir", packageDir]),
+    ],
+  };
+}
+
 export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error(
     "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
@@ -165,8 +189,14 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
-  if (shouldRunShrinkwrapGuard(result.paths)) {
-    add("npm shrinkwrap guard", ["deps:shrinkwrap:check"]);
+  const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
+  if (shrinkwrapGuardCommand) {
+    addCommand(
+      shrinkwrapGuardCommand.name,
+      shrinkwrapGuardCommand.bin,
+      shrinkwrapGuardCommand.args,
+      baseEnv,
+    );
   }
   add("package patch guard", ["deps:patches:check"]);
 
@@ -285,7 +315,10 @@ export function createChangedCheckPlan(result, options = {}) {
 export async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
-  const plan = createChangedCheckPlan(result, { ...options, env: childEnv });
+  const plan = createChangedCheckPlan(result, {
+    ...options,
+    env: childEnv,
+  });
   const releaseLock = options.dryRun
     ? () => {}
     : acquireLocalHeavyCheckLockSync({
@@ -440,8 +473,7 @@ function parseArgs(argv) {
 }
 
 function isDirectRun() {
-  const direct = process.argv[1];
-  return Boolean(direct && import.meta.url.endsWith(direct));
+  return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 if (isDirectRun()) {

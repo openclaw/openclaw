@@ -56,6 +56,7 @@ function makeFakeGit(
     "process.exit(response.status ?? 0);",
   ].join("\n");
   writeFileSync(gitPath, `${script}\n`, "utf8");
+  writeFileSync(`${gitPath}.cmd`, `@echo off\r\n"${process.execPath}" "%~dp0git" %*\r\n`, "utf8");
   chmodSync(gitPath, 0o755);
   return binDir;
 }
@@ -64,6 +65,7 @@ function runWrapper(
   helpText: string,
   args: string[],
   options: {
+    extraPathEntries?: string[];
     gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }>;
   } = {},
 ) {
@@ -74,7 +76,9 @@ function runWrapper(
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: [binDir, gitBinDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter),
+      PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
+        .filter(Boolean)
+        .join(path.delimiter),
       ...(options.gitResponses
         ? { OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(options.gitResponses) }
         : {}),
@@ -122,6 +126,32 @@ describe("scripts/crabbox-wrapper", () => {
       "providers=hetzner,aws,local-container,blacksmith-testbox,docker,cloudflare",
     );
   });
+
+  if (process.platform === "win32") {
+    it("preserves shell metacharacters through Windows Crabbox command shims", () => {
+      const remoteCommand = "pnpm build && pnpm test | more < in.txt > out.txt %PATH%";
+      const result = runWrapper("provider: aws\n", ["run", "--shell", "--", remoteCommand]);
+
+      expect(result.status).toBe(0);
+      expect(parseFakeCrabboxOutput(result).args).toEqual(["run", "--shell", "--", remoteCommand]);
+    });
+  }
+
+  if (process.platform !== "win32") {
+    it("keeps POSIX PATH lookup semantics for non-executable entries", () => {
+      const staleBinDir = mkdtempSync(path.join(tmpdir(), "openclaw-stale-crabbox-"));
+      tempDirs.push(staleBinDir);
+      writeFileSync(path.join(staleBinDir, "crabbox"), "not executable\n", "utf8");
+      const result = runWrapper(
+        "provider: aws\n",
+        ["run", "--provider", "aws", "--", "echo ok"],
+        { extraPathEntries: [staleBinDir] },
+      );
+
+      expect(result.status).toBe(0);
+      expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+    });
+  }
 
   it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
     const helpText = [
