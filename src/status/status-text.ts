@@ -369,14 +369,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         identity: liveModelIdentity,
       })
     : false;
+  const statusLiveModelIdentity = applyLiveModelIdentity ? liveModelIdentity : undefined;
   const statusSessionEntry =
-    applyLiveModelIdentity && sessionEntry
-      ? withLiveStatusModelIdentity(sessionEntry, liveModelIdentity)
+    statusLiveModelIdentity && sessionEntry
+      ? withLiveStatusModelIdentity(sessionEntry, statusLiveModelIdentity)
       : sessionEntry;
-  const statusProvider = applyLiveModelIdentity
-    ? (liveModelIdentity.provider ?? provider)
-    : provider;
-  const statusModel = applyLiveModelIdentity ? liveModelIdentity.model : model;
+  const statusProvider = statusLiveModelIdentity?.provider ?? provider;
+  const statusModel = statusLiveModelIdentity?.model ?? model;
   const statusAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
