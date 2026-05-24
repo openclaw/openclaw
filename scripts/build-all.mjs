@@ -17,6 +17,7 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
     ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
   ],
   ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+  ["ui:build", ["scripts/ui.js", "build"]],
 ]);
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
@@ -85,6 +86,15 @@ export const BUILD_ALL_STEPS = [
     },
   },
   {
+    label: "ui:build",
+    kind: "pnpm",
+    pnpmArgs: ["ui:build"],
+    cache: {
+      inputs: ["ui", "scripts/ui.js", "scripts/lib/copy-assets.ts"],
+      outputs: ["dist/control-ui"],
+    },
+  },
+  {
     label: "write-build-info",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
@@ -116,6 +126,7 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
