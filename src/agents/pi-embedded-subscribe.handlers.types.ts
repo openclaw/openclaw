@@ -37,7 +37,7 @@ export type ToolCallSummary = {
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
-  toolMetas: Array<{ toolName?: string; meta?: string }>;
+  toolMetas: Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;

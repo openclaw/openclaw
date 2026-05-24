@@ -500,6 +500,43 @@ describe("handleToolExecutionEnd media emission", () => {
     },
   );
 
+  it("marks async-started media generation in tool metadata", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult: vi.fn() });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      args: { action: "generate", prompt: "a portrait" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Background task started for image generation (task-123).",
+          },
+        ],
+        details: {
+          async: true,
+          status: "started",
+          taskId: "task-123",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "image_generate",
+        asyncStarted: true,
+      }),
+    ]);
+  });
+
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });

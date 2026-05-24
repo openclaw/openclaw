@@ -202,6 +202,11 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
     : undefined;
 }
 
+function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetailsRecord(result);
+  return details?.async === true && details.status === "started";
+}
+
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || typeof details.status !== "string") {
@@ -1027,7 +1032,12 @@ export async function handleToolExecutionEnd(
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  ctx.state.toolMetas.push({
+    toolName,
+    meta,
+    ...(asyncStarted ? { asyncStarted: true } : {}),
+  });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
