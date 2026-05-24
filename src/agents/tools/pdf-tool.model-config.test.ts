@@ -144,6 +144,7 @@ describe("resolvePdfModelConfigForTool", () => {
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "minimax/MiniMax-M2.7",
+      fallbacks: ["minimax-portal/MiniMax-M2.7"],
     });
   });
 
@@ -174,7 +175,77 @@ describe("resolvePdfModelConfigForTool", () => {
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "openai/gpt-5.4-mini",
-      fallbacks: ["minimax/MiniMax-M2.7"],
+      fallbacks: ["minimax/MiniMax-M2.7", "minimax-portal/MiniMax-M2.7"],
+    });
+  });
+
+  it("preserves explicit MiniMax text models for PDF text extraction fallback", () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg = {
+      ...withDefaultModel("minimax/MiniMax-M2.7-highspeed"),
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            models: [
+              {
+                id: "MiniMax-M2.7-highspeed",
+                name: "MiniMax M2.7 Highspeed",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "minimax/MiniMax-M2.7-highspeed",
+      fallbacks: ["minimax-portal/MiniMax-M2.7"],
+    });
+  });
+
+  it("preserves explicit MiniMax text models from normalized provider keys", () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg = {
+      ...withDefaultModel("openai/gpt-5.4"),
+      models: {
+        providers: {
+          Minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            models: [
+              {
+                id: "MiniMax-M2.7-highspeed",
+                name: "MiniMax M2.7 Highspeed",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "minimax/MiniMax-M2.7-highspeed",
+      fallbacks: ["minimax-portal/MiniMax-M2.7"],
+    });
+  });
+
+  it("does not use MiniMax VLM primaries for PDF text extraction fallback", () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg = withDefaultModel("minimax/MiniMax-VL-01");
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "minimax/MiniMax-M2.7",
+      fallbacks: ["minimax-portal/MiniMax-M2.7"],
     });
   });
 
@@ -195,6 +266,7 @@ describe("resolvePdfModelConfigForTool", () => {
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "minimax-portal/MiniMax-M2.7",
+      fallbacks: ["minimax/MiniMax-M2.7"],
     });
   });
 
