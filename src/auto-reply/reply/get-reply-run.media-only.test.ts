@@ -1203,23 +1203,33 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+    const activeOperation = createReplyOperation({
+      sessionId: "session-active",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
 
-    const result = await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        isNewSession: true,
-        sessionId: "session-reset-new",
-      }),
-    );
+    try {
+      const result = await runPreparedReply(
+        baseParams({
+          resetTriggered: true,
+          isNewSession: true,
+          sessionId: "session-reset-new",
+        }),
+      );
 
-    expect(result).toEqual({ text: "ok" });
-    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call?.shouldSteer).toBe(false);
-    expect(call?.shouldFollowup).toBe(false);
-    expect(call?.resetTriggered).toBe(true);
+      expect(result).toEqual({ text: "ok" });
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+      expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+      const call = requireRunReplyAgentCall();
+      expect(call?.shouldSteer).toBe(false);
+      expect(call?.shouldFollowup).toBe(false);
+      expect(call?.resetTriggered).toBe(true);
+    } finally {
+      activeOperation.complete();
+    }
   });
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");

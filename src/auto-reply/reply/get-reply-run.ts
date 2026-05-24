@@ -1028,9 +1028,11 @@ export async function runPreparedReply(
       queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) =>
-        (piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false) ||
-        abortReplyRunBySessionId(activeRunSessionId),
+      abortActiveRun: (activeRunSessionId) => {
+        const embeddedAborted = piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false;
+        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
+        return embeddedAborted || replyOperationAborted;
+      },
       waitForActiveRunEnd: (activeRunSessionId) =>
         isReplyRunActiveForSessionId(activeRunSessionId)
           ? waitForReplyRunEndBySessionId(activeRunSessionId)
