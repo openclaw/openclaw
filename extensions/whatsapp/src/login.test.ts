@@ -31,6 +31,7 @@ vi.mock("./auth-store.js", async () => {
   return {
     ...actual,
     clearStalePhoneCodePairingAuthIfNeeded: vi.fn(async () => false),
+    hasWebCredsSync: vi.fn(() => false),
     restoreCredsFromBackupIfNeeded: vi.fn(async () => false),
   };
 });
@@ -41,6 +42,7 @@ let loginWebWithPhoneCode: typeof import("./login.js").loginWebWithPhoneCode;
 let normalizeWhatsAppPairingPhoneNumber: typeof import("./login.js").normalizeWhatsAppPairingPhoneNumber;
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let clearStalePhoneCodePairingAuthIfNeeded: typeof import("./auth-store.js").clearStalePhoneCodePairingAuthIfNeeded;
+let hasWebCredsSync: typeof import("./auth-store.js").hasWebCredsSync;
 let restoreCredsFromBackupIfNeeded: typeof import("./auth-store.js").restoreCredsFromBackupIfNeeded;
 
 describe("web login", () => {
@@ -48,7 +50,7 @@ describe("web login", () => {
     ({ loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } =
       await import("./login.js"));
     ({ createWaSocket } = await import("./session.js"));
-    ({ clearStalePhoneCodePairingAuthIfNeeded, restoreCredsFromBackupIfNeeded } =
+    ({ clearStalePhoneCodePairingAuthIfNeeded, hasWebCredsSync, restoreCredsFromBackupIfNeeded } =
       await import("./auth-store.js"));
   });
 
@@ -117,6 +119,20 @@ describe("web login", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "On your phone, open WhatsApp → Linked Devices → Link with phone number, then enter this code.",
     );
+  });
+
+  it("does not request a pairing code when usable linked creds already exist", async () => {
+    vi.mocked(hasWebCredsSync).mockReturnValueOnce(true);
+    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await loginWebWithPhoneCode(false, "+44 7123-456-789", waiter, runtime);
+
+    const sock = (await vi.mocked(createWaSocket).mock.results[0]?.value) as {
+      requestPairingCode: ReturnType<typeof vi.fn>;
+    };
+    expect(sock.requestPairingCode).not.toHaveBeenCalled();
+    expect(waiter).toHaveBeenCalled();
   });
 
   it("clears partial phone-code credentials after a failed pairing attempt", async () => {

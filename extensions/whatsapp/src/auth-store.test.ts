@@ -309,6 +309,7 @@ describe("auth-store", () => {
 
       await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir })).resolves.toBe(false);
       expect(fsSync.existsSync(path.join(authDir, "creds.json"))).toBe(true);
+      expect(hasWebCredsSync(authDir)).toBe(true);
     });
   });
 
