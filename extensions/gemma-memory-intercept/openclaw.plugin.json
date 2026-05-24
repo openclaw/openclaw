@@ -1,0 +1,10 @@
+{
+  "id": "gemma-memory-intercept",
+  "name": "Gemma Memory Intercept (P2.25c option F)",
+  "description": "Intercept first toolCall when user sends a natural-language memo request to agentId=gemma. Blocks forbidden patterns (read SKILL.md, find/grep/cat/ls -R, memory.sh/person.sh direct) and steers to bash scripts/recall.sh.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
