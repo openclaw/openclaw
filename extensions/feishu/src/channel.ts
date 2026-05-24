@@ -693,12 +693,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reactions: true,
         edit: true,
         reply: true,
+        unsend: true,
       },
       agentPrompt: {
         messageToolHints: () => [
           "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
           "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-          "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+          "- Feishu supports `send`, `read`, `edit`, `unsend`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
         ],
       },
       groups: {
