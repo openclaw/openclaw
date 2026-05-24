@@ -2579,6 +2579,7 @@ export async function runCodexAppServerAttempt(
         projector?.recordDynamicToolResult({
           callId: call.callId,
           tool: call.tool,
+          asyncStarted: response.asyncStarted === true,
           success: protocolResponse.success,
           terminalType:
             response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),

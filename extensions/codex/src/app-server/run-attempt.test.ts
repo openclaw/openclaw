@@ -4020,6 +4020,7 @@ describe("runCodexAppServerAttempt", () => {
     projector.recordDynamicToolResult({
       callId: call.callId,
       tool: call.tool,
+      asyncStarted: toolResult.asyncStarted === true,
       success: toolResult.success,
       terminalType: toolResult.diagnosticTerminalType ?? "completed",
       sideEffectEvidence: toolResult.sideEffectEvidence === true,
