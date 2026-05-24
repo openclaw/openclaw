@@ -431,12 +431,9 @@ function resolveChatSessionPickerRows(
   const rowsByKey = new Map((result?.sessions ?? []).map((row) => [row.key, row] as const));
   return resolveSessionOptionGroups(state, state.sessionKey, result)
     .flatMap((group) => group.options)
+    .filter((option) => rowsByKey.has(option.key))
     .map((option) => ({
-      row: rowsByKey.get(option.key) ?? {
-        key: option.key,
-        kind: "direct",
-        updatedAt: null,
-      },
+      row: rowsByKey.get(option.key)!,
       label: option.label,
     }));
 }

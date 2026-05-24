@@ -1677,6 +1677,48 @@ describe("chat session controls", () => {
     expect(labels).toEqual(["Main chat", "Main work"]);
   });
 
+  it("does not add the active session to searched picker rows", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerQuery = "telegram";
+    state.chatSessionPickerAppliedQuery = "telegram";
+    state.chatSessionPickerResult = createSessionsResultFromRows(
+      [{ key: "agent:main:telegram", kind: "direct", label: "Telegram", updatedAt: 5 }],
+      { totalCount: 1 },
+    );
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+
+    expect(labels).toEqual(["Telegram"]);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("1 / 1");
+  });
+
+  it("keeps empty searched picker rows empty", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerQuery = "missing";
+    state.chatSessionPickerAppliedQuery = "missing";
+    state.chatSessionPickerResult = createSessionsResultFromRows([], { totalCount: 0 });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(container.querySelectorAll(".chat-session-picker__option-label")).toHaveLength(0);
+    expect(container.querySelector(".chat-session-picker__status")?.textContent).toContain(
+      t("sessionsView.noSessions"),
+    );
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("0 / 0");
+  });
+
   it("shows provider quota in the chat header when usage data is loaded", () => {
     const { state } = createChatHeaderState();
     state.modelAuthStatusResult = {
