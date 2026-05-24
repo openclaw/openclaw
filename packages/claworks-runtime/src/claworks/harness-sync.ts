@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { BRIDGE_SKILL } from "../kernel/bridge-registry.js";
 import type { ClaworksRuntime } from "./runtime-types.js";
 
 // ── 类型 ──────────────────────────────────────────────────────────────────
@@ -66,18 +67,53 @@ export type HarnessDetectResult = {
   version?: string;
 };
 
+export type HarnessSkillEntry = {
+  id: string;
+  name?: string;
+  description?: string;
+};
+
+export type HarnessStatusSnapshot = {
+  lastSyncAt?: string;
+  openclaw_found: boolean;
+  openclaw_detected: boolean;
+  models_synced: number;
+  tools_pushed: string[];
+  local_skill_count: number;
+  harness_skill_count: number;
+};
+
 export type HarnessSync = {
   detectOpenClaw(): Promise<HarnessDetectResult>;
   syncFromOpenClaw(configPath: string): Promise<HarnessSyncResult>;
   pushToOpenClaw(opts?: { agentId?: string }): Promise<PushResult>;
   bidirectionalSync(): Promise<HarnessSyncResult>;
-  status(): Promise<{
-    lastSyncAt?: string;
-    openclaw_found: boolean;
-    models_synced: number;
-    tools_pushed: string[];
-  }>;
+  status(): Promise<HarnessStatusSnapshot>;
 };
+
+/** 从 OpenClaw agent 配置扫描 harness 侧 skill ID（bridge.list 不可用时的 fallback） */
+export async function discoverHarnessSkillsFromConfig(): Promise<HarnessSkillEntry[]> {
+  const base = findOpenClawBase();
+  if (!base) {
+    return [];
+  }
+
+  const agents = scanAgents(base);
+  const seen = new Set<string>();
+  const skills: HarnessSkillEntry[] = [];
+
+  for (const agent of agents) {
+    for (const skillId of agent.config.skills ?? []) {
+      if (seen.has(skillId)) {
+        continue;
+      }
+      seen.add(skillId);
+      skills.push({ id: skillId, name: skillId });
+    }
+  }
+
+  return skills;
+}
 
 // ── ClaWorks 向 OpenClaw 注册的工具清单 ──────────────────────────────────
 
@@ -425,11 +461,28 @@ export function createHarnessSync(runtime: ClaworksRuntime): HarnessSync {
     },
 
     async status() {
+      const openclawFound = !!(await this.detectOpenClaw()).found;
+      const localSkillCount = runtime.scriptLibrary?.list().length ?? 0;
+      let harnessSkillCount = 0;
+      const skillBridge = runtime.bridges?.get(BRIDGE_SKILL);
+      if (skillBridge?.list) {
+        try {
+          harnessSkillCount = (await skillBridge.list()).length;
+        } catch {
+          harnessSkillCount = (await discoverHarnessSkillsFromConfig()).length;
+        }
+      } else {
+        harnessSkillCount = (await discoverHarnessSkillsFromConfig()).length;
+      }
+
       return {
         lastSyncAt: _lastSyncAt,
-        openclaw_found: !!(await this.detectOpenClaw()).found,
+        openclaw_found: openclawFound,
+        openclaw_detected: openclawFound,
         models_synced: _syncedModelsCount,
         tools_pushed: _pushedTools,
+        local_skill_count: localSkillCount,
+        harness_skill_count: harnessSkillCount,
       };
     },
   };

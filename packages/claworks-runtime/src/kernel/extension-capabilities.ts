@@ -52,13 +52,22 @@
  */
 
 import { resolveA2aTarget } from "../claworks/a2a-peers.js";
+import { discoverHarnessSkillsFromConfig } from "../claworks/harness-sync.js";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { buildA2aAgentCard } from "../interfaces/a2a/agent-card.js";
 import { A2aClient } from "../interfaces/a2a/client.js";
 import { BRIDGE_LLM, BRIDGE_NOTIFY, BRIDGE_SKILL } from "./bridge-registry.js";
-import type { CapabilityDescriptor } from "./capability-registry.js";
+import type { CapabilityDescriptor, CapabilityContext } from "./capability-registry.js";
 import { CW_EVENTS } from "./event-names.js";
 import type { ConstitutionV2 } from "./robot-constitution-v2.js";
+
+function capabilityInvokeCtx(runtime: ClaworksRuntime, source: string): CapabilityContext {
+  const ctx: CapabilityContext = {
+    source,
+    invoke: async (capabilityId, params) => runtime.capabilities.invoke(capabilityId, ctx, params),
+  };
+  return ctx;
+}
 
 // ── L10: reasoning.* ─────────────────────────────────────────────────────
 
@@ -1415,11 +1424,17 @@ export function makeMonitorCapabilities(runtime: ClaworksRuntime): CapabilityDes
   let busUnsubscribe: (() => void) | undefined;
   function ensureKernelSubscription(): void {
     if (busUnsubscribe) return;
-    busUnsubscribe = runtime.kernel.subscribe("*", async (event) => {
+    busUnsubscribe = runtime.kernel.subscribe("*", async (payload) => {
+      const eventType =
+        typeof payload._event_type === "string"
+          ? payload._event_type
+          : typeof payload.type === "string"
+            ? payload.type
+            : "";
       for (const [watchId, watch] of watches) {
-        if (matchesWatchPattern(watch.pattern, event.type)) {
+        if (matchesWatchPattern(watch.pattern, eventType)) {
           await runtime.playbookEngine
-            .trigger(watch.playbookId, { ...event.payload, _event: event, _watch_id: watchId })
+            .trigger(watch.playbookId, { ...payload, _watch_id: watchId })
             .catch((err: unknown) => {
               runtime.logger?.(
                 `[monitor.watch] playbook ${watch.playbookId} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1551,7 +1566,7 @@ export function makeNexusCapabilities(runtime: ClaworksRuntime): CapabilityDescr
 
     {
       id: "nexus.publish_capabilities",
-      verb: "write",
+      verb: "modify",
       description:
         "将当前机器人的能力清单发布到 KB 的 nexus_registry 命名空间，供其他智能体通过 nexus.search 发现和克隆",
       owner: { kind: "core" },
@@ -3440,16 +3455,10 @@ export function makeSystemCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         if (!skillId) {
           return { available: false, skill_id: skillId, reason: "skill_id 参数缺失" };
         }
-        const result = await runtime.capabilities.call(
+        const result = await runtime.capabilities.invoke(
           "system.list_skills",
+          capabilityInvokeCtx(runtime, "system.has_skill"),
           {},
-          {
-            source: "system.has_skill",
-            sourceKind: "capability",
-            correlationId: undefined,
-            userId: undefined,
-            sessionKey: undefined,
-          },
         );
         const items = (result as { items?: Array<{ id: string; name: string }> })?.items ?? [];
         const available = items.some((s) => s.id === skillId || s.name === skillId);
@@ -3485,16 +3494,10 @@ export function makeSystemCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         // 1. 感知能力自检：调用 perceive.intent 测试意图分类
         if (scope === "all" || scope === "perceive") {
           try {
-            const r = await runtime.capabilities.call(
+            const r = await runtime.capabilities.invoke(
               "perceive.intent",
+              capabilityInvokeCtx(runtime, "system.self_test"),
               { text: "泵1号振动超标，需要处理" },
-              {
-                source: "system.self_test",
-                sourceKind: "capability",
-                correlationId: undefined,
-                userId: undefined,
-                sessionKey: undefined,
-              },
             );
             const intent = (r as Record<string, unknown>).intent as string | undefined;
             results.perceive_intent = {
@@ -3731,6 +3734,19 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
             }));
           } catch {
             // harness 不可用时静默降级
+          }
+        }
+        if (harnessSkills.length === 0) {
+          try {
+            const raw = await discoverHarnessSkillsFromConfig();
+            harnessSkills = raw.map((s) => ({
+              id: s.id,
+              name: s.name ?? s.id,
+              description: s.description ?? "",
+              source: "harness" as const,
+            }));
+          } catch {
+            // OpenClaw 配置扫描失败时静默降级
           }
         }
 
@@ -4500,8 +4516,8 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
           prompt: String(params.prompt ?? ""),
           context: params.context,
           timeout_hours: params.timeout_hours ?? 24,
-          run_id: ctx.runId,
-          playbook_id: ctx.playbookId,
+          run_id: ctx.runId ?? ctx.stepCtx?.runId,
+          playbook_id: ctx.playbookId ?? ctx.stepCtx?.playbookId,
         });
         return { token, status: "pending", prompt: params.prompt };
       },
@@ -4559,11 +4575,11 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
         const filter: Record<string, unknown> = {};
         if (params.status) filter.status = String(params.status);
         if (params.equipment_id) filter.equipment_id = String(params.equipment_id);
-        const items = await runtime.objectStore.query("MaintenanceOrder", {
+        const result = await runtime.objectStore.query("MaintenanceOrder", {
           filter,
           limit: typeof params.limit === "number" ? params.limit : 20,
         });
-        return { items, count: items.length };
+        return { items: result.items, count: result.items.length };
       },
     },
   ];
@@ -5452,7 +5468,7 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
     // ── object.upsert / object.batch_upsert — ObjectStore 写入 ──────────────
     {
       id: "object.upsert",
-      verb: "write",
+      verb: "modify",
       description: "创建或更新 ObjectStore 中的单个业务对象",
       owner: { kind: "core" },
       paramsSchema: {
@@ -5476,7 +5492,7 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
     },
     {
       id: "object.batch_upsert",
-      verb: "write",
+      verb: "modify",
       description: "批量创建或更新 ObjectStore 中的业务对象",
       owner: { kind: "core" },
       paramsSchema: {
@@ -5585,7 +5601,7 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
     // ── kb.search (别名) ──────────────────────────────────────────────────
     {
       id: "search_kb",
-      verb: "read",
+      verb: "retrieve",
       description: "在知识库中语义检索（kb.search 的别名，供 Pack YAML 使用）",
       owner: { kind: "core" },
       paramsSchema: {
@@ -5601,7 +5617,10 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         const query = String(params.query ?? "");
         const namespace = params.namespace ? String(params.namespace) : undefined;
         const topK = Number(params.top_k ?? 5);
-        const hits = await runtime.kb.search(query, topK, namespace ? { namespace } : undefined);
+        const hits = await runtime.kb.search(query, {
+          limit: topK,
+          ...(namespace ? { namespace } : {}),
+        });
         return { status: "ok", hits, count: hits.length };
       },
     },
@@ -5634,7 +5653,7 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
     // ── object.update (别名) ──────────────────────────────────────────────
     {
       id: "update_object",
-      verb: "write",
+      verb: "modify",
       description: "更新 ObjectStore 中的业务对象字段（object.upsert 的别名，供 Pack YAML 使用）",
       owner: { kind: "core" },
       paramsSchema: {
@@ -5730,6 +5749,135 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
       },
     },
 
+    // ── 商业对象创建（enterprise-commercial pack 专用）──────────────────────
+    {
+      id: "create_bid_project",
+      verb: "modify",
+      description: "在 ObjectStore 中创建投标项目（BidProject），返回项目 ID",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "项目名称" },
+          customer_name: { type: "string", description: "招标方名称" },
+          customer_id: { type: "string", description: "招标方 ID" },
+          bid_deadline: { type: "string", description: "投标截止日期（ISO 8601）" },
+          budget_amount: { type: "number", description: "预算金额（元）" },
+          project_type: { type: "string", description: "项目类型" },
+          requirements: { type: "string", description: "招标需求描述" },
+          our_advantage: { type: "string", description: "我方优势说明" },
+          kb_namespace: { type: "string", description: "关联知识库命名空间" },
+        },
+        required: ["title"],
+      },
+      handler: async (_ctx, params) => {
+        const id = `bid-prj-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const fields: Record<string, unknown> = {
+          title: String(params.title ?? ""),
+          customer_name: String(params.customer_name ?? ""),
+          customer_id: String(params.customer_id ?? ""),
+          bid_deadline: String(params.bid_deadline ?? ""),
+          budget_amount: Number(params.budget_amount ?? 0),
+          project_type: String(params.project_type ?? ""),
+          requirements: String(params.requirements ?? ""),
+          our_advantage: String(params.our_advantage ?? ""),
+          kb_namespace: String(params.kb_namespace ?? "company"),
+          status: "drafting",
+          created_at: new Date().toISOString(),
+        };
+        await runtime.objectStore.upsert("BidProject", id, fields);
+        await runtime.kernel.publish("object.upserted", "create_bid_project", {
+          type: "BidProject",
+          id,
+        });
+        return { status: "ok", id, ...fields };
+      },
+    },
+
+    {
+      id: "create_bid_document",
+      verb: "modify",
+      description: "在 ObjectStore 中创建投标文件（BidDocument），返回文件 ID",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          bid_project_id: { type: "string", description: "所属投标项目 ID" },
+          doc_type: {
+            type: "string",
+            description: "文件类型（full_bid_package/technical_proposal 等）",
+          },
+          title: { type: "string", description: "文件标题" },
+          content: { type: "string", description: "文件正文（Markdown）" },
+          generated_at: { type: "string", description: "生成时间（ISO 8601）" },
+        },
+        required: ["bid_project_id", "content"],
+      },
+      handler: async (_ctx, params) => {
+        const id = `bid-doc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const fields: Record<string, unknown> = {
+          bid_project_id: String(params.bid_project_id ?? ""),
+          doc_type: String(params.doc_type ?? "full_bid_package"),
+          title: String(params.title ?? "投标文件"),
+          content: String(params.content ?? ""),
+          generated_at: String(params.generated_at ?? new Date().toISOString()),
+          status: "generated",
+          created_at: new Date().toISOString(),
+        };
+        await runtime.objectStore.upsert("BidDocument", id, fields);
+        await runtime.kernel.publish("object.upserted", "create_bid_document", {
+          type: "BidDocument",
+          id,
+        });
+        return { status: "ok", id, ...fields };
+      },
+    },
+
+    {
+      id: "create_quote",
+      verb: "modify",
+      description: "在 ObjectStore 中创建报价单（Quote），返回报价单 ID 和编号",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          customer_name: { type: "string", description: "客户名称" },
+          customer_id: { type: "string", description: "客户 ID" },
+          project_name: { type: "string", description: "项目名称" },
+          items: { type: "array", description: "报价明细列表" },
+          valid_days: { type: "number", description: "有效天数（默认 30）" },
+          payment_terms: { type: "string", description: "付款条款" },
+          notes: { type: "string", description: "备注" },
+          created_by: { type: "string", description: "创建人（user_id）" },
+        },
+        required: ["customer_name"],
+      },
+      handler: async (_ctx, params) => {
+        const id = `quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const quoteNo = `Q-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+        const fields: Record<string, unknown> = {
+          customer_name: String(params.customer_name ?? ""),
+          customer_id: String(params.customer_id ?? ""),
+          project_name: String(params.project_name ?? "未命名项目"),
+          items: Array.isArray(params.items) ? params.items : [],
+          valid_days: Number(params.valid_days ?? 30),
+          payment_terms: String(params.payment_terms ?? "合同签署后30日内付款"),
+          notes: String(params.notes ?? ""),
+          created_by: String(params.created_by ?? "system"),
+          quote_no: quoteNo,
+          status: "draft",
+          created_at: new Date().toISOString(),
+        };
+        await runtime.objectStore.upsert("Quote", id, fields);
+        await runtime.kernel.publish("object.upserted", "create_quote", {
+          type: "Quote",
+          id,
+          quote_no: quoteNo,
+        });
+        return { status: "ok", id, quote_no: quoteNo, ...fields };
+      },
+    },
+
     {
       id: "evolve.generate_simulations",
       verb: "execute",
@@ -5820,12 +5968,17 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
 }
 
 // ── L43: vision.* 视觉识别连接器 ─────────────────────────────────────────
+//
+// 架构分层：
+// - Connector 层：OCR/目标检测/帧预处理 → 结构化 JSON
+// - Robot 层：LLM 对结构化结果推理决策
+// - 弱模型路径：只消费结构化文本，不直接处理原始图像
 
 export function makeVisionCapabilities(runtime: ClaworksRuntime): CapabilityDescriptor[] {
   return [
     {
       id: "vision.analyze",
-      verb: "read",
+      verb: "retrieve",
       description:
         "分析图片内容，返回对象识别、文字提取和场景描述（连接器层预处理，结构化输出供弱模型推理）",
       owner: { kind: "core" },

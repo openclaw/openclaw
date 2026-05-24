@@ -4,7 +4,7 @@ import { createResearchAgent } from "../agents/research-agent.js";
 import { ConnectorManager } from "../interfaces/connectors/connector-manager.js";
 import { resolveConnectorConfigs } from "../interfaces/connectors/presets.js";
 import { createActionRegistry } from "../kernel/action-registry.js";
-import { createBridgeRegistry } from "../kernel/bridge-registry.js";
+import { createBridgeRegistry, BRIDGE_SKILL } from "../kernel/bridge-registry.js";
 import { createCardBuilder } from "../kernel/card-builder.js";
 import { createContextEngine } from "../kernel/context-engine.js";
 import { createCoreCapabilityRegistry } from "../kernel/core-capabilities.js";
@@ -47,6 +47,7 @@ import type {
   SubagentRunFn,
 } from "../planes/orch/step-executor.js";
 import { createDirectLlmBridge } from "./direct-llm-bridge.js";
+import { discoverHarnessSkillsFromConfig } from "./harness-sync.js";
 import { applyIngressPublish } from "./ingress-publish.js";
 import { createRuntimeLogger } from "./logger.js";
 import { createModelRouter } from "./model-router.js";
@@ -359,7 +360,10 @@ export async function createClaworksRuntime(
   if (opts?.skillRun) {
     runtime.skillRun = opts.skillRun;
     // 同时注册到 BRIDGE_SKILL，统一通过 bridges.get(BRIDGE_SKILL) 访问
-    runtime.bridges?.register("skill", { run: (p) => opts.skillRun!(p) });
+    runtime.bridges?.register(BRIDGE_SKILL, {
+      run: (p) => opts.skillRun!(p),
+      list: async () => discoverHarnessSkillsFromConfig(),
+    });
   }
   // 将 llmComplete 挂载到 runtime（供 structuredOutput 等延迟引用访问）
   if (opts?.llmComplete) {
@@ -398,8 +402,9 @@ export async function createClaworksRuntime(
   try {
     const { items } = await runtime.objectStore.query("_ConstitutionUserRule", { limit: 500 });
     for (const item of items) {
-      const entry = item as import("../kernel/robot-constitution-v2.js").UserConstitutionEntry &
-        Record<string, unknown>;
+      const entry =
+        item as unknown as import("../kernel/robot-constitution-v2.js").UserConstitutionEntry &
+          Record<string, unknown>;
       if (typeof entry.userId === "string" && entry.userId) {
         constitution.setUserRule(entry);
       }
@@ -410,7 +415,7 @@ export async function createClaworksRuntime(
 
   // 初始化脚手架引擎（强模型离线预生成，弱模型在线填空执行）
   // 初始化规则引擎（SOP→规则表、业务决策条件表）
-  const ruleEngine = createRuleEngine({ logger: opts?.logger });
+  const ruleEngine = createRuleEngine();
   registerBuiltinDecisionTables(ruleEngine);
   runtime.ruleEngine = ruleEngine;
 
@@ -429,8 +434,8 @@ export async function createClaworksRuntime(
   runtime.contextEngine = createContextEngine({
     llmComplete: opts?.llmComplete
       ? async (p) => {
-          const r = await opts.llmComplete!(p.prompt);
-          return { text: typeof r === "string" ? r : String(r) };
+          const r = await opts.llmComplete!({ prompt: p.prompt });
+          return { text: typeof r === "string" ? r : String(r.text ?? r) };
         }
       : undefined,
   });
@@ -672,7 +677,7 @@ function validateStartupConfig(config: ClaworksRobotConfig): string[] {
   const isProduction = isClaworksProductionMode(config);
   const tag = isProduction ? "[PRODUCTION]" : "[DEV]";
 
-  if (!config.model_router?.complete && !config.model_router?.fast) {
+  if (!config.model_router?.chat && !config.model_router?.complete && !config.model_router?.fast) {
     warnings.push(`${tag} LLM bridge 未配置，意图分类和 LLM 步骤将不可用`);
   }
   if (!config.notify?.targets || config.notify.targets.length === 0) {
