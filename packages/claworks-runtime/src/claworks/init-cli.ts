@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { CW_EVENTS } from "../kernel/event-names.js";
 import { applyDetectedLlmToConfig, detectLlmProviderFromEnv } from "./direct-llm-bridge.js";
 import { resolvePackProfileIds } from "./pack-profile.js";
 import { loadPersistedInstalled } from "./pack-runtime.js";
@@ -244,7 +245,7 @@ export async function runClaworksInit(opts: {
     });
     await startClaworksRuntime(runtime);
     try {
-      await runtime.kernel.publish("system.profile_apply_requested", "claworks.init", {
+      await runtime.kernel.publish(CW_EVENTS.PACK_LOAD_PROFILE_REQUESTED, "claworks.init", {
         profile,
         packs: packIds,
         source: "claworks.init",
@@ -252,7 +253,7 @@ export async function runClaworksInit(opts: {
       steps.push({
         step: stepNo++,
         title: "加载行业模板",
-        detail: `已发布 system.profile_apply_requested（${profileLabel(profile)}）`,
+        detail: `已发布 ${CW_EVENTS.PACK_LOAD_PROFILE_REQUESTED}（${profileLabel(profile)}）`,
         status: "ok",
       });
     } catch (err) {
@@ -260,7 +261,7 @@ export async function runClaworksInit(opts: {
       steps.push({
         step: stepNo++,
         title: "加载行业模板",
-        detail: "profile 事件发布失败，可稍后手动触发 apply_industry_profile",
+        detail: `profile 事件发布失败，可稍后手动调用 pack.load_profile 能力`,
         status: "warn",
       });
     } finally {

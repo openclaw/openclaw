@@ -1,12 +1,16 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { CW_EVENTS } from "../kernel/event-names.js";
 import {
+  applyPackProfile,
   parseProfilePackIds,
   PROFILE_PACK_ALIASES,
   resolvePackProfileIds,
 } from "./pack-profile.js";
+import * as packRuntime from "./pack-runtime.js";
+import type { ClaworksRuntime } from "./runtime-types.js";
 
 describe("resolvePackProfileIds", () => {
   it("maps init profile aliases to claworks.packs.json keys", () => {
@@ -93,5 +97,51 @@ describe("parseProfilePackIds", () => {
       "base",
       "enterprise-general",
     ]);
+  });
+});
+
+describe("applyPackProfile atomic switching", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("serializes concurrent profile switches", async () => {
+    const order: string[] = [];
+    const published: Array<{ type: string; profile: string }> = [];
+    const runtime = {
+      config: { packs: { installed: [] as string[] } },
+      kernel: {
+        publish: vi.fn(async (type: string, _source: string, payload: Record<string, unknown>) => {
+          published.push({ type, profile: String(payload.profile) });
+        }),
+      },
+      logger: vi.fn(),
+    } as unknown as ClaworksRuntime;
+
+    vi.spyOn(packRuntime, "persistInstalled").mockResolvedValue(undefined);
+    vi.spyOn(packRuntime, "reloadClaworksPacks").mockImplementation(async (rt) => {
+      const packs = rt.config.packs?.installed ?? [];
+      const label = packs.includes("a") ? "enterprise" : "industrial";
+      order.push(`start:${label}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      order.push(`end:${label}`);
+    });
+
+    const first = applyPackProfile(runtime, { profile: "enterprise", packIds: ["base", "a"] });
+    const second = applyPackProfile(runtime, { profile: "industrial", packIds: ["base", "b"] });
+
+    await Promise.all([first, second]);
+
+    expect(order).toEqual([
+      "start:enterprise",
+      "end:enterprise",
+      "start:industrial",
+      "end:industrial",
+    ]);
+    expect(published).toEqual([
+      { type: CW_EVENTS.PACK_PROFILE_LOADED, profile: "enterprise" },
+      { type: CW_EVENTS.PACK_PROFILE_LOADED, profile: "industrial" },
+    ]);
+    expect(runtime.config.packs?.installed).toEqual(["base", "b"]);
   });
 });

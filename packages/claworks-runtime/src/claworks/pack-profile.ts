@@ -1,8 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CW_EVENTS } from "../kernel/event-names.js";
 import { persistInstalled, reloadClaworksPacks } from "./pack-runtime.js";
 import { discoverPackSourceDir } from "./product-config-repair.js";
 import type { ClaworksRuntime } from "./runtime-types.js";
+
+/** Serialize concurrent profile switches so Pack reload stays atomic. */
+let profileSwitchChain: Promise<unknown> = Promise.resolve();
 
 /** CLI / Playbook profile 名 → claworks.packs.json profiles 键 */
 export const PROFILE_PACK_ALIASES: Record<string, string> = {
@@ -93,7 +97,7 @@ export function parseProfilePackIds(payload: Record<string, unknown>): string[] 
   return undefined;
 }
 
-export async function applyPackProfile(
+async function applyPackProfileOnce(
   runtime: ClaworksRuntime,
   opts: { profile: string; packIds?: string[]; source?: string },
 ): Promise<{ profile: string; pack_ids: string[] }> {
@@ -113,7 +117,7 @@ export async function applyPackProfile(
   await reloadClaworksPacks(runtime);
 
   const source = opts.source ?? "pack.load_profile";
-  await runtime.kernel.publish("pack.profile_loaded", source, {
+  await runtime.kernel.publish(CW_EVENTS.PACK_PROFILE_LOADED, source, {
     profile,
     pack_ids: packIds,
   });
@@ -123,4 +127,13 @@ export async function applyPackProfile(
   );
 
   return { profile, pack_ids: packIds };
+}
+
+export async function applyPackProfile(
+  runtime: ClaworksRuntime,
+  opts: { profile: string; packIds?: string[]; source?: string },
+): Promise<{ profile: string; pack_ids: string[] }> {
+  const run = profileSwitchChain.then(() => applyPackProfileOnce(runtime, opts));
+  profileSwitchChain = run.catch(() => {});
+  return run;
 }
