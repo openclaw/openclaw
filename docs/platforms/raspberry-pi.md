@@ -4,10 +4,10 @@ title: "Raspberry Pi (platform)"
 redirect: /install/raspberry-pi
 ---
 
-This page has moved to [Raspberry Pi](/install/raspberry-pi).
+This page has moved to [Raspberry Pi](../install/raspberry-pi.md).
 
 ## Related
 
-- [Install overview](/install)
-- [Linux server](/vps)
-- [Platforms](/platforms)
+- [Install overview](../install/index.md)
+- [Linux server](../vps.md)
+- [Platforms](./index.md)

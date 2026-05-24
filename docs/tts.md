@@ -4,8 +4,8 @@ title: "Text-to-speech"
 redirect: /tools/tts
 ---
 
-This page has moved to [Text-to-Speech](/tools/tts).
+This page has moved to [Text-to-Speech](./tools/tts.md).
 
 ## Related
 
-- [Text-to-speech](/tools/tts)
+- [Text-to-speech](./tools/tts.md)

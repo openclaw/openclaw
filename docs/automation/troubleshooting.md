@@ -3,10 +3,10 @@ summary: "Redirect to /automation/cron-jobs"
 title: "Automation troubleshooting"
 ---
 
-This page moved to [Scheduled Tasks](/automation/cron-jobs#troubleshooting). See [Scheduled Tasks](/automation/cron-jobs#troubleshooting) for troubleshooting documentation.
+This page moved to [Scheduled Tasks](./cron-jobs.md#troubleshooting). See [Scheduled Tasks](./cron-jobs.md#troubleshooting) for troubleshooting documentation.
 
 ## Related
 
-- [Hooks](/automation/hooks)
-- [Background tasks](/automation/tasks)
-- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Hooks](./hooks.md)
+- [Background tasks](./tasks.md)
+- [Gateway troubleshooting](../gateway/troubleshooting.md)

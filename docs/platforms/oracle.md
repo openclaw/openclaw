@@ -4,9 +4,9 @@ title: "Oracle Cloud (platform)"
 redirect: /install/oracle
 ---
 
-This page has moved to [Oracle Cloud](/install/oracle).
+This page has moved to [Oracle Cloud](../install/oracle.md).
 
 ## Related
 
-- [Install overview](/install)
-- [VPS hosting](/vps)
+- [Install overview](../install/index.md)
+- [VPS hosting](../vps.md)
