@@ -7433,6 +7433,63 @@ module.exports = {
     ).toHaveLength(2);
   });
 
+  it("treats per-agent memory role slot selections as explicit plugin activation", () => {
+    useNoBundledPlugins();
+    const capture = writePlugin({
+      id: "agent-memory-capture",
+      filename: "agent-memory-capture.cjs",
+      body: `module.exports = {
+        id: "agent-memory-capture",
+        kind: "memory",
+        register(api) {
+          api.on("agent_end", () => undefined);
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "capture should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [capture.file] },
+          slots: { "memory.recall": "none" },
+          entries: {
+            "agent-memory-capture": {
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "agent-memory-capture" },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "agent-memory-capture");
+    expect(record?.status).toBe("loaded");
+    expect(record?.memorySlotSelected).toBe(true);
+    expect(record?.memoryRolesSelected).toEqual(["capture"]);
+    expect(registry.typedHooks.map((entry) => [entry.pluginId, entry.hookName])).toEqual([
+      ["agent-memory-capture", "agent_end"],
+    ]);
+    expect(getMemoryRuntime()).toBeUndefined();
+  });
+
   it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();

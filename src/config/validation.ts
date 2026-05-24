@@ -20,6 +20,7 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { listConfiguredMemoryRolePluginIds } from "../plugins/slot-resolution.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
@@ -1842,8 +1843,48 @@ function validateConfigObjectWithPluginsBase(
       }),
     });
   }
+  for (const [agentIndex, agent] of (config.agents?.list ?? []).entries()) {
+    const agentSlots = agent?.plugins?.slots;
+    if (!agentSlots) {
+      continue;
+    }
+    for (const slotKey of MEMORY_SLOT_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(agentSlots, slotKey)) {
+        continue;
+      }
+      const rawSlotValue = agentSlots[slotKey];
+      if (typeof rawSlotValue !== "string" || !rawSlotValue.trim()) {
+        continue;
+      }
+      const slotValue = normalizePluginId(rawSlotValue);
+      if (!slotValue || slotValue.toLowerCase() === "none" || knownIds.has(slotValue)) {
+        continue;
+      }
+      const isRecallSlot = slotKey === "memory" || slotKey === "memory.recall";
+      const isMissingOfficialExternalMemorySlot =
+        isRecallSlot &&
+        slotValue === "memory-lancedb" &&
+        Boolean(
+          formatMissingOfficialExternalPluginWarning(slotValue, {
+            selectedMissingMemorySlot: true,
+          }),
+        );
+      pushMissingPluginIssue(`agents.list.${agentIndex}.plugins.slots.${slotKey}`, slotValue, {
+        warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(slotValue),
+        missingMessage: formatMissingOfficialExternalPluginWarning(slotValue, {
+          selectedMissingMemorySlot: isRecallSlot,
+        }),
+      });
+    }
+  }
 
-  const memorySlots = GRANULAR_MEMORY_SLOT_KEYS.map((slotKey) => normalizedPlugins.slots[slotKey]);
+  const selectedMemoryRolePluginIds = new Set(listConfiguredMemoryRolePluginIds({ cfg: config }));
+  const memorySlots = [
+    ...new Set([
+      ...GRANULAR_MEMORY_SLOT_KEYS.map((slotKey) => normalizedPlugins.slots[slotKey]),
+      ...selectedMemoryRolePluginIds,
+    ]),
+  ];
   let selectedMemoryPluginId: string | null = null;
   const seenPlugins = new Set<string>();
   for (const record of registry.plugins) {
@@ -1863,6 +1904,16 @@ function validateConfigObjectWithPluginsBase(
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;
+    if (
+      !enabled &&
+      selectedMemoryRolePluginIds.has(pluginId) &&
+      normalizedPlugins.enabled &&
+      !normalizedPlugins.deny.includes(pluginId) &&
+      normalizedPlugins.entries[pluginId]?.enabled !== false
+    ) {
+      enabled = true;
+      reason = "selected memory slot";
+    }
 
     if (enabled) {
       const memoryDecision = resolveMemorySlotDecision({

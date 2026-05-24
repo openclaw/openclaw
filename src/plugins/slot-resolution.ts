@@ -1,4 +1,4 @@
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -81,6 +81,76 @@ export function resolveMemoryRoleSlots(params: {
   };
 }
 
+export type MemoryRoleSlotSelection = {
+  role: MemoryPluginRole;
+  slotKey: MemoryPluginRoleSlotKey;
+  pluginId: string;
+  agentId?: string;
+};
+
+function addMemoryRoleSlotSelection(
+  selections: MemoryRoleSlotSelection[],
+  params: {
+    role: MemoryPluginRole;
+    pluginId: string | null | undefined;
+    agentId?: string;
+  },
+): void {
+  if (typeof params.pluginId !== "string") {
+    return;
+  }
+  const pluginId = params.pluginId.trim();
+  if (!pluginId || pluginId.toLowerCase() === "none") {
+    return;
+  }
+  selections.push({
+    role: params.role,
+    slotKey: memoryRoleToSlotKey(params.role),
+    pluginId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+}
+
+export function listConfiguredMemoryRoleSlotSelections(params: {
+  cfg: OpenClawConfig;
+}): MemoryRoleSlotSelection[] {
+  const selections: MemoryRoleSlotSelection[] = [];
+  for (const role of MEMORY_PLUGIN_ROLES) {
+    addMemoryRoleSlotSelection(selections, {
+      role,
+      pluginId: resolveMemoryRoleSlot({ cfg: params.cfg, role }),
+    });
+  }
+  for (const agent of listAgentEntries(params.cfg)) {
+    const agentId = agent.id?.trim();
+    if (!agentId || !agent.plugins?.slots) {
+      continue;
+    }
+    for (const role of MEMORY_PLUGIN_ROLES) {
+      const slotKey = memoryRoleToSlotKey(role);
+      const hasRoleSlot = hasOwnSlot(agent.plugins.slots, slotKey);
+      const hasLegacyRecallSlot = role === "recall" && hasOwnSlot(agent.plugins.slots, "memory");
+      if (!hasRoleSlot && !hasLegacyRecallSlot) {
+        continue;
+      }
+      addMemoryRoleSlotSelection(selections, {
+        role,
+        pluginId: resolveMemoryRoleSlot({ cfg: params.cfg, role, agentId }),
+        agentId,
+      });
+    }
+  }
+  return selections;
+}
+
+export function listConfiguredMemoryRolePluginIds(params: { cfg: OpenClawConfig }): string[] {
+  return [
+    ...new Set(
+      listConfiguredMemoryRoleSlotSelections(params).map((selection) => selection.pluginId),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 export function listSelectedMemoryRolePluginIds(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -130,6 +200,17 @@ export function listMemoryRolesSelectedForPlugin(params: {
   cfg: OpenClawConfig;
   pluginId: string;
   agentId?: string;
+  includeConfiguredAgentSlots?: boolean;
 }): MemoryPluginRole[] {
-  return MEMORY_PLUGIN_ROLES.filter((role) => isPluginSelectedForMemoryRole({ ...params, role }));
+  const roles = new Set<MemoryPluginRole>(
+    MEMORY_PLUGIN_ROLES.filter((role) => isPluginSelectedForMemoryRole({ ...params, role })),
+  );
+  if (params.includeConfiguredAgentSlots) {
+    for (const selection of listConfiguredMemoryRoleSlotSelections({ cfg: params.cfg })) {
+      if (selection.pluginId === params.pluginId) {
+        roles.add(selection.role);
+      }
+    }
+  }
+  return [...roles];
 }

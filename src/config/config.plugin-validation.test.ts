@@ -428,6 +428,34 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports missing per-agent memory role slot plugin refs", () => {
+    const res = validateInSuite({
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.capture": "missing-agent-capture" },
+            },
+          },
+        ],
+      },
+      plugins: {
+        enabled: true,
+        slots: { "memory.recall": "none" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessage(
+        res.issues,
+        "agents.list.0.plugins.slots.memory.capture",
+        "plugin not found: missing-agent-capture",
+      );
+    }
+  });
+
   it("validates memory plugins selected only by non-recall role slots", async () => {
     const capturePluginDir = path.join(suiteHome, "capture-plugin");
     await writePluginFixture({
@@ -462,6 +490,50 @@ describe("config plugin validation", () => {
       expectPathMessageIncludes(
         res.issues,
         "plugins.entries.capture-plugin.config.enabled",
+        "must have required property 'enabled'",
+      );
+    }
+  });
+
+  it("validates memory plugins selected only by per-agent role slots", async () => {
+    const capturePluginDir = path.join(suiteHome, "agent-capture-plugin");
+    await writePluginFixture({
+      dir: capturePluginDir,
+      id: "agent-capture-plugin",
+      kind: "memory",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+        },
+        required: ["enabled"],
+      },
+    });
+
+    const res = validateInSuite({
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.capture": "agent-capture-plugin" },
+            },
+          },
+        ],
+      },
+      plugins: {
+        enabled: true,
+        load: { paths: [capturePluginDir] },
+        slots: { "memory.recall": "none" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.agent-capture-plugin.config.enabled",
         "must have required property 'enabled'",
       );
     }
