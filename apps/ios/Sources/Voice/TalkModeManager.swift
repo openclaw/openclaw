@@ -2435,12 +2435,17 @@ extension TalkModeManager {
             let config: [String: Any]
             var redactedFallbackMissingScope: String?
             do {
-                guard let fetched = try await fetchConfig(includeSecrets: true) else { return }
-                config = fetched
+                if let fetched = try await fetchConfig(includeSecrets: true) {
+                    config = fetched
+                } else if let fetched = try await fetchConfig(includeSecrets: false) {
+                    config = fetched
+                    GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
+                } else {
+                    return
+                }
             } catch {
-                guard let missingScope = Self.missingTalkScope(from: error),
-                      let fetched = try await fetchConfig(includeSecrets: false)
-                else {
+                let missingScope = Self.missingTalkScope(from: error)
+                guard let fetched = try await fetchConfig(includeSecrets: false) else {
                     throw error
                 }
                 config = fetched
