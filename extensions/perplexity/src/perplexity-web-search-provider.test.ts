@@ -179,7 +179,8 @@ describe("perplexity web search provider", () => {
         expect(result.model).toBe("perplexity/sonar");
         expect(result.provider).toBe("perplexity");
 
-        const [input, init] = mockFetch.mock.calls[0] ?? [];
+        const call = mockFetch.mock.calls[0] as [RequestInfo | URL, RequestInit?] | undefined;
+        const [input, init] = call ?? [];
         expect(String(input)).toBe("https://openrouter.ai/api/v1/chat/completions");
         expect(JSON.parse(String(init?.body))).toMatchObject({
           model: "perplexity/sonar",
