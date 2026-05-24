@@ -1159,6 +1159,28 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
+  it("does not fall back to hook pack when managed npm root recovery rebuild fails", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error:
+        "managed npm root recovery failed after quarantining package-lock.json at /tmp/openclaw-state/extensions/.openclaw-managed-node_modules/_openclaw-quarantined-npm-roots/corrupt-demo: npm install failed during rebuild",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:demo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("managed npm root recovery failed");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
     loadConfig.mockReturnValue({} as OpenClawConfig);
     installPluginFromNpmSpec.mockResolvedValue({

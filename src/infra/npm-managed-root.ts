@@ -569,6 +569,7 @@ export async function quarantineManagedNpmRootForRebuild(params: {
   await fs.mkdir(params.npmRoot, { recursive: true });
   const quarantineParent = path.join(params.npmRoot, MANAGED_NPM_ROOT_QUARANTINE_DIR);
   await fs.mkdir(quarantineParent, { recursive: true });
+  // No process lock on the managed root; safe-by-construction: mkdtemp unique dir + rename ENOENT swallowed on re-quarantine.
   const quarantineDir = await fs.mkdtemp(path.join(quarantineParent, "corrupt-"));
   const movedArtifactNames: string[] = [];
   for (const artifactName of MANAGED_NPM_ROOT_REBUILD_ARTIFACT_NAMES) {

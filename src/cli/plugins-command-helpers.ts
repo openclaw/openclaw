@@ -201,6 +201,7 @@ export function shouldSkipHookPackFallbackAfterPluginInstallError(pluginError: s
   return (
     pluginError.startsWith("npm install failed") ||
     pluginError.startsWith("npm peer dependency planning failed") ||
+    pluginError.startsWith("managed npm root recovery failed") ||
     pluginError.startsWith("Failed to stage npm pack archive in managed npm root")
   );
 }
