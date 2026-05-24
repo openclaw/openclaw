@@ -2,6 +2,7 @@ import {
   CLAWORKS_CLI_NAME,
   isClaworksCliProduct,
   OPENCLAW_CLI_NAME,
+  replaceEmbeddedCliNames,
   resolveCliProductEmoji,
   resolveCliProductTitle,
 } from "./cli-name.js";
@@ -140,7 +141,9 @@ export function applyProductSurfaceCopy(
   const configPath = resolveProductConfigPathHint(env);
   const stateDir = resolveProductStateDirHint(env);
 
-  return value
+  const cliName = resolveProductCliName(env);
+
+  const result = value
     .replaceAll("OpenClaw setup", resolveProductSetupIntro(env))
     .replaceAll("OpenClaw configure", "ClaWorks configure")
     .replaceAll("OpenClaw update wizard", "ClaWorks update wizard")
@@ -166,5 +169,7 @@ export function applyProductSurfaceCopy(
     .replaceAll("Manage OpenClaw MCP", "Manage ClaWorks MCP")
     .replaceAll("openclaw.json", "claworks.json")
     .replaceAll("~/.openclaw", stateDir)
+    .replaceAll("https://docs.openclaw.ai", resolveProductDocsBase(env))
     .replace(/\bOpenClaw\b/g, product);
+  return replaceEmbeddedCliNames(result, cliName);
 }

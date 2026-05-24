@@ -46,4 +46,23 @@ describe("product-surface", () => {
       }),
     ).toContain("claworks.json");
   });
+
+  it("rewrites embedded openclaw command examples", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyProductSurfaceCopy("Migration complete. Run `openclaw doctor` next.", env),
+    ).toContain("`claworks doctor`");
+    expect(applyProductSurfaceCopy("Command: openclaw channels status --probe", env)).toBe(
+      "Command: claworks channels status --probe",
+    );
+    expect(
+      applyProductSurfaceCopy(
+        '"API Key" is sensitive. Set it via:\n  openclaw config set plugins.entries.foo.config.bar <value>',
+        env,
+      ),
+    ).toContain("claworks config set");
+    expect(applyProductSurfaceCopy("https://openclaw.ai/showcase", env)).toBe(
+      "https://openclaw.ai/showcase",
+    );
+  });
 });

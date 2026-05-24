@@ -188,11 +188,14 @@ export class EvolutionSyncManager {
         } else {
           const pb = this.runtime.playbookEngine;
           const source = `evolution-pack:${pack.source_robot_id}`;
-          if (typeof pb.load === "function") {
+          const pbExt = pb as typeof pb & {
+            loadFromYaml?: (yaml: string, src: string) => Promise<void>;
+          };
+          if (typeof pbExt.load === "function") {
             const playbookDef = parsePlaybookYaml(yamlContent, source);
-            pb.load(playbookDef);
-          } else if (typeof pb.loadFromYaml === "function") {
-            await pb.loadFromYaml(yamlContent, source);
+            pbExt.load(playbookDef);
+          } else if (typeof pbExt.loadFromYaml === "function") {
+            await pbExt.loadFromYaml(yamlContent, source);
           } else {
             throw new Error("playbookEngine.load / loadFromYaml 不可用");
           }
@@ -208,7 +211,9 @@ export class EvolutionSyncManager {
     // 2. 更新规则决策表
     for (const table of pack.updated_rule_tables ?? []) {
       try {
-        const ruleEngine = this.runtime.ruleEngine;
+        const ruleEngine = this.runtime.ruleEngine as
+          | (typeof this.runtime.ruleEngine & { loadTable?: (t: unknown) => void })
+          | undefined;
         if (ruleEngine?.registerTable) {
           ruleEngine.registerTable(table as import("./rule-engine.js").DecisionTable);
           applied.push(`规则表已更新: ${table.name}`);

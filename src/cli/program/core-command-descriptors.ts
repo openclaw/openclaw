@@ -88,6 +88,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "init",
+    description: "Initialize ClaWorks config, packs, and robot plugin defaults",
+    hasSubcommands: false,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,

@@ -6,7 +6,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,7 @@ import {
   repairClaworksJsonConfig,
   seedPacksToStateDir,
 } from "./product-config-repair.js";
-import { isClaworksProduct } from "./product-env.js";
+import { isClaworksProduct, isClaworksProductionMode } from "./product-env.js";
 import { createClaworksRuntime, startClaworksRuntime, stopClaworksRuntime } from "./runtime.js";
 
 export const INIT_PROFILES = ["industrial", "enterprise", "daily-report"] as const;
@@ -75,6 +75,46 @@ function profileLabel(profile: InitProfile): string {
     default:
       return "通用企业";
   }
+}
+
+/** User-visible warnings so init/onboard does not imply simulate OT is production-ready. */
+export function collectClaworksInitWarnings(
+  config: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const warnings: string[] = [];
+  const robot = ((
+    config.plugins as { entries?: Record<string, { config?: Record<string, unknown> }> } | undefined
+  )?.entries?.["claworks-robot"]?.config ?? {}) as Record<string, unknown>;
+  const production =
+    robot.production_mode === true ||
+    isClaworksProductionMode(robot) ||
+    env.CLAWORKS_PRODUCTION === "1" ||
+    env.CLAWORKS_PRODUCTION === "true";
+
+  const connectors = (robot.connectors ?? {}) as Record<
+    string,
+    { enabled?: boolean; simulate?: boolean; preset?: string }
+  >;
+  if (connectors.echo?.enabled !== false && connectors.echo) {
+    warnings.push(
+      "connectors.echo 为演示 OT 事件（非真实产线数据）；生产环境请配置 MQTT/OPC UA 等真实连接器",
+    );
+  }
+  const simulating = Object.entries(connectors).filter(
+    ([, cfg]) => cfg && typeof cfg === "object" && cfg.simulate === true,
+  );
+  if (simulating.length > 0 && !production) {
+    warnings.push(
+      `OT 连接器处于 simulate 开发模式：${simulating.map(([id]) => id).join(", ")}。生产前设 production_mode=true 并运行 claworks doctor --fix`,
+    );
+  }
+  if (!production && env.CLAWORKS_PRODUCT_PROFILE?.trim() !== "personal_work") {
+    warnings.push(
+      "个人企业混合（自托管 Qwen/KB）：CLAWORKS_PRODUCT_PROFILE=personal_work pnpm claworks:repair:personal",
+    );
+  }
+  return warnings;
 }
 
 export async function runClaworksInit(opts: {
@@ -175,6 +215,7 @@ export async function runClaworksInit(opts: {
     seedRobotMd: true,
   });
   warnings.push(...repair.warnings);
+  warnings.push(...collectClaworksInitWarnings(config, env));
   if (repair.changed) {
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
@@ -230,7 +271,8 @@ export async function runClaworksInit(opts: {
   steps.push({
     step: stepNo++,
     title: "下一步",
-    detail: "运行 claworks start 启动 Gateway，或 claworks doctor --fix 做健康检查",
+    detail:
+      "运行 claworks start 启动 Gateway；生产前 claworks doctor --fix；个人企业见 CLAWORKS_PRODUCT_PROFILE=personal_work",
     status: "ok",
   });
 

@@ -29,4 +29,43 @@ describe("applyClaworksWizardCopy", () => {
     expect(value).toContain("18800");
     expect(value).not.toContain("18789");
   });
+
+  it("rewrites embedded CLI command examples from locale strings", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyClaworksWizardCopy(
+        "wizard.migration.complete",
+        "Migration complete. Run `openclaw doctor` next.",
+        { locale: "en", env },
+      ),
+    ).toContain("`claworks doctor`");
+    expect(
+      applyClaworksWizardCopy(
+        "wizard.irc.nextStatusCommand",
+        "Command: openclaw channels status --probe",
+        { locale: "en", env },
+      ),
+    ).toBe("Command: claworks channels status --probe");
+    expect(
+      applyClaworksWizardCopy(
+        "wizard.search.configureLaterHint",
+        "Configure later with openclaw configure --section web",
+        { locale: "en", env },
+      ),
+    ).toBe("Configure later with claworks configure --section web");
+    expect(
+      applyClaworksWizardCopy(
+        "wizard.finalize.whatNow",
+        'What now: https://openclaw.ai/showcase ("What People Are Building").',
+        { locale: "en", env },
+      ),
+    ).toContain("docs.claworks.ai/showcase");
+    expect(
+      applyClaworksWizardCopy(
+        "wizard.finalize.outroDashboardLink",
+        "Onboarding complete. Use the dashboard link above to control OpenClaw.",
+        { locale: "en", env },
+      ),
+    ).toContain("ClaWorks");
+  });
 });

@@ -57,4 +57,29 @@ describe("wizard i18n", () => {
       expect(listWizardI18nKeys(locale), locale).toEqual(english);
     }
   });
+
+  it("productizes embedded CLI command examples in locale strings", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(t("wizard.migration.complete", undefined, { locale: "en", env })).toContain(
+      "`claworks doctor`",
+    );
+    expect(t("wizard.irc.nextStatusCommand", undefined, { locale: "en", env })).toBe(
+      "Command: claworks channels status --probe",
+    );
+    expect(t("wizard.search.configureLaterHint", undefined, { locale: "zh-CN", env })).toBe(
+      "稍后可用 claworks configure --section web 配置",
+    );
+    expect(t("wizard.finalize.whatNow", undefined, { locale: "en", env })).toContain(
+      "docs.claworks.ai/showcase",
+    );
+    expect(t("wizard.finalize.outroDashboardLink", undefined, { locale: "en", env })).toContain(
+      "ClaWorks",
+    );
+  });
+
+  it("leaves locale strings unchanged outside product mode", () => {
+    expect(t("wizard.migration.complete", undefined, { locale: "en", env: {} })).toContain(
+      "`openclaw doctor`",
+    );
+  });
 });

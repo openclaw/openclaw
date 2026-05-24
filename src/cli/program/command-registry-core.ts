@@ -117,6 +117,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../product/register-claworks-start-cli.js"),
         exportName: "registerClaworksStartCliIfProduct",
       },
+      {
+        commandNames: ["init"],
+        loadModule: () => import("../product/register-claworks-init-cli.js"),
+        exportName: "registerClaworksInitCliIfProduct",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(

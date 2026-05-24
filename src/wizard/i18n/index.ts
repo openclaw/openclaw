@@ -1,3 +1,4 @@
+import { applyClaworksWizardCopy } from "../product-copy.js";
 import { en } from "./locales/en.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
@@ -72,12 +73,13 @@ function interpolate(value: string, params?: WizardI18nParams): string {
 export function wizardT(
   key: string,
   params?: WizardI18nParams,
-  options?: { locale?: WizardLocale },
+  options?: { locale?: WizardLocale; env?: NodeJS.ProcessEnv },
 ): string {
   const locale = options?.locale ?? resolveWizardLocaleFromEnv();
+  const env = options?.env ?? process.env;
   const localized = readKey(LOCALES[locale], key);
   const fallback = localized ?? readKey(LOCALES[WIZARD_DEFAULT_LOCALE], key) ?? key;
-  return interpolate(fallback, params);
+  return applyClaworksWizardCopy(key, interpolate(fallback, params), { locale, env });
 }
 
 export const t = wizardT;

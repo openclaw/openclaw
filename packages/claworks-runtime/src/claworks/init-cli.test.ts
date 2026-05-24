@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyDetectedLlmToConfig, detectLlmProviderFromEnv } from "./direct-llm-bridge.js";
-import { INIT_PROFILES } from "./init-cli.js";
+import { INIT_PROFILES, collectClaworksInitWarnings } from "./init-cli.js";
 
 describe("detectLlmProviderFromEnv", () => {
   it("detects OpenAI", () => {
@@ -42,6 +42,46 @@ describe("applyDetectedLlmToConfig", () => {
 describe("INIT_PROFILES", () => {
   it("includes enterprise industrial daily-report", () => {
     expect(INIT_PROFILES).toEqual(["industrial", "enterprise", "daily-report"]);
+  });
+});
+
+describe("collectClaworksInitWarnings", () => {
+  it("warns when echo demo connector is enabled", () => {
+    const warnings = collectClaworksInitWarnings({
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            config: {
+              connectors: { echo: { enabled: true, preset: "echo" } },
+            },
+          },
+        },
+      },
+    });
+    expect(warnings.some((w) => w.includes("connectors.echo"))).toBe(true);
+  });
+
+  it("warns on simulate OT connectors outside production mode", () => {
+    const warnings = collectClaworksInitWarnings({
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            config: {
+              connectors: { plant: { simulate: true, enabled: true } },
+            },
+          },
+        },
+      },
+    });
+    expect(warnings.some((w) => w.includes("simulate"))).toBe(true);
+  });
+
+  it("suggests personal_work repair profile for enterprise init", () => {
+    const warnings = collectClaworksInitWarnings(
+      { plugins: { entries: { "claworks-robot": { config: {} } } } },
+      {},
+    );
+    expect(warnings.some((w) => w.includes("personal_work"))).toBe(true);
   });
 });
 
