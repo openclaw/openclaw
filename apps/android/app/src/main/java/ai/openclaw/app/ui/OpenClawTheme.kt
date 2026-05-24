@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import android.app.Activity
 import android.content.Context
 import android.os.Build
-import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
