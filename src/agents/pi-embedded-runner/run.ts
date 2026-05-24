@@ -1650,10 +1650,8 @@ export async function runEmbeddedPiAgent(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
-          const timedOutWithoutCurrentAssistant =
-            !currentAttemptAssistant && (timedOut || idleTimedOut);
           const sessionAssistantForCandidate =
-            timedOutWithoutCurrentAssistant &&
+            !currentAttemptAssistant &&
             !isAssistantForModelRef(sessionLastAssistant, {
               provider,
               model: modelId,
