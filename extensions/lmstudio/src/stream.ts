@@ -161,6 +161,7 @@ function couldStillBePlainTextToolCall(text: string): boolean {
     trimmed.startsWith("[") ||
     trimmed.startsWith("<|channel|>") ||
     trimmed.startsWith("commentary") ||
+    trimmed.startsWith("<|tool_call>") ||
     trimmed.startsWith("analysis") ||
     trimmed.startsWith("final")
   );

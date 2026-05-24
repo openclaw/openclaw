@@ -105,6 +105,36 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
 
     expect(blocks).toBeNull();
   });
+
+  it("parses Gemma tool calls", () => {
+    const raw = '<|tool_call>call:exec{command:<|"|>ls -a<|"|>}<tool_call|>';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
+
+    expect(blocks).toEqual([
+      {
+        name: "exec",
+        arguments: { command: "ls -a" },
+        start: 0,
+        end: raw.length,
+        raw,
+      },
+    ]);
+  });
+
+  it("parses Gemma tool calls with response marker", () => {
+    const raw = '<|tool_call>call:exec{command:<|"|>ls -a<|"|>}<tool_call|><|tool_response>';
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
+
+    expect(blocks).toEqual([
+      {
+        name: "exec",
+        arguments: { command: "ls -a" },
+        start: 0,
+        end: raw.length,
+        raw,
+      },
+    ]);
+  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
@@ -120,6 +150,14 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(
       stripPlainTextToolCallBlocks(
         'before\ncommentary to=read code {"path":"/tmp/file.txt"}\nafter',
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("strip gemma tool calls", () => {
+    expect(
+      stripPlainTextToolCallBlocks(
+        'before\n<|tool_call>call:exec{command:<|"|>ls -a<|"|>}<tool_call|>\nafter',
       ),
     ).toBe("before\nafter");
   });
