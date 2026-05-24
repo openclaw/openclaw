@@ -96,6 +96,17 @@ function mergeCapabilityFlags<T extends Record<string, boolean>>(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function normalizeBadges(badges: string[] | undefined): string[] | undefined {
+  const normalized = Array.from(
+    new Set((badges ?? []).map((badge) => badge.trim()).filter(Boolean)),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function mergeBadges(...badgeSets: Array<string[] | undefined>): string[] | undefined {
+  return normalizeBadges(badgeSets.flatMap((badges) => badges ?? []));
+}
+
 function mergePlatformCapabilities(
   first: BrokerPlatformCapabilities | undefined,
   second: BrokerPlatformCapabilities,
@@ -106,12 +117,16 @@ function mergePlatformCapabilities(
   const delivery = mergeCapabilityFlags(first.delivery, second.delivery);
   const live = mergeCapabilityFlags(first.live, second.live);
   const receive = mergeCapabilityFlags(first.receive, second.receive);
+  const constraints = mergeCapabilityFlags(first.constraints, second.constraints);
+  const badges = mergeBadges(first.badges, second.badges);
   const native = mergeCapabilityFlags(first.native, second.native);
   return {
     platform: first.platform,
     ...(delivery ? { delivery } : {}),
     ...(live ? { live } : {}),
     ...(receive ? { receive } : {}),
+    ...(constraints ? { constraints } : {}),
+    ...(badges ? { badges } : {}),
     ...(native ? { native } : {}),
   };
 }
@@ -122,12 +137,15 @@ function normalizeCapabilities(
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
     const platform = normalizeKnownChannelBrokerPlatformId(value.platform ?? rawPlatform);
+    const badges = normalizeBadges(value.badges);
     const current = hasOwnProperty(normalized, platform) ? normalized[platform] : undefined;
     normalized[platform] = mergePlatformCapabilities(current, {
       platform,
       ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
       ...(value.live ? { live: { ...value.live } } : {}),
       ...(value.receive ? { receive: { ...value.receive } } : {}),
+      ...(value.constraints ? { constraints: { ...value.constraints } } : {}),
+      ...(badges ? { badges } : {}),
       ...(value.native ? { native: { ...value.native } } : {}),
     });
   }

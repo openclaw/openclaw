@@ -18,6 +18,12 @@ BlueBubbles support was removed. Migrate `channels.bluebubbles` configs to `chan
 
 Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
 
+When iMessage routes through [Channel Broker](/channels/channel-broker), broker
+providers should badge it as Mac-hosted and device-bound with constraints such
+as `macHostRequired`, `messagesSignedIn`, `privateApiOptional`, or
+`privateApiRequired`. Those badges make host requirements visible without
+reintroducing BlueBubbles as a native OpenClaw channel.
+
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
     Replies, tapbacks, effects, attachments, and group management.

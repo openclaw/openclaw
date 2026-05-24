@@ -42,6 +42,7 @@ export const channelBrokerStatus = createComputedAccountStatusAdapter<ResolvedCh
         platforms: account.platforms,
         defaultPlatform: account.defaultPlatform,
         defaultConversationType: account.defaultConversationType,
+        capabilities: account.capabilities,
       },
     }),
   },

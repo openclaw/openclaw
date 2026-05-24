@@ -34,6 +34,27 @@ export type BrokerDeliveryRequirements = Partial<
   >
 >;
 
+export type BrokerPlatformConstraints = Partial<
+  Record<
+    | "businessApi"
+    | "cloudApi"
+    | "providerHosted"
+    | "deviceBound"
+    | "linkedDevice"
+    | "qrPairing"
+    | "sessionFragile"
+    | "selfHosted"
+    | "phoneNumberRequired"
+    | "signalCli"
+    | "macHostRequired"
+    | "messagesSignedIn"
+    | "privateApiOptional"
+    | "privateApiRequired"
+    | "externalBridge",
+    boolean
+  >
+>;
+
 export type BrokerConversationRef = {
   id: string;
   type: BrokerConversationType;
@@ -148,6 +169,8 @@ export type BrokerPlatformCapabilities = {
   delivery?: BrokerDeliveryRequirements;
   live?: Partial<Record<"draftPreview" | "previewFinalization" | "progressUpdates", boolean>>;
   receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
+  constraints?: BrokerPlatformConstraints;
+  badges?: string[];
   native?: Record<string, boolean>;
 };
 
@@ -157,12 +180,15 @@ export type BrokerProviderCapabilities = {
   delivery?: BrokerDeliveryRequirements;
   live?: Partial<Record<"draftPreview" | "previewFinalization" | "progressUpdates", boolean>>;
   receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
+  constraints?: BrokerPlatformConstraints;
+  badges?: string[];
 };
 
 export type BrokerCapabilityRequirements = {
   delivery?: BrokerDeliveryRequirements;
   live?: Partial<Record<"draftPreview" | "previewFinalization" | "progressUpdates", boolean>>;
   receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
+  constraints?: BrokerPlatformConstraints;
   native?: Record<string, boolean>;
 };
 
@@ -381,14 +407,42 @@ function normalizeBrokerMentionFacts(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeBrokerBooleanRecord(
+  record: Record<string, boolean | undefined> | undefined,
+): Record<string, boolean> | undefined {
+  const normalized: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(record ?? {})) {
+    const normalizedKey = key.trim();
+    if (normalizedKey) {
+      normalized[normalizedKey] = value === true;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeBrokerBadges(badges: string[] | undefined): string[] | undefined {
+  const normalized = Array.from(
+    new Set((badges ?? []).map((badge) => badge.trim()).filter(Boolean)),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function mergeBrokerBadges(...badgeSets: Array<string[] | undefined>): string[] | undefined {
+  return normalizeBrokerBadges(badgeSets.flatMap((badges) => badges ?? []));
+}
+
 function normalizeBrokerPlatformCapabilities(
   capabilities: BrokerPlatformCapabilities,
 ): BrokerPlatformCapabilities {
+  const constraints = normalizeBrokerBooleanRecord(capabilities.constraints);
+  const badges = normalizeBrokerBadges(capabilities.badges);
   return {
     platform: normalizeBrokerKnownPlatformId(capabilities.platform),
     ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
     ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
     ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
+    ...(constraints ? { constraints } : {}),
+    ...(badges ? { badges } : {}),
     ...(capabilities.native ? { native: { ...capabilities.native } } : {}),
   };
 }
@@ -408,12 +462,16 @@ function mergeBrokerPlatformCapabilities(
   const delivery = mergeBrokerCapabilityFlags(first.delivery, second.delivery);
   const live = mergeBrokerCapabilityFlags(first.live, second.live);
   const receive = mergeBrokerCapabilityFlags(first.receive, second.receive);
+  const constraints = mergeBrokerCapabilityFlags(first.constraints, second.constraints);
+  const badges = mergeBrokerBadges(first.badges, second.badges);
   const native = mergeBrokerCapabilityFlags(first.native, second.native);
   return {
     platform: first.platform,
     ...(delivery ? { delivery } : {}),
     ...(live ? { live } : {}),
     ...(receive ? { receive } : {}),
+    ...(constraints ? { constraints } : {}),
+    ...(badges ? { badges } : {}),
     ...(native ? { native } : {}),
   };
 }
@@ -436,6 +494,8 @@ function normalizeBrokerPlatformCapabilitiesList(
 export function normalizeBrokerProviderCapabilities(
   capabilities: BrokerProviderCapabilities,
 ): BrokerProviderCapabilities {
+  const constraints = normalizeBrokerBooleanRecord(capabilities.constraints);
+  const badges = normalizeBrokerBadges(capabilities.badges);
   return {
     ...(normalizeOptionalBrokerString(capabilities.providerId)
       ? { providerId: capabilities.providerId?.trim() }
@@ -444,6 +504,8 @@ export function normalizeBrokerProviderCapabilities(
     ...(capabilities.delivery ? { delivery: { ...capabilities.delivery } } : {}),
     ...(capabilities.live ? { live: { ...capabilities.live } } : {}),
     ...(capabilities.receive ? { receive: { ...capabilities.receive } } : {}),
+    ...(constraints ? { constraints } : {}),
+    ...(badges ? { badges } : {}),
   };
 }
 
@@ -541,11 +603,15 @@ export function resolveBrokerPlatformCapabilities(params: {
   if (!platformCapabilities) {
     return undefined;
   }
+  const constraints = Object.assign({}, normalized.constraints, platformCapabilities.constraints);
+  const badges = mergeBrokerBadges(normalized.badges, platformCapabilities.badges);
   return {
     platform,
     delivery: Object.assign({}, normalized.delivery, platformCapabilities.delivery),
     live: Object.assign({}, normalized.live, platformCapabilities.live),
     receive: Object.assign({}, normalized.receive, platformCapabilities.receive),
+    ...(Object.keys(constraints).length > 0 ? { constraints } : {}),
+    ...(badges ? { badges } : {}),
     ...(platformCapabilities.native ? { native: { ...platformCapabilities.native } } : {}),
   };
 }
@@ -578,6 +644,7 @@ export function brokerPlatformSupports(params: {
     supportsRequiredFlags(platformCapabilities.delivery, params.requirements.delivery) &&
     supportsRequiredFlags(platformCapabilities.live, params.requirements.live) &&
     supportsRequiredFlags(platformCapabilities.receive, params.requirements.receive) &&
+    supportsRequiredFlags(platformCapabilities.constraints, params.requirements.constraints) &&
     supportsRequiredFlags(platformCapabilities.native, params.requirements.native)
   );
 }

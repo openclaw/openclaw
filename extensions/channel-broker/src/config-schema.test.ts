@@ -59,6 +59,12 @@ describe("channel-broker config schema", () => {
             constructor: {
               delivery: { payload: true },
             },
+            whatsapp: {
+              delivery: { text: true, media: true },
+              constraints: { businessApi: true, cloudApi: true, providerHosted: true },
+              badges: ["business-api", "provider-hosted"],
+              native: { cloudApi: true },
+            },
           },
         },
       },
@@ -83,10 +89,17 @@ describe("channel-broker config schema", () => {
       thread: true,
     });
     expect(account.capabilities.qqbot?.native).toEqual({ botApi: true });
+<<<<<<< HEAD
     expect(account.capabilities["constructor"]).toEqual({
       platform: "constructor",
       delivery: { payload: true },
     });
+    expect(account.capabilities.whatsapp?.constraints).toEqual({
+      businessApi: true,
+      cloudApi: true,
+      providerHosted: true,
+    });
+    expect(account.capabilities.whatsapp?.badges).toEqual(["business-api", "provider-hosted"]);
   });
 
   it("rejects legacy flat capability fields so provider metadata matches the SDK shape", () => {
@@ -155,5 +168,28 @@ describe("channel-broker config schema", () => {
 
     expect(account.providerId).toBe("acme");
     expect(account.baseUrl).toBe("https://broker.example.test");
+  });
+
+  it("rejects unknown constrained-provider metadata unless the broker contract models it", () => {
+    const result = safeParseChannelBrokerConfig({
+      accounts: {
+        acme: {
+          baseUrl: "https://broker.example.test",
+          capabilities: {
+            signal: {
+              constraints: {
+                selfHosted: true,
+                unsupportedConstraint: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.success ? [] : result.issues.map((issue) => issue.path.join("."))).toContain(
+      "accounts.acme.capabilities.signal.constraints",
+    );
   });
 });

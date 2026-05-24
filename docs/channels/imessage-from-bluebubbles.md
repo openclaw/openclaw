@@ -11,6 +11,11 @@ The bundled `imessage` plugin now reaches the same private API surface as BlueBu
 
 BlueBubbles support was removed. OpenClaw supports iMessage through `imsg` only. This guide is for migrating old `channels.bluebubbles` configs to `channels.imessage`; there is no other supported migration path.
 
+For [Channel Broker](/channels/channel-broker), BlueBubbles remains provider
+metadata rather than a revived native channel. A broker provider that owns a
+BlueBubbles-backed iMessage bridge should expose it under iMessage routing and
+badge the provider with `externalBridge`.
+
 <Note>
 For the short announcement and operator summary, see [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage).
 </Note>
