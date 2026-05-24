@@ -322,6 +322,67 @@ describe("iMessage approval reactions", () => {
     });
   });
 
+  it("resolves a reaction when the binding was registered under a `p:0/…` prefixed GUID and the tapback surfaces both forms", async () => {
+    // Regression for the second ClawSweeper P1 finding: imsg can return
+    // `p:0/<guid>` as the outbound guid, so send.ts registers the binding
+    // under that prefixed key. The inbound tapback's `targetGuid` is the
+    // normalized (unprefixed) form, but `targetGuids` contains BOTH the
+    // normalized and raw forms. The resolver must probe every candidate or
+    // the lookup misses for valid tapbacks.
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "p:0/abc-123",
+      approvalId: "exec-prefixed",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const cfg = { channels: { imessage: { allowFrom: ["+15551230000"] } } };
+    const handled = await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: "default",
+      message: buildTapbackReactionPayload({
+        sender: "+15551230000",
+        // associated_message_guid carries the prefixed form; reacted_to_guid
+        // gets normalized by resolveIMessageReactionContext into the
+        // unprefixed form. The reaction-context helper exposes BOTH via
+        // `targetGuids`.
+        reacted_to_guid: "p:0/abc-123",
+        associated_message_guid: "p:0/abc-123",
+        reaction_emoji: "👍",
+      }),
+      bodyText: "",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "exec-prefixed",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+
+    // Both forms should be cleared from the in-memory map after success so a
+    // toggle/replay tap doesn't re-fire.
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/abc-123",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "abc-123",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("resolves DM reactions even when send registered under handle but inbound carries chat_guid", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",

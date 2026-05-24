@@ -504,7 +504,16 @@ export async function resolveIMessageApprovalReactionTargetWithPersistence(param
 
 type IMessageApprovalReactionEvent = {
   conversation: IMessageApprovalConversationKey;
+  /** Primary candidate (the normalized targetGuid form). */
   messageId: string;
+  /**
+   * Every GUID candidate iMessage surfaced for the tapback target. iMessage
+   * `reaction.targetGuids` contains both the normalized form (e.g. `abc-123`)
+   * and the raw form (e.g. `p:0/abc-123`). The outbound binding may be
+   * registered under either form depending on which the imsg bridge returned
+   * from `send`, so the lookup must probe all of them.
+   */
+  messageIdCandidates: readonly string[];
   actorHandle: string;
   reactionKey: string;
   action: "added" | "removed";
@@ -526,9 +535,13 @@ function readApprovalReactionEvent(
     return null;
   }
   const reactionKey = reaction.emoji.trim();
-  const messageId = reaction.targetGuid?.trim() ?? "";
+  const candidates = (reaction.targetGuids ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const primary = reaction.targetGuid?.trim() || candidates[0] || "";
+  const messageIdCandidates = candidates.length > 0 ? candidates : primary ? [primary] : [];
   const actorHandle = normalizeIMessageHandle((message.sender ?? "").trim());
-  if (!reactionKey || !messageId || !actorHandle) {
+  if (!reactionKey || !primary || !actorHandle) {
     return null;
   }
   const conversation: IMessageApprovalConversationKey = {
@@ -542,7 +555,14 @@ function readApprovalReactionEvent(
   if (!normalizeConversationKey(conversation)) {
     return null;
   }
-  return { conversation, messageId, actorHandle, reactionKey, action: reaction.action };
+  return {
+    conversation,
+    messageId: primary,
+    messageIdCandidates,
+    actorHandle,
+    reactionKey,
+    action: reaction.action,
+  };
 }
 
 export async function maybeResolveIMessageApprovalReaction(params: {
@@ -565,12 +585,20 @@ export async function maybeResolveIMessageApprovalReaction(params: {
   if (event.action === "removed") {
     return false;
   }
-  const target = await resolveIMessageApprovalReactionTargetWithPersistence({
-    accountId: params.accountId,
-    conversation: event.conversation,
-    messageId: event.messageId,
-    reactionKey: event.reactionKey,
-  });
+  let target: IMessageApprovalReactionResolution | null = null;
+  let matchedMessageId: string | null = null;
+  for (const candidate of event.messageIdCandidates) {
+    target = await resolveIMessageApprovalReactionTargetWithPersistence({
+      accountId: params.accountId,
+      conversation: event.conversation,
+      messageId: candidate,
+      reactionKey: event.reactionKey,
+    });
+    if (target) {
+      matchedMessageId = candidate;
+      break;
+    }
+  }
   if (!target) {
     return false;
   }
@@ -608,23 +636,28 @@ export async function maybeResolveIMessageApprovalReaction(params: {
     });
     // Clear the binding on success so a second tapback (toggle 👍→👎, Apple
     // cross-device echo, or chat.db replay) does not re-fire and produce a
-    // misleading 'expired approval' log line.
-    unregisterIMessageApprovalReactionTarget({
-      accountId: params.accountId,
-      conversation: event.conversation,
-      messageId: event.messageId,
-    });
+    // misleading 'expired approval' log line. Iterate every GUID candidate the
+    // inbound surfaced so the prefixed/unprefixed form pair both get cleared.
+    for (const candidate of event.messageIdCandidates) {
+      unregisterIMessageApprovalReactionTarget({
+        accountId: params.accountId,
+        conversation: event.conversation,
+        messageId: candidate,
+      });
+    }
     params.logVerboseMessage?.(
-      `imessage: approval reaction resolved id=${target.approvalId} sender=${event.actorHandle} decision=${target.decision}`,
+      `imessage: approval reaction resolved id=${target.approvalId} sender=${event.actorHandle} decision=${target.decision} via messageId=${matchedMessageId ?? event.messageId}`,
     );
     return true;
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
-      unregisterIMessageApprovalReactionTarget({
-        accountId: params.accountId,
-        conversation: event.conversation,
-        messageId: event.messageId,
-      });
+      for (const candidate of event.messageIdCandidates) {
+        unregisterIMessageApprovalReactionTarget({
+          accountId: params.accountId,
+          conversation: event.conversation,
+          messageId: candidate,
+        });
+      }
       params.logVerboseMessage?.(
         `imessage: approval reaction ignored for expired approval id=${target.approvalId} sender=${event.actorHandle}`,
       );
