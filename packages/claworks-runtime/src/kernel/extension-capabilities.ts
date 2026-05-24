@@ -739,6 +739,16 @@ export function makeCommsCapabilities(runtime: ClaworksRuntime): CapabilityDescr
           runtime.logger?.(`[comms.send] ${message} channels=${channels?.join(",") ?? "log"}`);
         }
 
+        // 将机器人回复写入对话上下文（供后续 _session 使用）
+        const sessionIdForContext = params.user_id
+          ? `direct:user:${String(params.user_id)}`
+          : channels?.[0]
+            ? `channel:${channels[0]}`
+            : undefined;
+        if (sessionIdForContext && runtime.contextEngine) {
+          runtime.contextEngine.append(sessionIdForContext, "assistant", message);
+        }
+
         return { status: "ok", message, channels };
       },
     },
