@@ -1,0 +1,40 @@
+OpenClaw #67136 / PR #67202 — Real behaviour repro
+node v25.9.0 | platform=darwin arm64
+cwd=/Users/clawbot/.openclaw/workspace-draixcoding/scratch/oss/openclaw-67202/openclaw
+
+━━━ Scenario A: pre-fix behaviour — silent write success (the bug) ━━━
+» tmpdir: /Users/clawbot/.openclaw/tmp/openclaw-proof-67136-A-2JNMO8
+» target: /Users/clawbot/.openclaw/tmp/openclaw-proof-67136-A-2JNMO8/feature.md
+agent → Successfully wrote 40 bytes to /Users/clawbot/.openclaw/tmp/openclaw-proof-67136-A-2JNMO8/feature.md
+✗ Reality: file does NOT exist on disk. The agent's success message was a lie. This is #67136 reproduced.
+
+━━━ Scenario B: post-fix behaviour — verifyHostFile catches the bug ━━━
+» tmpdir: /Users/clawbot/.openclaw/tmp/openclaw-proof-67136-B-k7LRRc
+✓ B1 normal write — verifyHostFile() OK for /Users/clawbot/.openclaw/tmp/openclaw-proof-67136-B-k7LRRc/ok.txt
+✓ B2 verifier threw WriteVerificationError as expected:
+      Write verification failed: file does not exist after write (/Users/clawbot/.openclaw/tmp/openclaw-proof-67136-B-k7LRRc/missing.txt)
+✓ B3 verifier threw on size mismatch as expected:
+      Write verification failed: expected 12 bytes but file has 5 bytes (/Users/clawbot/.openclaw/tmp/openclaw-proof-67136-B-k7LRRc/partial.txt)
+
+━━━ Scenario C: post-fix behaviour — verifyWrittenStat catches sandbox-shape failures ━━━
+✓ C1 stat=null → Write verification failed: file does not exist after write (/sandbox/missing)
+✓ C2 stat={type:"directory"} → Write verification failed: path is not a file after write (/sandbox/feature)
+✓ C3 stat={size:5} → Write verification failed: expected 11 bytes but file has 5 bytes (/sandbox/feature.md)
+✓ C4 happy path — verifyWrittenStat() returned cleanly for matching stat.
+
+━━━ Scenario D: edit-tool recovery must rethrow WriteVerificationError ━━━
+✓ Recovery wrapper rethrew WriteVerificationError as required:
+      Write verification failed: file does not exist after write (/Users/clawbot/.openclaw/tmp/openclaw-proof-67136-D-iJD46X/edit-target.txt)
+
+━━━ Summary ━━━
+  • A pre-fix silent failure → bug-reproduced
+  • B1 normal write → pass
+  • B2 file missing after write → pass
+  • B3 size mismatch → pass
+  • C1 sandbox stat=null → pass
+  • C2 sandbox wrong type → pass
+  • C3 sandbox wrong size → pass
+  • C4 sandbox happy path → pass
+  • D recovery rethrow → pass
+
+PASS — Bug reproduced (pre-fix) and verifier caught every failure mode (post-fix).
