@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-post-compaction-"));
+  let tmpDir = "";
   const defaultPostCompactionCfg = {
     agents: {
       defaults: {
@@ -16,7 +16,7 @@ describe("readPostCompactionContext", () => {
   } satisfies OpenClawConfig;
 
   beforeEach(() => {
-    fs.mkdirSync(tmpDir, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "test-post-compaction-"));
   });
 
   afterEach(() => {
