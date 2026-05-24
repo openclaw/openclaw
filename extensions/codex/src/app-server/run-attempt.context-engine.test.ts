@@ -654,7 +654,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     const sessionManager = SessionManager.open(sessionFile);
-    sessionManager.appendMessage(userMessage("previous stale-bootstrap request", Date.now()));
+    sessionManager.appendMessage(
+      userMessage("previous stale-bootstrap request", Date.now()) as never,
+    );
     sessionManager.appendMessage(
       assistantMessage("previous stale-bootstrap answer", Date.now() + 1) as never,
     );
