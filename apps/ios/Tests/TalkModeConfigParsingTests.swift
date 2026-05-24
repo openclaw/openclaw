@@ -172,6 +172,17 @@ import Testing
         #expect(descriptor.subtitle == "Native • en-US")
     }
 
+    @Test func openAIRealtimeSelectionFallbackKeepsGatewayRelayDefaults() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_applyOpenAIRealtimeSelectionDefaults()
+
+        #expect(manager._test_executionMode() == .realtimeRelay)
+        #expect(manager._test_realtimeProvider() == "openai")
+        #expect(manager._test_realtimeModelId() == "gpt-realtime-2")
+        #expect(manager._test_gatewayTalkUsesRealtimeRelay())
+    }
+
     @Test func mapsWebRTCRealtimeTransportToGatewayRelayOnIOS() {
         let config: [String: Any] = [
             "talk": [

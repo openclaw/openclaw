@@ -130,6 +130,12 @@ final class RealtimeTalkRelaySession {
     private var isOutputPlaying = false
     private var outputStartedAtMs: Double?
     private var lastBargeInAtMs: Double = 0
+    private var micLogFrameCount = 0
+    private var micLogByteCount = 0
+    private var micLogMaxRms: Float = 0
+    private var lastMicLogAtMs: Double = 0
+    private var outputAudioChunkCount = 0
+    private var outputAudioByteCount = 0
 
     init(
         gateway: GatewayNodeSession,
@@ -299,6 +305,7 @@ final class RealtimeTalkRelaySession {
             guard let base64 = payload["audioBase64"]?.stringValue,
                   let data = Data(base64Encoded: base64)
             else { return }
+            self.recordOutputAudioChunk(byteCount: data.count)
             if self.outputStartedAtMs == nil {
                 self.outputStartedAtMs = ProcessInfo.processInfo.systemUptime * 1000
             }
@@ -317,11 +324,20 @@ final class RealtimeTalkRelaySession {
             GatewayDiagnostics.log("talk realtime: error=\(Self.safeLogMessage(message))")
             self.onStatus(message)
         case "close":
+            GatewayDiagnostics.log("talk realtime: close")
             self.onStatus("Ready")
             self.close(sendClose: false)
         default:
             return
         }
+    }
+
+    private func recordOutputAudioChunk(byteCount: Int) {
+        self.outputAudioChunkCount += 1
+        self.outputAudioByteCount += byteCount
+        guard self.outputAudioChunkCount == 1 || self.outputAudioChunkCount % 20 == 0 else { return }
+        GatewayDiagnostics.log(
+            "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
     }
 
     private func handleInputLevelDuringOutput(_ rms: Float, timestampMs: Double) {
@@ -338,8 +354,12 @@ final class RealtimeTalkRelaySession {
     }
 
     private func handleTranscriptEvent(_ payload: [String: AnyCodable]) {
-        guard payload["final"]?.boolValue == true else { return }
+        let isFinal = payload["final"]?.boolValue == true
         let role = payload["role"]?.stringValue ?? ""
+        let charCount = payload["text"]?.stringValue?.count ?? 0
+        GatewayDiagnostics.log(
+            "talk realtime transcript: role=\(role.isEmpty ? "unknown" : role) final=\(isFinal) chars=\(charCount)")
+        guard isFinal else { return }
         if role == "user" {
             self.onStatus("Thinking…")
         } else if role == "assistant" {
@@ -513,6 +533,9 @@ final class RealtimeTalkRelaySession {
         { [weak self, audioSender = self.audioSender] encoded, timestampMs, rms in
             guard let audioSender else { return }
             Task {
+                await MainActor.run { [weak self] in
+                    self?.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
+                }
                 if rms >= Self.bargeInRmsThreshold {
                     await MainActor.run { [weak self] in
                         self?.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
@@ -532,6 +555,21 @@ final class RealtimeTalkRelaySession {
             block: tapBlock)
         self.audioEngine.prepare()
         try self.audioEngine.start()
+    }
+
+    private func recordMicrophoneFrame(byteCount: Int, rms: Float, timestampMs: Double) {
+        guard !self.isClosed else { return }
+        self.micLogFrameCount += 1
+        self.micLogByteCount += byteCount
+        self.micLogMaxRms = max(self.micLogMaxRms, rms)
+        guard timestampMs - self.lastMicLogAtMs >= 1000 else { return }
+        self.lastMicLogAtMs = timestampMs
+        let maxRms = String(format: "%.4f", Double(self.micLogMaxRms))
+        GatewayDiagnostics.log(
+            "talk realtime mic: buffers=\(self.micLogFrameCount) bytes=\(self.micLogByteCount) maxRms=\(maxRms)")
+        self.micLogFrameCount = 0
+        self.micLogByteCount = 0
+        self.micLogMaxRms = 0
     }
 
     private func stopMicrophonePump() {

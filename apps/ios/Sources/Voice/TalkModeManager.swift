@@ -132,6 +132,8 @@ final class TalkModeManager: NSObject {
         case pushToTalk
     }
 
+    private var isStarting = false
+    private var startAttemptID = 0
     private var captureMode: CaptureMode = .idle
     private var resumeContinuousAfterPTT: Bool = false
     private var activePTTCaptureId: String?
@@ -293,12 +295,24 @@ final class TalkModeManager: NSObject {
         guard self.isEnabled else { return }
         guard self.captureMode != .pushToTalk else { return }
         if self.isListening { return }
+        guard !self.isStarting else {
+            GatewayDiagnostics.log("talk start ignored: already starting")
+            return
+        }
         guard self.gatewayConnected else {
             self.statusText = "Offline"
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway offline")
             return
         }
 
+        self.isStarting = true
+        self.startAttemptID += 1
+        let attemptID = self.startAttemptID
+        defer {
+            if self.startAttemptID == attemptID {
+                self.isStarting = false
+            }
+        }
         self.logger.info("start")
         self.statusText = "Requesting permissions…"
         let permissionStartedAt = Self.nowSeconds()
@@ -311,7 +325,9 @@ final class TalkModeManager: NSObject {
             self.statusText = "Microphone permission denied"
             return
         }
+        guard self.isCurrentStartAttempt(attemptID) else { return }
         await self.ensureTalkConfigLoadedForStart()
+        guard self.isCurrentStartAttempt(attemptID) else { return }
         if self.gatewayTalkPermissionState.requiresTalkPermissionAction {
             self.statusText = "Gateway permission required"
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway permission")
@@ -334,6 +350,7 @@ final class TalkModeManager: NSObject {
                 status: SFSpeechRecognizer.authorizationStatus())
             return
         }
+        guard self.isCurrentStartAttempt(attemptID) else { return }
 
         do {
             GatewayDiagnostics.log("talk.timeline fallback speech pipeline start")
@@ -353,8 +370,45 @@ final class TalkModeManager: NSObject {
         }
     }
 
+    private func isCurrentStartAttempt(_ attemptID: Int) -> Bool {
+        self.startAttemptID == attemptID && self.isEnabled && self.captureMode != .pushToTalk
+    }
+
+    private func cancelPendingStart() {
+        self.startAttemptID += 1
+        self.isStarting = false
+    }
+
+    private var talkProviderSelection: TalkModeProviderSelection {
+        TalkModeProviderSelection.resolved(
+            UserDefaults.standard.string(forKey: TalkModeProviderSelection.storageKey))
+    }
+
+    private var shouldForceRealtimeRelayFromSelection: Bool {
+        self.talkProviderSelection == .openAIRealtime
+    }
+
+    private func applyOpenAIRealtimeSelectionDefaults() {
+        self.activeTalkProvider = "openai"
+        self.executionMode = .realtimeRelay
+        self.realtimeWebRTCEnabled = true
+        self.realtimeProvider = self.realtimeProvider ?? "openai"
+        self.realtimeModelId = self.realtimeModelId ?? Self.defaultRealtimeModelIdFallback
+        self.gatewayTalkProviderLabel = TalkModeProviderSelection.openAIRealtime.label
+        self.gatewayTalkUsesRealtime = true
+        self.gatewayTalkUsesRealtimeRelay = true
+        self.gatewayTalkTransportLabel = "Gateway Relay"
+        self.gatewayTalkRealtimeProviderLabel = Self.displayName(forProvider: self.realtimeProvider ?? "openai")
+        self.gatewayTalkRealtimeModelId = self.realtimeModelId
+        self.gatewayTalkRealtimeVoiceId = self.realtimeVoiceId
+        self.gatewayTalkDefaultModelId = self.realtimeModelId
+        self.gatewayTalkDefaultVoiceId = self.realtimeVoiceId
+        self.gatewayTalkApiKeyConfigured = true
+    }
+
     func stop() {
         self.isEnabled = false
+        self.cancelPendingStart()
         self.isListening = false
         self.isUserSpeechDetected = false
         self.isPushToTalkActive = false
@@ -401,6 +455,7 @@ final class TalkModeManager: NSObject {
         }
         let wasActive = self.isListening || self.isSpeaking || self.isPushToTalkActive
 
+        self.cancelPendingStart()
         self.isListening = false
         self.isPushToTalkActive = false
         self.captureMode = .idle
@@ -453,6 +508,7 @@ final class TalkModeManager: NSObject {
         }
 
         self.stopSpeaking(storeInterruption: false)
+        self.cancelPendingStart()
         self.pttTimeoutTask?.cancel()
         self.pttTimeoutTask = nil
         self.pttAutoStopEnabled = false
@@ -2462,8 +2518,7 @@ extension TalkModeManager {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
             }
-            let providerSelection = TalkModeProviderSelection.resolved(
-                UserDefaults.standard.string(forKey: TalkModeProviderSelection.storageKey))
+            let providerSelection = self.talkProviderSelection
             var activeProvider = parsed.activeProvider
             var executionMode = parsed.executionMode
             var realtimeProvider = parsed.realtimeProvider
@@ -2479,7 +2534,12 @@ extension TalkModeManager {
                 executionMode = .native
             case .openAIRealtime:
                 activeProvider = "openai"
-                executionMode = .native
+                executionMode = .realtimeRelay
+                realtimeProvider = realtimeProvider ?? "openai"
+                realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
+            }
+            if activeProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "openai" {
+                executionMode = .realtimeRelay
                 realtimeProvider = realtimeProvider ?? "openai"
                 realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
             }
@@ -2567,34 +2627,39 @@ extension TalkModeManager {
                     "talk config provider=\(activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
             }
         } catch {
-            self.activeTalkProvider = Self.defaultTalkProvider
-            self.executionMode = .native
-            self.realtimeWebRTCEnabled = false
-            self.realtimeProvider = nil
-            self.realtimeModelId = nil
-            self.realtimeVoiceId = nil
-            self.gatewayTalkProviderLabel = "Not loaded"
-            self.gatewayTalkTransportLabel = "Not loaded"
-            self.gatewayTalkUsesRealtime = false
-            self.gatewayTalkUsesRealtimeRelay = false
-            self.gatewayTalkRealtimeProviderLabel = nil
-            self.gatewayTalkRealtimeModelId = nil
-            self.gatewayTalkRealtimeVoiceId = nil
-            self.applyVoiceModeDescriptor(TalkVoiceModeDescriptor(
-                title: "Not loaded",
-                subtitle: nil,
-                providerId: nil,
-                modelId: nil,
-                voiceId: nil,
-                transport: nil,
-                isRealtime: false), persistAsConfigured: true)
+            if self.shouldForceRealtimeRelayFromSelection {
+                self.applyOpenAIRealtimeSelectionDefaults()
+                GatewayDiagnostics.log("talk config unavailable; keeping openai realtime selection")
+            } else {
+                self.activeTalkProvider = Self.defaultTalkProvider
+                self.executionMode = .native
+                self.realtimeWebRTCEnabled = false
+                self.realtimeProvider = nil
+                self.realtimeModelId = nil
+                self.realtimeVoiceId = nil
+                self.gatewayTalkProviderLabel = "Not loaded"
+                self.gatewayTalkTransportLabel = "Not loaded"
+                self.gatewayTalkUsesRealtime = false
+                self.gatewayTalkUsesRealtimeRelay = false
+                self.gatewayTalkRealtimeProviderLabel = nil
+                self.gatewayTalkRealtimeModelId = nil
+                self.gatewayTalkRealtimeVoiceId = nil
+                self.gatewayTalkDefaultVoiceId = nil
+                self.gatewayTalkDefaultModelId = nil
+                self.gatewayTalkApiKeyConfigured = false
+                self.applyVoiceModeDescriptor(TalkVoiceModeDescriptor(
+                    title: "Not loaded",
+                    subtitle: nil,
+                    providerId: nil,
+                    modelId: nil,
+                    voiceId: nil,
+                    transport: nil,
+                    isRealtime: false), persistAsConfigured: true)
+            }
             self.defaultModelId = Self.defaultModelIdFallback
             if !self.modelOverrideActive {
                 self.currentModelId = self.defaultModelId
             }
-            self.gatewayTalkDefaultVoiceId = nil
-            self.gatewayTalkDefaultModelId = nil
-            self.gatewayTalkApiKeyConfigured = false
             self.gatewayTalkConfigLoaded = false
             self.talkConfigLoadedAt = nil
             self.gatewaySpeechLocaleID = nil
@@ -2803,6 +2868,26 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
 extension TalkModeManager {
     static func _test_isPCMFormatRejectedByAPI(_ error: Error?) -> Bool {
         self.isPCMFormatRejectedByAPI(error)
+    }
+
+    func _test_applyOpenAIRealtimeSelectionDefaults() {
+        self.applyOpenAIRealtimeSelectionDefaults()
+    }
+
+    func _test_executionMode() -> TalkModeExecutionMode {
+        self.executionMode
+    }
+
+    func _test_realtimeProvider() -> String? {
+        self.realtimeProvider
+    }
+
+    func _test_realtimeModelId() -> String? {
+        self.realtimeModelId
+    }
+
+    func _test_gatewayTalkUsesRealtimeRelay() -> Bool {
+        self.gatewayTalkUsesRealtimeRelay
     }
 
     func _test_seedTranscript(_ transcript: String) {
