@@ -168,6 +168,12 @@ function makeSystemLearnDescriptor(runtime: ClaworksRuntime): CapabilityDescript
 // ── kb.* ─────────────────────────────────────────────────────────────────
 
 function makeKbSearchDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  // 30 秒 TTL、50 条容量的查询缓存，减少高频重复检索对 KB 的压力。
+  // 写入路径 TTL 自然过期即可；semantic 搜索结果同样缓存（key 含 semantic 标志）。
+  const kbSearchCache = new Map<string, { result: Record<string, unknown>; expiresAt: number }>();
+  const KB_SEARCH_CACHE_TTL_MS = 30_000;
+  const KB_SEARCH_CACHE_MAX = 50;
+
   return {
     id: "kb.search",
     verb: "retrieve",
@@ -193,6 +199,13 @@ function makeKbSearchDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor 
       const topK = typeof params.top_k === "number" ? params.top_k : 5;
       const namespace = typeof params.namespace === "string" ? params.namespace : undefined;
       const semantic = params.semantic === true;
+
+      const cacheKey = `${query}:${topK}:${namespace ?? ""}:${semantic}`;
+      const cached = kbSearchCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.result;
+      }
+
       let results;
       if (semantic && runtime.kb.semanticSearch) {
         results = await runtime.kb.semanticSearch(query, { limit: topK, namespace });
@@ -204,13 +217,21 @@ function makeKbSearchDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor 
         typeof kbAny.semanticSearch === "function" && typeof kbAny.supportsEmbedding === "boolean"
           ? kbAny.supportsEmbedding
           : typeof kbAny.semanticSearch === "function";
-      return {
+      const result = {
         results,
         count: results.length,
         provider: (kbAny.provider as string | undefined) ?? "unknown",
         semantic_used: semantic,
         embedding_available: embeddingAvailable,
       };
+
+      if (kbSearchCache.size >= KB_SEARCH_CACHE_MAX) {
+        const firstKey = kbSearchCache.keys().next().value;
+        if (firstKey !== undefined) kbSearchCache.delete(firstKey);
+      }
+      kbSearchCache.set(cacheKey, { result, expiresAt: Date.now() + KB_SEARCH_CACHE_TTL_MS });
+
+      return result;
     },
   };
 }
