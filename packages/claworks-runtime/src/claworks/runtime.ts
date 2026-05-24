@@ -23,6 +23,7 @@ import {
   DEFAULT_OPERATOR_CONSTITUTION,
 } from "../kernel/robot-constitution-v2.js";
 import { createRobotIdentityManager } from "../kernel/robot-identity-manager.js";
+import { createRuleEngine, registerBuiltinDecisionTables } from "../kernel/rule-engine.js";
 import { createScaffoldEngine } from "../kernel/scaffold-engine.js";
 import { createPlaybookScheduler } from "../kernel/scheduler.js";
 import { createScriptLibrary, registerBuiltinScripts } from "../kernel/script-library.js";
@@ -391,6 +392,11 @@ export async function createClaworksRuntime(
   capabilities.setConstitution(constitution);
 
   // 初始化脚手架引擎（强模型离线预生成，弱模型在线填空执行）
+  // 初始化规则引擎（SOP→规则表、业务决策条件表）
+  const ruleEngine = createRuleEngine({ logger: opts?.logger });
+  registerBuiltinDecisionTables(ruleEngine);
+  runtime.ruleEngine = ruleEngine;
+
   runtime.scaffoldEngine = createScaffoldEngine(runtime);
 
   // 初始化进化引擎（分析失败案例 → 提出 Playbook/能力改进建议 → 写入 Scaffold）

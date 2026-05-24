@@ -248,14 +248,14 @@ export type ClaworksRuntime = {
    * 由宿主注入；未注入时规则类能力不可用。
    */
   ruleEngine?: {
-    /** 对单个规则集（tableId）求值，返回触发的规则列表 */
+    /** 对规则表（tableId）求值，返回匹配规则汇总 */
     evaluate(
-      tableIdOrInput: string | Record<string, unknown>,
-      context?: Record<string, unknown>,
-    ): Array<{ id: string; triggered: boolean; action?: string }>;
-    listRules(): Array<{ id: string; name?: string; condition: string; action?: string }>;
-    addRule(rule: Record<string, unknown>): void;
-    registerTable?(table: Record<string, unknown>): void;
+      tableId: string,
+      context: Record<string, unknown>,
+    ): Promise<{ matched_rules: unknown[]; actions_taken: string[]; total_evaluated: number }>;
+    registerTable(table: Record<string, unknown>): void;
+    listRules?(): unknown[];
+    addRule?(rule: Record<string, unknown>): void;
     [key: string]: unknown;
   };
 
