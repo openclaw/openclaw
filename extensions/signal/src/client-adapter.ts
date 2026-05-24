@@ -65,7 +65,7 @@ async function resolveAutoApiMode(
     if (
       cached.mode !== "container" ||
       !options.requireContainerReceive ||
-      cached.receiveAccount === options.account
+      (Boolean(options.account?.trim()) && cached.receiveAccount === options.account?.trim())
     ) {
       return cached.mode;
     }
@@ -103,32 +103,29 @@ async function resolveApiModeForOperation(params: {
 
 /**
  * Detect which Signal API mode is available by probing endpoints.
- * First endpoint to respond OK wins.
+ * Native wins when both APIs are healthy because it preserves the richer JSON-RPC contract.
  */
 export async function detectSignalApiMode(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { account?: string; requireContainerReceive?: boolean } = {},
 ): Promise<"native" | "container"> {
-  const nativePromise = nativeCheck(baseUrl, timeoutMs).then((r) =>
-    r.ok ? ("native" as const) : Promise.reject(new Error("native not ok")),
-  );
   const containerAccount = options.requireContainerReceive ? options.account?.trim() : undefined;
+  const nativePromise = nativeCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
   const containerPromise = containerAccount
-    ? containerCheck(baseUrl, timeoutMs, containerAccount).then((r) =>
-        r.ok ? ("container" as const) : Promise.reject(new Error("container not ok")),
-      )
+    ? containerCheck(baseUrl, timeoutMs, containerAccount).catch(() => ({ ok: false }))
     : options.requireContainerReceive
-      ? Promise.reject(new Error("container receive account required"))
-      : containerCheck(baseUrl, timeoutMs).then((r) =>
-          r.ok ? ("container" as const) : Promise.reject(new Error("container not ok")),
-        );
+      ? Promise.resolve({ ok: false })
+      : containerCheck(baseUrl, timeoutMs).catch(() => ({ ok: false }));
 
-  try {
-    return await Promise.any([nativePromise, containerPromise]);
-  } catch {
-    throw new Error(`Signal API not reachable at ${baseUrl}`);
+  const [nativeResult, containerResult] = await Promise.all([nativePromise, containerPromise]);
+  if (nativeResult.ok) {
+    return "native";
   }
+  if (containerResult.ok) {
+    return "container";
+  }
+  throw new Error(`Signal API not reachable at ${baseUrl}`);
 }
 
 /**

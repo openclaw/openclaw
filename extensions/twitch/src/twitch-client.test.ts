@@ -186,6 +186,21 @@ describe("TwitchClientManager", () => {
       expect(mockConnect).toHaveBeenCalledTimes(1);
     });
 
+    it("deduplicates concurrent client creation for the same account", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const first = manager.getClient(testAccount);
+      const second = manager.getClient(testAccount);
+      await Promise.resolve();
+
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(authSuccessHandlers).toHaveLength(1);
+      authSuccessHandlers[0]?.();
+
+      const [client1, client2] = await Promise.all([first, second]);
+      expect(client1).toBe(client2);
+    });
+
     it("should create separate clients for different accounts", async () => {
       await manager.getClient(testAccount);
       await manager.getClient(testAccount2);
