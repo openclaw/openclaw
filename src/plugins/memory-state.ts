@@ -112,9 +112,14 @@ export type MemoryPluginRuntime = {
   // Optional idle-TTL sweep for cached MemoryIndexManager instances. Used by
   // long-running gateway daemons to release chokidar FSWatchers that the
   // CLI-exit path (closeAllMemorySearchManagers) does not cover.
+  //
+  // `skippedBusy` reports the number of entries that aged past idleMs but
+  // were held in-flight by an ongoing operation (e.g. batch reindex) and
+  // therefore deferred to the next scan. Counted for observability only;
+  // not an error.
   closeIdleMemorySearchManagers?(opts: {
     idleMs: number;
-  }): Promise<{ evicted: number; remaining: number }>;
+  }): Promise<{ evicted: number; skippedBusy: number; remaining: number }>;
 };
 
 export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";

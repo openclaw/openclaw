@@ -435,11 +435,16 @@ export async function closeMemorySearchManager(params: {
 // manager layer above does not currently retain its own watchers (managers
 // are created on demand and closed by the caller), so this only forwards to
 // the lower-level cache that backs file-backed indexes.
+//
+// Returns `skippedBusy` for entries that aged past idleMs but currently
+// have an in-flight operation (e.g. batch reindex) holding them via
+// MemoryIndexManager.withBusy(). Those entries are eligible again on the
+// next scan after release() fires.
 export async function closeIdleMemorySearchManagers(opts: {
   idleMs: number;
-}): Promise<{ evicted: number; remaining: number }> {
+}): Promise<{ evicted: number; skippedBusy: number; remaining: number }> {
   if (managerRuntimePromise === null) {
-    return { evicted: 0, remaining: 0 };
+    return { evicted: 0, skippedBusy: 0, remaining: 0 };
   }
   const { closeIdleMemoryIndexManagers } = await loadManagerRuntime();
   return await closeIdleMemoryIndexManagers({ idleMs: opts.idleMs });

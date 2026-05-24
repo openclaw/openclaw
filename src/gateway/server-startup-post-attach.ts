@@ -29,7 +29,19 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
+// Default idle-TTL for cached MemoryIndexManager entries in long-running
+// gateway daemons. 15 minutes is comfortably longer than the typical gap
+// between memory_search invocations during a single chat session, so an
+// active session does not have its cached embedding state thrown away,
+// while idle agents release their chokidar FSWatchers within one quiet
+// window. Override per-agent via
+// `agents.defaults.memorySearch.sync.idleEvictMs`; set to 0 to disable.
 const MEMORY_INDEX_IDLE_EVICT_DEFAULT_MS = 15 * 60_000;
+// How often the idle sweep runs. 5 minutes keeps the worst-case slack
+// between idleMs and actual eviction bounded to ~20min, while making the
+// sweep itself cheap (one Map walk + at most one close() per stale
+// entry). Override via `agents.defaults.memorySearch.sync.idleEvictScanMs`;
+// set to 0 to disable.
 const MEMORY_INDEX_IDLE_EVICT_SCAN_DEFAULT_MS = 5 * 60_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
@@ -214,9 +226,10 @@ function scheduleMemoryIndexIdleEvict(params: {
       const result = await runtime.closeIdleMemorySearchManagers({
         idleMs: policy.idleMs,
       });
-      if (result.evicted > 0) {
+      if (result.evicted > 0 || result.skippedBusy > 0) {
+        const busySuffix = result.skippedBusy > 0 ? ` (deferred ${result.skippedBusy} busy)` : "";
         params.log.info(
-          `memory index manager idle eviction: evicted ${result.evicted} (remaining ${result.remaining})`,
+          `memory index manager idle eviction: evicted ${result.evicted}${busySuffix} (remaining ${result.remaining})`,
         );
       }
     } catch (err) {

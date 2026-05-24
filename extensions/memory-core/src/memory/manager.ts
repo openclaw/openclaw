@@ -32,6 +32,7 @@ import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js"
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
+  acquireManagedCacheKey,
   closeIdleManagedCacheEntries,
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
@@ -85,6 +86,7 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
     cache: INDEX_CACHE,
     pending: INDEX_CACHE_PENDING,
     lastAccessAt: INDEX_MANAGER_CACHE.lastAccessAt,
+    inflightCount: INDEX_MANAGER_CACHE.inflightCount,
     onCloseError: (err) => {
       log.warn(`failed to close memory index manager: ${String(err)}`);
     },
@@ -99,9 +101,16 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
 // This is intended to run on a slow periodic tick (every few minutes). The
 // idle threshold should be larger than the typical gap between memory
 // searches to avoid churning the cache.
+//
+// Managers currently running a long-lived operation (full reindex, batch
+// reindex, async sync-on-search) wrap themselves in MemoryIndexManager.
+// withBusy(), which bumps an inflightCount refcount on the singleton
+// cache. closeIdleManagedCacheEntries honors that refcount and skips
+// busy entries; busyDeferred is the count of such skipped keys for this
+// scan and is logged when non-zero.
 export async function closeIdleMemoryIndexManagers(opts: {
   idleMs: number;
-}): Promise<{ evicted: number; remaining: number }> {
+}): Promise<{ evicted: number; skippedBusy: number; remaining: number }> {
   return await closeIdleManagedCacheEntries({
     cache: INDEX_MANAGER_CACHE,
     idleMs: opts.idleMs,
@@ -137,6 +146,7 @@ export async function closeMemoryIndexManagersForAgent(params: {
   }
   INDEX_CACHE.delete(key);
   INDEX_MANAGER_CACHE.lastAccessAt.delete(key);
+  INDEX_MANAGER_CACHE.inflightCount.delete(key);
   try {
     await manager.close();
   } catch (err) {
@@ -370,6 +380,25 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
+      sources?: MemorySource[];
+    },
+  ): Promise<MemorySearchResult[]> {
+    // Mark this manager as in-flight for the full search lifetime so the
+    // idle sweeper cannot close us while embedding/vector/FTS work is in
+    // progress. The inner sync() call below will acquire its own ref
+    // (refcounting is additive), and the search() refcount drops in the
+    // finally below.
+    return await this.withBusy(async () => this.searchInternal(query, opts));
+  }
+
+  private async searchInternal(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
@@ -675,6 +704,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }
 
+  // Runs `fn` with this manager's cache key marked as in-flight so the
+  // idle-eviction sweeper (closeIdleMemoryIndexManagers) will not close
+  // us mid-operation. Safe to nest: each call acquires its own ref.
+  //
+  // Use this on long-running operations whose runtime can exceed the
+  // configured idle threshold (full reindex, batch reindex, search-time
+  // async sync, etc.). Short-lived synchronous reads against the cached
+  // manager do not need wrapping; they refresh lastAccessAt on cache hit.
+  protected async withBusy<T>(fn: () => Promise<T>): Promise<T> {
+    const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   async sync(params?: {
     reason?: string;
     force?: boolean;
@@ -691,8 +737,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
       return this.syncing;
     }
+    // Wrap the underlying recovery loop in withBusy so the idle sweeper
+    // does not close this manager partway through a batch reindex or
+    // long sync pass. Refcount is released in the chained finally below
+    // alongside this.syncing reset, guaranteeing they unwind together.
+    const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
     this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
       this.syncing = null;
+      release();
     });
     return this.syncing ?? Promise.resolve();
   }
@@ -1019,6 +1071,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         INDEX_CACHE.delete(this.cacheKey);
       }
       INDEX_MANAGER_CACHE.lastAccessAt.delete(this.cacheKey);
+      // Clear any residual inflightCount for this key. Outstanding
+      // release() callbacks tied to acquireManagedCacheKey() are
+      // idempotent and safe to fire after the cache slot is gone.
+      INDEX_MANAGER_CACHE.inflightCount.delete(this.cacheKey);
     }
     const closeError = closeErrors.values().next().value;
     if (closeError) {

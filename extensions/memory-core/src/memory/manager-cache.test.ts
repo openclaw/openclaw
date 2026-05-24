@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  acquireManagedCacheKey,
   closeIdleManagedCacheEntries,
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
+  isManagedCacheKeyBusy,
   resolveSingletonManagedCache,
   type ManagedCache,
 } from "./manager-cache.js";
@@ -272,6 +274,160 @@ describe("manager cache", () => {
     expect(ok.close).toHaveBeenCalledTimes(1);
     expect(errors).toHaveLength(1);
     expect(cache.cache.size).toBe(0);
+  });
+
+  it("acquireManagedCacheKey marks the key busy until release fires", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("busy");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(false);
+    const release = acquireManagedCacheKey(cache, "k");
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(true);
+    release();
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(false);
+  });
+
+  it("acquireManagedCacheKey refcounts nested acquires", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const release1 = acquireManagedCacheKey(cache, "k");
+    const release2 = acquireManagedCacheKey(cache, "k");
+    expect(cache.inflightCount.get("k")).toBe(2);
+    release1();
+    expect(cache.inflightCount.get("k")).toBe(1);
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(true);
+    release2();
+    expect(cache.inflightCount.has("k")).toBe(false);
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(false);
+  });
+
+  it("release is idempotent and never produces negative counts", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const release = acquireManagedCacheKey(cache, "k");
+    release();
+    release();
+    release();
+    expect(cache.inflightCount.has("k")).toBe(false);
+  });
+
+  it("acquire and release both refresh lastAccessAt", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const t0 = 1_700_000_000_000;
+    const spy = vi.spyOn(Date, "now");
+    try {
+      spy.mockReturnValue(t0);
+      const release = acquireManagedCacheKey(cache, "k");
+      expect(cache.lastAccessAt.get("k")).toBe(t0);
+      spy.mockReturnValue(t0 + 7_000);
+      release();
+      expect(cache.lastAccessAt.get("k")).toBe(t0 + 7_000);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("closeIdleManagedCacheEntries defers busy entries past idleMs", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("busy-stale");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    // Simulate a long-running operation acquiring the key while the cache
+    // entry ages past idleMs without further refresh.
+    const release = acquireManagedCacheKey(cache, "k");
+    cache.lastAccessAt.set("k", Date.now() - 30_000);
+    const skippedKeys: string[] = [];
+    const first = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      onSkipBusy: (key) => skippedKeys.push(key),
+    });
+    expect(first.evicted).toBe(0);
+    expect(first.skippedBusy).toBe(1);
+    expect(first.remaining).toBe(1);
+    expect(entry.close).not.toHaveBeenCalled();
+    expect(cache.cache.has("k")).toBe(true);
+    expect(skippedKeys).toEqual(["k"]);
+
+    // Release the in-flight operation. release() refreshes lastAccessAt, so
+    // the next sweep is a no-op; we must age the entry again before it can
+    // be evicted.
+    release();
+    expect(isManagedCacheKeyBusy(cache, "k")).toBe(false);
+    const second = await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(second.evicted).toBe(0);
+    expect(entry.close).not.toHaveBeenCalled();
+
+    cache.lastAccessAt.set("k", Date.now() - 30_000);
+    const third = await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(third.evicted).toBe(1);
+    expect(third.skippedBusy).toBe(0);
+    expect(entry.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("k")).toBe(false);
+  });
+
+  it("closeIdleManagedCacheEntries evicts non-busy stale entries alongside busy deferrals", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const idle = createEntry("idle");
+    const busy = createEntry("busy");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "idle",
+      create: async () => idle,
+    });
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "busy",
+      create: async () => busy,
+    });
+    const release = acquireManagedCacheKey(cache, "busy");
+    cache.lastAccessAt.set("idle", Date.now() - 30_000);
+    cache.lastAccessAt.set("busy", Date.now() - 30_000);
+    const result = await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(result.evicted).toBe(1);
+    expect(result.skippedBusy).toBe(1);
+    expect(result.remaining).toBe(1);
+    expect(idle.close).toHaveBeenCalledTimes(1);
+    expect(busy.close).not.toHaveBeenCalled();
+    release();
+  });
+
+  it("closeIdleManagedCacheEntries clears inflightCount on eviction", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("e");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    // No in-flight refs; eviction should clean up an empty count entry too.
+    cache.inflightCount.set("k", 0);
+    cache.lastAccessAt.set("k", Date.now() - 30_000);
+    await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(cache.cache.has("k")).toBe(false);
+    expect(cache.inflightCount.has("k")).toBe(false);
   });
 
   it("closeIdleManagedCacheEntries is idempotent when entry.close removes its own cache slot", async () => {

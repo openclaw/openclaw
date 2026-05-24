@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ManagedCache } from "./manager-cache.js";
+import { acquireManagedCacheKey, type ManagedCache } from "./manager-cache.js";
 import { closeIdleMemoryIndexManagers, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
@@ -126,5 +126,54 @@ describe("closeIdleMemoryIndexManagers", () => {
   it("returns zero when there is nothing to evict", async () => {
     const result = await closeIdleMemoryIndexManagers({ idleMs: 60_000 });
     expect(result.evicted).toBe(0);
+    expect(result.skippedBusy).toBe(0);
+  });
+
+  it("defers a manager held in-flight via acquireManagedCacheKey", async () => {
+    const stale = seed("idle:in-flight", Date.now() - 30_000);
+    // Simulate a long-running batch reindex that started before the idle
+    // window opened and is still executing.
+    const release = acquireManagedCacheKey(cache, "idle:in-flight");
+    // Override the lastAccessAt that acquire just refreshed so the scan
+    // sees a stale timestamp; the busy guard is what must keep us alive.
+    cache.lastAccessAt.set("idle:in-flight", Date.now() - 30_000);
+
+    const first = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(first.evicted).toBe(0);
+    expect(first.skippedBusy).toBe(1);
+    expect(stale.close).not.toHaveBeenCalled();
+    expect(cache.cache.has("idle:in-flight")).toBe(true);
+
+    // Once the in-flight operation completes, release() refreshes
+    // lastAccessAt; we age the entry again before the next scan to confirm
+    // it then evicts cleanly.
+    release();
+    cache.lastAccessAt.set("idle:in-flight", Date.now() - 30_000);
+    const second = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(second.evicted).toBe(1);
+    expect(second.skippedBusy).toBe(0);
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("idle:in-flight")).toBe(false);
+  });
+
+  it("defers multiple busy entries together in a single scan", async () => {
+    const a = seed("idle:busy-a", Date.now() - 30_000);
+    const b = seed("idle:busy-b", Date.now() - 30_000);
+    const c = seed("idle:fresh", Date.now() - 30_000);
+    const releaseA = acquireManagedCacheKey(cache, "idle:busy-a");
+    const releaseB = acquireManagedCacheKey(cache, "idle:busy-b");
+    cache.lastAccessAt.set("idle:busy-a", Date.now() - 30_000);
+    cache.lastAccessAt.set("idle:busy-b", Date.now() - 30_000);
+
+    const result = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(result.evicted).toBe(1);
+    expect(result.skippedBusy).toBe(2);
+    expect(a.close).not.toHaveBeenCalled();
+    expect(b.close).not.toHaveBeenCalled();
+    expect(c.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("idle:fresh")).toBe(false);
+
+    releaseA();
+    releaseB();
   });
 });

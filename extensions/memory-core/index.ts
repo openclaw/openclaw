@@ -175,6 +175,7 @@ const memoryRuntime: MemoryPluginRuntime = {
     return (
       (await runtime.closeIdleMemorySearchManagers?.(opts)) ?? {
         evicted: 0,
+        skippedBusy: 0,
         remaining: 0,
       }
     );
