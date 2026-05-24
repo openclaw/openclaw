@@ -11,6 +11,29 @@ The channel broker SDK lives at `openclaw/plugin-sdk/channel-broker`. It is a
 small, versioned protocol surface for providers that want OpenClaw to own common
 message semantics while the provider owns platform mechanics.
 
+## Ownership model
+
+This SDK is intentionally a protocol, not another platform-specific channel.
+OpenClaw keeps the stable semantics that every channel needs: sessions,
+allowlists, routing, streaming policy, `/verbose`, durable final sends,
+receipts, retries, and audit fields. Broker providers keep the platform-specific
+work: bot/app API calls, bridge daemons, native identifiers, attachment hosting,
+device state, and regional or account constraints.
+
+```mermaid
+flowchart TD
+  inbound["BrokerInboundEventV1"] --> normalize["Normalize and allowlist"]
+  normalize --> run["OpenClaw model-run lifecycle"]
+  run --> outbound["BrokerOutboundRequestV1"]
+  outbound --> provider["Provider-owned platform adapter"]
+  provider --> receipt["BrokerReceiptV1"]
+  receipt --> durable["OpenClaw receipt commit and retry state"]
+```
+
+That split is what lets a provider fix one messaging system without forcing
+OpenClaw maintainers to rework every native channel plugin that shares the same
+streaming, verbose, receipt, or routing behavior.
+
 ## V1 types
 
 ```typescript

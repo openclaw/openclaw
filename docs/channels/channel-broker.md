@@ -14,6 +14,32 @@ retries, and audit fields. Broker providers own platform mechanics such as bot
 APIs, bridge daemons, device-bound connectors, native ids, and per-platform
 quirks.
 
+## Why this exists
+
+OpenClaw has accumulated many maintained chat channels, and the same classes of
+bugs keep returning in each one: streaming previews, `/verbose` tool messages,
+thread/topic routing, final-send durability, receipts, retries, and platform
+metadata drift. The broker turns those repeated fixes into one OpenClaw-owned
+contract. A provider can then fix Telegram, Discord, Slack, WhatsApp, Signal,
+iMessage, Matrix, or a regional platform inside its own plugin without making
+OpenClaw core chase every platform API change.
+
+```mermaid
+flowchart LR
+  user["User message"] --> provider["Broker provider plugin"]
+  provider --> broker["channel-broker contract"]
+  broker --> lifecycle["OpenClaw message lifecycle"]
+  lifecycle --> model["Model run, streaming, verbose policy"]
+  model --> broker
+  broker --> provider
+  provider --> platform["Native platform API or bridge"]
+```
+
+The important boundary is that OpenClaw keeps message/session semantics while
+providers keep platform mechanics. A feature added to the broker contract
+becomes available through the same contract to routed channels whose provider
+declares and passes conformance for that capability.
+
 The V1 transport is outbound HTTP from OpenClaw to the provider plus signed
 inbound HTTP webhooks from the provider to OpenClaw. WebSocket and provider
 polling transports are reserved for later protocol versions.
