@@ -11,6 +11,11 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  appendIMessageApprovalReactionHintForOutboundMessage,
+  type IMessageApprovalConversationKey,
+  registerIMessageApprovalReactionTargetForOutboundMessage,
+} from "./approval-reactions.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
@@ -185,7 +190,7 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message = text ?? "";
+  let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -291,6 +296,22 @@ export async function sendMessageIMessage(
         timestamp: Date.now(),
         isFromMe: true,
       });
+      if (message) {
+        const conversation: IMessageApprovalConversationKey =
+          target.kind === "chat_guid"
+            ? { chatGuid: target.chatGuid }
+            : target.kind === "chat_identifier"
+              ? { chatIdentifier: target.chatIdentifier }
+              : target.kind === "chat_id"
+                ? { chatId: target.chatId }
+                : { handle: target.to };
+        registerIMessageApprovalReactionTargetForOutboundMessage({
+          accountId: account.accountId,
+          conversation,
+          messageId: resolvedId,
+          text: message,
+        });
+      }
     }
     return {
       messageId,

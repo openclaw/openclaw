@@ -36,6 +36,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
@@ -459,6 +460,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         ? "<media:attachment>"
         : "";
     const bodyText = messageText || placeholder;
+
+    // Approval reaction shortcut: if the inbound tapback resolves a pending
+    // approval prompt, route it through the gateway and skip the normal
+    // dispatch pipeline. This bypasses reactionNotifications gating so
+    // approvals still work when general reaction surfacing is off, and it
+    // bypasses allowFrom/dmPolicy because the approval-reactions module
+    // enforces its own actor authorization via channels.imessage.allowFrom.
+    if (
+      await maybeResolveIMessageApprovalReaction({
+        cfg,
+        accountId: accountInfo.accountId,
+        message,
+        bodyText,
+        logVerboseMessage: logVerbose,
+      })
+    ) {
+      return;
+    }
 
     const storeAllowFrom = await readChannelAllowFromStore(
       "imessage",
