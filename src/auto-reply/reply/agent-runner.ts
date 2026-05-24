@@ -101,8 +101,6 @@ import {
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import {
   createMaintenanceReplyOperation,
-  createReplyOperation,
-  ReplyRunAlreadyActiveError,
   replyRunRegistry,
   type ReplyOperation,
 } from "./reply-run-registry.js";

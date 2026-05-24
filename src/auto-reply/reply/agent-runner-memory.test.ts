@@ -2018,6 +2018,38 @@ describe("pending memory-flush registry", () => {
     expect(hasPendingMemoryFlushForTest(sessionKey)).toBe(false);
   });
 
+  it("awaitPendingMemoryFlush abandons the pending entry when the abort callback fails to make a truly hung flush settle within the post-abort grace window", async () => {
+    const sessionKey = "session-key-await-timeout-hung-after-abort";
+    // The flush promise never settles. The abort callback is invoked
+    // but the simulated embedded runner ignores it (mirrors the case
+    // where the LLM call has no abort cooperation or the runner
+    // process is stuck). The barrier must give up and abandon the
+    // pending entry within timeoutMs + postAbortGraceMs.
+    let abortCalled = false;
+    const hungFlushPromise = new Promise<void>(() => {
+      // never resolves
+    });
+    registerPendingMemoryFlush(sessionKey, hungFlushPromise, () => {
+      abortCalled = true;
+      // Does nothing further: the flush stays hung.
+    });
+
+    const start = Date.now();
+    await awaitPendingMemoryFlush(sessionKey, {
+      timeoutMs: 20,
+      postAbortGraceMs: 30,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(abortCalled).toBe(true);
+    // The barrier returned within timeoutMs + postAbortGraceMs.
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(elapsed).toBeLessThan(2_000);
+    // Pending entry was abandoned (removed from the registry) so the
+    // next preflight does not pay the timeout again.
+    expect(hasPendingMemoryFlushForTest(sessionKey)).toBe(false);
+  });
+
   it("awaitPendingMemoryFlush stays bounded if the abort callback fails to settle the flush quickly", async () => {
     const sessionKey = "session-key-await-timeout-abort-throws";
     // Abort callback that throws synchronously: the barrier must still

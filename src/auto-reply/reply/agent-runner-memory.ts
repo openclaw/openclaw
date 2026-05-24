@@ -150,6 +150,15 @@ type PendingMemoryFlush = {
 const pendingMemoryFlushes = new Map<string, PendingMemoryFlush>();
 
 const DEFAULT_PENDING_MEMORY_FLUSH_BARRIER_TIMEOUT_MS = 30_000;
+// Bounded grace period after the barrier invokes the registered abort
+// callback. If the flush promise still has not settled within this
+// window (e.g. the abort callback throws, or the embedded runner does
+// not honour its AbortSignal), the barrier abandons the pending entry
+// and returns so the next preflight is not blocked indefinitely. The
+// abandoned flush may still complete later and mutate session state;
+// that risk is bounded and explicitly preferred over an unbounded
+// availability hang.
+const POST_ABORT_GRACE_MS = 5_000;
 
 export function registerPendingMemoryFlush(
   sessionKey: string,
@@ -174,7 +183,7 @@ export function registerPendingMemoryFlush(
 
 export async function awaitPendingMemoryFlush(
   sessionKey: string | undefined,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; postAbortGraceMs?: number },
 ): Promise<void> {
   if (!sessionKey) {
     return;
@@ -184,6 +193,7 @@ export async function awaitPendingMemoryFlush(
     return;
   }
   const timeoutMs = options?.timeoutMs ?? DEFAULT_PENDING_MEMORY_FLUSH_BARRIER_TIMEOUT_MS;
+  const postAbortGraceMs = options?.postAbortGraceMs ?? POST_ABORT_GRACE_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), timeoutMs);
@@ -202,13 +212,38 @@ export async function awaitPendingMemoryFlush(
       } catch (err) {
         logVerbose(`pending memory flush abort callback threw: ${String(err)}`);
       }
-      // Wait for the now-aborting flush to fully settle so the barrier
-      // cannot return while the flush is still racing the next
-      // compaction's session-state mutations. The flush's
-      // runWithModelFallback / runEmbeddedPiAgent see the maintenance
-      // op's aborted abortSignal and short-circuit quickly; the wrapped
-      // promise always resolves (never throws) by construction.
-      await pending.promise;
+      // Bounded wait for the now-aborting flush to fully settle so the
+      // barrier cannot return while the flush is still racing the next
+      // compaction's session-state mutations. If the abort callback
+      // does not make the flush settle within POST_ABORT_GRACE_MS
+      // (e.g. the embedded runner ignores its AbortSignal), abandon
+      // the pending entry so subsequent turns are not blocked
+      // indefinitely. The flush's runWithModelFallback /
+      // runEmbeddedPiAgent normally see the maintenance op's aborted
+      // abortSignal and short-circuit well inside this window; the
+      // wrapped promise always resolves (never throws) by construction.
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      const gracePromise = new Promise<"graced">((resolve) => {
+        graceTimer = setTimeout(() => resolve("graced"), postAbortGraceMs);
+      });
+      try {
+        const graceOutcome = await Promise.race([
+          pending.promise.then(() => "settled" as const),
+          gracePromise,
+        ]);
+        if (graceOutcome === "graced") {
+          logVerbose(
+            `pending memory flush did not settle within ${postAbortGraceMs}ms after abort for sessionKey=${sessionKey}; abandoning entry so further turns are not blocked`,
+          );
+          if (pendingMemoryFlushes.get(sessionKey) === pending) {
+            pendingMemoryFlushes.delete(sessionKey);
+          }
+        }
+      } finally {
+        if (graceTimer !== undefined) {
+          clearTimeout(graceTimer);
+        }
+      }
     }
   } finally {
     if (timer !== undefined) {
