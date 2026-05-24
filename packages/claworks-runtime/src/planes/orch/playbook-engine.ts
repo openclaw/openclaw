@@ -143,6 +143,9 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
   const playbooks = new Map<string, PlaybookDefinition>();
   const runs = new Map<string, PlaybookRun>();
   const suspended = new Map<string, SuspendedExecution>();
+  // Per-playbook concurrency counter — prevents runaway parallel invocations
+  const concurrencyMap = new Map<string, number>();
+  const MAX_CONCURRENT_PER_PLAYBOOK = 8;
   const db = deps.db;
   let llmComplete = deps.llmComplete;
   let notify = deps.notify;
@@ -191,6 +194,25 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
     if (!def) {
       throw new Error(`Playbook not found: ${playbookId}`);
     }
+
+    // Concurrency guard: reject if this playbook already has too many running instances
+    const currentConcurrency = concurrencyMap.get(playbookId) ?? 0;
+    if (currentConcurrency >= MAX_CONCURRENT_PER_PLAYBOOK) {
+      deps.logger?.(
+        `[claworks:playbook] concurrency limit reached for '${playbookId}' (${currentConcurrency}/${MAX_CONCURRENT_PER_PLAYBOOK}) — dropping run`,
+      );
+      return {
+        id: `dropped-${Date.now()}`,
+        playbookId,
+        status: "failed",
+        startedAt: new Date(),
+        completedAt: new Date(),
+        input,
+        steps: [],
+        error: `concurrency_limit_exceeded: ${playbookId}`,
+      };
+    }
+    concurrencyMap.set(playbookId, currentConcurrency + 1);
 
     const runId = randomUUID();
     const _pbStartMs = Date.now();
@@ -301,7 +323,20 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     runs.set(runId, run);
     persistRun(upsertRun, run, suspended.get(runId));
+    // Release concurrency slot when run reaches a terminal or suspended state
+    if (run.status !== "running") {
+      releaseConcurrency(playbookId);
+    }
     return run;
+  }
+  // Decrement concurrency counter when a run completes (any terminal status)
+  function releaseConcurrency(playbookId: string): void {
+    const cur = concurrencyMap.get(playbookId) ?? 1;
+    if (cur <= 1) {
+      concurrencyMap.delete(playbookId);
+    } else {
+      concurrencyMap.set(playbookId, cur - 1);
+    }
   }
 
   async function runSteps(

@@ -325,7 +325,7 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       id,
       skillId: String(raw.skill_id ?? raw.skill ?? ""),
       input: (raw.input ?? raw.params) as Record<string, unknown> | undefined,
-      output: raw.output ? String(raw.output) : id,
+      output: readField(raw, "store_result_as", "storeResultAs", "output", "output_var") || id,
     };
   }
   if (stepType === "script") {
@@ -335,7 +335,7 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       id,
       scriptId: String(raw.script_id ?? raw.script ?? ""),
       input: (raw.input ?? raw.params) as Record<string, unknown> | undefined,
-      output: raw.output ? String(raw.output) : id,
+      output: readField(raw, "store_result_as", "storeResultAs", "output", "output_var") || id,
     };
   }
   if (stepType === "notify") {
