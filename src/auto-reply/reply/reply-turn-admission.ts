@@ -54,11 +54,9 @@ export async function admitReplyTurn(params: {
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      const ended = await replyRunRegistry.waitForIdle(
-        params.sessionKey,
-        params.waitTimeoutMs ?? Infinity,
-        { signal: params.upstreamAbortSignal },
-      );
+      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, params.waitTimeoutMs, {
+        signal: params.upstreamAbortSignal,
+      });
       if (!ended) {
         return {
           status: "skipped",

@@ -914,18 +914,15 @@ export async function dispatchReplyFromConfig(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
-  let dispatchAbortOperationAllowsDispatch = false;
+  let preDispatchAbortOperation: ReplyOperation | undefined;
   type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
   const ensureDispatchReplyOperation = async (): Promise<DispatchReplyOperationAcquisition> => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
       return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
-      return dispatchReplyOperation || dispatchAbortOperationAllowsDispatch
-        ? { status: "ready" }
-        : { status: "busy" };
+      return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
     }
-    dispatchAbortOperationAllowsDispatch = false;
     if (!dispatchOperationSessionKey) {
       return { status: "ready" };
     }
@@ -945,12 +942,10 @@ export async function dispatchReplyFromConfig(
     });
     if (admission.status === "skipped") {
       if (replyTurnKind === "visible" && admission.reason === "active-run") {
-        dispatchAbortOperation = admission.activeOperation;
-        dispatchAbortOperationAllowsDispatch = true;
+        preDispatchAbortOperation = admission.activeOperation;
         return { status: "ready" };
       }
       dispatchAbortOperation = admission.activeOperation;
-      dispatchAbortOperationAllowsDispatch = false;
       logVerbose(
         `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
       );
@@ -960,6 +955,7 @@ export async function dispatchReplyFromConfig(
     dispatchAbortOperation = admission.operation;
     return { status: "ready" };
   };
+  const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
   const getReplyOptions = () =>
     dispatchReplyOperation
       ? {
@@ -1621,7 +1617,7 @@ export async function dispatchReplyFromConfig(
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
           hookRunner.runBeforeDispatch(
             {
               content: hookContext.content,
@@ -1663,7 +1659,7 @@ export async function dispatchReplyFromConfig(
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithReplyOperationAbort(getPreDispatchAbortOperation(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
