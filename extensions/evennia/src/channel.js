@@ -1,18 +1,24 @@
-import {
-  createChannelPluginBase,
-  createChatChannelPlugin,
-} from "openclaw/plugin-sdk/channel-core";
+import { readReactionParams } from "openclaw/plugin-sdk/channel-actions";
+import { createChannelPluginBase, createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { jsonResult } from "openclaw/plugin-sdk/core";
 import { Type } from "typebox";
 import { EvenniaClient } from "./evennia-client.js";
 
 const clients = new Map();
 
+const ROOM_CONTEXT_MAX_CHARS = 5000;
+const HELP_CONTEXT_MAX_CHARS = 2500;
+
 const EVENNIA_AGENT_PROMPT = [
   "You are acting as an Evennia MUD character through the Evennia channel.",
   "Use normal text replies when you want to speak in-character.",
+  "Before each turn, OpenClaw may include a fresh `look` snapshot and cached `help` output in your context. Treat those as the authoritative room state.",
+  "If the user asks you to look around, inspect exits, inspect objects, or check available actions, use the evennia_command tool (`look`, `help`, `examine <thing>`, etc.) before answering.",
   "When you want to perform an in-world action or run an Evennia command, call the evennia_command tool with exactly that command instead of saying the command aloud.",
-  "Examples of commands to send through the tool: look, north, get key, use terminal, use chalk stub, pose studies the room.",
+  "Never say text like `evennia_command(command=...)`; that is not an action. Use the actual tool call.",
+  "Examples of commands to send through the tool: look, north, get key, open crate, take emergency chalk from crate, get all from crate, use terminal, use chalk stub, pose studies the room.",
+  "For open containers, prefer `take <item> from <container>` or `get all from <container>` rather than `get <container>` unless you mean to loot all visible contents.",
+  "Never put pose commands in backticks or inline with speech. Use the tool, then send spoken text separately.",
   "Never put multiple Evennia commands in one tool call; use one tool call per command.",
 ].join("\n");
 
@@ -38,12 +44,7 @@ function resolveAccount(cfg, accountId = null) {
     username: raw.username,
     passwordFile: raw.passwordFile,
     character: raw.character || raw.username,
-    triggerName: (
-      raw.triggerName ||
-      raw.character ||
-      raw.username ||
-      id
-    ).toLowerCase(),
+    triggerName: (raw.triggerName || raw.character || raw.username || id).toLowerCase(),
     startRoom: raw.startRoom,
     allowFrom: raw.allowFrom || [],
     allowedRooms: raw.allowedRooms || [],
@@ -73,11 +74,459 @@ function inspectAccount(cfg, accountId = null) {
 function readToolString(raw, key, { required = false } = {}) {
   const value = raw?.[key];
   if (value === undefined || value === null) {
-    if (required) throw new Error(`${key} is required`);
+    if (required) {
+      throw new Error(`${key} is required`);
+    }
     return undefined;
   }
-  if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  if (typeof value !== "string") {
+    throw new Error(`${key} must be a string`);
+  }
   return value;
+}
+
+const EVENNIA_REACTION_POSES = new Map([
+  [
+    "✅",
+    [
+      "lets out a quiet breath as a small confirmation rune fades from view.",
+      "gives one satisfied nod, the work settling into place.",
+      "relaxes their shoulders as the room's hum steadies again.",
+    ],
+  ],
+  [
+    "☑️",
+    [
+      "lets out a quiet breath as a small confirmation rune fades from view.",
+      "gives one satisfied nod, the work settling into place.",
+      "relaxes their shoulders as the room's hum steadies again.",
+    ],
+  ],
+  [
+    "👍",
+    [
+      "raises a hand in quick acknowledgement.",
+      "answers with a small, confident gesture of assent.",
+      "tilts their chin up in a brief sign of agreement.",
+    ],
+  ],
+  [
+    "👀",
+    [
+      "turns toward the speaker, attention sharpening.",
+      "stillness gathers around them as they listen closely.",
+      "glances up from the room's hum, clearly taking this in.",
+      "sets aside whatever they were holding and focuses on the moment.",
+    ],
+  ],
+  [
+    "🔎",
+    [
+      "narrows their eyes, searching the room for the hidden thread.",
+      "studies the nearest signs with careful suspicion.",
+      "leans closer, following a clue only half-visible in the air.",
+    ],
+  ],
+  [
+    "🔍",
+    [
+      "narrows their eyes, searching the room for the hidden thread.",
+      "studies the nearest signs with careful suspicion.",
+      "leans closer, following a clue only half-visible in the air.",
+    ],
+  ],
+  [
+    "🤔",
+    [
+      "tilts their head, letting the thought turn over slowly.",
+      "falls quiet for a beat, weighing the shape of the problem.",
+      "taps a finger once, then again, chasing the right answer.",
+    ],
+  ],
+  [
+    "🧠",
+    [
+      "goes still while thoughts churn behind their eyes.",
+      "draws a slow circle in the air, arranging the idea before speaking.",
+      "looks inward for a moment, listening to the old machinery of thought.",
+    ],
+  ],
+  [
+    "⏳",
+    [
+      "waits as a faint hourglass shimmer hangs nearby.",
+      "keeps watch while the moment stretches longer than expected.",
+      "holds position, patient but alert, as the air ticks softly.",
+    ],
+  ],
+  [
+    "⌛",
+    [
+      "waits as a faint hourglass shimmer hangs nearby.",
+      "keeps watch while the moment stretches longer than expected.",
+      "holds position, patient but alert, as the air ticks softly.",
+    ],
+  ],
+  [
+    "🛠️",
+    [
+      "produces a tiny toolkit and starts making careful adjustments.",
+      "rolls up their sleeves and gets to work on the invisible mechanism.",
+      "checks the seams of the situation like a machine that can be tuned.",
+    ],
+  ],
+  [
+    "🧰",
+    [
+      "rummages through a battered toolkit for exactly the right implement.",
+      "sets a small case of tools on the floor and chooses carefully.",
+      "sorts through old instruments until one gives a promising little spark.",
+    ],
+  ],
+  [
+    "💻",
+    [
+      "unfolds a little terminal of blue-white light and starts typing.",
+      "summons a floating prompt and begins entering careful commands.",
+      "watches lines of pale text crawl across an unseen console.",
+    ],
+  ],
+  [
+    "📖",
+    [
+      "opens a worn notebook and scans the page.",
+      "runs a finger down an old margin, looking for the relevant line.",
+      "consults a dog-eared page covered in cramped annotations.",
+    ],
+  ],
+  [
+    "📚",
+    [
+      "consults an improbable stack of notes.",
+      "pulls three references from nowhere and cross-checks them quickly.",
+      "balances a leaning tower of lore just long enough to find the answer.",
+    ],
+  ],
+  [
+    "✍️",
+    [
+      "scribbles a note with focused intent.",
+      "marks something down before it can slip away.",
+      "writes a quick line in a ledger that smells faintly of ozone.",
+    ],
+  ],
+  [
+    "📝",
+    [
+      "scribbles a note with focused intent.",
+      "marks something down before it can slip away.",
+      "writes a quick line in a ledger that smells faintly of ozone.",
+    ],
+  ],
+  [
+    "🌐",
+    [
+      "traces a glowing line through an invisible web of connections.",
+      "listens to distant signals threading through the walls.",
+      "follows a thin blue filament of network-light into the unseen distance.",
+    ],
+  ],
+  [
+    "🛫",
+    [
+      "sets a tiny launch sigil spinning above one palm.",
+      "checks the wind of the upper Stack and prepares to send something outward.",
+      "lets a little paper-wing charm circle once before release.",
+    ],
+  ],
+  [
+    "🏗️",
+    [
+      "summons a wireframe scaffold and checks each glowing joint.",
+      "measures the air as if preparing to raise a new support beam.",
+      "sets spectral braces into place around the work ahead.",
+    ],
+  ],
+  [
+    "💁",
+    [
+      "straightens up, ready to handle the next practical detail.",
+      "makes a small welcoming gesture, prepared to take point.",
+      "turns with attentive poise, waiting for the useful next thing.",
+    ],
+  ],
+  [
+    "🧭",
+    [
+      "checks an old brass compass and adjusts course.",
+      "sets their bearing by a compass that points toward unfinished business.",
+      "turns the compass once and watches the needle settle.",
+    ],
+  ],
+  [
+    "📊",
+    [
+      "studies a hovering set of orderly little bars.",
+      "watches a row of tiny indicators rise and fall in the air.",
+      "compares the room's pulse against a neat ghostly chart.",
+    ],
+  ],
+  [
+    "🧪",
+    [
+      "swirls a tiny vial and watches the result closely.",
+      "adds one careful drop to the problem and waits for the color to change.",
+      "holds a small experiment up to the light of the racks.",
+    ],
+  ],
+  [
+    "⚠️",
+    [
+      "stiffens as a warning spark snaps in the air.",
+      "raises one hand as the room's edge gives a cautionary flicker.",
+      "goes alert, attention pulled toward a sharp note in the hum.",
+    ],
+  ],
+  [
+    "❌",
+    [
+      "shakes their head, the air briefly crackling with refusal.",
+      "cuts the motion short with a firm, wordless no.",
+      "draws a line in the dust and does not step across it.",
+    ],
+  ],
+  [
+    "🚫",
+    [
+      "holds up a hand, blocking the path for now.",
+      "sets a small ward across the way until it is safe to continue.",
+      "plants their palm against the air and the moment stops there.",
+    ],
+  ],
+  [
+    "🗜️",
+    [
+      "compresses a bundle of glowing notes into a smaller, denser charm.",
+      "folds a long thread of thought into a tight little knot.",
+      "presses scattered context into a compact sigil and pockets it.",
+    ],
+  ],
+  [
+    "💤",
+    [
+      "settles into a quiet, watchful idle.",
+      "lets the room's hum carry the watch for a while.",
+      "goes still, present but no longer reaching for the next motion.",
+    ],
+  ],
+]);
+
+function normalizeEmojiKey(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function stripUnsafePoseText(text) {
+  return text
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripLeadingCharacterName(text, account) {
+  const character = account?.character?.trim();
+  const clean = stripUnsafePoseText(text);
+  if (!character) {
+    return clean;
+  }
+  const escaped = character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return clean.replace(new RegExp(`^${escaped}(?:\\s+|[,;:—–-]+\\s*)`, "iu"), "").trimStart();
+}
+
+function normalizePoseCommand(command, account) {
+  const match = String(command ?? "")
+    .trim()
+    .match(/^pose\s+(.+)$/iu);
+  if (!match) {
+    return command;
+  }
+  return `pose ${stripLeadingCharacterName(match[1], account)}`.trim();
+}
+
+function choosePose(candidates, avoid = "") {
+  const poses = Array.isArray(candidates)
+    ? candidates.filter(Boolean)
+    : [candidates].filter(Boolean);
+  if (poses.length === 0) {
+    return undefined;
+  }
+  const pool = poses.length > 1 ? poses.filter((pose) => pose !== avoid) : poses;
+  const choicePool = pool.length > 0 ? pool : poses;
+  return choicePool[Math.floor(Math.random() * choicePool.length)];
+}
+
+export function splitEvenniaOutboundText(text, account = undefined) {
+  const raw = String(text ?? "");
+  const parts = [];
+  const pushSay = (value) => {
+    const clean = value.replace(/\s+/g, " ").trim();
+    if (clean) {
+      parts.push({ kind: "say", text: clean });
+    }
+  };
+  const pushPose = (value) => {
+    const clean = stripLeadingCharacterName(value, account);
+    if (clean) {
+      parts.push({ kind: "pose", text: clean });
+    }
+  };
+
+  const codePose = /`+\s*pose\s+([^`]+?)\s*`+/giu;
+  let index = 0;
+  for (const match of raw.matchAll(codePose)) {
+    pushSay(raw.slice(index, match.index));
+    pushPose(match[1]);
+    index = match.index + match[0].length;
+  }
+  const tail = raw.slice(index);
+  for (const line of tail.split(/\n+/)) {
+    const command = line.trim().match(/^pose\s+(.+)$/iu);
+    if (command) {
+      pushPose(command[1]);
+    } else {
+      pushSay(line);
+    }
+  }
+  return parts;
+}
+
+async function deliverEvenniaText(client, account, text, { replyMode = "say", target } = {}) {
+  const parts = splitEvenniaOutboundText(text, account);
+  for (const part of parts) {
+    if (part.kind === "pose") {
+      await client.command(`pose ${part.text}`);
+    } else if (replyMode === "tell" && target) {
+      await client.tell(target, part.text);
+    } else if (replyMode === "whisper" && target) {
+      await client.whisper(target, part.text);
+    } else {
+      await client.say(part.text);
+    }
+  }
+}
+
+function extractLeadingEmoji(text) {
+  const match = String(text ?? "")
+    .trim()
+    .match(/^(\p{Extended_Pictographic}(?:\uFE0F|\uFE0E)?)/u);
+  return match?.[1];
+}
+
+function createEvenniaStatusPoseController(client, log) {
+  let lastPose = "";
+  async function setEmoji(emoji) {
+    const key = normalizeEmojiKey(emoji);
+    if (!key) {
+      return;
+    }
+    const pose = poseForEvenniaReaction(key, { avoid: lastPose });
+    if (!pose || pose === lastPose) {
+      return;
+    }
+    lastPose = pose;
+    try {
+      await client.command(`pose ${pose}`);
+    } catch (err) {
+      log?.warn?.(`evennia status pose failed: ${err?.message || err}`);
+    }
+  }
+  return {
+    setEmoji,
+    setToolResult: async (payload) => {
+      const emoji = extractLeadingEmoji(payload?.text);
+      if (emoji) {
+        await setEmoji(emoji);
+      } else if (payload?.isError) {
+        await setEmoji("⚠️");
+      } else {
+        await setEmoji("🛠️");
+      }
+    },
+  };
+}
+
+export function poseForEvenniaReaction(emoji, options = {}) {
+  const key = normalizeEmojiKey(emoji);
+  if (!key) {
+    return "makes a small, wordless gesture of acknowledgement.";
+  }
+  const mapped = choosePose(EVENNIA_REACTION_POSES.get(key), options.avoid);
+  if (mapped) {
+    return mapped;
+  }
+  const visible = stripUnsafePoseText(key).slice(0, 24);
+  return visible
+    ? `makes a small in-world gesture marked by ${visible}.`
+    : "makes a small, wordless gesture of acknowledgement.";
+}
+
+function formatContextBlock(title, text) {
+  const clean = String(text ?? "").trim();
+  return clean ? `\n\n[${title}]\n${clean}` : "";
+}
+
+async function collectRoomContext(client, log) {
+  try {
+    return await client.commandAndCollect("look", {
+      waitMs: 750,
+      maxChars: ROOM_CONTEXT_MAX_CHARS,
+    });
+  } catch (err) {
+    log?.warn?.(`evennia look context failed: ${err?.message || err}`);
+    return "";
+  }
+}
+
+async function collectHelpContext(client, log) {
+  if (client.helpText) {
+    return client.helpText;
+  }
+  try {
+    client.helpText = await client.commandAndCollect("help", {
+      waitMs: 900,
+      maxChars: HELP_CONTEXT_MAX_CHARS,
+    });
+  } catch (err) {
+    log?.warn?.(`evennia help context failed: ${err?.message || err}`);
+    client.helpText = "";
+  }
+  return client.helpText;
+}
+
+function isMentioned(event, account) {
+  if (event.kind === "tell" || event.kind === "whisper") {
+    return true;
+  }
+  const trigger = account.triggerName?.trim().toLowerCase();
+  if (!trigger) {
+    return false;
+  }
+  return event.text?.toLowerCase().includes(trigger) === true;
+}
+
+function resolveActionClient(accountId, params = {}) {
+  const requested =
+    (typeof accountId === "string" && accountId.trim()) ||
+    (typeof params.accountId === "string" && params.accountId.trim()) ||
+    (typeof params.to === "string" && params.to.trim()) ||
+    clients.keys().next().value;
+  if (!requested) {
+    throw new Error("no connected Evennia accounts are available");
+  }
+  const client = clients.get(requested);
+  if (!client) {
+    throw new Error(`evennia account ${requested} is not connected`);
+  }
+  return { accountId: requested, client };
 }
 
 export function createEvenniaCommandTool() {
@@ -102,22 +551,25 @@ export function createEvenniaCommandTool() {
       const command = readToolString(rawParams, "command", {
         required: true,
       }).trim();
-      if (!command) throw new Error("command must not be empty");
+      if (!command) {
+        throw new Error("command must not be empty");
+      }
       if (command.includes("\n") || command.includes("\r")) {
-        throw new Error(
-          "command must be a single Evennia command without newlines",
-        );
+        throw new Error("command must be a single Evennia command without newlines");
       }
 
       const requestedAccountId = readToolString(rawParams, "accountId")?.trim();
       const accountId = requestedAccountId || clients.keys().next().value;
-      if (!accountId)
+      if (!accountId) {
         throw new Error("no connected Evennia accounts are available");
+      }
       const client = clients.get(accountId);
-      if (!client)
+      if (!client) {
         throw new Error(`evennia account ${accountId} is not connected`);
-      await client.command(command);
-      return jsonResult({ ok: true, accountId, command });
+      }
+      const normalizedCommand = normalizePoseCommand(command, client.account);
+      await client.command(normalizedCommand);
+      return jsonResult({ ok: true, accountId, command: normalizedCommand });
     },
   };
 }
@@ -129,8 +581,21 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     return;
   }
   const direct = event.kind === "tell" || event.kind === "whisper";
-  if (!direct && !account.respondToAmbientMentions) return;
-  if (direct && account.respondToAmbientMentions === false) return;
+  const mentioned = isMentioned(event, account);
+  if (!direct && !account.respondToAmbientMentions) {
+    return;
+  }
+  if (direct && account.respondToAmbientMentions === false) {
+    return;
+  }
+  if (!direct && !mentioned) {
+    return;
+  }
+
+  const client = clients.get(account.accountId);
+  const roomContext = client ? await collectRoomContext(client, ctx.log) : "";
+  const helpContext = client ? await collectHelpContext(client, ctx.log) : "";
+  const stateContext = `${formatContextBlock("Current room from automatic look", roomContext)}${formatContextBlock("Available Evennia help", helpContext)}`;
 
   const messageId = event.id || `evennia-${Date.now()}`;
   const routeSessionKey = rt.routing.buildAgentSessionKey({
@@ -181,7 +646,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     message: {
       rawBody: event.text,
       body: event.text,
-      bodyForAgent: `[Evennia ${direct ? "tell" : "room"} from ${event.sender}${event.room ? ` in ${event.room}` : ""}]\n${event.text}`,
+      bodyForAgent: `[Evennia ${direct ? "tell" : "room"} from ${event.sender}${event.room ? ` in ${event.room}` : ""}]\n${event.text}${stateContext}`,
       commandBody: event.text,
       envelopeFrom: event.sender,
       senderLabel: event.sender,
@@ -215,40 +680,57 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     },
   });
 
-  await rt.turn.dispatchAssembled({
-    cfg: ctx.cfg,
-    channel: "evennia",
-    accountId: account.accountId,
-    agentId: account.agentId,
-    routeSessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: rt.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      rt.reply.dispatchReplyWithBufferedBlockDispatcher,
-    messageId,
-    admission: {
-      kind: "dispatch",
-      reason: direct ? "direct-tell" : "mentioned",
-    },
-    delivery: {
-      deliver: async (payload) => {
-        const text = payload?.text || payload?.content || "";
-        if (text.trim()) {
-          const client = clients.get(account.accountId);
-          if (event.replyMode === "tell")
-            await client?.tell(event.sender, text.trim());
-          else if (event.replyMode === "whisper")
-            await client?.whisper(event.sender, text.trim());
-          else await client?.say(text.trim());
-        }
-        return {
-          messageIds: [`evennia-out-${Date.now()}`],
-          visibleReplySent: true,
-        };
+  const statusClient = clients.get(account.accountId);
+  const statusPoses = statusClient
+    ? createEvenniaStatusPoseController(statusClient, ctx.log)
+    : null;
+  await statusPoses?.setEmoji("👀");
+
+  try {
+    await rt.turn.dispatchAssembled({
+      cfg: ctx.cfg,
+      channel: "evennia",
+      accountId: account.accountId,
+      agentId: account.agentId,
+      routeSessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession: rt.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher: rt.reply.dispatchReplyWithBufferedBlockDispatcher,
+      messageId,
+      replyOptions: {
+        onToolResult: async (payload) => {
+          await statusPoses?.setToolResult(payload);
+        },
       },
-    },
-  });
+      admission: {
+        kind: "dispatch",
+        reason: direct ? "direct-tell" : "mentioned",
+      },
+      delivery: {
+        deliver: async (payload) => {
+          const text = payload?.text || payload?.content || "";
+          if (text.trim()) {
+            const client = clients.get(account.accountId);
+            if (client) {
+              await deliverEvenniaText(client, account, text.trim(), {
+                replyMode: event.replyMode,
+                target: event.sender,
+              });
+            }
+          }
+          return {
+            messageIds: [`evennia-out-${Date.now()}`],
+            visibleReplySent: true,
+          };
+        },
+      },
+    });
+    await statusPoses?.setEmoji("✅");
+  } catch (err) {
+    await statusPoses?.setEmoji("⚠️");
+    throw err;
+  }
 }
 
 export const evenniaPlugin = createChatChannelPlugin({
@@ -260,8 +742,7 @@ export const evenniaPlugin = createChatChannelPlugin({
       inspectAccount,
       defaultAccountId: (cfg) => listAccountIds(cfg)[0] || "default",
       isEnabled: (account) => account.enabled,
-      isConfigured: (account) =>
-        Boolean(account.username && account.passwordFile),
+      isConfigured: (account) => Boolean(account.username && account.passwordFile),
       describeAccount: (account) => ({
         id: account.accountId,
         name: account.character || account.username,
@@ -281,22 +762,62 @@ export const evenniaPlugin = createChatChannelPlugin({
     },
     attachedResults: {
       channel: "evennia",
-      sendText: async ({ to, text, accountId }) => {
+      sendText: async ({ cfg, to, text, accountId }) => {
         const id = accountId || to;
         const client = clients.get(id);
-        if (!client) throw new Error(`evennia account ${id} is not connected`);
-        await client.say(text);
+        if (!client) {
+          throw new Error(`evennia account ${id} is not connected`);
+        }
+        const account = inspectAccount(cfg, id);
+        await deliverEvenniaText(client, account, text);
         return { messageId: `evennia-out-${Date.now()}` };
       },
     },
   },
 });
 
+evenniaPlugin.actions = {
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = accountId
+      ? [inspectAccount(cfg, accountId)]
+      : listAccountIds(cfg).map((id) => inspectAccount(cfg, id));
+    if (accounts.every((account) => !account.enabled)) {
+      return null;
+    }
+    return { actions: ["send", "react"] };
+  },
+  supportsAction: ({ action }) => action === "send" || action === "react",
+  handleAction: async ({ action, params, accountId }) => {
+    if (action !== "react") {
+      throw new Error(`Unsupported Evennia message action: ${action}`);
+    }
+    const { emoji, remove, isEmpty } = readReactionParams(params, {
+      removeErrorMessage: "Emoji is required to remove an Evennia pose reaction.",
+    });
+    if (remove) {
+      return jsonResult({ ok: true, removed: 0, note: "Evennia poses cannot be removed." });
+    }
+
+    const { accountId: resolvedAccountId, client } = resolveActionClient(accountId, params);
+    const pose = poseForEvenniaReaction(emoji);
+    const command = `pose ${pose}`;
+    await client.command(command);
+    return jsonResult({
+      ok: true,
+      accountId: resolvedAccountId,
+      command,
+      emoji: isEmpty ? undefined : emoji,
+    });
+  },
+};
+
 // createChatChannelPlugin intentionally focuses the common chat surfaces; attach
 // the long-running gateway adapter explicitly for this external transport.
 evenniaPlugin.gateway = {
   startAccount: async (ctx) => {
-    if (!ctx.account.enabled) return;
+    if (!ctx.account.enabled) {
+      return;
+    }
 
     let retryMs = 1000;
     while (!ctx.abortSignal.aborted) {
@@ -309,9 +830,7 @@ evenniaPlugin.gateway = {
       if (ctx.account.respondToAmbientMentions) {
         client.onEvent((event) =>
           dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
-            ctx.log?.error?.(
-              `evennia inbound failed: ${err?.stack || err?.message || err}`,
-            ),
+            ctx.log?.error?.(`evennia inbound failed: ${err?.stack || err?.message || err}`),
           ),
         );
       }
@@ -319,11 +838,13 @@ evenniaPlugin.gateway = {
       try {
         await client.connect();
         retryMs = 1000;
-        if (ctx.account.character)
+        if (ctx.account.character) {
           await client.command(`ic ${ctx.account.character}`).catch(() => {});
+        }
         await new Promise((resolve) => setTimeout(resolve, 750));
-        if (ctx.account.startRoom)
+        if (ctx.account.startRoom) {
           await client.command(`teleport ${ctx.account.startRoom}`).catch(() => {});
+        }
         await client.command("look").catch(() => {});
         ctx.setStatus({
           accountId: ctx.account.accountId,
@@ -357,7 +878,9 @@ evenniaPlugin.gateway = {
         });
       }
 
-      if (ctx.abortSignal.aborted) break;
+      if (ctx.abortSignal.aborted) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, retryMs));
       retryMs = Math.min(retryMs * 2, 30000);
     }
