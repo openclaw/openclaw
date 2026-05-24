@@ -106,12 +106,14 @@ function resolveProvidersForMode(params: {
   });
 }
 
-function collectExistingUserOwnedApiKeys(existingParsed: unknown): ReadonlyMap<string, string> {
-  const userOwned = new Map<string, string>();
-  if (!isRecord(existingParsed) || !isRecord(existingParsed.providers)) {
-    return userOwned;
+function collectPlaintextApiKeysFromProviders(
+  providers: unknown,
+): ReadonlyMap<string, string> {
+  const plaintextApiKeys = new Map<string, string>();
+  if (!isRecord(providers)) {
+    return plaintextApiKeys;
   }
-  for (const [providerKey, entry] of Object.entries(existingParsed.providers)) {
+  for (const [providerKey, entry] of Object.entries(providers)) {
     if (!isRecord(entry)) {
       continue;
     }
@@ -126,14 +128,44 @@ function collectExistingUserOwnedApiKeys(existingParsed: unknown): ReadonlyMap<s
     if (isNonSecretApiKeyMarker(apiKey)) {
       continue;
     }
-    userOwned.set(providerKey, apiKey);
+    plaintextApiKeys.set(providerKey, apiKey);
   }
-  return userOwned;
+  return plaintextApiKeys;
+}
+
+function collectPreservedApiKeysForModelsJson(params: {
+  mode: NonNullable<ModelsConfig["mode"]>;
+  existingParsed: unknown;
+  sourceProviders: unknown;
+  providersBeforeMerge: Record<string, ProviderConfig>;
+  mergedProviders: Record<string, ProviderConfig>;
+}): ReadonlyMap<string, string> {
+  const preserved = new Map<string, string>(
+    collectPlaintextApiKeysFromProviders(params.sourceProviders),
+  );
+  if (params.mode !== "merge" || !isRecord(params.existingParsed)) {
+    return preserved;
+  }
+  const existingProviders = isRecord(params.existingParsed.providers)
+    ? params.existingParsed.providers
+    : {};
+  const existingPlaintextApiKeys = collectPlaintextApiKeysFromProviders(existingProviders);
+  for (const [providerKey, apiKey] of existingPlaintextApiKeys) {
+    const providerBeforeMerge = params.providersBeforeMerge[providerKey];
+    const beforeMergeApiKey = providerBeforeMerge?.apiKey;
+    if (typeof beforeMergeApiKey === "string" && beforeMergeApiKey.trim()) {
+      continue;
+    }
+    if (params.mergedProviders[providerKey]?.apiKey === apiKey) {
+      preserved.set(providerKey, apiKey);
+    }
+  }
+  return preserved;
 }
 
 function stripResolvedApiKeysForModelsJson(
   providers: Record<string, ProviderConfig>,
-  existingUserOwnedApiKeys: ReadonlyMap<string, string>,
+  preservedPlaintextApiKeys: ReadonlyMap<string, string>,
 ): Record<string, ProviderConfig> {
   let changed = false;
   const sanitizedProviders: Record<string, ProviderConfig> = {};
@@ -144,7 +176,7 @@ function stripResolvedApiKeysForModelsJson(
     // mergeWithExistingProviderSecrets intentionally carries these forward,
     // and replacing them with a non-usable marker would break custom
     // providers whose only credential lives in the existing models.json.
-    if (typeof apiKey === "string" && existingUserOwnedApiKeys.get(providerKey) === apiKey) {
+    if (typeof apiKey === "string" && preservedPlaintextApiKeys.get(providerKey) === apiKey) {
       sanitizedProviders[providerKey] = provider;
       continue;
     }
@@ -232,10 +264,16 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const existingUserOwnedApiKeys = collectExistingUserOwnedApiKeys(params.existingParsed);
+  const preservedPlaintextApiKeys = collectPreservedApiKeysForModelsJson({
+    mode,
+    existingParsed: params.existingParsed,
+    sourceProviders: params.sourceConfigForSecrets?.models?.providers ?? cfg.models?.providers,
+    providersBeforeMerge: normalizedProviders,
+    mergedProviders,
+  });
   const finalProviders = stripResolvedApiKeysForModelsJson(
     applyNativeStreamingUsageCompat(secretEnforcedProviders),
-    existingUserOwnedApiKeys,
+    preservedPlaintextApiKeys,
   );
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 

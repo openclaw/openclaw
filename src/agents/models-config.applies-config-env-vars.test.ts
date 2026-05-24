@@ -358,6 +358,158 @@ describe("models-config", () => {
     expect(parsed.providers?.custom?.apiKey).toBe("sk-user-authored-key");
   });
 
+  it("preserves plaintext apiKey values from source config providers", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-config-only-key", // pragma: allowlist secret
+                models: [
+                  {
+                    id: "custom-model",
+                    name: "Custom Model",
+                    input: ["text"],
+                    reasoning: false,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 8192,
+                    maxTokens: 2048,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({}),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("sk-config-only-key");
+  });
+
+  it("does not preserve matching existing plaintext apiKey values in replace mode", async () => {
+    const existing = {
+      providers: {
+        custom: {
+          baseUrl: "https://custom.example/v1",
+          api: "openai-completions",
+          apiKey: "sk-previously-generated-key", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    };
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "replace", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+        existingParsed: existing,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-previously-generated-key",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("secretref-managed");
+    expect(plan.contents).not.toContain("sk-previously-generated-key");
+  });
+
+  it("does not preserve matching existing plaintext apiKey values when current resolution regenerated the same key", async () => {
+    const existing = {
+      providers: {
+        custom: {
+          baseUrl: "https://custom.example/v1",
+          api: "openai-completions",
+          apiKey: "sk-regenerated-key", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    };
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { mode: "merge", providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+        existingParsed: existing,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            api: "openai-completions",
+            apiKey: "sk-regenerated-key",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                input: ["text"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.custom?.apiKey).toBe("secretref-managed");
+    expect(plan.contents).not.toContain("sk-regenerated-key");
+  });
+
   it("replaces plaintext apiKey for a newly added provider in merge mode while preserving an existing provider's user-authored key", async () => {
     const existing = {
       providers: {
