@@ -92,6 +92,46 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
+  it("uses OpenRouter top_provider context when endpoint limits are smaller", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    id: "nvidia/nemotron-3-super-120b-a12b:free",
+                    name: "NVIDIA: Nemotron 3 Super 120B A12B (free)",
+                    modality: "text->text",
+                    context_length: 1_000_000,
+                    top_provider: {
+                      context_length: 262_144,
+                      max_completion_tokens: 262_144,
+                    },
+                  },
+                ],
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            ),
+        ),
+      );
+
+      const module = await importOpenRouterModelCapabilities("top-provider-context");
+      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
+
+      const capabilities = module.getOpenRouterModelCapabilities(
+        "nvidia/nemotron-3-super-120b-a12b:free",
+      );
+      expect(capabilities?.contextWindow).toBe(262_144);
+      expect(capabilities?.maxTokens).toBe(262_144);
+    });
+  });
+
   it("preserves explicit OpenRouter tool support metadata", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
