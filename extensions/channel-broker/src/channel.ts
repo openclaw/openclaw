@@ -1,4 +1,6 @@
-import { parseBrokerConversationTarget } from "openclaw/plugin-sdk/channel-broker";
+import {
+  parseBrokerConversationTarget,
+} from "openclaw/plugin-sdk/channel-broker";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,

@@ -128,6 +128,37 @@ export function inferChannelBrokerTargetChatType(
   }
 }
 
+function parseTelegramTopicConversation(rawConversationId: string): {
+  conversationId: string;
+  threadId?: string;
+} {
+  const topicMatch = /^(.*):topic:([^:]+)$/i.exec(rawConversationId);
+  if (topicMatch?.[1] && topicMatch[2]) {
+    return {
+      conversationId: topicMatch[1],
+      threadId: topicMatch[2],
+    };
+  }
+  const numericTopicMatch = /^(-?\d+):(\d+)$/.exec(rawConversationId);
+  if (numericTopicMatch?.[1] && numericTopicMatch[2]) {
+    return {
+      conversationId: numericTopicMatch[1],
+      threadId: numericTopicMatch[2],
+    };
+  }
+  return { conversationId: rawConversationId };
+}
+
+function parsePlatformConversation(params: { platform: string; rawConversationId: string }): {
+  conversationId: string;
+  threadId?: string;
+} {
+  if (params.platform === "telegram") {
+    return parseTelegramTopicConversation(params.rawConversationId);
+  }
+  return { conversationId: params.rawConversationId };
+}
+
 export function parseChannelBrokerTarget(params: {
   rawTarget: string;
   account: ResolvedChannelBrokerAccount;
@@ -167,12 +198,18 @@ export function parseChannelBrokerTarget(params: {
     ? normalizeConversationType(colonParts[0])
     : undefined;
   const rawId = explicitType ? colonParts.slice(1).join(":") : rawConversationId;
-  const conversationId = rawId.trim();
+  const platformConversation = parsePlatformConversation({
+    platform,
+    rawConversationId: rawId,
+  });
+  const conversationId = platformConversation.conversationId.trim();
   if (!conversationId) {
     throw new Error("broker conversation id is required");
   }
   const threadId =
-    params.threadId == null ? parsed.threadId : String(params.threadId).trim() || parsed.threadId;
+    params.threadId == null
+      ? (parsed.threadId ?? platformConversation.threadId)
+      : String(params.threadId).trim() || parsed.threadId || platformConversation.threadId;
   return {
     platform,
     conversationId,
