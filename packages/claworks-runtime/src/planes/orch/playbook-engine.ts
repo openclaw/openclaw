@@ -195,6 +195,29 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       throw new Error(`Playbook not found: ${playbookId}`);
     }
 
+    // Role guard: if Playbook declares required_role, check input.user_role
+    if (def.required_role) {
+      const roleOrder = ["viewer", "operator", "admin"] as const;
+      const requiredIdx = roleOrder.indexOf(def.required_role);
+      const userRole = String(input.user_role ?? "");
+      const userIdx = roleOrder.indexOf(userRole as (typeof roleOrder)[number]);
+      if (userIdx < requiredIdx) {
+        deps.logger?.(
+          `[claworks:playbook] role denied for '${playbookId}': need ${def.required_role}, got '${userRole}'`,
+        );
+        return {
+          id: `denied-${Date.now()}`,
+          playbookId,
+          status: "failed",
+          startedAt: new Date(),
+          completedAt: new Date(),
+          input,
+          steps: [],
+          error: `权限不足：需要 ${def.required_role} 角色`,
+        };
+      }
+    }
+
     // Concurrency guard: reject if this playbook already has too many running instances
     const currentConcurrency = concurrencyMap.get(playbookId) ?? 0;
     if (currentConcurrency >= MAX_CONCURRENT_PER_PLAYBOOK) {

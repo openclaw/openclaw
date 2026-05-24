@@ -282,6 +282,13 @@ export interface PlaybookDefinition {
   priority: number;
   /** Playbook 全局超时（秒），超时后 run 强制标记 failed，默认 300s（5 分钟） */
   timeout_seconds?: number;
+  /**
+   * 触发此 Playbook 所需的最低用户角色（可选）。
+   * 角色等级：viewer < operator < admin。
+   * 触发时若 input.user_role 低于此值，立即拒绝并返回 failed 状态。
+   * 未配置时不做角色检查，所有触发均允许。
+   */
+  required_role?: "viewer" | "operator" | "admin";
   steps: PlaybookStep[];
 }
 

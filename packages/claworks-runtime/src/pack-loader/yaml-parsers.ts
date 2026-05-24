@@ -79,6 +79,14 @@ export function parsePlaybookYaml(content: string, packId: string): PlaybookDefi
   const stepsRaw = Array.isArray(doc.steps) ? doc.steps : [];
   const steps = stepsRaw.map((s, i) => parseStep(s as Record<string, unknown>, i));
 
+  const validRoles = ["viewer", "operator", "admin"] as const;
+  type ValidRole = (typeof validRoles)[number];
+  const rawRole = doc.required_role != null ? String(doc.required_role) : undefined;
+  const required_role: ValidRole | undefined =
+    rawRole && (validRoles as readonly string[]).includes(rawRole)
+      ? (rawRole as ValidRole)
+      : undefined;
+
   return {
     id,
     name: String(doc.name ?? id),
@@ -88,6 +96,7 @@ export function parsePlaybookYaml(content: string, packId: string): PlaybookDefi
     trigger,
     priority: typeof doc.priority === "number" ? doc.priority : 0,
     timeout_seconds: typeof doc.timeout_seconds === "number" ? doc.timeout_seconds : undefined,
+    required_role,
     steps,
   };
 }
