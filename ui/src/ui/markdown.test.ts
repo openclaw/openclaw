@@ -352,6 +352,19 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(code?.textContent).toBe("console.log(1)\n");
     });
 
+    it("renders code blocks without chrome when requested", () => {
+      const html = toSanitizedMarkdownHtml("```bash\npython3 - <<'PY'\nPY\n```", {
+        codeBlockChrome: false,
+      });
+      const fragment = htmlFragment(html);
+      const code = fragment.querySelector("pre code");
+
+      expect(fragment.querySelector(".code-block-wrapper")).toBeNull();
+      expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(code?.classList.contains("language-bash")).toBe(true);
+      expect(code?.textContent).toBe("python3 - <<'PY'\nPY\n");
+    });
+
     it("renders indented code blocks", () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");

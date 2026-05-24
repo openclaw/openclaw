@@ -12,6 +12,7 @@ import {
 import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const markdownMock = vi.hoisted(() => vi.fn((value: string) => value));
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -22,7 +23,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
+  toSanitizedMarkdownHtml: markdownMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -560,6 +561,31 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
+  it("keeps code block chrome off user markdown but on for assistant markdown", () => {
+    const container = document.createElement("div");
+    const markdown = "```bash\npython3 - <<'PY'\nPY\n```";
+
+    markdownMock.mockClear();
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: markdown,
+        timestamp: 1000,
+      },
+      "user",
+    );
+    expect(markdownMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: false });
+
+    markdownMock.mockClear();
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: markdown,
+      timestamp: 1001,
+    });
+    expect(markdownMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: true });
   });
 
   it("positions delete confirm by message side", () => {

@@ -87,6 +87,15 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
+type MarkdownRenderOptions = {
+  codeBlockChrome?: boolean;
+};
+
+const DEFAULT_MARKDOWN_RENDER_OPTIONS: Required<MarkdownRenderOptions> = {
+  codeBlockChrome: true,
+};
+let currentMarkdownRenderOptions = DEFAULT_MARKDOWN_RENDER_OPTIONS;
+
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -530,6 +539,9 @@ md.renderer.rules.fence = (tokens, idx) => {
   const highlighted = highlightCode(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!currentMarkdownRenderOptions.codeBlockChrome) {
+    return codeBlock;
+  }
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
@@ -558,6 +570,9 @@ md.renderer.rules.code_block = (tokens, idx) => {
   const highlighted = highlightCode(text, "");
   const classAttr = codeClassAttribute("", highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!currentMarkdownRenderOptions.codeBlockChrome) {
+    return codeBlock;
+  }
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
@@ -576,13 +591,20 @@ md.renderer.rules.code_block = (tokens, idx) => {
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
-export function toSanitizedMarkdownHtml(markdown: string): string {
+export function toSanitizedMarkdownHtml(
+  markdown: string,
+  options: MarkdownRenderOptions = {},
+): string {
   const input = stripUnsupportedCitationControlMarkers(markdown).trim();
   if (!input) {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${input}`;
+  const renderOptions = {
+    ...DEFAULT_MARKDOWN_RENDER_OPTIONS,
+    ...options,
+  };
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome ? "chrome" : "plain"}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -605,6 +627,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     return sanitized;
   }
   let rendered: string;
+  const previousMarkdownRenderOptions = currentMarkdownRenderOptions;
+  currentMarkdownRenderOptions = renderOptions;
   try {
     rendered = md.render(`${truncated.text}${suffix}`);
   } catch (err) {
@@ -612,6 +636,8 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     const escaped = escapeHtml(`${truncated.text}${suffix}`);
     rendered = `<pre class="code-block">${escaped}</pre>`;
+  } finally {
+    currentMarkdownRenderOptions = previousMarkdownRenderOptions;
   }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {

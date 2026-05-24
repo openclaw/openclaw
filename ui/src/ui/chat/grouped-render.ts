@@ -1495,6 +1495,7 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
+  const markdownRenderOptions = { codeBlockChrome: role === "assistant" };
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
   const hasActions = canCopyMarkdown || canExpand;
@@ -1617,7 +1618,9 @@ function renderGroupedMessage(
                           </details>`
                         : markdown
                           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                              ${unsafeHTML(
+                                toSanitizedMarkdownHtml(markdown, markdownRenderOptions),
+                              )}
                             </div>`
                           : nothing}
                       ${hasToolCards
@@ -1679,7 +1682,7 @@ function renderGroupedMessage(
                 </details>`
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
                   </div>`
                 : nothing}
             ${hasToolCards
