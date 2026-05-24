@@ -345,6 +345,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   let client: IMessageRpcClient | undefined;
   let detachAbortHandler = () => {};
   let liveCatchupCursorAdvanceEnabled = false;
+  let startupCatchupInProgress = false;
+  const pendingLiveCatchupCursorAdvances: Array<{ lastSeenMs: number; lastSeenRowid: number }> = [];
   const getActiveClient = () => {
     if (!client) {
       throw new Error("imessage monitor client not initialized");
@@ -352,10 +354,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return client;
   };
 
-  async function maybeAdvanceLiveCatchupCursor(message: IMessagePayload): Promise<void> {
-    if (!catchupCfg.enabled || !liveCatchupCursorAdvanceEnabled) {
-      return;
-    }
+  function resolveLiveCatchupCursor(
+    message: IMessagePayload,
+  ): { lastSeenMs: number; lastSeenRowid: number } | null {
     const coalescedCursor = (
       message as {
         coalescedCatchupCursor?: { lastSeenMs?: unknown; lastSeenRowid?: unknown };
@@ -375,16 +376,39 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           ? Date.parse(message.created_at)
           : Number.NaN;
     if (rowid === null || !Number.isFinite(dateMs)) {
+      return null;
+    }
+    return { lastSeenMs: dateMs, lastSeenRowid: rowid };
+  }
+
+  async function maybeAdvanceLiveCatchupCursor(message: IMessagePayload): Promise<void> {
+    if (!catchupCfg.enabled) {
+      return;
+    }
+    const cursor = resolveLiveCatchupCursor(message);
+    if (!cursor) {
+      return;
+    }
+    if (!liveCatchupCursorAdvanceEnabled) {
+      if (startupCatchupInProgress) {
+        pendingLiveCatchupCursorAdvances.push(cursor);
+      }
       return;
     }
     try {
-      await advanceIMessageCatchupCursor(
-        accountInfo.accountId,
-        { lastSeenMs: dateMs, lastSeenRowid: rowid },
-        catchupCfg,
-      );
+      await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
     } catch (err) {
       runtime.error?.(`imessage catchup: failed to advance live cursor: ${String(err)}`);
+    }
+  }
+
+  async function flushPendingLiveCatchupCursorAdvances(): Promise<void> {
+    for (const cursor of pendingLiveCatchupCursorAdvances.splice(0)) {
+      try {
+        await advanceIMessageCatchupCursor(accountInfo.accountId, cursor, catchupCfg);
+      } catch (err) {
+        runtime.error?.(`imessage catchup: failed to advance pending live cursor: ${String(err)}`);
+      }
     }
   }
 
@@ -956,6 +980,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // any overlap with replayed rows. Disabled by default — opt-in via
   // `channels.imessage.catchup.enabled`. See issue #78649.
   if (catchupCfg.enabled && !abort?.aborted) {
+    startupCatchupInProgress = true;
     try {
       const catchupSummary = await runIMessageCatchup({
         client: activeClient,
@@ -972,10 +997,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
       liveCatchupCursorAdvanceEnabled =
         catchupSummary.querySucceeded && catchupSummary.fullyCaughtUp;
+      if (liveCatchupCursorAdvanceEnabled) {
+        await flushPendingLiveCatchupCursorAdvances();
+      } else {
+        pendingLiveCatchupCursorAdvances.length = 0;
+      }
     } catch (err) {
+      pendingLiveCatchupCursorAdvances.length = 0;
       // Catchup is opt-in recovery — surface the error but do not block the
       // monitor. The live dispatch loop is already up and running.
       runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+    } finally {
+      startupCatchupInProgress = false;
     }
   }
 

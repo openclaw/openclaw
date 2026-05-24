@@ -97,6 +97,7 @@ describe("iMessage monitor last-route updates", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -206,6 +207,93 @@ describe("iMessage monitor last-route updates", () => {
         await Promise.resolve();
         await Promise.resolve();
       }),
+      stop: vi.fn(async () => {}),
+    };
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      if (!params?.onNotification) {
+        throw new Error("expected iMessage notification handler");
+      }
+      onNotification = params.onNotification;
+      return client as never;
+    });
+
+    await monitorIMessageProvider({
+      config: {
+        channels: {
+          imessage: {
+            catchup: { enabled: true },
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+          },
+        },
+        messages: { inbound: { debounceMs: 0 } },
+        session: { mainKey: "main" },
+      } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadIMessageCatchupCursor("default"))?.lastSeenRowid).toBe(77);
+    });
+  });
+
+  it("flushes live cursor advancement for rows handled while startup catchup is running", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T15:31:00.000Z"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-live-during-catchup-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    const client = {
+      request: vi.fn(async (method: string, params: unknown) => {
+        if (method === "watch.subscribe") {
+          return { subscription: 1 };
+        }
+        if (method === "chats.list") {
+          return {
+            chats: [{ id: 1, last_message_at: "2026-05-22T15:15:00.000Z" }],
+          };
+        }
+        if (method === "messages.history") {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 77,
+                guid: "LIVE-GUID-77",
+                chat_id: 123,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "hello during catchup",
+                is_group: false,
+                created_at: "2026-05-22T15:30:00.000Z",
+              },
+            },
+          });
+          await vi.waitFor(() => {
+            expect(dispatchInboundMessageMock).toHaveBeenCalled();
+          });
+          const p = params as { chat_id: number };
+          expect(p.chat_id).toBe(1);
+          return {
+            messages: [
+              {
+                id: 10,
+                guid: "CATCHUP-GUID-10",
+                chat_id: 1,
+                sender: "+15550001111",
+                is_from_me: false,
+                text: "catchup row",
+                is_group: false,
+                created_at: "2026-05-22T15:15:00.000Z",
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected imsg method ${method}`);
+      }),
+      waitForClose: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     };
     createIMessageRpcClientMock.mockImplementation(async (params) => {
