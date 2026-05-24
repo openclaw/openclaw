@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -14,6 +14,7 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const require = createRequire(import.meta.url);
 
@@ -103,6 +104,13 @@ function toRepoRelativeArg(arg, cwd) {
   return normalized.replaceAll(path.sep, "/").replace(/^\.\//u, "");
 }
 
+function withImplicitVitestConfig(argv, config) {
+  if (argv[0] === "run") {
+    return ["run", "--config", config, ...argv.slice(1)];
+  }
+  return ["--config", config, ...argv];
+}
+
 export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (hasExplicitVitestConfigArg(argv)) {
     return argv;
@@ -111,12 +119,15 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
   if (testTargets.length === 0 || !testTargets.every(isUnitUiTestTarget)) {
+    if (
+      testTargets.length > 0 &&
+      testTargets.every((target) => isUiTestTarget(target) && !isUnitUiTestTarget(target))
+    ) {
+      return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
+    }
     return argv;
   }
-  if (argv[0] === "run") {
-    return ["run", "--config", UNIT_UI_VITEST_CONFIG, ...argv.slice(1)];
-  }
-  return ["--config", UNIT_UI_VITEST_CONFIG, ...argv];
+  return withImplicitVitestConfig(argv, UNIT_UI_VITEST_CONFIG);
 }
 
 function spawnVitestProcess({ pnpmArgs, spawnParams }) {

@@ -61,6 +61,20 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it("routes explicit non-e2e ui tests through the ui config", () => {
+    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/app-gateway.node.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.ui.config.ts",
+      "ui/src/ui/app-gateway.node.test.ts",
+    ]);
+  });
+
+  it("keeps mixed unit ui and broader ui targets on existing routing", () => {
+    const argv = ["ui/src/ui/controllers/chat.test.ts", "ui/src/ui/app-gateway.node.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
   it("allows opting back into Maglev explicitly", () => {
     expect(
       resolveVitestNodeArgs({
