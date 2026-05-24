@@ -35,6 +35,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
+  providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
@@ -658,12 +659,6 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
-const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
-
-function providerRequiresSignedThinking(provider?: string | null): boolean {
-  return SIGNED_THINKING_PROVIDERS.has(provider ?? "");
-}
-
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -697,12 +692,11 @@ export async function sanitizeSessionHistory(params: {
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
-  const allowProviderOwnedThinkingReplay =
-    shouldAllowProviderOwnedThinkingReplay({
-      modelApi: params.modelApi,
-      policy,
-    }) ||
-    (signedThinkingProvider && !policy.dropThinkingBlocks);
+  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+    modelApi: params.modelApi,
+    provider: params.provider,
+    policy,
+  });
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
