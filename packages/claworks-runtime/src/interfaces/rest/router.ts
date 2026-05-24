@@ -893,6 +893,67 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // GET /v1/evolution/export?days=30 — 导出近期运行数据供离线强模型生成进化包
+      if (method === "GET" && parts[1] === "evolution" && parts[2] === "export") {
+        if (!(await requireRead())) return true;
+        const days = parseInt(String(url.searchParams?.get?.("days") ?? "30"), 10) || 30;
+        const data = await runtime.evolutionSync?.exportEvolutionData(days);
+        sendJson(res, 200, data ?? { events: [], cases: [], feedback: [] });
+        return true;
+      }
+
+      // POST /v1/evolution/import — 将离线生成的进化包（Playbook/规则/Prompt改进）应用到机器人
+      if (method === "POST" && parts[1] === "evolution" && parts[2] === "import") {
+        if (!(await requireWrite("evolution:import"))) return true;
+        const pack = await readJsonBody(req);
+        if (!runtime.evolutionSync) {
+          sendJson(res, 503, { error: "evolutionSync 未初始化" });
+          return true;
+        }
+        const result = await runtime.evolutionSync.importEvolutionPack(
+          pack as Parameters<typeof runtime.evolutionSync.importEvolutionPack>[0],
+        );
+        sendJson(res, 200, result);
+        return true;
+      }
+
+      // GET /v1/events/stream — SSE 实时事件流（Studio UI / 监控面板）
+      if (method === "GET" && parts[1] === "events" && parts[2] === "stream") {
+        if (!(await requireRead())) return true;
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        // bus.subscribe("*") 直接监听所有事件，payload 由 bus 传入
+        const rawBusSub = runtime.kernel.bus.subscribe("*", async (event) => {
+          try {
+            const data = JSON.stringify({
+              type: event.type,
+              source: event.source,
+              payload: event.payload,
+              ts: event.timestamp,
+            });
+            res.write(`data: ${data}\n\n`);
+          } catch {
+            // 忽略序列化错误
+          }
+        });
+        req.on("close", () => rawBusSub());
+        req.on("aborted", () => rawBusSub());
+        // 每30秒发送心跳，保持连接
+        const hbInterval = setInterval(() => {
+          try {
+            res.write(": heartbeat\n\n");
+          } catch {
+            clearInterval(hbInterval);
+          }
+        }, 30_000);
+        req.on("close", () => clearInterval(hbInterval));
+        return true;
+      }
+
       // GET /v1/hitl/pending — 列出所有等待人工审批的 Playbook 运行
       if (method === "GET" && parts[1] === "hitl" && parts[2] === "pending") {
         const runs = await runtime.playbookEngine.listRuns({ status: "waiting_hitl", limit: 50 });
