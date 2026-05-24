@@ -59,6 +59,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
+import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import {
   findOpenAIStrictToolSchemaDiagnostics,
   normalizeOpenAIStrictToolParameters,
@@ -1115,6 +1116,7 @@ function convertResponsesMessages(
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
       let textFallbackOrdinal = 0;
+      let previousReplayItemWasReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
@@ -1149,23 +1151,19 @@ function convertResponsesMessages(
               continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
+            previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
           const textSignature = parseTextSignature(block.textSignature);
-          let msgId: string | undefined;
-          if (shouldReplayResponsesItemIds) {
-            if (textSignature?.id) {
-              msgId = textSignature.id;
-            } else {
-              // Reasoning-dropped/model-switch replay strips textSignature, which can
-              // leave several text blocks in one assistant turn without ids. msgIndex
-              // is per-message, so disambiguate fallbacks to avoid duplicate item ids.
-              msgId =
-                textFallbackOrdinal === 0
-                  ? `msg_${msgIndex}`
-                  : `msg_${msgIndex}_${textFallbackOrdinal}`;
-              textFallbackOrdinal += 1;
-            }
+          let msgId = resolveReplayableResponsesMessageId({
+            replayResponsesItemIds: shouldReplayResponsesItemIds,
+            textSignatureId: textSignature?.id,
+            fallbackId: `msg_${msgIndex}`,
+            fallbackOrdinal: textFallbackOrdinal,
+            previousReplayItemWasReasoning,
+          });
+          if (!textSignature?.id) {
+            textFallbackOrdinal += 1;
           }
           msgId = normalizeResponsesReplayItemId(msgId, "msg");
           const messageItem: ReplayableResponseOutputMessage = {
@@ -1183,6 +1181,7 @@ function convertResponsesMessages(
             phase: textSignature?.phase,
           };
           output.push(messageItem as ResponseInputItem);
+          previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
           const [callId, itemIdRaw] = block.id.split("|");
           const itemId =
@@ -1199,6 +1198,7 @@ function convertResponsesMessages(
                 ? block.arguments
                 : JSON.stringify(block.arguments ?? {}),
           });
+          previousReplayItemWasReasoning = false;
         }
       }
       if (output.length > 0) {
