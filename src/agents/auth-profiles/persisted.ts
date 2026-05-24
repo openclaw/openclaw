@@ -149,6 +149,11 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("key" in entry) && typeof entry["apiKey"] === "string") {
     entry["key"] = entry["apiKey"];
   }
+  // Also accept the snake_case `api_key` spelling commonly used in hand-written
+  // auth-profiles.json files; without this the profile is silently skipped.
+  if (!("key" in entry) && typeof entry["api_key"] === "string") {
+    entry["key"] = entry["api_key"];
+  }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
   normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
   if (entry.type === "api_key") {

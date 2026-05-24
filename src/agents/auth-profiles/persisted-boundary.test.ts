@@ -212,4 +212,27 @@ describe("persisted auth profile boundary", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("accepts the snake_case api_key alias for api_key credentials (57389)", () => {
+    const store = coercePersistedAuthProfileStore({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "my-provider:default": {
+          type: "api_key",
+          provider: "my-provider",
+          api_key: "sk-snake-case-key", // pragma: allowlist secret
+        },
+      },
+      order: { "my-provider": ["my-provider:default"] },
+    });
+
+    // A hand-written profile using the snake_case `api_key` field must be
+    // aliased to `key` so it is usable; otherwise it is silently skipped and
+    // resolution fails with a misleading "No API key found" error.
+    expect(store?.profiles["my-provider:default"]).toMatchObject({
+      type: "api_key",
+      provider: "my-provider",
+      key: "sk-snake-case-key", // pragma: allowlist secret
+    });
+  });
 });
