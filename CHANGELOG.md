@@ -75,6 +75,7 @@ Docs: https://docs.openclaw.ai
 - Config/secrets: preflight active runtime SecretRefs before root and include config writes persist, and roll back unchanged file/env state when post-write refresh fails. Fixes #46531. (#84454) Thanks @samzong.
 - CLI/models: preserve SecretRef-backed custom provider `apiKey` markers when `models status` regenerates `models.json`, avoiding resolved plaintext secrets on disk. Fixes #84632. (#84658) Thanks @NianJiuZst.
 - WhatsApp/auto-reply: deliver deferred media replies through the foreground reply fence so overlapping no-reply turns no longer hide already visible responses. (#85517) Thanks @cavit99.
+- Sessions/security: replace agent-to-agent wildcard allowlist regexes with a precompiled linear matcher so cross-agent access checks avoid backtracking-prone patterns. (#85849) Thanks @SebTardif.
 - WebChat: keep the run-complete indicator in progress until deferred history replay renders the assistant reply, so Done no longer appears before response text. (#85374) Thanks @neeravmakwana.
 - Agents/tools: give timed-out or cancelled process trees a bounded SIGTERM cleanup window before SIGKILL while preserving tree-aware cancellation. Fixes #66399. (#85865) Thanks @IWhatsskill.
 - Agents/subagents: treat aborted subagent stop reasons as killed terminal failures so parent sessions get error announcements instead of silent success. Fixes #72293. (#85860) Thanks @IWhatsskill.
