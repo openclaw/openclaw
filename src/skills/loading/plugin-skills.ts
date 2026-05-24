@@ -50,7 +50,12 @@ export function resolvePluginSkillDirs(params: {
     metadataSnapshot.normalizePluginId,
   );
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
-  const memorySlot = normalizedPlugins.slots.memory;
+  const memorySlots = [
+    normalizedPlugins.slots["memory.recall"],
+    normalizedPlugins.slots["memory.compaction"],
+    normalizedPlugins.slots["memory.capture"],
+    normalizedPlugins.slots["memory.userModel"],
+  ];
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: string[] = [];
@@ -76,7 +81,7 @@ export function resolvePluginSkillDirs(params: {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

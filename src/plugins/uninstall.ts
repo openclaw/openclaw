@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginInstallRecord, PluginSlotsConfig } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readOpenClawManagedNpmRootOverrides,
@@ -18,6 +18,14 @@ import {
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
+
+const MEMORY_SLOT_KEYS = [
+  "memory",
+  "memory.recall",
+  "memory.compaction",
+  "memory.capture",
+  "memory.userModel",
+] as const satisfies readonly (keyof PluginSlotsConfig)[];
 
 export type UninstallActions = {
   entry: boolean;
@@ -446,12 +454,17 @@ export function removePluginFromConfig(
 
   // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
-  if (slots?.memory === pluginId) {
-    slots = {
-      ...slots,
-      memory: defaultSlotIdForKey("memory"),
-    };
-    actions.memorySlot = true;
+  if (slots) {
+    for (const slotKey of MEMORY_SLOT_KEYS) {
+      if (slots[slotKey] !== pluginId) {
+        continue;
+      }
+      slots = {
+        ...slots,
+        [slotKey]: defaultSlotIdForKey(slotKey),
+      };
+      actions.memorySlot = true;
+    }
   }
   if (slots?.contextEngine === pluginId) {
     slots = {

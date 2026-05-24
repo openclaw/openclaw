@@ -187,9 +187,18 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
+  const rawRecall = normalizeOptionalString(cfg.plugins?.slots?.["memory.recall"]);
+  const rawLegacyMemory = normalizeOptionalString(cfg.plugins?.slots?.memory);
+  const raw = rawRecall ?? rawLegacyMemory ?? "";
   if (normalizeOptionalLowercaseString(raw) === "none") {
-    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+    return {
+      enabled: false,
+      slot: null,
+      reason:
+        rawRecall !== undefined
+          ? 'plugins.slots.memory.recall="none"'
+          : 'plugins.slots.memory="none"',
+    };
   }
   return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
 }

@@ -24,6 +24,7 @@ async function writePluginFixture(params: {
   id: string;
   schema: Record<string, unknown>;
   channels?: string[];
+  kind?: string | string[];
 }) {
   await mkdirSafe(params.dir);
   await fs.writeFile(
@@ -37,6 +38,9 @@ async function writePluginFixture(params: {
   };
   if (params.channels) {
     manifest.channels = params.channels;
+  }
+  if (params.kind) {
+    manifest.kind = params.kind;
   }
   await fs.writeFile(
     path.join(params.dir, "openclaw.plugin.json"),
@@ -377,6 +381,84 @@ describe("config plugin validation", () => {
       "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
     expectPathMessage(res.warnings, "plugins.slots.memory", slotMessage);
     expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", entryMessage);
+  });
+
+  it("reports missing purpose-specific memory slot plugin refs", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        slots: {
+          "memory.recall": "missing-recall",
+          "memory.compaction": "missing-compactor",
+          "memory.capture": "missing-capture",
+          "memory.userModel": "missing-user-model",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessage(
+        res.issues,
+        "plugins.slots.memory.recall",
+        "plugin not found: missing-recall",
+      );
+      expectPathMessage(
+        res.issues,
+        "plugins.slots.memory.compaction",
+        "plugin not found: missing-compactor",
+      );
+      expectPathMessage(
+        res.issues,
+        "plugins.slots.memory.capture",
+        "plugin not found: missing-capture",
+      );
+      expectPathMessage(
+        res.issues,
+        "plugins.slots.memory.userModel",
+        "plugin not found: missing-user-model",
+      );
+    }
+  });
+
+  it("validates memory plugins selected only by non-recall role slots", async () => {
+    const capturePluginDir = path.join(suiteHome, "capture-plugin");
+    await writePluginFixture({
+      dir: capturePluginDir,
+      id: "capture-plugin",
+      kind: "memory",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          enabled: { type: "boolean" },
+        },
+        required: ["enabled"],
+      },
+    });
+
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [capturePluginDir] },
+        allow: ["capture-plugin"],
+        slots: {
+          "memory.recall": "none",
+          "memory.capture": "capture-plugin",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.capture-plugin.config.enabled",
+        "must have required property 'enabled'",
+      );
+    }
   });
 
   it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {

@@ -410,6 +410,27 @@ describe("removePluginFromConfig", () => {
       expectedChanged: true,
     },
     {
+      name: "clears granular memory role slots when uninstalling active memory plugin",
+      config: createPluginConfig({
+        entries: {
+          "memory-plugin": { enabled: true },
+        },
+        slots: {
+          "memory.recall": "memory-plugin",
+          "memory.compaction": "memory-plugin",
+          "memory.capture": "memory-plugin",
+          "memory.userModel": "memory-plugin",
+        },
+      }),
+      pluginId: "memory-plugin",
+      expectedMemory: undefined,
+      expectedRecall: "memory-core",
+      expectedCompaction: "none",
+      expectedCapture: "none",
+      expectedUserModel: "none",
+      expectedChanged: true,
+    },
+    {
       name: "does not modify memory slot when uninstalling non-memory plugin",
       config: createPluginConfig({
         entries: createSinglePluginEntries(),
@@ -419,14 +440,34 @@ describe("removePluginFromConfig", () => {
       }),
       pluginId: "my-plugin",
       expectedMemory: "memory-core",
+      expectedRecall: undefined,
+      expectedCompaction: undefined,
+      expectedCapture: undefined,
+      expectedUserModel: undefined,
       expectedChanged: false,
     },
-  ] as const)("$name", ({ config, pluginId, expectedMemory, expectedChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, pluginId);
+  ] as const)(
+    "$name",
+    ({
+      config,
+      pluginId,
+      expectedMemory,
+      expectedRecall,
+      expectedCompaction,
+      expectedCapture,
+      expectedUserModel,
+      expectedChanged,
+    }) => {
+      const { config: result, actions } = removePluginFromConfig(config, pluginId);
 
-    expect(result.plugins?.slots?.memory).toBe(expectedMemory);
-    expect(actions.memorySlot).toBe(expectedChanged);
-  });
+      expect(result.plugins?.slots?.memory).toBe(expectedMemory);
+      expect(result.plugins?.slots?.["memory.recall"]).toBe(expectedRecall);
+      expect(result.plugins?.slots?.["memory.compaction"]).toBe(expectedCompaction);
+      expect(result.plugins?.slots?.["memory.capture"]).toBe(expectedCapture);
+      expect(result.plugins?.slots?.["memory.userModel"]).toBe(expectedUserModel);
+      expect(actions.memorySlot).toBe(expectedChanged);
+    },
+  );
 
   it("clears context engine slot when uninstalling active context engine plugin", () => {
     const config = createPluginConfig({

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginInstallRecord, PluginSlotsConfig } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
@@ -50,6 +50,15 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
+
+const PLUGIN_SLOT_KEYS = [
+  "memory",
+  "memory.recall",
+  "memory.compaction",
+  "memory.capture",
+  "memory.userModel",
+  "contextEngine",
+] as const satisfies readonly (keyof PluginSlotsConfig)[];
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -800,13 +809,14 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
     delete nextEntries[fromId];
   }
 
-  const nextSlots = slots
-    ? {
-        ...slots,
-        ...(slots.memory === fromId ? { memory: toId } : {}),
-        ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+  const nextSlots = slots ? { ...slots } : undefined;
+  if (nextSlots) {
+    for (const slotKey of PLUGIN_SLOT_KEYS) {
+      if (nextSlots[slotKey] === fromId) {
+        nextSlots[slotKey] = toId;
       }
-    : undefined;
+    }
+  }
 
   return {
     ...cfg,
@@ -881,16 +891,13 @@ function resetDisabledPluginSlots(
     return slots;
   }
   let next = slots;
-  if (next.memory === pluginId) {
+  for (const slotKey of PLUGIN_SLOT_KEYS) {
+    if (next[slotKey] !== pluginId) {
+      continue;
+    }
     next = {
       ...next,
-      memory: defaultSlotIdForKey("memory"),
-    };
-  }
-  if (next.contextEngine === pluginId) {
-    next = {
-      ...next,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
+      [slotKey]: defaultSlotIdForKey(slotKey),
     };
   }
   return next;

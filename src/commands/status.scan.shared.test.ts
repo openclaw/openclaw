@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveGatewayProbeSnapshot,
+  resolveMemoryPluginStatus,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
@@ -423,6 +424,37 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.gatewayReachable).toBe(false);
+  });
+});
+
+describe("resolveMemoryPluginStatus", () => {
+  it("prefers the granular recall slot over the legacy memory slot", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            memory: "legacy-memory",
+            "memory.recall": "recall-memory",
+          },
+        },
+      }),
+    ).toEqual({ enabled: true, slot: "recall-memory" });
+  });
+
+  it("reports granular recall disablement", () => {
+    expect(
+      resolveMemoryPluginStatus({
+        plugins: {
+          slots: {
+            "memory.recall": "none",
+          },
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      slot: null,
+      reason: 'plugins.slots.memory.recall="none"',
+    });
   });
 });
 

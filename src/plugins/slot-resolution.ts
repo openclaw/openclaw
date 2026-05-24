@@ -96,6 +96,9 @@ export function listSelectedMemoryRolePluginIds(params: {
     if (!pluginId) {
       continue;
     }
+    if (pluginId.toLowerCase() === "none") {
+      continue;
+    }
     if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
       continue;
     }

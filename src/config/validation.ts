@@ -44,12 +44,21 @@ import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
+import type { PluginSlotsConfig } from "./types.plugins.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+const MEMORY_SLOT_KEYS = [
+  "memory",
+  "memory.recall",
+  "memory.compaction",
+  "memory.capture",
+  "memory.userModel",
+] as const satisfies readonly (keyof PluginSlotsConfig)[];
+const GRANULAR_MEMORY_SLOT_KEYS = MEMORY_SLOT_KEYS.filter((key) => key !== "memory");
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -1802,32 +1811,38 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
-  // The default memory slot is inferred; only a user-configured slot should block startup.
+  // Default slot values are inferred; only user-configured slot refs should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
-  const memorySlot = normalizedPlugins.slots.memory;
-  if (
-    hasExplicitMemorySlot &&
-    typeof memorySlot === "string" &&
-    memorySlot.trim() &&
-    !knownIds.has(memorySlot)
-  ) {
+  for (const slotKey of MEMORY_SLOT_KEYS) {
+    const hasExplicitSlot =
+      pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, slotKey);
+    const slotValue = normalizedPlugins.slots[slotKey];
+    if (
+      !hasExplicitSlot ||
+      typeof slotValue !== "string" ||
+      !slotValue.trim() ||
+      knownIds.has(slotValue)
+    ) {
+      continue;
+    }
+    const isRecallSlot = slotKey === "memory" || slotKey === "memory.recall";
     const isMissingOfficialExternalMemorySlot =
-      memorySlot === "memory-lancedb" &&
+      isRecallSlot &&
+      slotValue === "memory-lancedb" &&
       Boolean(
-        formatMissingOfficialExternalPluginWarning(memorySlot, {
+        formatMissingOfficialExternalPluginWarning(slotValue, {
           selectedMissingMemorySlot: true,
         }),
       );
-    pushMissingPluginIssue("plugins.slots.memory", memorySlot, {
-      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(memorySlot),
-      missingMessage: formatMissingOfficialExternalPluginWarning(memorySlot, {
-        selectedMissingMemorySlot: true,
+    pushMissingPluginIssue(`plugins.slots.${slotKey}`, slotValue, {
+      warnOnly: isMissingOfficialExternalMemorySlot && !findBlockedPluginDiagnostic(slotValue),
+      missingMessage: formatMissingOfficialExternalPluginWarning(slotValue, {
+        selectedMissingMemorySlot: isRecallSlot,
       }),
     });
   }
 
+  const memorySlots = GRANULAR_MEMORY_SLOT_KEYS.map((slotKey) => normalizedPlugins.slots[slotKey]);
   let selectedMemoryPluginId: string | null = null;
   const seenPlugins = new Set<string>();
   for (const record of registry.plugins) {
@@ -1852,7 +1867,7 @@ function validateConfigObjectWithPluginsBase(
       const memoryDecision = resolveMemorySlotDecision({
         id: pluginId,
         kind: record.kind,
-        slot: memorySlot,
+        slot: memorySlots,
         selectedId: selectedMemoryPluginId,
       });
       if (!memoryDecision.enabled) {

@@ -99,6 +99,7 @@ function createSinglePluginRegistry(params: {
   skills: string[];
   format?: "openclaw" | "bundle";
   legacyPluginIds?: string[];
+  kind?: string | string[];
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -110,6 +111,7 @@ function createSinglePluginRegistry(params: {
         channels: [],
         providers: [],
         cliBackends: [],
+        kind: params.kind,
         legacyPluginIds: params.legacyPluginIds,
         skills: params.skills,
         hooks: [],
@@ -382,6 +384,35 @@ describe("resolvePluginSkillDirs", () => {
         plugins: {
           entries: {
             "helper-legacy": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("resolves memory plugin skills selected by non-recall role slots", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-memory-plugin-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        skills: ["./skills"],
+        kind: "memory",
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          allow: ["helper"],
+          slots: {
+            "memory.recall": "none",
+            "memory.capture": "helper",
           },
         },
       } as OpenClawConfig,

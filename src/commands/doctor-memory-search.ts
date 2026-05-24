@@ -366,7 +366,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   if (!plugins.enabled) {
     return false;
   }
-  const memorySlot = plugins.slots.memory;
+  const memorySlot = plugins.slots["memory.recall"];
   if (typeof memorySlot !== "string" || memorySlot.length === 0) {
     return false;
   }
