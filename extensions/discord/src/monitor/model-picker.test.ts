@@ -12,6 +12,7 @@ import {
   computeAlphaBuckets,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
+  findProviderBucketId,
   loadDiscordModelPickerData,
   parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
@@ -240,7 +241,7 @@ describe("Discord model picker custom_id", () => {
 });
 
 describe("provider paging", () => {
-  it("keeps providers on a single page when count fits Discord button rows", () => {
+  it("keeps providers on a single page when count fits Discord select options", () => {
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX - 2; i += 1) {
       entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -299,7 +300,7 @@ describe("provider paging", () => {
     expect(compactPage.bucket?.id).toBe("all");
 
     // 26 providers → buckets engage. First bucket has 20 items which fits a
-    // single page; the user navigates between buckets, not pages.
+    // single select page; the user navigates between buckets, not pages.
     const pagedEntries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 1; i += 1) {
       pagedEntries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -478,30 +479,32 @@ describe("Discord model picker rendering", () => {
     expect(firstComponent.type).toBe(ComponentType.Container);
 
     const rows = extractContainerRows(payload.components);
-    expect(rows.length).toBeGreaterThan(0);
+    expect(rows).toHaveLength(1);
 
-    const rowProviderCounts = rows.map(
-      (row) =>
-        (row.components ?? []).filter((component) => {
-          const parsed = parseDiscordModelPickerCustomId(component.custom_id ?? "");
-          return parsed?.action === "provider";
-        }).length,
+    const providerSelect = requireValue(
+      rows[0]?.components?.find(
+        (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
+      ),
+      "provider view should render a provider select",
     );
-    expect(rowProviderCounts).toEqual([4, 5, 5, 5, 5]);
+    expect(providerSelect.options).toHaveLength(Object.keys(entries).length);
+    expect(providerSelect.options?.find((option) => option.value === "provider-01")?.default).toBe(
+      true,
+    );
 
-    const allButtons = rows.flatMap((row) => row.components ?? []);
-    const providerButtons = allButtons.filter((component) => {
-      const parsed = parseDiscordModelPickerCustomId(component.custom_id ?? "");
-      return parsed?.action === "provider";
-    });
-    expect(providerButtons).toHaveLength(Object.keys(entries).length);
-    const customIds = allButtons.map((component) => component.custom_id ?? "");
+    const providerState = parseDiscordModelPickerCustomId(providerSelect.custom_id ?? "");
+    expect(providerState?.action).toBe("provider");
+    expect(providerState?.view).toBe("models");
+
+    const customIds = rows
+      .flatMap((row) => row.components ?? [])
+      .map((component) => component.custom_id ?? "");
     expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
   it("renders a bucket select when provider count exceeds the bucket threshold", () => {
     // 29 providers (>25) trigger alpha-bucket mode; the rendered view now
-    // surfaces a `bucket` select row before the provider button grid.
+    // surfaces a `bucket` select row before the provider select.
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 4; i += 1) {
       entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -595,41 +598,34 @@ describe("Discord model picker rendering", () => {
     }
   });
 
-  it("provider page sizes shrink to a 4-row budget when buckets are active", () => {
-    // Regression for reviewloop pass 3 finding #2: the bucket select row
-    // consumes one of Discord's 5 message-action rows, so provider button
-    // pages must drop from 25 (single-page) to 20 and from 20 (paginated)
-    // to 15 to avoid exceeding the action-row cap.
-    const entries: Record<string, string[]> = {};
-    for (let i = 1; i <= 26; i += 1) {
-      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
-    }
-    const data = createModelsProviderData(entries);
-
-    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1 });
-    // Buckets engaged (26 > 25 threshold) → page size capped at 20 even
-    // though a fits-in-single-page bucket would historically allow 25.
-    expect(firstBucket.buckets.length).toBeGreaterThan(1);
-    expect(firstBucket.items.length).toBeLessThanOrEqual(20);
-  });
-
-  it("provider buttons omit providerBucket; bucket is preserved via the nav row", () => {
-    // After reviewloop pass 3 the provider button customId drops
-    // providerBucket (the bucket is derived from the picked provider on
-    // re-render). The bucket-state hint lives on the nav prev/next row,
-    // which is the only place pagination needs to know which bucket it
-    // is walking.
+  it("provider pages use Discord's select-option cap when buckets are active", () => {
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= 30; i += 1) {
-      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
+      entries[`p-${String(i).padStart(2, "0")}`] = [`model-${i}`];
     }
+    entries["z-01"] = ["model-z"];
+    const data = createModelsProviderData(entries);
+
+    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1, bucket: "p" });
+    expect(firstBucket.bucket?.id).toBe("p");
+    expect(firstBucket.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
+    expect(firstBucket.items).toHaveLength(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
+    expect(firstBucket.totalPages).toBe(2);
+  });
+
+  it("provider select and pagination preserve the active provider bucket", () => {
+    const entries: Record<string, string[]> = {};
+    for (let i = 1; i <= 30; i += 1) {
+      entries[`p-${String(i).padStart(2, "0")}`] = [`model-${i}`];
+    }
+    entries["z-01"] = ["model-z"];
     const data = createModelsProviderData(entries);
 
     const rendered = renderDiscordModelPickerProvidersView({
       command: "models",
       userId: "42",
       data,
-      providerBucket: "21-30",
+      providerBucket: "p",
     });
 
     const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
@@ -640,18 +636,26 @@ describe("Discord model picker rendering", () => {
     const customIds = allComponents.map((component) => component.custom_id ?? "");
 
     const providerActionIds = customIds.filter((customId) => customId.includes(";a=provider;"));
-    expect(providerActionIds.length).toBeGreaterThan(0);
-    for (const customId of providerActionIds) {
-      // Provider buttons no longer encode pb (derived from picked
-      // provider via findProviderBucketId at re-render time).
-      expect(customId).not.toMatch(/;pb=/);
-    }
+    expect(providerActionIds).toHaveLength(1);
+    expect(providerActionIds[0]).toContain("pb=p");
+
+    const providerSelect = requireValue(
+      allComponents.find(
+        (component) =>
+          component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE &&
+          component.custom_id?.includes(";a=provider;"),
+      ),
+      "provider view should render a provider select",
+    );
+    expect(providerSelect.options).toHaveLength(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
+
     // The nav customId carries the active bucket because pagination is
     // bucket-scoped and the user's "current" range is the only durable
     // hint of where to keep them.
     const navIds = customIds.filter((customId) => customId.includes(";a=nav;"));
+    expect(navIds.length).toBeGreaterThan(0);
     for (const customId of navIds) {
-      expect(customId).toContain("pb=21-30");
+      expect(customId).toContain("pb=p");
     }
   });
 
@@ -694,6 +698,57 @@ describe("Discord model picker rendering", () => {
     };
 
     expect(payload.content).toContain("Current model: openai/ gpt-5");
+  });
+
+  it("keeps provider navigation available when model bucketing drops the provider select", () => {
+    const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
+    const providerEntries = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [
+        `provider-${String(i + 1).padStart(2, "0")}`,
+        ["model"],
+      ]),
+    );
+    const data = createModelsProviderData({ ...providerEntries, vllm: models });
+    const providerBucket = requireValue(
+      findProviderBucketId(data, "vllm"),
+      "test data should bucket the selected provider",
+    );
+
+    const rows = renderModelsViewRows({
+      command: "models",
+      userId: "12345678901234567890",
+      data,
+      provider: "vllm",
+      page: 1,
+      providerPage: 1,
+      providerBucket,
+      modelBucket: "21-30",
+    });
+
+    const providerSelect = rows
+      .flatMap((row) => row.components ?? [])
+      .find(
+        (component) =>
+          component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE &&
+          component.options?.some((option) => option.value === "vllm"),
+      );
+    expect(providerSelect).toBeUndefined();
+
+    const buttons = rows.at(-1)?.components ?? [];
+    const providersButton = requireValue(
+      buttons.find((button) => button.custom_id?.includes(";a=back;v=providers;")),
+      "bucketed model view should render a providers button",
+    );
+    const state = requireValue(
+      parseDiscordModelPickerCustomId(providersButton.custom_id ?? ""),
+      "providers button custom id should parse",
+    );
+    expect(state.action).toBe("back");
+    expect(state.view).toBe("providers");
+    expect(state.providerBucket).toBe(providerBucket);
+    expect((providersButton.custom_id ?? "").length).toBeLessThanOrEqual(
+      DISCORD_CUSTOM_ID_MAX_CHARS,
+    );
   });
 
   it("renders model view with select menu and explicit submit button", () => {
@@ -750,16 +805,21 @@ describe("Discord model picker rendering", () => {
     expect(parsedModelSelectState?.provider).toBe("openai");
 
     const navButtons = rows[2]?.components ?? [];
-    expect(navButtons).toHaveLength(3);
+    expect(navButtons).toHaveLength(4);
 
-    const cancelState = parseDiscordModelPickerCustomId(navButtons[0]?.custom_id ?? "");
+    const providersState = parseDiscordModelPickerCustomId(navButtons[0]?.custom_id ?? "");
+    expect(providersState?.action).toBe("back");
+    expect(providersState?.view).toBe("providers");
+    expect(providersState?.page).toBe(1);
+
+    const cancelState = parseDiscordModelPickerCustomId(navButtons[1]?.custom_id ?? "");
     expect(cancelState?.action).toBe("cancel");
 
-    const resetState = parseDiscordModelPickerCustomId(navButtons[1]?.custom_id ?? "");
+    const resetState = parseDiscordModelPickerCustomId(navButtons[2]?.custom_id ?? "");
     expect(resetState?.action).toBe("reset");
     expect(resetState?.provider).toBe("openai");
 
-    const submitState = parseDiscordModelPickerCustomId(navButtons[2]?.custom_id ?? "");
+    const submitState = parseDiscordModelPickerCustomId(navButtons[3]?.custom_id ?? "");
     expect(submitState?.action).toBe("submit");
     expect(submitState?.provider).toBe("openai");
     expect(submitState?.modelIndex).toBe(3);
@@ -917,10 +977,10 @@ describe("Discord model picker rendering", () => {
     });
     const buttonRow = rows[2];
     const buttons = buttonRow?.components ?? [];
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
 
     const favoritesState = requireValue(
-      parseDiscordModelPickerCustomId(buttons[2]?.custom_id ?? ""),
+      parseDiscordModelPickerCustomId(buttons[3]?.custom_id ?? ""),
       "recents button custom id should parse",
     );
     expect(favoritesState.action).toBe("recents");
@@ -943,7 +1003,7 @@ describe("Discord model picker rendering", () => {
     });
     const buttonRow = rows[2];
     const buttons = buttonRow?.components ?? [];
-    expect(buttons).toHaveLength(3);
+    expect(buttons).toHaveLength(4);
 
     const allActions = buttons.map(
       (b) => parseDiscordModelPickerCustomId(b?.custom_id ?? "")?.action,

@@ -10,10 +10,8 @@ export const DISCORD_COMPONENT_MAX_ROWS = 5;
 export const DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW = 5;
 export const DISCORD_COMPONENT_MAX_SELECT_OPTIONS = 25;
 
-export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE =
-  DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * (DISCORD_COMPONENT_MAX_ROWS - 1);
-export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX =
-  DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * DISCORD_COMPONENT_MAX_ROWS;
+export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 export const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 const COMMAND_CONTEXTS = ["model", "models"] as const;
@@ -535,24 +533,11 @@ export function getDiscordModelPickerProviderPage(params: {
   const bucket = resolveBucket(buckets, params.bucket);
   const bucketItems = bucket ? allItems.slice(bucket.start, bucket.end) : allItems;
 
-  // Discord caps each message at 5 action rows. The bucket select consumes
-  // one row when bucketing is active, so provider buttons get only 4 rows
-  // (no nav) or 3 rows (with nav). Without buckets the row budget is
-  // unchanged.
-  const bucketingActive = buckets.length > 1;
-  const bucketedSinglePageMax =
-    DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * (DISCORD_COMPONENT_MAX_ROWS - 1);
-  const bucketedPaginatedPageSize =
-    DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * (DISCORD_COMPONENT_MAX_ROWS - 2);
-  const singlePageMax = bucketingActive
-    ? bucketedSinglePageMax
-    : DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX;
-  const paginatedPageSize = bucketingActive
-    ? bucketedPaginatedPageSize
-    : DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE;
-  const canFitSinglePage = bucketItems.length <= singlePageMax;
-  const maxPageSize = canFitSinglePage ? singlePageMax : paginatedPageSize;
-  const pageSize = clampPageSize(params.pageSize, maxPageSize, maxPageSize);
+  const pageSize = clampPageSize(
+    params.pageSize,
+    DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE,
+    DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE,
+  );
   const page = paginateItems({
     items: bucketItems,
     page: normalizeModelPickerPage(params.page),
