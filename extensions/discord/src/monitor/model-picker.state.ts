@@ -386,7 +386,13 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
   }
 
   const buckets: DiscordModelPickerBucket[] = [];
-  const target = DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE;
+  // Cap bucket count at the Discord select-option limit. Without this a very
+  // large list (e.g. 600+ diverse items) would yield >25 buckets and the
+  // bucket select itself would exceed Discord's hard 25-option cap. The
+  // letter-boundary extender below can only grow buckets (never split
+  // letter groups), so sizing the base target to a 25-bucket ceiling
+  // remains safe even after extension.
+  const target = computeBucketTargetSize(sortedItems.length);
   let start = 0;
   while (start < sortedItems.length) {
     let end = Math.min(sortedItems.length, start + target);
@@ -410,9 +416,21 @@ export function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBu
   return buckets;
 }
 
+/**
+ * Pick the per-bucket target size such that the resulting bucket count never
+ * exceeds {@link DISCORD_COMPONENT_MAX_SELECT_OPTIONS} (Discord's hard select
+ * cap). Stays at the default {@link DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE}
+ * for typical inputs and grows linearly for very large lists.
+ */
+function computeBucketTargetSize(totalItems: number): number {
+  const minTarget = DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE;
+  const capByBucketCount = Math.ceil(totalItems / DISCORD_COMPONENT_MAX_SELECT_OPTIONS);
+  return Math.max(minTarget, capByBucketCount);
+}
+
 function chunkBucketsByCount(sortedItems: string[]): DiscordModelPickerBucket[] {
   const buckets: DiscordModelPickerBucket[] = [];
-  const target = DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE;
+  const target = computeBucketTargetSize(sortedItems.length);
   for (let start = 0; start < sortedItems.length; start += target) {
     const end = Math.min(sortedItems.length, start + target);
     buckets.push({

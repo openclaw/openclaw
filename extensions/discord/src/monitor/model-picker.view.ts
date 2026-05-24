@@ -480,6 +480,10 @@ function buildModelRows(params: {
   });
 
   if (runtimeChoices.length > 1) {
+    const runtimeModelBucket =
+      params.modelPage.bucket && params.modelPage.bucket.id !== "all"
+        ? params.modelPage.bucket.id
+        : undefined;
     rows.push(
       new Row([
         createModelSelect({
@@ -492,6 +496,7 @@ function buildModelRows(params: {
             page: params.modelPage.page,
             providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
+            modelBucket: runtimeModelBucket,
             userId: params.userId,
           }),
           options: runtimeChoices.map((choice) => {
@@ -520,6 +525,11 @@ function buildModelRows(params: {
       : false,
   }));
 
+  const activeModelBucket =
+    params.modelPage.bucket && params.modelPage.bucket.id !== "all"
+      ? params.modelPage.bucket.id
+      : undefined;
+
   rows.push(
     new Row([
       createModelSelect({
@@ -531,6 +541,7 @@ function buildModelRows(params: {
           runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
+          modelBucket: activeModelBucket,
           userId: params.userId,
         }),
         options: modelOptions,

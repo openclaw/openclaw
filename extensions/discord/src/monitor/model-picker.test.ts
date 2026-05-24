@@ -433,6 +433,19 @@ describe("computeAlphaBuckets", () => {
   it("returns an empty array for empty input", () => {
     expect(computeAlphaBuckets([])).toEqual([]);
   });
+
+  it("never returns more than 25 buckets even for huge same-prefix lists", () => {
+    // Regression: with a fixed target=20 a 501-item list yielded 26 numeric
+    // buckets, exceeding the Discord select-option cap and breaking the
+    // picker for the largest wildcard configs. Dynamic target keeps the
+    // bucket count <= 25 regardless of input size.
+    const items = Array.from({ length: 501 }, (_, i) => `qwen3-${String(i).padStart(3, "0")}`);
+    const buckets = computeAlphaBuckets(items);
+    expect(buckets.length).toBeLessThanOrEqual(25);
+    // Sanity check: a much larger list still fits.
+    const huge = Array.from({ length: 5000 }, (_, i) => `qwen3-${String(i).padStart(4, "0")}`);
+    expect(computeAlphaBuckets(huge).length).toBeLessThanOrEqual(25);
+  });
 });
 
 describe("Discord model picker rendering", () => {
@@ -515,6 +528,36 @@ describe("Discord model picker rendering", () => {
     const bucketIds = customIds.filter((customId) => customId.includes(";a=bucket;"));
     expect(bucketIds).toHaveLength(1);
     expect(bucketIds[0]).toMatch(/a=bucket;v=providers;u=42/);
+  });
+
+  it("model select customId carries modelBucket so non-first-bucket picks survive re-render", () => {
+    // Regression for the Codex P2 finding: rendering the models view in a
+    // non-first bucket previously encoded a `model` action customId without
+    // the bucket id, so the next interaction would re-render with the
+    // default bucket and the just-selected model would disappear.
+    const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
+    const data = createModelsProviderData({ vllm: models });
+
+    const rendered = renderDiscordModelPickerModelsView({
+      command: "models",
+      userId: "42",
+      data,
+      provider: "vllm",
+      page: 1,
+      providerPage: 1,
+      modelBucket: "21-30",
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      components?: SerializedComponent[];
+    };
+    const rows = extractContainerRows(payload.components);
+    const allComponents = rows.flatMap((row) => row.components ?? []);
+    const customIds = allComponents.map((component) => component.custom_id ?? "");
+
+    const modelActionIds = customIds.filter((customId) => customId.includes(";a=model;"));
+    expect(modelActionIds).toHaveLength(1);
+    expect(modelActionIds[0]).toContain("mb=21-30");
   });
 
   it("supports classic fallback rendering with content + action rows", () => {
