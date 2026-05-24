@@ -351,6 +351,33 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Session key the chat picker should default to for this paired client.
+    ///
+    /// In remote mode every paired Mac/iOS device defaults to its own
+    /// `node-${deviceId}` session — otherwise multiple paired Macs would share
+    /// the gateway main session and the picker would surface the wrong node's
+    /// chat history and label (#59268). Local mode keeps the snapshot main
+    /// session so the menu app behaves as before.
+    func cachedPreferredDefaultSessionKey() async -> String? {
+        let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+        if mode == .remote {
+            return Self.nodeScopedSessionKey()
+        }
+        return self.cachedMainSessionKey()
+    }
+
+    func preferredDefaultSessionKey(timeoutMs: Double = 15000) async -> String {
+        let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+        if mode == .remote {
+            return Self.nodeScopedSessionKey()
+        }
+        return await self.mainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    static func nodeScopedSessionKey() -> String {
+        "node-\(DeviceIdentityStore.loadOrCreate().deviceId)"
+    }
+
     func cachedGatewayVersion() -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
         let raw = snapshot.server["version"]?.value as? String

@@ -60,7 +60,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             params: params,
             timeoutMs: 15000)
         let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
-        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        // Remote-paired clients resolve to their own node-scoped session here so
+        // the picker doesn't default every Mac to the shared gateway main (#59268).
+        let mainSessionKey = await GatewayConnection.shared.cachedPreferredDefaultSessionKey()
         let defaults = decoded.defaults.map {
             OpenClawChatSessionsDefaults(
                 modelProvider: $0.modelProvider,

@@ -1,7 +1,9 @@
 import Foundation
 import Testing
 @testable import OpenClaw
+import OpenClawKit
 
+@Suite(.serialized)
 struct WebChatMainSessionKeyTests {
     @Test func `config get snapshot main key falls back to main when missing`() throws {
         let json = """
@@ -63,5 +65,32 @@ struct WebChatMainSessionKeyTests {
         """
         let key = try GatewayConnection.mainSessionKey(fromConfigGetData: Data(json.utf8))
         #expect(key == "global")
+    }
+
+    @Test func `node scoped session key embeds device identity`() {
+        let key = GatewayConnection.nodeScopedSessionKey()
+        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        #expect(!deviceId.isEmpty)
+        #expect(key == "node-\(deviceId)")
+    }
+
+    @Test @MainActor func `remote mode resolves preferred default to node scoped key`() async {
+        let previous = AppStateStore.shared.connectionMode
+        AppStateStore.shared.connectionMode = .remote
+        defer { AppStateStore.shared.connectionMode = previous }
+
+        let expected = "node-\(DeviceIdentityStore.loadOrCreate().deviceId)"
+        let cached = await GatewayConnection.shared.cachedPreferredDefaultSessionKey()
+        #expect(cached == expected)
+    }
+
+    @Test @MainActor func `local mode preferred default mirrors cached main session key`() async {
+        let previous = AppStateStore.shared.connectionMode
+        AppStateStore.shared.connectionMode = .local
+        defer { AppStateStore.shared.connectionMode = previous }
+
+        let cachedMain = GatewayConnection.shared.cachedMainSessionKey()
+        let preferred = await GatewayConnection.shared.cachedPreferredDefaultSessionKey()
+        #expect(preferred == cachedMain)
     }
 }

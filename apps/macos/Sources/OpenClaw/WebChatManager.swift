@@ -104,7 +104,7 @@ final class WebChatManager {
 
     func preferredSessionKey() async -> String {
         if let cachedPreferredSessionKey { return cachedPreferredSessionKey }
-        let key = await GatewayConnection.shared.mainSessionKey()
+        let key = await GatewayConnection.shared.preferredDefaultSessionKey()
         self.cachedPreferredSessionKey = key
         return key
     }
