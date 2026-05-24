@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -13,6 +14,7 @@ const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
 const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -90,6 +92,31 @@ export function shouldSuppressVitestStderrLine(line) {
 
 export function resolveDirectNodeVitestArgs(pnpmArgs) {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
+}
+
+function hasExplicitVitestConfigArg(argv) {
+  return argv.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
+}
+
+function toRepoRelativeArg(arg, cwd) {
+  const normalized = path.isAbsolute(arg) ? path.relative(cwd, arg) : arg;
+  return normalized.replaceAll(path.sep, "/").replace(/^\.\//u, "");
+}
+
+export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
+  if (hasExplicitVitestConfigArg(argv)) {
+    return argv;
+  }
+  const testTargets = argv
+    .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
+    .map((arg) => toRepoRelativeArg(arg, cwd));
+  if (testTargets.length === 0 || !testTargets.every(isUnitUiTestTarget)) {
+    return argv;
+  }
+  if (argv[0] === "run") {
+    return ["run", "--config", UNIT_UI_VITEST_CONFIG, ...argv.slice(1)];
+  }
+  return ["--config", UNIT_UI_VITEST_CONFIG, ...argv];
 }
 
 function spawnVitestProcess({ pnpmArgs, spawnParams }) {
@@ -271,11 +298,18 @@ function main(argv = process.argv.slice(2), env = process.env) {
     process.exit(1);
   }
 
+  const vitestArgs = resolveImplicitVitestArgs(argv);
   const { child, teardown } = spawnWatchedVitestProcess({
-    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    pnpmArgs: [
+      "exec",
+      "node",
+      ...resolveVitestNodeArgs(env),
+      resolveVitestCliEntry(),
+      ...vitestArgs,
+    ],
     spawnParams: resolveVitestSpawnParams(env),
     env,
-    label: argv.join(" "),
+    label: vitestArgs.join(" "),
   });
 
   child.on("exit", (code, signal) => {

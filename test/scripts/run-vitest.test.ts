@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   installVitestNoOutputWatchdog,
   resolveDirectNodeVitestArgs,
+  resolveImplicitVitestArgs,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -24,6 +25,40 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+  });
+
+  it("routes explicit unit ui tests through the narrow unit ui config", () => {
+    expect(
+      resolveImplicitVitestArgs([
+        "ui/src/ui/controllers/chat.test.ts",
+        "-t",
+        "keeps optimistic user attachment previews",
+      ]),
+    ).toEqual([
+      "--config",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+      "-t",
+      "keeps optimistic user attachment previews",
+    ]);
+  });
+
+  it("does not override explicit vitest configs", () => {
+    const argv = [
+      "--config",
+      "test/vitest/vitest.ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("keeps the run subcommand first when routing unit ui tests", () => {
+    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/controllers/chat.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ]);
   });
 
   it("allows opting back into Maglev explicitly", () => {
