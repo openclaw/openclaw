@@ -42,7 +42,7 @@ validate_script() {
     first_line="$(head -c 256 "$tmp" | head -1)"
     if [[ "$first_line" != "#!"* ]]; then
         local safe_line
-        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177')"
+        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177\200-\237')"
         safe_line="${safe_line//\\/\\\\}"
         ui_error "Downloaded file does not look like a shell script (no shebang): ${url}"
         ui_error "First line: ${safe_line}"
@@ -96,6 +96,9 @@ cat > "$TMPDIR_TEST/valid_env.sh" << 'ENVSH'
 echo "Hello from env-bash script"
 ENVSH
 
+# (g) File with C1 control bytes (0x9B = CSI, could inject terminal escapes)
+printf '\x9b\x33\x31\x6dPWNED\x9b\x30\x6d rest of line\n' > "$TMPDIR_TEST/c1_escape.txt"
+
 # ===========================================================================
 #  GREEN tests — WITH validation (new behavior), bad files are REJECTED
 # ===========================================================================
@@ -123,6 +126,21 @@ if ! validate_script "$TMPDIR_TEST/binary.bin" 2>/dev/null; then
     ok "binary blob  → rejected"
 else
     ko "binary blob  → should have been rejected"
+fi
+
+if ! validate_script "$TMPDIR_TEST/c1_escape.txt" 2>/dev/null; then
+    ok "C1 escape    → rejected"
+else
+    ko "C1 escape    → should have been rejected"
+fi
+
+# Verify C1 bytes are stripped from the "First line:" diagnostic
+c1_first_line="$(validate_script "$TMPDIR_TEST/c1_escape.txt" "https://example.com/c1" 2>&1 \
+    | grep 'First line:' | sed 's/.*First line: //' || true)"
+if [ -n "$c1_first_line" ] && ! printf '%s' "$c1_first_line" | LC_ALL=C grep -qP '[\x00-\x1f\x7f\x80-\x9f]'; then
+    ok "C1 diagnostic → C1 bytes stripped from error output"
+else
+    ko "C1 diagnostic → C1 bytes leaked into error output"
 fi
 
 # Valid scripts should PASS

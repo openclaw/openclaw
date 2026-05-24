@@ -97,11 +97,11 @@ validate_downloaded_script() {
     local first_line
     first_line="$(head -c 256 "$file" | head -1)"
     if [[ "$first_line" != "#!"* ]]; then
-        # Sanitize before logging: strip control chars and escape backslashes
-        # so untrusted content cannot inject terminal escapes through
-        # ui_error's echo -e path (which interprets \033[...] sequences).
+        # Sanitize before logging: strip C0 controls (\000-\037), DEL (\177),
+        # and C1 controls (\200-\237) so untrusted content cannot inject
+        # terminal escapes through ui_error's echo -e path.
         local safe_line
-        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177')"
+        safe_line="$(printf '%s' "${first_line:0:80}" | LC_ALL=C tr -d '\000-\037\177\200-\237')"
         safe_line="${safe_line//\\/\\\\}"
         ui_error "Downloaded file does not look like a shell script (no shebang): ${url}"
         ui_error "First line: ${safe_line}"
