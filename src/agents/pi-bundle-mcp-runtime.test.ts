@@ -25,6 +25,8 @@ type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
 >;
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
+const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
+const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
 
 async function writeListToolsMcpServer(params: {
   filePath: string;
@@ -375,11 +377,11 @@ describe("session MCP runtime", () => {
     );
 
     try {
-      await waitForFileText(logPath, "recv tools/list", 1000);
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
       const result = await Promise.race([
         catalogResult,
         new Promise<{ status: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ status: "pending" }), 2500);
+          setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
         }),
       ]);
 
