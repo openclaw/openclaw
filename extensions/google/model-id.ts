@@ -18,7 +18,10 @@ export function normalizeGoogleModelId(id: string): string {
   if (id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
   }
-  if (id === "gemini-3.1-flash-lite") {
+  // Google GA'd gemini-3.1-flash-lite in May 2026; the GA model no longer
+  // requires the -preview suffix. Keep the preview alias for users who
+  // explicitly target the older preview endpoint.
+  if (id === "gemini-3.1-flash-lite-preview") {
     return "gemini-3.1-flash-lite-preview";
   }
   if (id === "gemini-3.1-flash" || id === "gemini-3.1-flash-preview") {

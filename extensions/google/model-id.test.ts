@@ -36,7 +36,8 @@ describe("google model id helpers", () => {
     );
   });
 
-  it("adds the preview suffix for gemini 3.1 flash-lite", () => {
-    expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite-preview");
+  it("keeps gemini 3.1 flash-lite as-is (GA release, May 2026)", () => {
+    expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+    expect(normalizeGoogleModelId("gemini-3.1-flash-lite-preview")).toBe("gemini-3.1-flash-lite-preview");
   });
 });
