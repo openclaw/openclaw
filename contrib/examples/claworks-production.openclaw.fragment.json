@@ -60,8 +60,30 @@
             "targets": ["feishu:oc_xxx"]
           },
           "connectors": {
-            "opcua": { "preset": "opcua", "enabled": false },
-            "mqtt": { "preset": "mqtt", "enabled": true },
+            "plant-mqtt": {
+              "preset": "mqtt",
+              "enabled": true,
+              "env": {
+                "CLAWORKS_MQTT_URL": "mqtt://127.0.0.1:1883",
+                "CLAWORKS_MQTT_TOPIC": "claworks/alarms/#",
+                "CLAWORKS_MQTT_EVENT_TYPE": "alarm.created"
+              }
+            },
+            "plant-opcua": {
+              "preset": "opcua",
+              "enabled": false,
+              "env": {
+                "CLAWORKS_OPCUA_ENDPOINT": "opc.tcp://127.0.0.1:4840"
+              }
+            },
+            "plant-modbus": {
+              "preset": "modbus",
+              "enabled": false,
+              "env": {
+                "CLAWORKS_MODBUS_HOST": "127.0.0.1",
+                "CLAWORKS_MODBUS_PORT": "502"
+              }
+            },
             "echo": { "preset": "echo", "enabled": true }
           }
         }
