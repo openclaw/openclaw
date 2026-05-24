@@ -941,12 +941,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         },
       } as OpenClawConfig,
       dispatcher,
-      replyResolver: async (_resolverCtx, options) => {
-        (
-          options as { replyOperation?: { complete: () => void } } | undefined
-        )?.replyOperation?.complete();
-        return { text: "late final should not send" };
-      },
+      replyResolver: async () => ({ text: "late final should not send" }),
     });
 
     await ttsStartedPromise;
