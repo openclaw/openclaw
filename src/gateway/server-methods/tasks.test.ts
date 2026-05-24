@@ -8,6 +8,10 @@ import {
   recordTaskProgressByRunId,
   resetTaskRegistryForTests,
 } from "../../tasks/runtime-internal.js";
+import {
+  createManagedTaskFlow,
+  resetTaskFlowRegistryForTests,
+} from "../../tasks/task-flow-runtime-internal.js";
 import { tasksHandlers } from "./tasks.js";
 import type { RespondFn } from "./types.js";
 
@@ -25,10 +29,12 @@ beforeEach(async () => {
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
   process.env.OPENCLAW_STATE_DIR = stateDir;
   resetTaskRegistryForTests();
+  resetTaskFlowRegistryForTests();
 });
 
 afterEach(async () => {
   resetTaskRegistryForTests();
+  resetTaskFlowRegistryForTests();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -211,5 +217,98 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.id).toBe(task.taskId);
     expect(payload?.task?.status).toBe("cancelled");
     expect(payload?.task?.error).toBe("user stopped task");
+  });
+
+  it("lists and gets TaskFlows through gateway methods", async () => {
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "lobster-builder/test-run",
+      status: "waiting",
+      goal: "Run Lobster workflow",
+      currentStep: "await_lobster_approval",
+      waitJson: { kind: "lobster_approval", prompt: "Approve?" },
+    });
+    createManagedTaskFlow({
+      ownerKey: "agent:other:main",
+      controllerId: "lobster-builder/test-run",
+      status: "waiting",
+      goal: "Other Lobster workflow",
+    });
+
+    const listCapture = captureRespond();
+    await tasksHandlers["tasks.flows.list"]({
+      req: { type: "req", id: "req-flows-list", method: "tasks.flows.list" },
+      params: {
+        status: "waiting",
+        sessionKey: "agent:main:main",
+      },
+      respond: listCapture.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(listCapture.calls[0]?.[0]).toBe(true);
+    const listPayload = listCapture.calls[0]?.[1] as { flows?: Array<Record<string, unknown>> };
+    expect(listPayload.flows).toHaveLength(1);
+    expect(listPayload.flows?.[0]).toMatchObject({
+      id: flow.flowId,
+      ownerKey: "agent:main:main",
+      status: "waiting",
+      goal: "Run Lobster workflow",
+      currentStep: "await_lobster_approval",
+    });
+
+    const getCapture = captureRespond();
+    await tasksHandlers["tasks.flows.get"]({
+      req: { type: "req", id: "req-flows-get", method: "tasks.flows.get" },
+      params: { flowId: flow.flowId },
+      respond: getCapture.respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(getCapture.calls[0]?.[0]).toBe(true);
+    const getPayload = getCapture.calls[0]?.[1] as { flow?: Record<string, unknown> };
+    expect(getPayload.flow).toMatchObject({
+      id: flow.flowId,
+      status: "waiting",
+      wait: { kind: "lobster_approval", prompt: "Approve?" },
+      taskSummary: { total: 0, active: 0 },
+    });
+  });
+
+  it("cancels managed TaskFlows", async () => {
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "lobster-builder/test-run",
+      status: "running",
+      goal: "Run Lobster workflow",
+      currentStep: "run_lobster",
+    });
+
+    const { calls, respond } = captureRespond();
+    await tasksHandlers["tasks.flows.cancel"]({
+      req: { type: "req", id: "req-flows-cancel", method: "tasks.flows.cancel" },
+      params: { flowId: flow.flowId },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    const payload = calls[0]?.[1] as {
+      found?: boolean;
+      cancelled?: boolean;
+      flow?: Record<string, unknown>;
+    };
+    expect(payload.found).toBe(true);
+    expect(payload.cancelled).toBe(true);
+    expect(payload.flow).toMatchObject({
+      id: flow.flowId,
+      status: "cancelled",
+    });
   });
 });

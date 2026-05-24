@@ -23,6 +23,7 @@ const hookMocks = vi.hoisted(() => ({
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
+let lastMessageToolSignal: AbortSignal | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
@@ -132,7 +133,15 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
     {
       name: "nodes",
-      parameters: { type: "object", properties: {} },
+      ownerOnly: true,
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string" },
+          node: { type: "string" },
+          invokeCommand: { type: "string" },
+        },
+      },
       execute: async () => ({ ok: true, result: "nodes" }),
     },
     {
@@ -149,6 +158,34 @@ vi.mock("../agents/openclaw-tools.js", () => {
       name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "write-scoped" }),
+    },
+    {
+      name: "lobster",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "lobster" }),
+    },
+    {
+      name: "message",
+      parameters: {
+        type: "object",
+        properties: {
+          body: { type: "string" },
+        },
+      },
+      execute: async (_toolCallId: string, args: unknown, signal?: AbortSignal) => {
+        lastMessageToolSignal = signal;
+        return {
+          ok: true,
+          result: "message",
+          args,
+        };
+      },
+    },
+    {
+      name: "owner_only_test",
+      ownerOnly: true,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "owner-only" }),
     },
     {
       name: "tools_invoke_test",
@@ -214,6 +251,7 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
+const { createRuntimeTools } = await import("../plugins/runtime/runtime-tools.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
@@ -267,6 +305,7 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
+  lastMessageToolSignal = undefined;
   pluginToolMetaState.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
@@ -960,6 +999,184 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: "browser" });
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+});
+
+describe("runtime.tools.invoke policy bridge", () => {
+  const invokeRuntimeTool = async (params: {
+    tool: string;
+    action?: string;
+    args?: Record<string, unknown>;
+    senderIsOwner?: boolean;
+    signal?: AbortSignal;
+  }) =>
+    await createRuntimeTools({ getRuntimeConfig: () => cfg as never }).invoke({
+      ctx: {
+        sessionKey: "main",
+        agentId: "main",
+        messageChannel: "discord",
+        agentAccountId: "default",
+        senderIsOwner: params.senderIsOwner === true,
+      },
+      tool: params.tool,
+      action: params.action,
+      args: params.args ?? {},
+      toolCallIdPrefix: "lobster",
+      signal: params.signal,
+    });
+
+  const invokeRuntimeMessage = async () =>
+    await invokeRuntimeTool({
+      tool: "message",
+      action: "send",
+      args: { body: "done" },
+    });
+
+  it("does not let lobster alone widen nested tool permissions", async () => {
+    setMainAllowedTools({ allow: ["lobster"] });
+
+    const denied = await invokeRuntimeMessage();
+
+    expect(denied.ok).toBe(false);
+    expect(denied.status).toBe(404);
+    expect(denied.toolName).toBe("message");
+    if (!denied.ok) {
+      expect(denied.error.message).toBe("Tool not available: message");
+    }
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
+  it("allows nested message when the invoking agent has lobster plus message", async () => {
+    setMainAllowedTools({ allow: ["lobster", "message"] });
+
+    const allowed = await invokeRuntimeMessage();
+
+    expect(allowed.ok).toBe(true);
+    if (allowed.ok) {
+      expect(allowed.toolName).toBe("message");
+      expect(allowed.result).toEqual({
+        ok: true,
+        result: "message",
+        args: { body: "done" },
+      });
+    }
+    const hookArg = firstHookCallArg();
+    expect(hookArg.toolName).toBe("message");
+    expect(hookArg.toolCallId).toMatch(/^lobster-/);
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
+  });
+
+  it("threads nested runtime invoke abort signals into hooks and tool execution", async () => {
+    setMainAllowedTools({ allow: ["lobster", "message"] });
+    const controller = new AbortController();
+
+    const allowed = await invokeRuntimeTool({
+      tool: "message",
+      action: "send",
+      args: { body: "done" },
+      signal: controller.signal,
+    });
+
+    expect(allowed.ok).toBe(true);
+    expect(firstHookCallArg().signal).toBe(controller.signal);
+    expect(lastMessageToolSignal).toBe(controller.signal);
+  });
+
+  it("allows nested sessions_spawn through the loopback surface when the invoking agent allows it", async () => {
+    setMainAllowedTools({ allow: ["lobster", "sessions_spawn"] });
+
+    const allowed = await invokeRuntimeTool({
+      tool: "sessions_spawn",
+      action: "spawn",
+      args: { task: "test" },
+    });
+
+    expect(allowed.ok).toBe(true);
+    if (allowed.ok) {
+      expect(allowed.toolName).toBe("sessions_spawn");
+      expect(allowed.result).toEqual({
+        ok: true,
+        route: {
+          agentTo: undefined,
+          agentThreadId: undefined,
+        },
+      });
+    }
+    const hookArg = firstHookCallArg();
+    expect(hookArg.toolName).toBe("sessions_spawn");
+    expect(hookArg.params).toEqual({ task: "test" });
+  });
+
+  it("does not let lobster alone widen nested sessions_spawn permissions", async () => {
+    setMainAllowedTools({ allow: ["lobster"] });
+
+    const denied = await invokeRuntimeTool({
+      tool: "sessions_spawn",
+      action: "spawn",
+      args: { task: "test" },
+    });
+
+    expect(denied.ok).toBe(false);
+    expect(denied.status).toBe(404);
+    expect(denied.toolName).toBe("sessions_spawn");
+    if (!denied.ok) {
+      expect(denied.error.message).toBe("Tool not available: sessions_spawn");
+    }
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
+  it("keeps owner-only nested nodes denied for non-owner agents even when allowed", async () => {
+    setMainAllowedTools({ allow: ["lobster", "nodes"] });
+
+    const denied = await invokeRuntimeTool({
+      tool: "nodes",
+      action: "invoke",
+      args: { node: "macbook", invokeCommand: "device.status" },
+    });
+
+    expect(denied.ok).toBe(false);
+    expect(denied.status).toBe(404);
+    expect(denied.toolName).toBe("nodes");
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
+  it("allows owner-only nested nodes through the loopback surface for owner agents with nodes permission", async () => {
+    setMainAllowedTools({ allow: ["lobster", "nodes"] });
+
+    const allowed = await invokeRuntimeTool({
+      tool: "nodes",
+      action: "invoke",
+      args: { node: "macbook", invokeCommand: "device.status" },
+      senderIsOwner: true,
+    });
+
+    expect(allowed.ok).toBe(true);
+    if (allowed.ok) {
+      expect(allowed.toolName).toBe("nodes");
+      expect(allowed.result).toEqual({ ok: true, result: "nodes" });
+    }
+    const hookArg = firstHookCallArg();
+    expect(hookArg.toolName).toBe("nodes");
+    expect(hookArg.params).toEqual({
+      action: "invoke",
+      node: "macbook",
+      invokeCommand: "device.status",
+    });
+  });
+
+  it("refuses recursive lobster invocation through the nested runtime bridge", async () => {
+    setMainAllowedTools({ allow: ["lobster"] });
+
+    const denied = await createRuntimeTools({ getRuntimeConfig: () => cfg as never }).invoke({
+      ctx: { sessionKey: "main", agentId: "main" },
+      tool: "lobster",
+      args: {},
+      toolCallIdPrefix: "lobster",
+    });
+
+    expect(denied.ok).toBe(false);
+    expect(denied.status).toBe(404);
+    expect(denied.toolName).toBe("lobster");
   });
 });
 

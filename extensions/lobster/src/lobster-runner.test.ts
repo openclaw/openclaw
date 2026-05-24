@@ -57,6 +57,23 @@ function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: 
   return call[0];
 }
 
+async function* streamFromItems(items: unknown[]) {
+  for (const item of items) {
+    yield item;
+  }
+}
+
+async function collectAsync(value: AsyncIterable<unknown> | undefined): Promise<unknown[]> {
+  const items: unknown[] = [];
+  if (!value) {
+    return items;
+  }
+  for await (const item of value) {
+    items.push(item);
+  }
+  return items;
+}
+
 function expectToolContext(value: unknown, expected: { cwd?: string; mode: "tool" }) {
   const ctx = requireRecord(value, "tool context");
   if (expected.cwd !== undefined) {
@@ -120,6 +137,437 @@ describe("createEmbeddedLobsterRunner", () => {
       output: [{ hello: "world" }],
       requiresApproval: null,
     });
+  });
+
+  it("overrides openclaw.invoke with an in-process native tool bridge", async () => {
+    const nativeToolInvoker = vi.fn().mockResolvedValue({ sent: true });
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec", "openclaw.invoke"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async ({ ctx }: { ctx?: unknown }) => {
+        const toolContext = requireRecord(ctx, "tool context");
+        const registry = requireRecord(toolContext.registry, "tool registry") as {
+          get(name: string): unknown;
+        };
+        const command = registry.get("openclaw.invoke") as {
+          run(params: {
+            input: AsyncIterable<unknown>;
+            args: Record<string, unknown>;
+            ctx: unknown;
+          }): Promise<{ output?: AsyncIterable<unknown> }>;
+        };
+        const result = await command.run({
+          input: streamFromItems([]),
+          args: {
+            tool: "message",
+            action: "send",
+            "args-json": '{"provider":"discord","message":"done"}',
+          },
+          ctx,
+        });
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: await collectAsync(result.output),
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      nativeToolInvoker,
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "openclaw.invoke --tool message --action send",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(nativeToolInvoker).toHaveBeenCalledWith({
+      tool: "message",
+      action: "send",
+      args: { provider: "discord", message: "done" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(envelope).toEqual({
+      ok: true,
+      status: "ok",
+      output: [{ sent: true }],
+      requiresApproval: null,
+    });
+  });
+
+  it("maps each pipeline item into in-process openclaw.invoke args", async () => {
+    const nativeToolInvoker = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "first" })
+      .mockResolvedValueOnce({ id: "second" });
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec", "openclaw.invoke"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async ({ ctx }: { ctx?: unknown }) => {
+        const toolContext = requireRecord(ctx, "tool context");
+        const registry = requireRecord(toolContext.registry, "tool registry") as {
+          get(name: string): unknown;
+        };
+        const command = registry.get("openclaw.invoke") as {
+          run(params: {
+            input: AsyncIterable<unknown>;
+            args: Record<string, unknown>;
+            ctx: unknown;
+          }): Promise<{ output?: AsyncIterable<unknown> }>;
+        };
+        const result = await command.run({
+          input: streamFromItems(["one", "two"]),
+          args: {
+            tool: "message",
+            action: "send",
+            each: true,
+            "item-key": "message",
+            "args-json": '{"provider":"discord"}',
+          },
+          ctx,
+        });
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: await collectAsync(result.output),
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      nativeToolInvoker,
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "openclaw.invoke --tool message --action send --each --item-key message",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(nativeToolInvoker).toHaveBeenNthCalledWith(1, {
+      tool: "message",
+      action: "send",
+      args: { provider: "discord", message: "one" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(nativeToolInvoker).toHaveBeenNthCalledWith(2, {
+      tool: "message",
+      action: "send",
+      args: { provider: "discord", message: "two" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(envelope).toMatchObject({
+      ok: true,
+      status: "ok",
+      output: [{ id: "first" }, { id: "second" }],
+    });
+  });
+
+  it("exposes published child workflows through the embedded lobster.workflow command", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "lobster-child-workflow-"));
+    const childPath = path.join(tmpDir, "child.lobster");
+    await fs.writeFile(
+      childPath,
+      "name: child\nsteps:\n  - id: done\n    run: echo done\n",
+      "utf8",
+    );
+    const workflowResolver = vi.fn(async () => childPath);
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async (request: Record<string, unknown>) => {
+        if (request.pipeline) {
+          const toolContext = requireRecord(request.ctx, "tool context");
+          const registry = requireRecord(toolContext.registry, "tool registry") as {
+            get(name: string): unknown;
+          };
+          const command = registry.get("lobster.workflow") as {
+            run(params: {
+              input: AsyncIterable<unknown>;
+              args: Record<string, unknown>;
+              ctx: Record<string, unknown>;
+            }): Promise<{ output?: AsyncIterable<unknown> }>;
+          };
+          const result = await command.run({
+            input: streamFromItems([{ customer: "c1" }]),
+            args: {
+              "workflow-id": "child",
+              "workflow-revision": "2",
+              "args-json": '{"static":true}',
+              "input-key": "input",
+            },
+            ctx: toolContext,
+          });
+          return {
+            ok: true,
+            protocolVersion: 1,
+            status: "ok",
+            output: await collectAsync(result.output),
+            requiresApproval: null,
+          };
+        }
+
+        expect(request.filePath).toBe(childPath);
+        expect(request.args).toEqual({
+          static: true,
+          input: { customer: "c1" },
+        });
+        const childContext = requireRecord(request.ctx, "child workflow context");
+        const childEnv = requireRecord(childContext.env, "child workflow env");
+        expect(childEnv.OPENCLAW_LOBSTER_WORKFLOW_DEPTH).toBe("1");
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [{ child: true }],
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      workflowResolver,
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "lobster.workflow --workflow-id child",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(workflowResolver).toHaveBeenCalledWith({ workflowId: "child", workflowRevision: 2 });
+    expect(envelope).toEqual({
+      ok: true,
+      status: "ok",
+      output: [{ child: true }],
+      requiresApproval: null,
+    });
+  });
+
+  it("exposes parallel branch pipelines through the embedded lobster.parallel command", async () => {
+    const branchStarted: string[] = [];
+    let releaseBranches!: () => void;
+    const branchesReady = new Promise<void>((resolve) => {
+      releaseBranches = resolve;
+    });
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async (request: Record<string, unknown>) => {
+        if (request.pipeline === "lobster.parallel") {
+          const toolContext = requireRecord(request.ctx, "tool context");
+          const registry = requireRecord(toolContext.registry, "tool registry") as {
+            get(name: string): unknown;
+          };
+          const command = registry.get("lobster.parallel") as {
+            run(params: {
+              input: AsyncIterable<unknown>;
+              args: Record<string, unknown>;
+              ctx: Record<string, unknown>;
+            }): Promise<{ output?: AsyncIterable<unknown> }>;
+          };
+          const result = await command.run({
+            input: streamFromItems([]),
+            args: {
+              "branches-json": JSON.stringify([
+                { id: "left", pipeline: "branch-left" },
+                { id: "right", pipeline: "branch-right" },
+              ]),
+            },
+            ctx: toolContext,
+          });
+          return {
+            ok: true,
+            protocolVersion: 1,
+            status: "ok",
+            output: await collectAsync(result.output),
+            requiresApproval: null,
+          };
+        }
+
+        const branchId = request.pipeline === "branch-left" ? "left" : "right";
+        branchStarted.push(branchId);
+        if (branchStarted.length === 2) {
+          releaseBranches();
+        }
+        await branchesReady;
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [{ branch: branchId }],
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "lobster.parallel",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(branchStarted.toSorted()).toEqual(["left", "right"]);
+    expect(envelope).toEqual({
+      ok: true,
+      status: "ok",
+      output: [
+        { id: "left", status: "ok", output: [{ branch: "left" }] },
+        { id: "right", status: "ok", output: [{ branch: "right" }] },
+      ],
+      requiresApproval: null,
+    });
+  });
+
+  it("normalizes workflow reference steps before handing files to Lobster core", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "lobster-parent-workflow-"));
+    const parentPath = path.join(tmpDir, "parent.lobster");
+    await fs.writeFile(
+      parentPath,
+      [
+        "name: parent",
+        "steps:",
+        "  - id: child",
+        "    workflow: child-flow",
+        "    workflowRevision: 2",
+        "    workflow_args:",
+        "      customer: c1",
+        "      input: $prepare.stdout",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async (request: Record<string, unknown>) => {
+        const normalizedPath = String(request.filePath);
+        expect(normalizedPath).not.toBe(parentPath);
+        const normalized = await fs.readFile(normalizedPath, "utf8");
+        expect(normalized).toContain("lobster.workflow");
+        expect(normalized).toContain("--workflow-id");
+        expect(normalized).toContain("child-flow");
+        expect(normalized).toContain("--workflow-revision");
+        expect(normalized).toContain("--input-key");
+        expect(normalized).toContain("stdin: $prepare.stdout");
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [{ parent: true }],
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      workflowResolver: vi.fn(),
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: parentPath,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(envelope.output).toEqual([{ parent: true }]);
+  });
+
+  it("normalizes parallel steps before handing files to Lobster core", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "lobster-parallel-workflow-"));
+    const parentPath = path.join(tmpDir, "parallel.lobster");
+    await fs.writeFile(
+      parentPath,
+      [
+        "name: parallel-parent",
+        "steps:",
+        "  - id: fanout",
+        "    parallel:",
+        "      wait: all",
+        "      branches:",
+        "        - id: child-a",
+        '          pipeline: "lobster.workflow --workflow-id child-a"',
+        "        - id: child-b",
+        '          pipeline: "lobster.workflow --workflow-id child-b"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const runtime = {
+      createDefaultRegistry: vi.fn(() => ({
+        get: vi.fn(),
+        list: vi.fn(() => ["exec"]),
+      })),
+      runToolRequest: vi.fn().mockImplementation(async (request: Record<string, unknown>) => {
+        const normalizedPath = String(request.filePath);
+        expect(normalizedPath).not.toBe(parentPath);
+        const normalized = await fs.readFile(normalizedPath, "utf8");
+        expect(normalized).toContain("lobster.parallel");
+        expect(normalized).toContain("--branches-json");
+        expect(normalized).toContain("child-a");
+        expect(normalized).toContain("child-b");
+        return {
+          ok: true,
+          protocolVersion: 1,
+          status: "ok",
+          output: [{ parent: true }],
+          requiresApproval: null,
+        };
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+      workflowResolver: vi.fn(),
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: parentPath,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(envelope.output).toEqual([{ parent: true }]);
   });
 
   it("detects workflow files and parses argsJson", async () => {

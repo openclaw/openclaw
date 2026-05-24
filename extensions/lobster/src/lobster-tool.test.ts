@@ -1,3 +1,6 @@
+import { mkdtemp, readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
@@ -128,6 +131,124 @@ describe("lobster plugin tool", () => {
         pipeline: "noop",
       }),
     ).rejects.toThrow("boom");
+  });
+
+  it("runs a published workflowId through the existing file-path runner path", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const workflowStore = {
+      materialize: vi.fn(async () => ({
+        workflowId: "daily-support",
+        revision: 3,
+        sha256: "a".repeat(64),
+        bytes: 128,
+        createdAt: "2026-05-22T00:00:00.000Z",
+        updatedAt: "2026-05-22T00:00:00.000Z",
+        workflowPath: "/tmp/openclaw-state/lobster/workflows/daily-support/rev-3.lobster",
+      })),
+    };
+    const tool = createLobsterTool(fakeApi(), { runner, workflowStore });
+
+    await tool.execute("call-workflow-id", {
+      action: "run",
+      workflowId: "daily-support",
+      workflowRevision: 3,
+      argsJson: '{"customerId":"c1"}',
+    });
+
+    expect(workflowStore.materialize).toHaveBeenCalledWith("daily-support", {
+      expectedRevision: 3,
+    });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "/tmp/openclaw-state/lobster/workflows/daily-support/rev-3.lobster",
+      argsJson: '{"customerId":"c1"}',
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+  });
+
+  it("materializes inline workflow YAML before running through the file-path runner path", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "lobster-inline-run-"));
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const api = fakeApi({
+      runtime: {
+        version: "test",
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+      } as never,
+    });
+    const workflowYaml = "name: Inline\nsteps:\n  - id: hello\n    run: echo hi\n";
+    const tool = createLobsterTool(api, { runner });
+
+    await tool.execute("call-inline-yaml", {
+      action: "run",
+      workflowYaml,
+    });
+
+    const call = runner.run.mock.calls[0]?.[0];
+    expect(call?.pipeline).toMatch(/inline-runs\/[a-f0-9]+\.lobster$/u);
+    await expect(readFile(String(call?.pipeline), "utf8")).resolves.toBe(workflowYaml.trim());
+  });
+
+  it("rejects ambiguous workflow run sources", async () => {
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+    });
+
+    await expect(
+      tool.execute("call-ambiguous-workflow", {
+        action: "run",
+        pipeline: "echo ok",
+        workflowId: "daily-support",
+      }),
+    ).rejects.toThrow(/only one of pipeline, workflowId, or workflowYaml/);
+  });
+
+  it("does not touch plugin runtime for ordinary pipeline construction or execution", async () => {
+    const runtime = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          throw new Error(`runtime should not be read: ${String(prop)}`);
+        },
+      },
+    );
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+
+    const tool = createLobsterTool(fakeApi({ runtime: runtime as never }), {
+      runner,
+      toolContext: fakeCtx(),
+    });
+    const res = await tool.execute("call-no-runtime-read", {
+      action: "run",
+      pipeline: "noop",
+    });
+
+    expect(runner.run).toHaveBeenCalledOnce();
+    expect(requireRecord(res.details, "details").ok).toBe(true);
   });
 
   it("can run through managed TaskFlow mode", async () => {

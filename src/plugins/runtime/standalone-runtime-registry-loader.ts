@@ -40,7 +40,9 @@ function installStandaloneRegistry(
     case "active":
       break;
     case "channel":
-      pinActivePluginChannelRegistry(registry);
+      if ((registry.channels?.length ?? 0) > 0) {
+        pinActivePluginChannelRegistry(registry);
+      }
       break;
     case "http-route":
       pinActivePluginHttpRouteRegistry(registry);
@@ -79,7 +81,9 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
       case "active":
         break;
       case "channel":
-        pinActivePluginChannelRegistry(registry);
+        if ((registry.channels?.length ?? 0) > 0) {
+          pinActivePluginChannelRegistry(registry);
+        }
         break;
       case "http-route":
         pinActivePluginHttpRouteRegistry(registry);

@@ -1,6 +1,17 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+export const TaskFlowStatusSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("running"),
+  Type.Literal("waiting"),
+  Type.Literal("blocked"),
+  Type.Literal("succeeded"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+  Type.Literal("lost"),
+]);
+
 export const TaskLedgerStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -86,6 +97,115 @@ export const TasksCancelResultSchema = Type.Object(
     cancelled: Type.Boolean(),
     reason: Type.Optional(Type.String()),
     task: Type.Optional(TaskSummarySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const TaskRunAggregateSummarySchema = Type.Object(
+  {
+    total: Type.Integer({ minimum: 0 }),
+    active: Type.Integer({ minimum: 0 }),
+    terminal: Type.Integer({ minimum: 0 }),
+    failures: Type.Integer({ minimum: 0 }),
+    byStatus: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+    byRuntime: Type.Record(Type.String(), Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowSummarySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    ownerKey: NonEmptyString,
+    requesterOrigin: Type.Optional(Type.Unknown()),
+    status: TaskFlowStatusSchema,
+    notifyPolicy: Type.String(),
+    goal: Type.String(),
+    currentStep: Type.Optional(Type.String()),
+    cancelRequestedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    createdAt: Type.Integer({ minimum: 0 }),
+    updatedAt: Type.Integer({ minimum: 0 }),
+    endedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowDetailSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    ownerKey: NonEmptyString,
+    requesterOrigin: Type.Optional(Type.Unknown()),
+    status: TaskFlowStatusSchema,
+    notifyPolicy: Type.String(),
+    goal: Type.String(),
+    currentStep: Type.Optional(Type.String()),
+    cancelRequestedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    createdAt: Type.Integer({ minimum: 0 }),
+    updatedAt: Type.Integer({ minimum: 0 }),
+    endedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    state: Type.Optional(Type.Unknown()),
+    wait: Type.Optional(Type.Unknown()),
+    blocked: Type.Optional(
+      Type.Object(
+        {
+          taskId: Type.Optional(Type.String()),
+          summary: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    tasks: Type.Array(Type.Unknown()),
+    taskSummary: TaskRunAggregateSummarySchema,
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsListParamsSchema = Type.Object(
+  {
+    status: Type.Optional(Type.Union([TaskFlowStatusSchema, Type.Array(TaskFlowStatusSchema)])),
+    sessionKey: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+    cursor: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsListResultSchema = Type.Object(
+  {
+    flows: Type.Array(TaskFlowSummarySchema),
+    nextCursor: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsGetParamsSchema = Type.Object(
+  {
+    flowId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsGetResultSchema = Type.Object(
+  {
+    flow: TaskFlowDetailSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsCancelParamsSchema = Type.Object(
+  {
+    flowId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TaskFlowsCancelResultSchema = Type.Object(
+  {
+    found: Type.Boolean(),
+    cancelled: Type.Boolean(),
+    reason: Type.Optional(Type.String()),
+    flow: Type.Optional(TaskFlowDetailSchema),
+    tasks: Type.Optional(Type.Array(Type.Unknown())),
   },
   { additionalProperties: false },
 );

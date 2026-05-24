@@ -4,10 +4,16 @@ type ExplicitToolAllowlistSource = {
   label: string;
   entries: string[];
   enforceWhenToolsDisabled?: boolean;
+  allowEmptyResult?: boolean;
 };
 
 export function collectExplicitToolAllowlistSources(
-  sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
+  sources: Array<{
+    label: string;
+    allow?: string[];
+    enforceWhenToolsDisabled?: boolean;
+    allowEmptyResult?: boolean;
+  }>,
 ): ExplicitToolAllowlistSource[] {
   return sources.flatMap((source) => {
     const entries = (source.allow ?? []).map((entry) => entry.trim()).filter(Boolean);
@@ -19,6 +25,7 @@ export function collectExplicitToolAllowlistSources(
         label: source.label,
         entries,
         ...(source.enforceWhenToolsDisabled === true ? { enforceWhenToolsDisabled: true } : {}),
+        ...(source.allowEmptyResult === true ? { allowEmptyResult: true } : {}),
       },
     ];
   });
@@ -33,7 +40,7 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   const sources =
     params.disableTools === true
       ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
-      : params.sources;
+      : params.sources.filter((source) => source.allowEmptyResult !== true);
   const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;

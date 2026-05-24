@@ -1,7 +1,10 @@
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { getTaskById, listTaskRecords, listTasksForFlowId } from "../../tasks/runtime-internal.js";
+import { mapTaskFlowDetail, mapTaskFlowView } from "../../tasks/task-domain-views.js";
+import type { TaskFlowRecord, TaskFlowStatus } from "../../tasks/task-flow-registry.types.js";
+import { getTaskFlowById, listTaskFlowRecords } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -12,8 +15,13 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type TaskFlowDetail,
+  type TaskFlowsListParams,
   type TaskSummary,
   type TasksListParams,
+  validateTaskFlowsCancelParams,
+  validateTaskFlowsGetParams,
+  validateTaskFlowsListParams,
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
@@ -130,6 +138,32 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function normalizeFlowStatusFilter(
+  status: TaskFlowsListParams["status"],
+): Set<TaskFlowStatus> | null {
+  if (!status) {
+    return null;
+  }
+  const statuses = Array.isArray(status) ? status : [status];
+  return new Set(statuses);
+}
+
+function flowMatchesSession(flow: TaskFlowRecord, sessionKey: string | undefined): boolean {
+  const normalized = normalizeOptionalString(sessionKey);
+  if (!normalized) {
+    return true;
+  }
+  return normalizeOptionalString(flow.ownerKey) === normalized;
+}
+
+function mapFlowDetail(flow: TaskFlowRecord): TaskFlowDetail {
+  const tasks = listTasksForFlowId(flow.flowId);
+  return mapTaskFlowDetail({
+    flow,
+    tasks,
+  }) as TaskFlowDetail;
+}
+
 export const tasksHandlers: GatewayRequestHandlers = {
   "tasks.list": ({ params, respond }) => {
     if (!validateTasksListParams(params)) {
@@ -215,6 +249,90 @@ export const tasksHandlers: GatewayRequestHandlers = {
       cancelled: result.cancelled,
       ...(result.reason ? { reason: result.reason } : {}),
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
+    });
+  },
+  "tasks.flows.list": ({ params, respond }) => {
+    if (!validateTaskFlowsListParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid tasks.flows.list params: ${formatValidationErrors(validateTaskFlowsListParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const cursor = parseCursor(params.cursor);
+    if (cursor === null) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid tasks.flows.list cursor"),
+      );
+      return;
+    }
+    const statusFilter = normalizeFlowStatusFilter(params.status);
+    const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
+    const filtered = listTaskFlowRecords().filter((flow) => {
+      if (statusFilter && !statusFilter.has(flow.status)) {
+        return false;
+      }
+      return flowMatchesSession(flow, params.sessionKey);
+    });
+    const page = filtered.slice(cursor, cursor + limit);
+    const nextOffset = cursor + page.length;
+    respond(true, {
+      flows: page.map((flow) => mapTaskFlowView(flow)),
+      ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
+    });
+  },
+  "tasks.flows.get": ({ params, respond }) => {
+    if (!validateTaskFlowsGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid tasks.flows.get params: ${formatValidationErrors(validateTaskFlowsGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const flow = getTaskFlowById(params.flowId);
+    if (!flow) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `flow not found: ${params.flowId}`),
+      );
+      return;
+    }
+    respond(true, { flow: mapFlowDetail(flow) });
+  },
+  "tasks.flows.cancel": async ({ params, respond, context }) => {
+    if (!validateTaskFlowsCancelParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid tasks.flows.cancel params: ${formatValidationErrors(validateTaskFlowsCancelParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const { cancelFlowById } = await import("../../tasks/task-executor.js");
+    const result = await cancelFlowById({
+      cfg: context.getRuntimeConfig(),
+      flowId: params.flowId,
+    });
+    respond(true, {
+      found: result.found,
+      cancelled: result.cancelled,
+      ...(result.reason ? { reason: result.reason } : {}),
+      ...(result.flow ? { flow: mapFlowDetail(result.flow) } : {}),
+      ...(result.tasks ? { tasks: result.tasks.map((task) => mapTaskSummary(task)) } : {}),
     });
   },
 };

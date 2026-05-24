@@ -100,19 +100,28 @@ Enable the tool:
 }
 ```
 
-### Important limitation: embedded Lobster vs `openclaw.invoke`
+### Embedded `openclaw.invoke`
 
-The bundled Lobster plugin runs workflows **in-process** inside the gateway. In that embedded mode, `openclaw.invoke` does **not** automatically inherit a gateway URL/auth context for nested OpenClaw CLI tool calls.
+The bundled Lobster plugin runs workflows **in-process** inside the gateway. In that embedded mode, `openclaw.invoke` and `clawd.invoke` are intercepted by the plugin runtime and call OpenClaw tools without a gateway URL or bearer token.
 
-That means this pattern is **not currently reliable in the embedded runner**:
+The nested call uses the invoking agent's session, channel route, account, owner status, and tool policy. It does not widen permissions:
+
+- `lobster` alone does not grant nested tools.
+- A workflow that sends a channel message needs `lobster` plus `message`.
+- A workflow that calls `llm-task` needs `lobster` plus `llm-task`.
+- Recursive nested `lobster` invocation is blocked.
+
+Do not pass gateway identity overrides to the embedded bridge. These are rejected:
 
 ```lobster
-openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
+openclaw.invoke --url http://127.0.0.1:3000 --tool llm-task --action json --args-json '{ ... }'
+openclaw.invoke --token secret --tool llm-task --action json --args-json '{ ... }'
+openclaw.invoke --session-key other --tool llm-task --action json --args-json '{ ... }'
 ```
 
-Use the example below only when running the **standalone Lobster CLI** in an environment where `openclaw.invoke` is already configured with the correct gateway/auth context.
+When running the **standalone Lobster CLI** outside the gateway, `openclaw.invoke` uses the HTTP `POST /tools/invoke` bridge and must be configured with the correct gateway/auth context.
 
-Use it in a standalone Lobster CLI pipeline:
+Use it in a Lobster pipeline:
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -130,11 +139,6 @@ openclaw.invoke --tool llm-task --action json --args-json '{
   }
 }'
 ```
-
-If you are using the embedded Lobster plugin today, prefer either:
-
-- a direct `llm-task` tool call outside Lobster, or
-- non-`openclaw.invoke` steps inside the Lobster pipeline until a supported embedded bridge is added.
 
 See [LLM Task](/tools/llm-task) for details and configuration options.
 
@@ -167,6 +171,72 @@ Notes:
 
 - `stdin: $step.stdout` and `stdin: $step.json` pass a prior step's output.
 - `condition` (or `when`) can gate steps on `$step.approved`.
+
+Gateway/operator clients can also store workflow documents in the Lobster
+plugin registry:
+
+- `lobster.workflow.publish` writes a workflow document and returns its
+  `workflowId`, revision, file metadata, and timestamps.
+- `lobster.workflow.list` lists stored workflow documents.
+- `lobster.workflow.get` reads metadata, and can include the workflow document.
+- `lobster.workflow.delete` removes the stored workflow document and its files.
+
+Published documents are stored under OpenClaw runtime state and are control-plane
+resources. Publishing a document does not run it and does not grant any nested
+tool permission.
+
+To schedule a stored workflow, use the existing Cron control plane. Create an
+`agentTurn` job that tells the target agent to invoke the `lobster` tool with
+the stored workflow id:
+
+```json
+{
+  "name": "lobster:daily-support",
+  "enabled": true,
+  "schedule": { "kind": "cron", "expr": "0 9 * * 1-5", "tz": "UTC" },
+  "sessionTarget": "isolated",
+  "agentId": "main",
+  "wakeMode": "now",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Run published Lobster workflow daily-support using the lobster tool.",
+    "toolsAllow": ["lobster"]
+  },
+  "delivery": { "mode": "none" }
+}
+```
+
+Remove or pause the schedule with `cron.remove` or `cron.update`. Cron does not
+grant nested tool permission; the target agent still needs permission to use
+`lobster` and any nested tools.
+
+To run a stored document, invoke the existing `lobster` agent tool with the
+workflow id:
+
+```json
+{
+  "action": "run",
+  "workflowId": "daily-support",
+  "workflowRevision": 3
+}
+```
+
+For inline authoring or tests, the `lobster` tool can accept `workflowYaml`.
+The plugin writes that YAML to a temporary workflow file under runtime state and
+then uses the same workflow-file execution path:
+
+```json
+{
+  "action": "run",
+  "workflowYaml": "name: demo\nsteps:\n  - id: hello\n    command: echo hi\n"
+}
+```
+
+Use exactly one run source: `pipeline`, `workflowId`, or `workflowYaml`.
+Execution still happens through the `lobster` tool, so nested OpenClaw actions
+use the invoking agent's existing session and tool policy. A workflow that sends
+a channel message still needs both `lobster` and `message` allowed for that
+agent.
 
 ## Install Lobster
 

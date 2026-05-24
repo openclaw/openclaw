@@ -43,6 +43,8 @@ export type OpenClawPluginToolContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
+  /** Runtime-trusted owner status for owner-only tool surfaces. */
+  senderIsOwner?: boolean;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   sandboxed?: boolean;

@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawPluginToolContext } from "../runtime-api.js";
 import {
   createEmbeddedLobsterRunner,
   resolveLobsterCwd,
+  type OpenClawNativeToolInvoker,
   type LobsterRunner,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
@@ -11,6 +16,10 @@ import {
   resumeManagedLobsterFlow,
   runManagedLobsterFlow,
 } from "./lobster-taskflow.js";
+import {
+  createLobsterWorkflowStoreFromApi,
+  type LobsterWorkflowStore,
+} from "./lobster-workflow-store.js";
 
 type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["tasks"]["managedFlows"]["bindSession"]
@@ -29,6 +38,9 @@ type JsonLike =
 type LobsterToolOptions = {
   runner?: LobsterRunner;
   taskFlow?: BoundTaskFlow;
+  workflowStore?: Pick<LobsterWorkflowStore, "materialize">;
+  toolContext?: OpenClawPluginToolContext;
+  nativeToolInvoker?: OpenClawNativeToolInvoker;
 };
 
 type ManagedFlowRunParams = {
@@ -80,6 +92,16 @@ function readOptionalBoolean(value: unknown, fieldName: string): boolean | undef
   }
   if (typeof value !== "boolean") {
     throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function readOptionalWorkflowRevision(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new Error("workflowRevision must be a positive integer");
   }
   return value;
 }
@@ -202,6 +224,87 @@ function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "ru
   return taskFlow;
 }
 
+function resolveTaskFlowRuntime(
+  api: OpenClawPluginApi,
+  options: LobsterToolOptions | undefined,
+): BoundTaskFlow | undefined {
+  if (options?.taskFlow) {
+    return options.taskFlow;
+  }
+  const toolContext = options?.toolContext;
+  if (!toolContext?.sessionKey) {
+    return undefined;
+  }
+  return api.runtime?.tasks.managedFlows?.fromToolContext(toolContext);
+}
+
+function resolveWorkflowStore(
+  api: OpenClawPluginApi,
+  options: LobsterToolOptions | undefined,
+): Pick<LobsterWorkflowStore, "materialize"> {
+  return options?.workflowStore ?? createLobsterWorkflowStoreFromApi(api);
+}
+
+async function materializeInlineWorkflowYaml(api: OpenClawPluginApi, workflowYaml: string) {
+  const trimmed = workflowYaml.trim();
+  if (!trimmed) {
+    throw new Error("workflowYaml must not be empty");
+  }
+  const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
+  const stateDir = api.runtime.state.resolveStateDir();
+  const filePath = path.join(stateDir, "lobster", "inline-runs", `${hash}.lobster`);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, trimmed, "utf8");
+  return filePath;
+}
+
+async function resolveWorkflowPipeline(params: {
+  api: OpenClawPluginApi;
+  options: LobsterToolOptions | undefined;
+  action: "run" | "resume";
+  pipeline: unknown;
+  workflowId: unknown;
+  workflowRevision: unknown;
+  workflowYaml: unknown;
+}): Promise<string | undefined> {
+  const pipeline = typeof params.pipeline === "string" ? params.pipeline : undefined;
+  const workflowId = readOptionalTrimmedString(params.workflowId, "workflowId");
+  const workflowYaml =
+    typeof params.workflowYaml === "string" && params.workflowYaml.trim()
+      ? params.workflowYaml
+      : undefined;
+  const workflowRevision = readOptionalWorkflowRevision(params.workflowRevision);
+
+  if (params.action !== "run") {
+    if (workflowId !== undefined || workflowYaml !== undefined || workflowRevision !== undefined) {
+      throw new Error(
+        "resume action does not accept workflowId, workflowRevision, or workflowYaml",
+      );
+    }
+    return pipeline;
+  }
+
+  const workflowSources = [pipeline, workflowId, workflowYaml].filter(
+    (value) => value !== undefined,
+  );
+  if (workflowSources.length > 1) {
+    throw new Error("run action accepts only one of pipeline, workflowId, or workflowYaml");
+  }
+  if (workflowRevision !== undefined && !workflowId) {
+    throw new Error("workflowRevision requires workflowId");
+  }
+  if (workflowId) {
+    const record = await resolveWorkflowStore(params.api, params.options).materialize(workflowId, {
+      expectedRevision: workflowRevision,
+    });
+    return record.workflowPath;
+  }
+  if (workflowYaml) {
+    return await materializeInlineWorkflowYaml(params.api, workflowYaml);
+  }
+  return pipeline;
+}
+
 function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
   if (!result.ok) {
     throw result.error;
@@ -209,8 +312,51 @@ function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
   return formatManagedFlowResult(result);
 }
 
+function createOpenClawNativeToolInvoker(
+  api: OpenClawPluginApi,
+  toolContext: OpenClawPluginToolContext | undefined,
+): OpenClawNativeToolInvoker | undefined {
+  if (!toolContext) {
+    return undefined;
+  }
+  return async ({ tool, action, args, idempotencyKey, dryRun, signal }) => {
+    const invoke = api.runtime?.tools?.invoke;
+    if (!invoke) {
+      throw new Error("OpenClaw runtime tools.invoke unavailable");
+    }
+    const outcome = await invoke({
+      ctx: toolContext,
+      tool,
+      action,
+      args,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(dryRun !== undefined ? { dryRun } : {}),
+      ...(signal ? { signal } : {}),
+      toolCallIdPrefix: "lobster",
+    });
+    if (outcome.ok) {
+      return outcome.result;
+    }
+    throw new Error(
+      `OpenClaw tool "${outcome.toolName || tool}" unavailable for invoking agent: ${outcome.error.message}`,
+    );
+  };
+}
+
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
-  const runner = options?.runner ?? createEmbeddedLobsterRunner();
+  const nativeToolInvoker =
+    options?.nativeToolInvoker ?? createOpenClawNativeToolInvoker(api, options?.toolContext);
+  const runner =
+    options?.runner ??
+    createEmbeddedLobsterRunner({
+      nativeToolInvoker,
+      workflowResolver: async ({ workflowId, workflowRevision }) => {
+        const record = await resolveWorkflowStore(api, options).materialize(workflowId, {
+          expectedRevision: workflowRevision,
+        });
+        return record.workflowPath;
+      },
+    });
   return {
     name: "lobster",
     label: "Lobster Workflow",
@@ -220,6 +366,9 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       // NOTE: Prefer string enums in tool schemas; some providers reject unions/anyOf.
       action: Type.Unsafe<"run" | "resume">({ type: "string", enum: ["run", "resume"] }),
       pipeline: Type.Optional(Type.String()),
+      workflowId: Type.Optional(Type.String()),
+      workflowRevision: Type.Optional(Type.Number()),
+      workflowYaml: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
       approvalId: Type.Optional(Type.String()),
@@ -254,13 +403,19 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       const maxStdoutBytes =
         typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
 
-      if (api.runtime?.version && api.logger?.debug) {
-        api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
-      }
+      const pipeline = await resolveWorkflowPipeline({
+        api,
+        options,
+        action,
+        pipeline: params.pipeline,
+        workflowId: params.workflowId,
+        workflowRevision: params.workflowRevision,
+        workflowYaml: params.workflowYaml,
+      });
 
       const runnerParams: LobsterRunnerParams = {
         action,
-        ...(typeof params.pipeline === "string" ? { pipeline: params.pipeline } : {}),
+        ...(pipeline ? { pipeline } : {}),
         ...(typeof params.argsJson === "string" ? { argsJson: params.argsJson } : {}),
         ...(typeof params.token === "string" ? { token: params.token } : {}),
         ...(typeof params.approvalId === "string" ? { approvalId: params.approvalId } : {}),
@@ -270,10 +425,10 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         maxStdoutBytes,
       };
 
-      const taskFlow = options?.taskFlow;
       if (action === "run") {
         const flowParams = parseRunFlowParams(params);
         if (flowParams) {
+          const taskFlow = resolveTaskFlowRuntime(api, options);
           return resolveManagedFlowToolResult(
             await runManagedLobsterFlow({
               taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
@@ -290,6 +445,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       } else {
         const flowParams = parseResumeFlowParams(params);
         if (flowParams) {
+          const taskFlow = resolveTaskFlowRuntime(api, options);
           return resolveManagedFlowToolResult(
             await resumeManagedLobsterFlow({
               taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),

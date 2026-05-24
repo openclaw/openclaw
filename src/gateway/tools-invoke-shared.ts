@@ -2,6 +2,7 @@ import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,7 @@ import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+type ToolsInvokeSurface = "http" | "loopback";
 
 export type ToolsInvokeInput = {
   tool?: unknown;
@@ -153,6 +155,10 @@ export async function invokeGatewayTool(params: {
   senderIsOwner?: boolean;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
+  widenRequestedPluginTool?: boolean;
+  excludeToolNames?: Iterable<string>;
+  surface?: ToolsInvokeSurface;
+  signal?: AbortSignal;
 }): Promise<ToolsInvokeOutcome> {
   const toolName = normalizeOptionalString(params.input.name ?? params.input.tool) ?? "";
   if (!toolName) {
@@ -183,7 +189,8 @@ export async function invokeGatewayTool(params: {
   }
 
   const knownCoreTool = isKnownCoreToolId(toolName);
-  const gatewayRequestedTools = knownCoreTool ? [] : [toolName];
+  const gatewayRequestedTools =
+    knownCoreTool || params.widenRequestedPluginTool === false ? [] : [toolName];
 
   const action = normalizeOptionalString(params.input.action);
   const argsRaw = params.input.args;
@@ -203,7 +210,8 @@ export async function invokeGatewayTool(params: {
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
-      surface: "http",
+      surface: params.surface ?? "http",
+      excludeToolNames: params.excludeToolNames,
       disablePluginTools,
       gatewayRequestedTools,
     });
@@ -224,7 +232,9 @@ export async function invokeGatewayTool(params: {
       },
     };
   }
-  const tool = tools.find((candidate) => candidate.name === toolName);
+  const tool = applyOwnerOnlyToolPolicy(tools, params.senderIsOwner === true).find(
+    (candidate) => candidate.name === toolName,
+  );
   if (!tool) {
     return {
       ok: false,
@@ -256,6 +266,7 @@ export async function invokeGatewayTool(params: {
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       approvalMode: params.approvalMode,
+      signal: params.signal,
     });
     if (hookResult.blocked) {
       return {
@@ -274,7 +285,7 @@ export async function invokeGatewayTool(params: {
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params),
+      result: await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

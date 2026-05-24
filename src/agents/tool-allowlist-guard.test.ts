@@ -63,6 +63,40 @@ describe("tool allowlist guard", () => {
     ).toBeNull();
   });
 
+  it("allows inherited ceiling allowlists to reduce a run to zero tools", () => {
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [
+          {
+            label: "inherited tools.allow",
+            entries: ["sessions_spawn"],
+            allowEmptyResult: true,
+          },
+        ],
+        callableToolNames: [],
+        toolsEnabled: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("still fails when another explicit allowlist source resolves to zero tools", () => {
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [
+        {
+          label: "inherited tools.allow",
+          entries: ["sessions_spawn"],
+          allowEmptyResult: true,
+        },
+        { label: "runtime toolsAllow", entries: ["query_db"] },
+      ],
+      callableToolNames: [],
+      toolsEnabled: true,
+    });
+
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).not.toContain("inherited tools.allow");
+  });
+
   it("allows explicit allowlists when at least one callable tool remains", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({

@@ -85,22 +85,11 @@ Returns `details.json` containing the parsed JSON (and validates against
 
 ## Example: Lobster workflow step
 
-### Important limitation
+The bundled embedded Lobster runner intercepts `openclaw.invoke` in process, so a Lobster workflow can call `llm-task` without a gateway URL or bearer token. The invoking agent must still be allowed to use both `lobster` and `llm-task`.
 
-The example below assumes the **standalone Lobster CLI** is running in an environment where `openclaw.invoke` already has the correct gateway URL/auth context.
+When running the standalone Lobster CLI outside OpenClaw, configure `openclaw.invoke` with the correct gateway URL/auth context.
 
-For the bundled **embedded** Lobster runner inside OpenClaw, this nested CLI pattern is **not currently reliable**:
-
-```lobster
-openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
-```
-
-Until embedded Lobster has a supported bridge for this flow, prefer either:
-
-- direct `llm-task` tool calls outside Lobster, or
-- Lobster steps that do not rely on nested `openclaw.invoke` calls.
-
-Standalone Lobster CLI example:
+Example:
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{

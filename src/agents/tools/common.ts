@@ -14,6 +14,7 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
 > & {
+  ownerOnly?: boolean;
   displaySummary?: string;
 };
 
@@ -29,6 +30,7 @@ type ErasedAgentToolExecute = {
 
 export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
   ErasedAgentToolExecute & {
+    ownerOnly?: boolean;
     displaySummary?: string;
   };
 

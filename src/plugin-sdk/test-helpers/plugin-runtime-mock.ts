@@ -753,6 +753,15 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       flow: taskFlow,
     },
     taskFlow,
+    tools: {
+      invoke: vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        toolName: "mock",
+        source: "core",
+        result: {},
+      })),
+    } as unknown as PluginRuntime["tools"],
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       getRuntimeAuthForModel:

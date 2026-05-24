@@ -349,6 +349,22 @@ import {
   TasksCancelParamsSchema,
   type TasksCancelResult,
   TasksCancelResultSchema,
+  type TaskFlowDetail,
+  TaskFlowDetailSchema,
+  type TaskFlowSummary,
+  TaskFlowSummarySchema,
+  type TaskFlowsCancelParams,
+  TaskFlowsCancelParamsSchema,
+  type TaskFlowsCancelResult,
+  TaskFlowsCancelResultSchema,
+  type TaskFlowsGetParams,
+  TaskFlowsGetParamsSchema,
+  type TaskFlowsGetResult,
+  TaskFlowsGetResultSchema,
+  type TaskFlowsListParams,
+  TaskFlowsListParamsSchema,
+  type TaskFlowsListResult,
+  TaskFlowsListResultSchema,
   type TasksGetParams,
   TasksGetParamsSchema,
   type TasksGetResult,
@@ -645,6 +661,12 @@ export const validateSessionsUsageParams =
 export const validateTasksListParams = lazyCompile<TasksListParams>(TasksListParamsSchema);
 export const validateTasksGetParams = lazyCompile<TasksGetParams>(TasksGetParamsSchema);
 export const validateTasksCancelParams = lazyCompile<TasksCancelParams>(TasksCancelParamsSchema);
+export const validateTaskFlowsListParams =
+  lazyCompile<TaskFlowsListParams>(TaskFlowsListParamsSchema);
+export const validateTaskFlowsGetParams = lazyCompile<TaskFlowsGetParams>(TaskFlowsGetParamsSchema);
+export const validateTaskFlowsCancelParams = lazyCompile<TaskFlowsCancelParams>(
+  TaskFlowsCancelParamsSchema,
+);
 export const validateConfigGetParams = lazyCompile<ConfigGetParams>(ConfigGetParamsSchema);
 export const validateConfigSetParams = lazyCompile<ConfigSetParams>(ConfigSetParamsSchema);
 export const validateConfigApplyParams = lazyCompile<ConfigApplyParams>(ConfigApplyParamsSchema);
@@ -941,6 +963,14 @@ export {
   TasksGetResultSchema,
   TasksCancelParamsSchema,
   TasksCancelResultSchema,
+  TaskFlowSummarySchema,
+  TaskFlowDetailSchema,
+  TaskFlowsListParamsSchema,
+  TaskFlowsListResultSchema,
+  TaskFlowsGetParamsSchema,
+  TaskFlowsGetResultSchema,
+  TaskFlowsCancelParamsSchema,
+  TaskFlowsCancelResultSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -1213,6 +1243,14 @@ export type {
   TasksGetResult,
   TasksCancelParams,
   TasksCancelResult,
+  TaskFlowSummary,
+  TaskFlowDetail,
+  TaskFlowsListParams,
+  TaskFlowsListResult,
+  TaskFlowsGetParams,
+  TaskFlowsGetResult,
+  TaskFlowsCancelParams,
+  TaskFlowsCancelResult,
   CronJob,
   CronListParams,
   CronStatusParams,

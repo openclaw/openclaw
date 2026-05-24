@@ -139,6 +139,41 @@ type RuntimeRunEmbeddedPiAgent = (
   params: import("../../agents/pi-embedded-runner/run/params.js").RunEmbeddedPiAgentParams,
 ) => Promise<import("../../agents/pi-embedded-runner/types.js").EmbeddedPiRunResult>;
 
+export type RuntimeToolInvokeParams = {
+  ctx?: Pick<
+    import("../tool-types.js").OpenClawPluginToolContext,
+    | "runtimeConfig"
+    | "getRuntimeConfig"
+    | "config"
+    | "sessionKey"
+    | "agentId"
+    | "messageChannel"
+    | "agentAccountId"
+    | "deliveryContext"
+    | "senderIsOwner"
+  >;
+  tool: string;
+  action?: string;
+  args?: Record<string, unknown>;
+  idempotencyKey?: string;
+  dryRun?: boolean;
+  signal?: AbortSignal;
+  toolCallIdPrefix?: string;
+  approvalMode?: "request" | "report";
+};
+
+export type RuntimeToolInvokeResult = Awaited<
+  ReturnType<typeof import("../../gateway/tools-invoke-shared.js").invokeGatewayTool>
+>;
+
+export type PluginRuntimeTools = {
+  /**
+   * Invoke an OpenClaw tool through the same policy and hook path used by
+   * Gateway tools.invoke, but bound to a trusted in-process plugin tool context.
+   */
+  invoke: (params: RuntimeToolInvokeParams) => Promise<RuntimeToolInvokeResult>;
+};
+
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
@@ -320,6 +355,7 @@ export type PluginRuntimeCore = {
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
+  tools: PluginRuntimeTools;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
   };

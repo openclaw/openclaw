@@ -32,6 +32,7 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
+import { createRuntimeTools } from "./runtime-tools.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
 export type { CreatePluginRuntimeOptions } from "./types.js";
@@ -223,6 +224,7 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
 }
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
+  const config = createRuntimeConfig();
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
@@ -232,7 +234,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
-    config: createRuntimeConfig(),
+    config,
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
       _options.subagent,
@@ -256,6 +258,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     },
     tasks,
     taskFlow,
+    tools: createRuntimeTools({ getRuntimeConfig: config.current }),
   } satisfies Omit<
     PluginRuntime,
     | "tts"
