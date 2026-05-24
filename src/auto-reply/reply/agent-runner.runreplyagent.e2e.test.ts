@@ -1067,12 +1067,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       expect(sessionEntry.modelProvider).toBe("openai-codex");
       expect(sessionEntry.model).toBe("gpt-5.5");
+      expect(sessionEntry.providerOverride).toBeUndefined();
+      expect(sessionEntry.modelOverride).toBeUndefined();
+      expect(sessionEntry.modelOverrideSource).toBeUndefined();
       expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
       expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
       expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
       const persistedStore = JSON.parse(await readFile(storePath, "utf-8"));
       expect(persistedStore.main.modelProvider).toBe("openai-codex");
       expect(persistedStore.main.model).toBe("gpt-5.5");
+      expect(persistedStore.main.providerOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverride).toBeUndefined();
+      expect(persistedStore.main.modelOverrideSource).toBeUndefined();
       expect(persistedStore.main.fallbackNoticeSelectedModel).toBeUndefined();
       expect(persistedStore.main.fallbackNoticeActiveModel).toBeUndefined();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
@@ -1138,6 +1144,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
     expect(sessionEntry.modelProvider).toBe("openai-codex");
     expect(sessionEntry.model).toBe("gpt-5.5");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
     expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
     expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
