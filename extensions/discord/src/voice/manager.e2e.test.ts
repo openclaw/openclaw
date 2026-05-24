@@ -2431,6 +2431,149 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("normal answer");
   });
 
+  it("requires the agent wake name before realtime agent-proxy consults", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          autoRespondToAudio?: boolean;
+          interruptResponseOnInputAudio?: boolean;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    expect(bridgeParams?.autoRespondToAudio).toBe(false);
+    expect(bridgeParams?.interruptResponseOnInputAudio).toBe(false);
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(48_000));
+
+    const guestTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: false, speakerLabel: "Guest" },
+      "u-guest",
+    );
+    guestTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "agent-1 status of PR 123", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Hey, Molty, status of PR 123", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
+      sessionKey: "discord:g1:c1",
+      text: "status of PR 123",
+    });
+    expect(lastAgentCommandArgs().message).toContain("status of PR 123");
+    expect(lastAgentCommandArgs().message).not.toContain("Molty");
+    expect(lastAgentCommandArgs().message).not.toContain("Hey");
+    expect(lastAgentCommandArgs().userId).toBe("u-owner");
+    expectUserMessageIncludes("wake answer");
+  });
+
+  it("leaves non-OpenAI agent-proxy realtime auto-response enabled when wake names are requested", async () => {
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
+      provider: { id: "google" },
+      providerConfig: { model: "gemini-live", voice: "default" },
+    });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "google", consultPolicy: "auto", requireWakeName: true },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          autoRespondToAudio?: boolean;
+          interruptResponseOnInputAudio?: boolean;
+        }
+      | undefined;
+
+    expect(bridgeParams?.autoRespondToAudio).toBe(true);
+    expect(bridgeParams?.interruptResponseOnInputAudio).toBe(true);
+  });
+
+  it("uses configured wake names before realtime agent-proxy consults", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "configured wake answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: {
+          provider: "openai",
+          consultPolicy: "auto",
+          requireWakeName: true,
+          wakeNames: ["Claw", "Claw Bot"],
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "Claw Bot, ship it", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("ship it");
+    expect(lastAgentCommandArgs().message).not.toContain("Claw");
+    expect(lastAgentCommandArgs().message).not.toContain("Bot");
+    expectUserMessageIncludes("configured wake answer");
+  });
+
   it("lets status questions fall back to normal realtime handling when no run is active", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "status answer" }] });
     controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce({
@@ -3319,6 +3462,7 @@ describe("DiscordVoiceManager", () => {
           voice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          requireWakeName: true,
           providers: {
             openai: {
               interruptResponseOnInputAudio: false,
