@@ -13,7 +13,12 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import { completeFollowupRunLifecycle, isFollowupRunAborted, type FollowupRun } from "./types.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  isFollowupRunDeferredError,
+  type FollowupRun,
+} from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -304,6 +309,7 @@ export function scheduleFollowupDrain(
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
+    let retryDeferred = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -457,10 +463,16 @@ export function scheduleFollowupDrain(
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();
-      defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      if (isFollowupRunDeferredError(err)) {
+        retryDeferred = true;
+      } else {
+        defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
+      }
     } finally {
       queue.draining = false;
-      if (queue.items.length === 0 && queue.droppedCount === 0) {
+      if (retryDeferred && queue.items.length > 0) {
+        scheduleFollowupDrain(key, effectiveRunFollowup);
+      } else if (queue.items.length === 0 && queue.droppedCount === 0) {
         // Only remove the map entry if it still points to this queue instance.
         // clearSessionQueues can replace the entry mid-drain; deleting
         // unconditionally would orphan the replacement queue.

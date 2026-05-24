@@ -1,7 +1,7 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, FollowupRunDeferredError, scheduleFollowupDrain } from "./queue.js";
 import {
   createDeferred,
   createQueueTestRun as createRun,
@@ -234,6 +234,33 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("first");
     expect(calls[1]?.prompt).toBe("second");
+  });
+
+  it("keeps a deferred followup queued and retries with the remembered callback", async () => {
+    const key = `test-deferred-followup-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const retried = createDeferred<void>();
+    let attempts = 0;
+
+    const runFollowup = async (run: FollowupRun) => {
+      attempts++;
+      calls.push(run);
+      if (attempts === 1) {
+        throw new FollowupRunDeferredError("reply lane busy");
+      }
+      retried.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "wait-for-lane" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await retried.promise;
+
+    expect(attempts).toBe(2);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("wait-for-lane");
+    expect(calls[1]?.prompt).toBe("wait-for-lane");
   });
 
   it("does not process messages after clearSessionQueues clears the callback", async () => {

@@ -45,6 +45,7 @@ import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   completeFollowupRunLifecycle,
+  FollowupRunDeferredError,
   isFollowupRunAborted,
   refreshQueuedFollowupSession,
   type FollowupRun,
@@ -400,6 +401,7 @@ export function createFollowupRunner(params: {
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
     let replyOperation: ReplyOperation | undefined;
+    let deferred = false;
 
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -491,6 +493,10 @@ export function createFollowupRunner(params: {
         upstreamAbortSignal: queued.abortSignal,
       });
       if (admission.status === "skipped") {
+        if (admission.reason === "active-run") {
+          deferred = true;
+          throw new FollowupRunDeferredError("Follow-up reply lane is still active");
+        }
         return;
       }
       replyOperation = admission.operation;
@@ -1049,7 +1055,9 @@ export function createFollowupRunner(params: {
           );
         }
       }
-      completeFollowupRunLifecycle(queued);
+      if (!deferred) {
+        completeFollowupRunLifecycle(queued);
+      }
       replyOperation?.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
