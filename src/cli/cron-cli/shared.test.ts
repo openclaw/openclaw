@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  parseAt,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -256,6 +257,19 @@ describe("parseCronToolsAllow", () => {
 
   it("returns undefined for empty input", () => {
     expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("parseAt", () => {
+  it("accepts a leading plus on relative durations", () => {
+    const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect(parseAt("+30m")).toBe("2026-01-01T00:30:00.000Z");
+      expect(parseAt("30m")).toBe("2026-01-01T00:30:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 });
 

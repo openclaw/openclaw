@@ -316,16 +316,7 @@ describe("cron cli", () => {
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
-        args: [
-          "cron",
-          "run",
-          "job-1",
-          "--wait",
-          "--wait-timeout",
-          "1s",
-          "--poll-interval",
-          "1ms",
-        ],
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
@@ -455,6 +446,50 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("accepts documented +duration values for cron add --at", async () => {
+    const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      await runCronCommand([
+        "cron",
+        "add",
+        "--name",
+        "Plus duration",
+        "--at",
+        "+30m",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+      ]);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    const params = getGatewayCallParams<{ schedule: { kind?: string; at?: string } }>("cron.add");
+    expect(params.schedule).toEqual({
+      kind: "at",
+      at: "2026-01-01T00:30:00.000Z",
+    });
+  });
+
+  it("keeps leading plus durations invalid for cron add --every", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "Invalid plus every",
+      "--every",
+      "+30m",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+    ]);
+
+    expectRuntimeErrorContaining("Invalid --every");
   });
 
   it("includes --account on isolated cron add delivery", async () => {
