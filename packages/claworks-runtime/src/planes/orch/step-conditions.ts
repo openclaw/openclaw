@@ -25,6 +25,24 @@ export function evaluatePlaybookCondition(
   const payload = (variables.payload ?? variables) as Record<string, unknown>;
   const steps = (variables.steps ?? {}) as StepsMap;
 
+  // ── or（最低优先级，先于 and 检查避免短路错误） ────────────────────────
+  // 按 " or " 分割；若任意一段为 true，整体为 true
+  if (/ or /.test(expr)) {
+    const parts = expr.split(/ or /);
+    return parts.some((part) => evaluatePlaybookCondition(part.trim(), variables));
+  }
+
+  // ── and ───────────────────────────────────────────────────────────────
+  if (/ and /.test(expr)) {
+    const parts = expr.split(/ and /);
+    return parts.every((part) => evaluatePlaybookCondition(part.trim(), variables));
+  }
+
+  // ── not <expr> ────────────────────────────────────────────────────────
+  if (/^not\s+/.test(expr)) {
+    return !evaluatePlaybookCondition(expr.slice(4).trim(), variables);
+  }
+
   const inList = expr.match(
     /payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s+in\s+\(([^)]+)\)/,
   );
@@ -38,7 +56,7 @@ export function evaluatePlaybookCondition(
   }
 
   const floatCmp = expr.match(
-    /float\(\s*steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*,\s*([^)]+)\)\s*\)\s*(>|>=|<|<=|==)\s*([\d.]+)/,
+    /float\(\s*steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*,\s*([^)]+)\)\s*\)\s*(>|>=|<|<=|==|!=)\s*([\d.]+)/,
   );
   if (floatCmp) {
     const step = steps[floatCmp[1]]?.result ?? {};
@@ -47,21 +65,12 @@ export function evaluatePlaybookCondition(
     const left = Number.parseFloat(String(raw ?? fallback));
     const op = floatCmp[4];
     const right = Number.parseFloat(floatCmp[5]);
-    if (op === ">") {
-      return left > right;
-    }
-    if (op === ">=") {
-      return left >= right;
-    }
-    if (op === "<") {
-      return left < right;
-    }
-    if (op === "<=") {
-      return left <= right;
-    }
-    if (op === "==") {
-      return left === right;
-    }
+    if (op === ">") return left > right;
+    if (op === ">=") return left >= right;
+    if (op === "<") return left < right;
+    if (op === "<=") return left <= right;
+    if (op === "==") return left === right;
+    if (op === "!=") return left !== right;
   }
 
   const stepsStatus = expr.match(
@@ -77,17 +86,34 @@ export function evaluatePlaybookCondition(
     return length != null && length > Number(lenGt[2]);
   }
 
+  // steps['x']['result'].get('key') == 'value'（值允许含空格、点号等）
   const stepsChoice = expr.match(
-    /steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s*==\s*['"]([\w-]+)['"]/,
+    /steps\[['"](\w+)['"]\]\[['"]result['"]\]\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s*(==|!=)\s*['"]([^'"]*)['"]/,
   );
   if (stepsChoice) {
     const result = steps[stepsChoice[1]]?.result ?? {};
-    return String(result[stepsChoice[2]] ?? "") === stepsChoice[3];
+    const actual = String(result[stepsChoice[2]] ?? "");
+    return stepsChoice[3] === "==" ? actual === stepsChoice[4] : actual !== stepsChoice[4];
   }
 
-  if (expr.includes(" and ")) {
-    const parts = expr.split(/\s+and\s+/);
-    return parts.every((part) => evaluatePlaybookCondition(part.trim(), variables));
+  // ── 简单数值/字符串比较（插值后剩余的裸比较式，如 "5 > 3"、"foo == bar"） ──
+  const simpleCmp = expr.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/);
+  if (simpleCmp) {
+    const lhs = simpleCmp[1].trim().replace(/^['"]|['"]$/g, "");
+    const op = simpleCmp[2];
+    const rhs = simpleCmp[3].trim().replace(/^['"]|['"]$/g, "");
+    const lNum = Number(lhs);
+    const rNum = Number(rhs);
+    if (!Number.isNaN(lNum) && !Number.isNaN(rNum)) {
+      if (op === ">") return lNum > rNum;
+      if (op === ">=") return lNum >= rNum;
+      if (op === "<") return lNum < rNum;
+      if (op === "<=") return lNum <= rNum;
+      if (op === "==") return lNum === rNum;
+      if (op === "!=") return lNum !== rNum;
+    }
+    if (op === "==") return lhs === rhs;
+    if (op === "!=") return lhs !== rhs;
   }
 
   if (expr.includes("payload.")) {
