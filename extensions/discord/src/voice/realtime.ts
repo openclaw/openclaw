@@ -235,7 +235,9 @@ export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): D
   return "agent-proxy";
 }
 
-export function isDiscordRealtimeVoiceMode(mode: DiscordVoiceMode): boolean {
+export function isDiscordRealtimeVoiceMode(
+  mode: DiscordVoiceMode,
+): mode is Exclude<DiscordVoiceMode, "stt-tts"> {
   return mode === "agent-proxy" || mode === "bidi";
 }
 
@@ -389,10 +391,15 @@ function resolveDiscordRealtimeWakeNames(params: {
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
     .map((name) => (typeof name === "string" ? normalizeWakeName(name) : undefined))
     .filter((name): name is string => Boolean(name));
+  const productWakeNames = [normalizeWakeName("OpenClaw")].filter((name): name is string =>
+    Boolean(name),
+  );
   const defaults =
     configuredAgentNames.length > 0
-      ? configuredAgentNames
-      : [normalizeWakeName(params.agentId)].filter((name): name is string => Boolean(name));
+      ? [...configuredAgentNames, ...productWakeNames]
+      : [normalizeWakeName(params.agentId), ...productWakeNames].filter((name): name is string =>
+          Boolean(name),
+        );
   return sortWakeNames(Array.from(new Set(defaults)));
 }
 

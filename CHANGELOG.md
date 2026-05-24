@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 
 - MiniMax: store OAuth token expiry as an absolute millisecond timestamp so OAuth profiles no longer appear expired on every request. (#83480) Thanks @NianJiuZst.
 - Agents/channels: send a visible notice when an aborted main session cannot be resumed after restart, including Telegram group targets. (#85805) Thanks @pfrederiksen.
+- Discord/voice: serialize overlapping voice joins, retry aborted startup readiness within the configured timeout, upgrade meeting-notes-only sessions to realtime when the normal follow join arrives, detach promoted meeting-notes ownership without leaving voice, and include `OpenClaw` in default realtime wake names.
 - Gateway/restart: honor the configured restart drain budget for embedded runs and avoid spending the deferral timeout twice after forced restart timeouts. (#85708) Thanks @Kaspre.
 - Gateway/boot: run `BOOT.md` startup checks in an isolated boot session so gateway restarts do not overwrite the agent's main session mapping. (#85479)
 - Meeting Notes: include a speaker-labeled transcript section in generated summaries so Discord group voice captures show who said each captured utterance.
