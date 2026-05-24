@@ -19,6 +19,7 @@ import {
   installPromptSubmissionLockRelease,
   installSessionEventWriteLock,
   installSessionExternalHookWriteLock,
+  resetEmbeddedAttemptSessionFilePromptGuardsForTest,
 } from "./attempt.session-lock.js";
 
 const lockOptions = {
@@ -32,6 +33,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   resetSessionWriteLockStateForTest();
+  resetEmbeddedAttemptSessionFilePromptGuardsForTest();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -531,6 +533,7 @@ describe("embedded attempt session lock lifecycle", () => {
           },
         ),
     );
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -564,6 +567,7 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
     const cleanupLock = await secondController.acquireForCleanup();
 
@@ -629,6 +633,7 @@ describe("embedded attempt session lock lifecycle", () => {
           },
         ),
     );
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -665,6 +670,7 @@ describe("embedded attempt session lock lifecycle", () => {
       await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
       await fs.appendFile(sessionFile, '{"type":"message","id":"external-interleaved"}\n', "utf8");
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -698,6 +704,7 @@ describe("embedded attempt session lock lifecycle", () => {
       acquireSessionWriteLock,
       lockOptions: { ...lockOptions, sessionFile },
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -734,6 +741,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await secondController.withSessionWriteLock(async () => {
       await fs.appendFile(sessionFile, '{"type":"message","id":"same-process"}\n', "utf8");
     });
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
     await secondController.releaseForPrompt();
 
     await expect(
@@ -1204,5 +1212,223 @@ describe("embedded attempt session lock lifecycle", () => {
     await hookPromise;
 
     expect(events).toEqual(["queue-drained", "lock", "hook-start", "hook-end"]);
+  });
+
+  it("serialises prompt windows on the same session file across two controllers", async () => {
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const id = acquireCount;
+      events.push(`acquire-${id}`);
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${id}`);
+        }),
+      };
+    });
+
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    let secondCompletedRelease = false;
+    const secondReleasePromise = secondController.releaseForPrompt().then(() => {
+      secondCompletedRelease = true;
+    });
+    // Yield several microtasks; the second release must still be blocked
+    // because the first controller has not yet reacquired its prompt turn.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(secondCompletedRelease).toBe(false);
+
+    await firstController.reacquireAfterPrompt();
+    await secondReleasePromise;
+
+    expect(secondCompletedRelease).toBe(true);
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("vacates the prompt turn so later waiters proceed when reacquireAfterPrompt throws", async () => {
+    // Regression for the file-scoped guard's cleanup-on-failure path. If
+    // reacquireAfterPrompt's error branch did not release the turn, the
+    // next same-file waiter would block forever — i.e. one failed prompt
+    // window would wedge the session file for the rest of the process.
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+
+    const firstInitialRelease = vi.fn(async () => {
+      events.push("first-initial-release");
+    });
+    const secondInitialRelease = vi.fn(async () => {
+      events.push("second-initial-release");
+    });
+    const secondReacquireRelease = vi.fn(async () => {
+      events.push("second-reacquire-release");
+    });
+
+    const acquireSessionWriteLock = vi.fn();
+    acquireSessionWriteLock
+      .mockResolvedValueOnce({ release: firstInitialRelease })
+      .mockResolvedValueOnce({ release: secondInitialRelease })
+      // First controller's reacquireAfterPrompt rejects with a real
+      // lock-timeout error (the same shape the production code would see if
+      // another process or lane held the lock past timeoutMs).
+      .mockRejectedValueOnce(
+        new SessionWriteLockTimeoutError({
+          timeoutMs: lockOptions.timeoutMs,
+          owner: "pid=external",
+          lockPath: `${sessionFile}.lock`,
+        }),
+      )
+      .mockResolvedValueOnce({ release: secondReacquireRelease });
+
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    let secondCompletedRelease = false;
+    const secondReleasePromise = secondController.releaseForPrompt().then(() => {
+      secondCompletedRelease = true;
+    });
+    await Promise.resolve();
+    expect(secondCompletedRelease).toBe(false);
+
+    await expect(firstController.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      SessionWriteLockTimeoutError,
+    );
+
+    // The first turn must have been released by reacquireAfterPrompt's
+    // finally block, even though the body threw. The second waiter is now
+    // free to proceed through its own release-for-prompt.
+    await secondReleasePromise;
+    expect(secondCompletedRelease).toBe(true);
+
+    // The second controller observes a clean prompt window; the file-scoped
+    // queue did not get wedged by the first lane's failed reacquire.
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("vacates the prompt turn when releaseForPrompt itself fails mid-flight", async () => {
+    // Regression for the same cleanup-on-failure path on the other side of
+    // the prompt window. If releaseForPrompt throws partway — for example
+    // the held lock's release rejects — the turn slot must still be
+    // vacated. Otherwise the next same-file waiter blocks forever even
+    // though no prompt is actually in flight.
+    const sessionFile = await createTempSessionFile();
+
+    const firstInitialRelease = vi.fn(async () => {
+      throw new Error("simulated lock-release failure");
+    });
+    const secondInitialRelease = vi.fn(async () => {});
+    const secondReacquireRelease = vi.fn(async () => {});
+    const thirdInitialRelease = vi.fn(async () => {});
+
+    const acquireSessionWriteLock = vi.fn();
+    acquireSessionWriteLock
+      // First and second start with their own locks; the second is
+      // blocked waiting on the first's turn at the point first throws.
+      .mockResolvedValueOnce({ release: firstInitialRelease })
+      .mockResolvedValueOnce({ release: secondInitialRelease })
+      // The second controller's prior-wait dance reacquires here after
+      // the first turn vacates on its release failure.
+      .mockResolvedValueOnce({ release: secondReacquireRelease })
+      .mockResolvedValueOnce({ release: thirdInitialRelease });
+
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    // First controller's releaseForPrompt now reaches lock.release() which
+    // rejects. The turn must be vacated by the catch block.
+    await expect(firstController.releaseForPrompt()).rejects.toThrow(
+      "simulated lock-release failure",
+    );
+
+    // Second controller's releaseForPrompt must complete without blocking
+    // on a dangling turn from the failed first release.
+    await secondController.releaseForPrompt();
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("does not block prompt-window waiters behind a compaction-wait release on the same file", async () => {
+    // releaseForSessionIdleWait is for the post-prompt compaction window;
+    // it must not register a prompt-turn or other lanes will wait on it
+    // unnecessarily.
+    const sessionFile = await createTempSessionFile();
+    const events: string[] = [];
+    let acquireCount = 0;
+    const acquireSessionWriteLock = vi.fn(async () => {
+      acquireCount += 1;
+      const id = acquireCount;
+      events.push(`acquire-${id}`);
+      return {
+        release: vi.fn(async () => {
+          events.push(`release-${id}`);
+        }),
+      };
+    });
+
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForSessionIdleWait();
+
+    // Second controller's prompt window should run without waiting on
+    // anything from the idle-wait release.
+    await secondController.releaseForPrompt();
+
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(secondController.hasSessionTakeover()).toBe(false);
+  });
+
+  it("does not serialise prompt windows across different session files", async () => {
+    const sessionFileA = await createTempSessionFile();
+    const sessionFileB = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({
+      release: vi.fn(async () => {}),
+    }));
+
+    const controllerA = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile: sessionFileA },
+    });
+    const controllerB = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile: sessionFileB },
+    });
+
+    await controllerA.releaseForPrompt();
+    // B's prompt window targets a different session file — it must not
+    // block on A's outstanding turn.
+    await controllerB.releaseForPrompt();
+    expect(controllerB.hasSessionTakeover()).toBe(false);
   });
 });

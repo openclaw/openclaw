@@ -402,6 +402,50 @@ const ownedSessionFileWrites = new Map<string, OwnedSessionFileWrite>();
 const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
 let ownedSessionFileWriteGeneration = 0;
 
+// File-scoped prompt-window queue. Two lanes (e.g. a heartbeat and a channel
+// reply) can end up on the same resolved session JSONL through aliased session
+// UUIDs or stuck-session recovery. The takeover fence catches the symptom
+// after one lane is mid-stream, but by then the losing lane's reply has
+// already been dropped. The queue below serialises prompt windows on the same
+// file so the second entrant waits for the first to finish reacquiring rather
+// than racing it into the provider stream.
+type SessionFilePromptTurn = {
+  // Defined only when another controller already held a prompt turn on this
+  // file at acquisition time. Awaiting it serialises the new entrant behind
+  // the existing holder's reacquire (or its cleanup-on-failure).
+  awaitPrior: Promise<void> | undefined;
+  // Resolves the chain so the next waiter can proceed. Must be called on
+  // every exit path: success, takeover, reacquire failure, abort. Failing to
+  // call it leaves later same-file waiters blocked indefinitely.
+  release: () => void;
+};
+
+const promptSessionFileTurnTails = new Map<string, Promise<void>>();
+
+function acquirePromptSessionFileTurn(sessionFileKey: string): SessionFilePromptTurn {
+  const previous = promptSessionFileTurnTails.get(sessionFileKey);
+  let releaseFn!: () => void;
+  let alreadyReleased = false;
+  const released = new Promise<void>((resolve) => {
+    releaseFn = resolve;
+  });
+  const tail = previous ? previous.then(() => released) : released;
+  promptSessionFileTurnTails.set(sessionFileKey, tail);
+  return {
+    awaitPrior: previous,
+    release: () => {
+      if (alreadyReleased) {
+        return;
+      }
+      alreadyReleased = true;
+      releaseFn();
+      if (promptSessionFileTurnTails.get(sessionFileKey) === tail) {
+        promptSessionFileTurnTails.delete(sessionFileKey);
+      }
+    },
+  };
+}
+
 function resolveSessionFileFenceKey(sessionFile: string): string {
   return path.resolve(sessionFile);
 }
@@ -616,6 +660,7 @@ export function installSessionExternalHookWriteLock(params: {
 
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
+  releaseForSessionIdleWait(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
@@ -648,6 +693,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceActive = false;
   let takeoverDetected = false;
   const sessionFileFenceKey = resolveSessionFileFenceKey(params.lockOptions.sessionFile);
+  // Tracks the prompt-window turn this controller has registered in the
+  // file-scoped queue. Set when releaseForPrompt() promotes the controller to
+  // turn-owner; cleared when reacquireAfterPrompt() returns or throws.
+  // releaseForSessionIdleWait() never sets this — compaction-wait release is
+  // not a provider-prompt window and must not block other lanes.
+  let activePromptSessionTurn: SessionFilePromptTurn | undefined;
 
   async function acquireWriteLock(): Promise<{ lock: SessionLock; owned: boolean }> {
     if (heldLock) {
@@ -748,12 +799,36 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   const noopLock: SessionLock = { release: async () => {} };
 
-  return {
-    async releaseForPrompt(): Promise<void> {
-      if (!heldLock) {
+  async function performHeldLockReleaseForWindow(registerPromptHolder: boolean): Promise<void> {
+    if (!heldLock) {
+      return;
+    }
+
+    const promptTurn = registerPromptHolder
+      ? acquirePromptSessionFileTurn(sessionFileFenceKey)
+      : undefined;
+
+    try {
+      // If another lane on this file is still in its prompt window, give up
+      // our write lock so they can reacquire after their provider call, wait
+      // for them to finish, then take the lock back fresh. This serialises
+      // entrants on the same file rather than letting both stride into the
+      // provider stream and force the takeover fence to pick a survivor.
+      // No contention (no prior tail) means we fall through to the normal
+      // single-release path below, without an extra acquire/release cycle.
+      if (promptTurn?.awaitPrior !== undefined) {
+        const yieldedLock = heldLock;
+        heldLock = undefined;
+        await yieldedLock.release();
+        await promptTurn.awaitPrior;
+        const reacquired = await acquireLock();
+        heldLock = reacquired;
+      }
+
+      const lock = heldLock;
+      if (!lock) {
         return;
       }
-      const lock = heldLock;
       heldLock = undefined;
       const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
       const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
@@ -765,7 +840,31 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           ? ownedWrite.generation
           : (trustedGeneration ?? fenceGeneration);
       fenceActive = true;
+      // Promote the turn to controller ownership only after every step that
+      // can throw is past. reacquireAfterPrompt() will clear it.
+      activePromptSessionTurn = promptTurn;
       await lock.release();
+    } catch (err) {
+      // Any exception between acquiring the turn and the controller taking
+      // ownership leaves the turn dangling — and a dangling turn in the
+      // file-scoped queue blocks every later same-file waiter forever. Vacate
+      // the slot before rethrowing so other lanes can make progress.
+      if (promptTurn) {
+        promptTurn.release();
+        if (activePromptSessionTurn === promptTurn) {
+          activePromptSessionTurn = undefined;
+        }
+      }
+      throw err;
+    }
+  }
+
+  return {
+    async releaseForPrompt(): Promise<void> {
+      await performHeldLockReleaseForWindow(true);
+    },
+    async releaseForSessionIdleWait(): Promise<void> {
+      await performHeldLockReleaseForWindow(false);
     },
     refreshAfterOwnedSessionWrite(): void {
       if (fenceActive && !takeoverDetected) {
@@ -775,16 +874,29 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async reacquireAfterPrompt(): Promise<void> {
       if (takeoverDetected || heldLock) {
+        // No-op exits must still vacate the turn so the next same-file
+        // waiter does not block on a holder that never ran a real prompt.
+        activePromptSessionTurn?.release();
+        activePromptSessionTurn = undefined;
         return;
       }
-      const lock = await acquireLock();
+      let lock: SessionLock | undefined;
       try {
+        lock = await acquireLock();
         heldLock = lock;
         await assertSessionFileFence();
       } catch (err) {
         heldLock = undefined;
-        await lock.release();
+        if (lock) {
+          await lock.release();
+        }
         throw err;
+      } finally {
+        // finally, not catch — the turn must release on the success path too,
+        // and the takeover/lock-timeout paths above set takeoverDetected
+        // before throwing so this branch covers both.
+        activePromptSessionTurn?.release();
+        activePromptSessionTurn = undefined;
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
@@ -877,6 +989,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       await lock.release();
     },
   };
+}
+
+export function resetEmbeddedAttemptSessionFilePromptGuardsForTest(): void {
+  promptSessionFileTurnTails.clear();
 }
 
 export function installPromptSubmissionLockRelease(params: {
