@@ -169,7 +169,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-
       const result: EmbeddedPiRunResult = {
         meta: {
           durationMs: 1,
@@ -1320,6 +1319,27 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      const freshVisibleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 2,
+        lastInteractionAt: 20,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 400_000,
+        inputTokens: 44,
+        outputTokens: 55,
+        totalTokens: 666,
+        totalTokensFresh: true,
+        cacheRead: 7,
+        cacheWrite: 8,
+        estimatedCostUsd: 0.5,
+        abortedLastRun: false,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "new-visible-cli-session" },
+        },
+        compactionCount: 9,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
 
       const result: EmbeddedPiRunResult = {
         meta: {
@@ -1357,20 +1377,20 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const next = sessionStore[sessionKey];
-      expect(next?.modelProvider).toBe("anthropic");
-      expect(next?.model).toBe("claude-opus-4-6");
-      expect(next?.contextTokens).toBe(1_000_000);
-      expect(next?.inputTokens).toBe(11);
-      expect(next?.outputTokens).toBe(22);
-      expect(next?.totalTokens).toBe(333);
+      expect(next?.modelProvider).toBe("openai");
+      expect(next?.model).toBe("gpt-5.5");
+      expect(next?.contextTokens).toBe(400_000);
+      expect(next?.inputTokens).toBe(44);
+      expect(next?.outputTokens).toBe(55);
+      expect(next?.totalTokens).toBe(666);
       expect(next?.totalTokensFresh).toBe(true);
-      expect(next?.cacheRead).toBe(4);
-      expect(next?.cacheWrite).toBe(5);
-      expect(next?.estimatedCostUsd).toBe(0.25);
+      expect(next?.cacheRead).toBe(7);
+      expect(next?.cacheWrite).toBe(8);
+      expect(next?.estimatedCostUsd).toBe(0.5);
       expect(next?.abortedLastRun).toBe(false);
-      expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("visible-cli-session");
-      expect(next?.compactionCount).toBe(7);
-      expect(next?.lastInteractionAt).toBeGreaterThan(10);
+      expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("new-visible-cli-session");
+      expect(next?.compactionCount).toBe(9);
+      expect(next?.lastInteractionAt).toBeGreaterThan(20);
     });
   });
 

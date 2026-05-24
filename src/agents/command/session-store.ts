@@ -247,7 +247,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  const metadataPatch = removeLifecycleStateFromMetadataPatch(next);
+  const metadataPatch = preserveUserFacingRunState
+    ? {
+        sessionId,
+        updatedAt: next.updatedAt,
+        sessionStartedAt: next.sessionStartedAt,
+        ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
+      }
+    : removeLifecycleStateFromMetadataPatch(next);
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
     store[sessionKey] = merged;
