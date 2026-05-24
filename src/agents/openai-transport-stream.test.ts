@@ -4769,7 +4769,7 @@ describe("openai transport stream", () => {
   it("clamps max_completion_tokens to the remaining context budget for proxy-like endpoints when prompt + output would exceed contextWindow (covers #83086)", () => {
     // StepFun-style shape: large context window, max_tokens equal to context,
     // and a substantial prompt that should leave well under the context budget.
-    // 200_000 chars → estimated 62_500 input tokens (chars/4 * 1.25).
+    // 200_000 ASCII chars -> estimated 62_500 input tokens (chars/4 * 1.25).
     // That leaves remaining budget of 262_144 - 62_500 - 1 = 199_643 tokens.
     const systemPrompt = "x".repeat(200_000);
     const params = buildOpenAICompletionsParams(
@@ -4798,6 +4798,88 @@ describe("openai transport stream", () => {
     const estimatedInputTokens = Math.ceil((systemPrompt.length / 4) * 1.25);
     expect(cap).toBe(262_144 - estimatedInputTokens - 1);
     expect(cap).toBeLessThan(262_144);
+  });
+
+  it("uses CJK-aware input estimates when clamping proxy-like completions output budgets", () => {
+    const cjkPrompt = "你好世界".repeat(1_000);
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 10_000,
+        maxTokens: 10_000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: cjkPrompt,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    // 4,000 CJK chars count as 16,000 adjusted chars, then chars/4 * 1.25.
+    expect(params.max_completion_tokens).toBe(10_000 - 5_000 - 1);
+  });
+
+  it("rounds proxy-like completions input estimates after summing message content", () => {
+    const messages = Array.from({ length: 4_000 }, () => ({
+      role: "user",
+      content: "x",
+    }));
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-5-122b-a10b-nvfp4",
+        name: "qwen3-5-122b-a10b-nvfp4",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 10_000,
+        maxTokens: 10_000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: undefined,
+        messages,
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(10_000 - 1_250 - 1);
+  });
+
+  it("clamps proxy-like completions output budgets against contextTokens before contextWindow", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-5-122b-a10b-nvfp4",
+        name: "qwen3-5-122b-a10b-nvfp4",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131_072,
+        contextTokens: 4_096,
+        maxTokens: 200_000,
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(4_096 - 2 - 1);
   });
 
   it("clamps max_completion_tokens for proxy-like endpoints when configured maxTokens >= contextWindow and prompt is small", () => {

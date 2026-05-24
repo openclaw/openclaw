@@ -29,6 +29,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
@@ -2950,20 +2951,20 @@ function resolveOpenAICompletionsMaxTokens(
   return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
 }
 
-// Rough char->token estimate used only to bound `max_completion_tokens` below
-// `contextWindow - input` for strict OpenAI-compatible servers (e.g. vLLM,
-// StepFun). 4 chars/token is the OpenAI-published heuristic; the 1.25x margin
-// biases the estimate high so we leave headroom for whichever real tokenizer
-// the upstream server uses. Wrong-high here just trims output a little;
-// wrong-low would let the server reject the request.
+const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
+
+// Used only to bound `max_completion_tokens` below the effective context cap
+// for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
+// helper avoids undercounting non-Latin prompts enough to trigger server-side
+// context rejections; wrong-high here just trims output a little.
 function estimateOpenAICompletionsInputTokens(context: {
   systemPrompt?: unknown;
   messages?: unknown;
   tools?: unknown;
 }): number {
-  let chars = 0;
+  let adjustedChars = 0;
   if (typeof context.systemPrompt === "string") {
-    chars += context.systemPrompt.length;
+    adjustedChars += estimateStringChars(context.systemPrompt);
   }
   if (Array.isArray(context.messages)) {
     for (const message of context.messages) {
@@ -2972,7 +2973,7 @@ function estimateOpenAICompletionsInputTokens(context: {
       }
       const content = (message as { content?: unknown }).content;
       if (typeof content === "string") {
-        chars += content.length;
+        adjustedChars += estimateStringChars(content);
       } else if (Array.isArray(content)) {
         for (const block of content) {
           if (!block || typeof block !== "object") {
@@ -2980,13 +2981,13 @@ function estimateOpenAICompletionsInputTokens(context: {
           }
           const text = (block as { text?: unknown }).text;
           if (typeof text === "string") {
-            chars += text.length;
+            adjustedChars += estimateStringChars(text);
             continue;
           }
           try {
-            chars += JSON.stringify(block).length;
+            adjustedChars += estimateStringChars(JSON.stringify(block));
           } catch {
-            chars += 256;
+            adjustedChars += 256;
           }
         }
       }
@@ -2994,12 +2995,28 @@ function estimateOpenAICompletionsInputTokens(context: {
   }
   if (Array.isArray(context.tools) && context.tools.length > 0) {
     try {
-      chars += JSON.stringify(context.tools).length;
+      adjustedChars += estimateStringChars(JSON.stringify(context.tools));
     } catch {
-      chars += 1024;
+      adjustedChars += 1024;
     }
   }
-  return Math.ceil((chars / 4) * 1.25);
+  return Math.ceil(
+    (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
+  );
+}
+
+function resolveOpenAICompletionsEffectiveContextTokens(
+  model: OpenAIModeModel,
+): number | undefined {
+  const contextTokens = (model as { contextTokens?: number }).contextTokens;
+  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
+    return contextTokens;
+  }
+  return typeof model.contextWindow === "number" &&
+    Number.isFinite(model.contextWindow) &&
+    model.contextWindow > 0
+    ? model.contextWindow
+    : undefined;
 }
 
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
@@ -3423,20 +3440,23 @@ export function buildOpenAICompletionsParams(
   }
   {
     const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
-    const contextWindow =
-      typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-        ? model.contextWindow
-        : undefined;
+    const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
     let clampedMaxTokens = effectiveMaxTokens;
     if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
       effectiveMaxTokens !== undefined &&
-      contextWindow !== undefined
+      effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(context);
-      const remainingBudget = Math.max(1, contextWindow - estimatedInputTokens - 1);
+      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
       if (effectiveMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
+        emitModelTransportDebug(
+          log,
+          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+            `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+        );
       }
     }
     if (clampedMaxTokens) {
