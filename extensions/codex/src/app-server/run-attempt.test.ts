@@ -1202,7 +1202,7 @@ describe("runCodexAppServerAttempt", () => {
       pluginConfig: {},
       onYieldDetected: () => undefined,
     });
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
         return threadStartResult();
       }
