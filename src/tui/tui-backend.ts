@@ -135,4 +135,9 @@ export type TuiBackend = {
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
+  listExperimentalFlags?: () => Promise<TuiExperimentalFlagState[]>;
+  setExperimentalFlag?: (params: {
+    path: string;
+    value: boolean;
+  }) => Promise<TuiExperimentalFlagUpdate>;
 };
