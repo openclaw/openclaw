@@ -40,6 +40,9 @@ export const CW_EVENTS = {
   PLAYBOOK_TRIGGER: "playbook.trigger",
 
   // ── Alarm / 报警 ──────────────────────────────────────────────────────
+  /** 外部系统（domain-operations、业务 pack 等）发布新报警记录时使用。 */
+  ALARM_CREATED: "alarm.created",
+  /** 保留：语义同 ALARM_CREATED，供已有代码向后兼容。 */
   ALARM_TRIGGERED: "alarm.triggered",
   ALARM_ACKNOWLEDGED: "alarm.acknowledged",
   ALARM_RESOLVED: "alarm.resolved",
