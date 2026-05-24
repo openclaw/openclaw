@@ -114,26 +114,10 @@ export async function captureBaseline(options?: {
   const channelCount = listConfiguredChannelIdsForReadOnlyScope({ config: config ?? {} }).length;
   const pluginCount = loadPluginManifestRegistry({ config }).plugins.length;
 
-  let sessionCount = 0;
-  try {
-    const result = await callGateway<{ sessions?: unknown[] }>({
-      method: "sessions.list",
-      params: { limit: 1 },
-      timeoutMs: gatewayTimeoutMs,
-    });
-    sessionCount = Array.isArray(result?.sessions) ? result.sessions.length : 0;
-  } catch {
-    // session count unknown
-  }
-
+  const sessionCount = await countSessions(gatewayTimeoutMs);
   let taskCount = 0;
   try {
-    const result = await callGateway<{ tasks?: unknown[] }>({
-      method: "tasks.list",
-      params: { status: ["queued", "running"], limit: 100 },
-      timeoutMs: gatewayTimeoutMs,
-    });
-    taskCount = Array.isArray(result?.tasks) ? result.tasks.length : 0;
+    taskCount = await countActiveTasks(gatewayTimeoutMs);
   } catch {
     // task count unknown
   }
@@ -327,6 +311,50 @@ async function checkGatewayStatus(skip?: boolean, timeoutMs = 5000): Promise<Com
   }
 }
 
+async function countSessions(timeoutMs = 5000): Promise<number> {
+  try {
+    const result = await callGateway<{ sessions?: unknown[]; totalCount?: number }>({
+      method: "sessions.list",
+      params: { limit: 1 },
+      timeoutMs,
+    });
+    if (typeof result?.totalCount === "number" && Number.isFinite(result.totalCount)) {
+      return Math.max(0, Math.trunc(result.totalCount));
+    }
+    return Array.isArray(result?.sessions) ? result.sessions.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function countActiveTasks(timeoutMs = 5000): Promise<number> {
+  let cursor: string | undefined;
+  const seenCursors = new Set<string>();
+  let count = 0;
+
+  do {
+    const result = await callGateway<{ tasks?: unknown[]; nextCursor?: string }>({
+      method: "tasks.list",
+      params: {
+        status: ["queued", "running"],
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      },
+      timeoutMs,
+    });
+    count += Array.isArray(result?.tasks) ? result.tasks.length : 0;
+
+    const nextCursor = typeof result?.nextCursor === "string" ? result.nextCursor : undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  } while (cursor);
+
+  return count;
+}
+
 type ChannelStatusSummary = {
   configured?: boolean;
   connected?: boolean;
@@ -410,12 +438,7 @@ async function checkAgentsStatus(): Promise<ComponentStatus> {
 
 async function checkTasksStatus(timeoutMs = 5000): Promise<ComponentStatus> {
   try {
-    const result = await callGateway<{ tasks?: unknown[] }>({
-      method: "tasks.list",
-      params: { status: ["queued", "running"], limit: 100 },
-      timeoutMs,
-    });
-    const count = Array.isArray(result?.tasks) ? result.tasks.length : 0;
+    const count = await countActiveTasks(timeoutMs);
     return { status: "pass", message: `${count} active tasks`, details: { count } };
   } catch (err) {
     return { status: "warn", message: err instanceof Error ? err.message : "Unknown error" };

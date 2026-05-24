@@ -23,26 +23,31 @@ import { captureBaseline } from "./capture.js";
 describe("captureBaseline", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
-    callGatewayMock.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "status") {
-        return { runtimeVersion: "test", eventLoop: { delayMs: 0 } };
-      }
-      if (method === "sessions.list") {
-        return { sessions: [{ id: "session-1" }] };
-      }
-      if (method === "channels.status") {
-        return {
-          channels: {
-            telegram: { linked: true },
-            signal: { configured: false },
-          },
-        };
-      }
-      if (method === "tasks.list") {
-        return { tasks: [{ id: "task-1" }, { id: "task-2" }] };
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    });
+    callGatewayMock.mockImplementation(
+      async ({ method, params }: { method: string; params?: Record<string, unknown> }) => {
+        if (method === "status") {
+          return { runtimeVersion: "test", eventLoop: { delayMs: 0 } };
+        }
+        if (method === "sessions.list") {
+          return { sessions: [{ id: "session-1" }], totalCount: 3 };
+        }
+        if (method === "channels.status") {
+          return {
+            channels: {
+              telegram: { linked: true },
+              signal: { configured: false },
+            },
+          };
+        }
+        if (method === "tasks.list") {
+          if (params?.cursor === "2") {
+            return { tasks: [{ id: "task-3" }] };
+          }
+          return { tasks: [{ id: "task-1" }, { id: "task-2" }], nextCursor: "2" };
+        }
+        throw new Error(`unexpected gateway method: ${method}`);
+      },
+    );
   });
 
   it("uses supported gateway contracts and applies the requested gateway timeout", async () => {
@@ -63,10 +68,17 @@ describe("captureBaseline", () => {
       { method: "status", timeoutMs: 1234 },
       { method: "channels.status", timeoutMs: 1234 },
       { method: "tasks.list", timeoutMs: 1234 },
+      { method: "tasks.list", timeoutMs: 1234 },
       { method: "sessions.list", timeoutMs: 1234 },
       { method: "tasks.list", timeoutMs: 1234 },
+      { method: "tasks.list", timeoutMs: 1234 },
     ]);
-    expect(baseline.metrics.activeTaskCount).toBe(2);
+    expect(baseline.metrics.sessionCount).toBe(3);
+    expect(baseline.metrics.activeTaskCount).toBe(3);
+    expect(baseline.components.tasks).toMatchObject({
+      status: "pass",
+      message: "3 active tasks",
+    });
     expect(baseline.components.channels).toMatchObject({
       status: "warn",
       message: "1/2 channels connected",
