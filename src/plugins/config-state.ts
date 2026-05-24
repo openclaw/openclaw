@@ -218,7 +218,7 @@ export function resolveEffectivePluginActivationState(params: {
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: string | string[];
-  slot: string | null | undefined;
+  slot: string | null | undefined | readonly (string | null | undefined)[];
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   return resolveMemorySlotDecisionShared(params);

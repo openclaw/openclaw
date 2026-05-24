@@ -96,30 +96,47 @@ function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<str
   return new Set([DEFAULT_MEMORY_DREAMING_PLUGIN_ID, resolveMemoryDreamingPluginId(config)]);
 }
 
-function resolveMemorySlotStartupPluginId(params: {
+function resolveMemorySlotStartupPluginIds(params: {
   activationSourceConfig: OpenClawConfig;
   activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
   normalizePluginId: (pluginId: string) => string;
-}): string | undefined {
+}): Set<string> {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.memory?.trim();
-  if (configuredSlot?.toLowerCase() === "none") {
-    return undefined;
-  }
-  if (!configuredSlot) {
-    const defaultSlot = activationSourcePlugins.slots.memory;
-    if (typeof defaultSlot !== "string") {
-      return undefined;
+  const ids = new Set<string>();
+  const slots = activationSourceConfig.plugins?.slots ?? {};
+  const addSlot = (slot: string | null | undefined) => {
+    if (typeof slot !== "string") {
+      return;
     }
+    const normalized = normalizePluginId(slot);
+    if (!normalized || normalized.toLowerCase() === "none") {
+      return;
+    }
+    if (activationSourcePlugins.deny.includes(normalized)) {
+      return;
+    }
+    if (activationSourcePlugins.entries[normalized]?.enabled === false) {
+      return;
+    }
+    ids.add(normalized);
+  };
+
+  addSlot(slots["memory.recall"] ?? slots.memory);
+  addSlot(slots["memory.compaction"]);
+  addSlot(slots["memory.capture"]);
+  addSlot(slots["memory.userModel"]);
+
+  if (!slots["memory.recall"] && !slots.memory) {
+    const defaultSlot = activationSourcePlugins.slots["memory.recall"];
     if (
-      activationSourcePlugins.allow.length > 0 &&
-      !activationSourcePlugins.allow.includes(defaultSlot)
+      typeof defaultSlot === "string" &&
+      (activationSourcePlugins.allow.length === 0 ||
+        activationSourcePlugins.allow.includes(defaultSlot))
     ) {
-      return undefined;
+      addSlot(defaultSlot);
     }
-    return defaultSlot;
   }
-  return normalizePluginId(configuredSlot);
+  return ids;
 }
 
 function resolveContextEngineSlotStartupPluginId(params: {
@@ -150,7 +167,7 @@ function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
-  memorySlotStartupPluginId?: string;
+  memorySlotStartupPluginIds: ReadonlySet<string>;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
   if (params.manifest?.activation?.onStartup === true) {
@@ -165,7 +182,7 @@ function shouldConsiderForGatewayStartup(params: {
   if (params.startupDreamingPluginIds.has(params.plugin.pluginId)) {
     return true;
   }
-  return params.memorySlotStartupPluginId === params.plugin.pluginId;
+  return params.memorySlotStartupPluginIds.has(params.plugin.pluginId);
 }
 
 function hasConfiguredStartupChannel(params: {
@@ -1070,7 +1087,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
-  const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
+  const memorySlotStartupPluginIds = resolveMemorySlotStartupPluginIds({
     activationSourceConfig,
     activationSourcePlugins,
     normalizePluginId,
@@ -1205,7 +1222,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           plugin,
           manifest,
           startupDreamingPluginIds,
-          memorySlotStartupPluginId,
+          memorySlotStartupPluginIds,
           contextEngineSlotStartupPluginId,
         })
       ) {

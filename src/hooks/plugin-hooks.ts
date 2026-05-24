@@ -8,6 +8,7 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-policy.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolveMemoryRoleSlots } from "../plugins/slot-resolution.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
@@ -40,7 +41,7 @@ export function resolvePluginHookDirs(params: {
     params.config?.plugins,
     metadataSnapshot.normalizePluginId,
   );
-  const memorySlot = normalizedPlugins.slots.memory;
+  const memorySlots = Object.values(resolveMemoryRoleSlots({ cfg: params.config ?? {} }));
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: PluginHookDirEntry[] = [];
@@ -62,7 +63,7 @@ export function resolvePluginHookDirs(params: {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

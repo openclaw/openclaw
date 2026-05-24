@@ -1,31 +1,15 @@
-import {
-  resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getMemoryRuntime } from "./memory-state.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
-
-function hasOwnSlot(slots: unknown, slotKey: string): boolean {
-  return Boolean(
-    slots && typeof slots === "object" && Object.prototype.hasOwnProperty.call(slots, slotKey),
-  );
-}
+import { resolveMemoryRoleSlot } from "./slot-resolution.js";
 
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig, agentId?: string): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
-  let memorySlot = plugins.slots["memory.recall"] ?? plugins.slots.memory;
-  const agentSlots = agentId ? resolveAgentConfig(config, agentId)?.plugins?.slots : undefined;
-  if (hasOwnSlot(agentSlots, "memory.recall") || hasOwnSlot(agentSlots, "memory")) {
-    const agentPlugins = normalizePluginsConfig({ slots: agentSlots });
-    memorySlot = hasOwnSlot(agentSlots, "memory.recall")
-      ? agentPlugins.slots["memory.recall"]
-      : agentPlugins.slots.memory;
-  }
+  const memorySlot = resolveMemoryRoleSlot({ cfg: config, role: "recall", agentId });
   if (!plugins.enabled || typeof memorySlot !== "string" || memorySlot.trim().length === 0) {
     return [];
   }

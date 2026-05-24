@@ -423,6 +423,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  memoryRolesSelected?: import("./slot-resolution.js").MemoryPluginRole[];
   dependencyStatus?: PluginDependencyStatus;
 };
 

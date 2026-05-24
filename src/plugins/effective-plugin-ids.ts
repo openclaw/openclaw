@@ -14,6 +14,7 @@ import {
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import { listSelectedMemoryRolePluginIds } from "./slot-resolution.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
@@ -140,6 +141,12 @@ function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[]
   return [pluginId];
 }
 
+function collectSelectedMemoryRolePluginIds(config: OpenClawConfig): string[] {
+  return listSelectedMemoryRolePluginIds({ cfg: config }).filter(
+    (pluginId) => pluginId !== defaultSlotIdForKey("memory"),
+  );
+}
+
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -152,6 +159,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedMemoryRolePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
     ids.add(pluginId);
   }

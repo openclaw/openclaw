@@ -7353,6 +7353,86 @@ module.exports = {
     runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
   });
 
+  it("loads capture and user-model role plugins without letting them own recall runtime", () => {
+    useNoBundledPlugins();
+    const capture = writePlugin({
+      id: "memory-capture",
+      filename: "memory-capture.cjs",
+      body: `module.exports = {
+        id: "memory-capture",
+        kind: "memory",
+        register(api) {
+          api.on("agent_end", () => undefined);
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "capture should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const userModel = writePlugin({
+      id: "memory-user-model",
+      filename: "memory-user-model.cjs",
+      body: `module.exports = {
+        id: "memory-user-model",
+        kind: "memory",
+        register(api) {
+          api.on("before_prompt_build", () => ({ appendContext: "profile" }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "user model should not own recall" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [capture.file, userModel.file] },
+          allow: ["memory-capture", "memory-user-model"],
+          slots: {
+            "memory.recall": "none",
+            "memory.capture": "memory-capture",
+            "memory.userModel": "memory-user-model",
+          },
+          entries: {
+            "memory-capture": {
+              hooks: { allowConversationAccess: true },
+            },
+            "memory-user-model": {
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "memory-capture")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "memory-user-model")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => [entry.pluginId, entry.hookName])).toEqual([
+      ["memory-capture", "agent_end"],
+      ["memory-user-model", "before_prompt_build"],
+    ]);
+    expect(getMemoryRuntime()).toBeUndefined();
+    expect(
+      registry.diagnostics.filter((diag) =>
+        diag.message.includes("not selected for memory.recall slot"),
+      ),
+    ).toHaveLength(2);
+  });
+
   it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();

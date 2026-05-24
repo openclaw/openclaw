@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCompactionProviderIdForOwnerPlugin } from "../../plugins/compaction-provider.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { resolveMemoryRoleSlot } from "../../plugins/slot-resolution.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
@@ -152,6 +154,14 @@ export function buildEmbeddedExtensionFactories(params: {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+    const compactionSlot =
+      params.cfg && !compactionCfg?.provider
+        ? resolveMemoryRoleSlot({ cfg: params.cfg, role: "compaction" })
+        : undefined;
+    const slotCompactionProvider =
+      typeof compactionSlot === "string"
+        ? resolveCompactionProviderIdForOwnerPlugin(compactionSlot)
+        : undefined;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
@@ -173,7 +183,7 @@ export function buildEmbeddedExtensionFactories(params: {
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,
-      provider: compactionCfg?.provider,
+      provider: compactionCfg?.provider ?? slotCompactionProvider,
     });
     factories.push(compactionSafeguardExtension);
   }

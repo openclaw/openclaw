@@ -162,6 +162,7 @@ import {
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
+import { listMemoryRolesSelectedForPlugin, resolveMemoryRoleSlots } from "./slot-resolution.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type {
@@ -1921,7 +1922,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     const seenIds = new Map<string, PluginRecord["origin"]>();
-    const memorySlot = normalized.slots.memory;
+    const memoryRoleSlots = resolveMemoryRoleSlots({ cfg });
+    const memorySlots = Object.values(memoryRoleSlots);
+    const memorySlot = memoryRoleSlots.recall;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
@@ -2161,7 +2164,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const earlyMemoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: manifestRecord.kind,
-            slot: memorySlot,
+            slot: memorySlots,
             selectedId: selectedMemoryPluginId,
           });
           if (!earlyMemoryDecision.enabled) {
@@ -2185,7 +2188,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         const memoryDecision = resolveMemorySlotDecision({
           id: record.id,
           kind: record.kind,
-          slot: memorySlot,
+          slot: memorySlots,
           selectedId: selectedMemoryPluginId,
         });
 
@@ -2203,6 +2206,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           selectedMemoryPluginId = record.id;
           memorySlotMatched = true;
           record.memorySlotSelected = true;
+          record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+            cfg,
+            pluginId: record.id,
+          });
         }
       }
 
@@ -2553,7 +2560,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: record.kind,
-            slot: memorySlot,
+            slot: memorySlots,
             selectedId: selectedMemoryPluginId,
           });
 
@@ -2570,6 +2577,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (memoryDecision.selected && hasKind(record.kind, "memory")) {
             selectedMemoryPluginId = record.id;
             record.memorySlotSelected = true;
+            record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+              cfg,
+              pluginId: record.id,
+            });
           }
         }
       }
@@ -2827,7 +2838,9 @@ export async function loadOpenClawPluginCliRegistry(
   });
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
-  const memorySlot = normalized.slots.memory;
+  const memoryRoleSlots = resolveMemoryRoleSlots({ cfg });
+  const memorySlots = Object.values(memoryRoleSlots);
+  const memorySlot = memoryRoleSlots.recall;
   let selectedMemoryPluginId: string | null = null;
   const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
 
@@ -3052,7 +3065,7 @@ export async function loadOpenClawPluginCliRegistry(
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,
-        slot: memorySlot,
+        slot: memorySlots,
         selectedId: selectedMemoryPluginId,
       });
       if (!memoryDecision.enabled) {
@@ -3067,6 +3080,10 @@ export async function loadOpenClawPluginCliRegistry(
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
+        record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+          cfg,
+          pluginId: record.id,
+        });
       }
     }
 
