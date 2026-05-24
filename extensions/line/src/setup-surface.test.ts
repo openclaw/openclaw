@@ -307,6 +307,54 @@ describe("line setup wizard", () => {
     expect(configured).toBe(false);
   });
 
+  it("keeps env-only default credentials available without marking them config-backed", async () => {
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+    vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
+
+    try {
+      const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+      expect(await lineSetupWizard.status.resolveConfigured({ cfg })).toBe(true);
+      expect(lineSetupWizard.credentials[0]?.inspect({ cfg, accountId: "default" })).toMatchObject({
+        accountConfigured: true,
+        hasConfiguredValue: false,
+        resolvedValue: "env-token",
+        envValue: "env-token",
+      });
+      expect(lineSetupWizard.credentials[1]?.inspect({ cfg, accountId: "default" })).toMatchObject({
+        accountConfigured: true,
+        hasConfiguredValue: false,
+        resolvedValue: "env-secret",
+        envValue: "env-secret",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not inherit top-level configured values for named-account credential prompts", () => {
+    const cfg = {
+      channels: {
+        line: {
+          channelAccessToken: "root-token",
+          channelSecret: "root-secret",
+          accounts: { work: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.credentials[0]?.inspect({ cfg, accountId: "work" })).toMatchObject({
+      accountConfigured: false,
+      hasConfiguredValue: false,
+      resolvedValue: undefined,
+    });
+    expect(lineSetupWizard.credentials[1]?.inspect({ cfg, accountId: "work" })).toMatchObject({
+      accountConfigured: false,
+      hasConfiguredValue: false,
+      resolvedValue: undefined,
+    });
+  });
+
   it("reports top-level SecretRef credentials as configured during read-only setup inspection", async () => {
     const cfg = {
       channels: {

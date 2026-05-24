@@ -1,3 +1,4 @@
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
@@ -43,6 +44,38 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   t("wizard.line.multipleEntries"),
   t("wizard.channels.docs", { link: formatDocsLink("/channels/line", "channels/line") }),
 ];
+
+function hasConfiguredLineCredential(
+  cfg: Parameters<typeof inspectLineAccount>[0]["cfg"],
+  accountId: string,
+  valueKey: "channelAccessToken" | "channelSecret",
+  fileKey: "tokenFile" | "secretFile",
+): boolean {
+  const lineConfig = cfg.channels?.line as
+    | {
+        channelAccessToken?: unknown;
+        channelSecret?: unknown;
+        tokenFile?: string;
+        secretFile?: string;
+        accounts?: Record<
+          string,
+          {
+            channelAccessToken?: unknown;
+            channelSecret?: unknown;
+            tokenFile?: string;
+            secretFile?: string;
+          }
+        >;
+      }
+    | undefined;
+  const sourceConfig =
+    accountId !== DEFAULT_ACCOUNT_ID ? lineConfig?.accounts?.[accountId] : lineConfig;
+
+  return (
+    hasConfiguredSecretInput(sourceConfig?.[valueKey]) ||
+    Boolean(normalizeOptionalString(sourceConfig?.[fileKey]))
+  );
+}
 
 const lineDmPolicy: ChannelSetupDmPolicy = {
   label: "LINE",
@@ -121,7 +154,12 @@ export const lineSetupWizard: ChannelSetupWizard = {
         const resolved = inspectLineAccount({ cfg, accountId });
         return {
           accountConfigured: resolved.configured,
-          hasConfiguredValue: resolved.tokenStatus !== "missing",
+          hasConfiguredValue: hasConfiguredLineCredential(
+            cfg,
+            accountId,
+            "channelAccessToken",
+            "tokenFile",
+          ),
           resolvedValue: normalizeOptionalString(resolved.channelAccessToken),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
@@ -161,7 +199,12 @@ export const lineSetupWizard: ChannelSetupWizard = {
         const resolved = inspectLineAccount({ cfg, accountId });
         return {
           accountConfigured: resolved.configured,
-          hasConfiguredValue: resolved.signingSecretStatus !== "missing",
+          hasConfiguredValue: hasConfiguredLineCredential(
+            cfg,
+            accountId,
+            "channelSecret",
+            "secretFile",
+          ),
           resolvedValue: normalizeOptionalString(resolved.channelSecret),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
