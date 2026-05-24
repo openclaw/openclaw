@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 
-type JsonLike =
+export type JsonLike =
   | null
   | boolean
   | number
@@ -214,7 +214,7 @@ export function createLobsterWorkflowStore(
             record.slug?.toLowerCase().includes(query)
           );
         })
-        .sort(
+        .toSorted(
           (a, b) =>
             b.updatedAt.localeCompare(a.updatedAt) || a.workflowId.localeCompare(b.workflowId),
         );

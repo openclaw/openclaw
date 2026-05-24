@@ -508,6 +508,9 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
+    if (!envelope.ok) {
+      throw new Error(envelope.error.message);
+    }
     expect(envelope.output).toEqual([{ parent: true }]);
   });
 
@@ -567,6 +570,9 @@ describe("createEmbeddedLobsterRunner", () => {
       maxStdoutBytes: 4096,
     });
 
+    if (!envelope.ok) {
+      throw new Error(envelope.error.message);
+    }
     expect(envelope.output).toEqual([{ parent: true }]);
   });
 

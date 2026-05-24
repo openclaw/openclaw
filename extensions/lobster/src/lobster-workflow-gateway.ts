@@ -6,6 +6,7 @@ import {
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
   createLobsterWorkflowStoreFromApi,
+  type JsonLike,
   type LobsterWorkflowStore,
 } from "./lobster-workflow-store.js";
 
@@ -45,10 +46,7 @@ function booleanParam(params: Record<string, unknown>, key: string): boolean | u
   return value;
 }
 
-function objectParam(
-  params: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
+function objectParam(params: Record<string, unknown>, key: string): JsonLike | undefined {
   const value = params[key];
   if (value === undefined) {
     return undefined;
@@ -56,7 +54,7 @@ function objectParam(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${key} must be an object`);
   }
-  return value as Record<string, unknown>;
+  return value as JsonLike;
 }
 
 function workflowIdParam(params: Record<string, unknown>): string {

@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { installLobsterAjvCompileCache } from "./lobster-ajv-cache.js";
 
@@ -315,7 +315,8 @@ async function* streamFromItems(items: unknown[]) {
 }
 
 async function drainInput(input: AsyncIterable<unknown>): Promise<void> {
-  for await (const _item of input) {
+  for await (const item of input) {
+    void item;
     // Drain upstream pipeline input so the command keeps Lobster pipeline backpressure semantics.
   }
 }
@@ -491,7 +492,11 @@ async function materializeOpenClawWorkflowFile(filePath: string): Promise<string
   }
   const serialized = stringifyYaml(parsed);
   const hash = createHash("sha256").update(`${filePath}\0${serialized}`).digest("hex").slice(0, 16);
-  const normalizedPath = path.join(os.tmpdir(), "openclaw-lobster-workflows", `${hash}.lobster`);
+  const normalizedPath = path.join(
+    resolvePreferredOpenClawTmpDir(),
+    "openclaw-lobster-workflows",
+    `${hash}.lobster`,
+  );
   await mkdir(path.dirname(normalizedPath), { recursive: true });
   await writeFile(normalizedPath, serialized, "utf8");
   return normalizedPath;
@@ -772,7 +777,7 @@ function createOpenClawRegistry(
           ...(options.workflowCommand ? [options.workflowCommand.name] : []),
           ...(options.parallelCommand ? [options.parallelCommand.name] : []),
         ]),
-      ).sort();
+      ).toSorted();
     },
   };
 }

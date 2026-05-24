@@ -20,7 +20,11 @@ function createMemoryStore<T>() {
       return entries.delete(key);
     },
     async entries() {
-      return [...entries.entries()].map(([key, entry]) => ({ key, ...entry }));
+      return Array.from(entries.entries(), ([key, entry]) => ({
+        key,
+        value: entry.value,
+        createdAt: entry.createdAt,
+      }));
     },
   };
 }

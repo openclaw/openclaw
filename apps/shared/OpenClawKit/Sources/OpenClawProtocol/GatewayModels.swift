@@ -2640,6 +2640,250 @@ public struct TasksCancelResult: Codable, Sendable {
     }
 }
 
+public struct TaskFlowSummary: Codable, Sendable {
+    public let id: String
+    public let ownerkey: String
+    public let requesterorigin: AnyCodable?
+    public let status: AnyCodable
+    public let notifypolicy: String
+    public let goal: String
+    public let currentstep: String?
+    public let cancelrequestedat: Int?
+    public let createdat: Int
+    public let updatedat: Int
+    public let endedat: Int?
+
+    public init(
+        id: String,
+        ownerkey: String,
+        requesterorigin: AnyCodable?,
+        status: AnyCodable,
+        notifypolicy: String,
+        goal: String,
+        currentstep: String?,
+        cancelrequestedat: Int?,
+        createdat: Int,
+        updatedat: Int,
+        endedat: Int?)
+    {
+        self.id = id
+        self.ownerkey = ownerkey
+        self.requesterorigin = requesterorigin
+        self.status = status
+        self.notifypolicy = notifypolicy
+        self.goal = goal
+        self.currentstep = currentstep
+        self.cancelrequestedat = cancelrequestedat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.endedat = endedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case ownerkey = "ownerKey"
+        case requesterorigin = "requesterOrigin"
+        case status
+        case notifypolicy = "notifyPolicy"
+        case goal
+        case currentstep = "currentStep"
+        case cancelrequestedat = "cancelRequestedAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case endedat = "endedAt"
+    }
+}
+
+public struct TaskFlowDetail: Codable, Sendable {
+    public let id: String
+    public let ownerkey: String
+    public let requesterorigin: AnyCodable?
+    public let status: AnyCodable
+    public let notifypolicy: String
+    public let goal: String
+    public let currentstep: String?
+    public let cancelrequestedat: Int?
+    public let createdat: Int
+    public let updatedat: Int
+    public let endedat: Int?
+    public let state: AnyCodable?
+    public let wait: AnyCodable?
+    public let blocked: [String: AnyCodable]?
+    public let tasks: [AnyCodable]
+    public let tasksummary: [String: AnyCodable]
+
+    public init(
+        id: String,
+        ownerkey: String,
+        requesterorigin: AnyCodable?,
+        status: AnyCodable,
+        notifypolicy: String,
+        goal: String,
+        currentstep: String?,
+        cancelrequestedat: Int?,
+        createdat: Int,
+        updatedat: Int,
+        endedat: Int?,
+        state: AnyCodable?,
+        wait: AnyCodable?,
+        blocked: [String: AnyCodable]?,
+        tasks: [AnyCodable],
+        tasksummary: [String: AnyCodable])
+    {
+        self.id = id
+        self.ownerkey = ownerkey
+        self.requesterorigin = requesterorigin
+        self.status = status
+        self.notifypolicy = notifypolicy
+        self.goal = goal
+        self.currentstep = currentstep
+        self.cancelrequestedat = cancelrequestedat
+        self.createdat = createdat
+        self.updatedat = updatedat
+        self.endedat = endedat
+        self.state = state
+        self.wait = wait
+        self.blocked = blocked
+        self.tasks = tasks
+        self.tasksummary = tasksummary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case ownerkey = "ownerKey"
+        case requesterorigin = "requesterOrigin"
+        case status
+        case notifypolicy = "notifyPolicy"
+        case goal
+        case currentstep = "currentStep"
+        case cancelrequestedat = "cancelRequestedAt"
+        case createdat = "createdAt"
+        case updatedat = "updatedAt"
+        case endedat = "endedAt"
+        case state
+        case wait
+        case blocked
+        case tasks
+        case tasksummary = "taskSummary"
+    }
+}
+
+public struct TaskFlowsListParams: Codable, Sendable {
+    public let status: AnyCodable?
+    public let sessionkey: String?
+    public let limit: Int?
+    public let cursor: String?
+
+    public init(
+        status: AnyCodable?,
+        sessionkey: String?,
+        limit: Int?,
+        cursor: String?)
+    {
+        self.status = status
+        self.sessionkey = sessionkey
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case sessionkey = "sessionKey"
+        case limit
+        case cursor
+    }
+}
+
+public struct TaskFlowsListResult: Codable, Sendable {
+    public let flows: [TaskFlowSummary]
+    public let nextcursor: String?
+
+    public init(
+        flows: [TaskFlowSummary],
+        nextcursor: String?)
+    {
+        self.flows = flows
+        self.nextcursor = nextcursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flows
+        case nextcursor = "nextCursor"
+    }
+}
+
+public struct TaskFlowsGetParams: Codable, Sendable {
+    public let flowid: String
+
+    public init(
+        flowid: String)
+    {
+        self.flowid = flowid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+    }
+}
+
+public struct TaskFlowsGetResult: Codable, Sendable {
+    public let flow: TaskFlowDetail
+
+    public init(
+        flow: TaskFlowDetail)
+    {
+        self.flow = flow
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flow
+    }
+}
+
+public struct TaskFlowsCancelParams: Codable, Sendable {
+    public let flowid: String
+
+    public init(
+        flowid: String)
+    {
+        self.flowid = flowid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case flowid = "flowId"
+    }
+}
+
+public struct TaskFlowsCancelResult: Codable, Sendable {
+    public let found: Bool
+    public let cancelled: Bool
+    public let reason: String?
+    public let flow: TaskFlowDetail?
+    public let tasks: [AnyCodable]?
+
+    public init(
+        found: Bool,
+        cancelled: Bool,
+        reason: String?,
+        flow: TaskFlowDetail?,
+        tasks: [AnyCodable]?)
+    {
+        self.found = found
+        self.cancelled = cancelled
+        self.reason = reason
+        self.flow = flow
+        self.tasks = tasks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case found
+        case cancelled
+        case reason
+        case flow
+        case tasks
+    }
+}
+
 public struct ConfigGetParams: Codable, Sendable {}
 
 public struct ConfigSetParams: Codable, Sendable {
