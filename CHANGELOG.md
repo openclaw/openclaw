@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Installer: install Node.js through `apk` on Alpine Linux instead of falling through to the NodeSource package-manager path.
 - Installer: detect musl Linux shells such as Alpine as Linux instead of rejecting them before npm install.
 - Control UI: split large build-time runtime dependencies into stable chunks so Linux/Docker install and package builds stay below the app chunk warning threshold.
 - Scripts: run the optional Discord native opus installer through the shared pnpm launcher and Windows CI coverage so native Windows installs avoid shell-mode package-manager shims.

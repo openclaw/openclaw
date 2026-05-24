@@ -39,6 +39,46 @@ describe("install.sh", () => {
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
   });
 
+  it("installs Node.js with apk on Alpine before falling back to NodeSource", () => {
+    expect(script).toContain("finish_linux_node_install()");
+    expect(script).toContain('ui_info "Installing Node.js via apk (Alpine Linux detected)"');
+    expect(script).toContain(
+      'run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm',
+    );
+    expect(script).toContain(
+      'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
+    );
+    expect(script).toContain('if ! node_is_at_least_required; then');
+
+    const apkIndex = script.indexOf('if command -v apk &> /dev/null; then');
+    const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
+    expect(apkIndex).toBeGreaterThan(-1);
+    expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
+  });
+
+  it("uses the apk Node.js installer path on Alpine", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
+      apk() { :; }
+      finish_linux_node_install() { printf 'finish-linux-node\\n'; }
+      install_node
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("info:Installing Node.js via apk (Alpine Linux detected)");
+    expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
+    expect(result.stdout).toContain("finish-linux-node");
+    expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
     expect(script).toContain('freshness_flag="--min-release-age=0"');

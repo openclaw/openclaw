@@ -1621,6 +1621,21 @@ check_node() {
     fi
 }
 
+finish_linux_node_install() {
+    activate_supported_node_on_path || true
+    if ! node_is_at_least_required; then
+        local active_path active_version
+        active_path="$(command -v node 2>/dev/null || echo "not found")"
+        active_version="$(node -v 2>/dev/null || echo "missing")"
+        ui_error "Installed Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+        echo "Upgrade the system Node.js package or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+        exit 1
+    fi
+
+    ui_success "Node.js v$(node -v | cut -d'v' -f2) installed"
+    print_active_node_paths || true
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -1653,9 +1668,18 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            promote_supported_node_binary || true
-            ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-            print_active_node_paths || true
+            finish_linux_node_install
+            return 0
+        fi
+
+        if command -v apk &> /dev/null; then
+            ui_info "Installing Node.js via apk (Alpine Linux detected)"
+            if is_root; then
+                run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+            else
+                run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+            fi
+            finish_linux_node_install
             return 0
         fi
 
@@ -1699,9 +1723,7 @@ install_node() {
             exit 1
         fi
 
-        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-        activate_supported_node_on_path || true
-        print_active_node_paths || true
+        finish_linux_node_install
     fi
 }
 
