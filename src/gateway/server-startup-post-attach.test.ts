@@ -1003,7 +1003,7 @@ describe("startGatewayPostAttachRuntime", () => {
       async () => {
         let releaseChannels: (() => void) | undefined;
         const events: string[] = [];
-        const pluginServices = { stop: vi.fn(async () => {}) } as never;
+        const pluginServices = { stop: vi.fn(async () => {}) };
         const onPluginServices = vi.fn();
         const onSidecarsReady = vi.fn();
         const startChannels = vi.fn(

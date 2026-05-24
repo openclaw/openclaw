@@ -285,28 +285,39 @@ async function persistRunSessionUsageForFollowupTest(
   if (!entry) {
     return;
   }
+  const preserveSessionModelState =
+    params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+  const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const nextEntry: SessionEntry = {
     ...entry,
     updatedAt: Date.now(),
-    modelProvider: params.providerUsed ?? entry.modelProvider,
-    model: params.modelUsed ?? entry.model,
-    contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-    systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+    modelProvider: preserveSessionModelState
+      ? entry.modelProvider
+      : (params.providerUsed ?? entry.modelProvider),
+    model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+    contextTokens: preserveUserFacingRunState
+      ? entry.contextTokens
+      : (params.contextTokensUsed ?? entry.contextTokens),
+    systemPromptReport: preserveUserFacingRunState
+      ? entry.systemPromptReport
+      : (params.systemPromptReport ?? entry.systemPromptReport),
   };
-  if (params.usage) {
+  if (params.usage && !preserveUserFacingRunState) {
     nextEntry.inputTokens = params.usage.input ?? 0;
     nextEntry.outputTokens = params.usage.output ?? 0;
     const cacheUsage = params.lastCallUsage ?? params.usage;
     nextEntry.cacheRead = cacheUsage?.cacheRead ?? 0;
     nextEntry.cacheWrite = cacheUsage?.cacheWrite ?? 0;
   }
-  const promptTokens =
-    params.promptTokens ??
-    (params.lastCallUsage?.input ?? params.usage?.input ?? 0) +
-      (params.lastCallUsage?.cacheRead ?? params.usage?.cacheRead ?? 0) +
-      (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
-  nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
-  nextEntry.totalTokensFresh = promptTokens > 0;
+  if (!preserveUserFacingRunState) {
+    const promptTokens =
+      params.promptTokens ??
+      (params.lastCallUsage?.input ?? params.usage?.input ?? 0) +
+        (params.lastCallUsage?.cacheRead ?? params.usage?.cacheRead ?? 0) +
+        (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
+    nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
+    nextEntry.totalTokensFresh = promptTokens > 0;
+  }
   store[sessionKey] = nextEntry;
   if (registeredStore) {
     return;
@@ -2309,6 +2320,77 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
     expect(requireMockCallArg(persistSpy, 0).usageIsContextSnapshot).toBeUndefined();
+    persistSpy.mockRestore();
+  });
+
+  it("preserves user-facing session model state for queued internal announce fallback", async () => {
+    const storePath = "/tmp/openclaw-followup-internal-announce-usage.json";
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokens: 200_000,
+      inputTokens: 1_234,
+      outputTokens: 56,
+      cacheRead: 7,
+      cacheWrite: 8,
+      totalTokens: 1_305,
+      totalTokensFresh: true,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "internal announce complete" }],
+      meta: {
+        agentMeta: {
+          usage: { input: 39_908, output: 122 },
+          lastCallUsage: { input: 39_908, output: 122 },
+          model: "gemini-2.5-flash",
+          provider: "google",
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: createAsyncReplySpy() },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai-codex/gpt-5.5",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(
+      runner(
+        createQueuedRun({
+          run: {
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:codex:subagent:c34fca91",
+              sourceChannel: "__internal__",
+              sourceTool: "subagent_announce",
+            },
+          },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.preserveUserFacingSessionModelState).toBe(true);
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
+    expect(sessionStore[sessionKey]?.inputTokens).toBe(1_234);
+    expect(sessionStore[sessionKey]?.outputTokens).toBe(56);
+    expect(sessionStore[sessionKey]?.cacheRead).toBe(7);
+    expect(sessionStore[sessionKey]?.cacheWrite).toBe(8);
+    expect(sessionStore[sessionKey]?.totalTokens).toBe(1_305);
+    expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
     persistSpy.mockRestore();
   });
 
