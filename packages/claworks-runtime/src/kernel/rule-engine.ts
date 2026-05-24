@@ -485,6 +485,26 @@ export const BUILTIN_IM_QUICK_RULES_TABLE: DecisionTable = {
       },
       stopOnMatch: true,
     },
+    {
+      id: "urgent_keyword",
+      name: "紧急关键词高优先处理",
+      priority: 95,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "紧急" },
+          { field: "text", op: "contains", value: "宕机" },
+          { field: "text", op: "contains", value: "崩溃" },
+          { field: "text", op: "contains", value: "紧急求助" },
+          { field: "text", op: "contains", value: "中断" },
+          { field: "text", op: "contains", value: "挂了" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "im.urgent_message", priority: "high" },
+      },
+      stopOnMatch: false, // 不阻断后续规则，允许意图分类继续
+    },
   ],
 };
 

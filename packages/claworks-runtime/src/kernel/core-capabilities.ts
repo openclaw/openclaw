@@ -1227,11 +1227,27 @@ function makePerceiveSentimentDescriptor(runtime: ClaworksRuntime): CapabilityDe
         };
       } catch {
         // 关键词兜底
-        const urgentKeywords = ["紧急", "马上", "立刻", "快", "急", "!!", "！！"];
+        const urgentKeywords = [
+          "紧急",
+          "马上",
+          "立刻",
+          "快",
+          "急",
+          "!!",
+          "！！",
+          "告警",
+          "宕机",
+          "崩溃",
+          "紧急求助",
+          "故障",
+          "异常",
+          "中断",
+          "挂了",
+        ];
         const frustratedKeywords = ["为什么", "怎么回事", "不行", "不对", "差", "烂"];
         const text_lc = text.toLowerCase();
         if (urgentKeywords.some((k) => text_lc.includes(k))) {
-          return { sentiment: "urgent", urgency: 0.85, source: "keyword" };
+          return { sentiment: "urgent", urgency: 0.9, source: "keyword" };
         }
         if (frustratedKeywords.some((k) => text_lc.includes(k))) {
           return { sentiment: "frustrated", urgency: 0.6, source: "keyword" };
