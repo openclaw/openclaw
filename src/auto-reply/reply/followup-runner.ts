@@ -522,6 +522,9 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+        queued.run.inputProvenance,
+      );
       const resolveRunForFallbackCandidate = (
         provider: string,
         model: string,
@@ -554,6 +557,9 @@ export function createFollowupRunner(params: {
         provider: string;
         model: string;
       }): Promise<void> => {
+        if (preserveUserFacingSessionState) {
+          return;
+        }
         const probe = run.autoFallbackPrimaryProbe;
         if (!probe) {
           return;
@@ -926,9 +932,6 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
-      const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
-        queued.run.inputProvenance,
-      );
       const contextTokensUsed =
         resolveContextTokensForModel({
           cfg: queued.run.config,

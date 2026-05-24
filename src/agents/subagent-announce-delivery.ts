@@ -935,6 +935,7 @@ async function sendSubagentAnnounceDirectly(params: {
         sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
         sourceTool: params.sourceTool ?? "subagent_announce",
       },
+      sessionEffects: "internal",
       ...(completionSourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),

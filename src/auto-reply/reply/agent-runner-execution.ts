@@ -1486,6 +1486,9 @@ export async function runAgentTurnWithFallback(params: {
     provider: string;
     model: string;
   }): Promise<void> => {
+    if (preserveUserFacingSessionState) {
+      return;
+    }
     const probe = effectiveRun.autoFallbackPrimaryProbe;
     if (!probe) {
       return;
