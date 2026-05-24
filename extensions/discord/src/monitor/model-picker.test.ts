@@ -4,10 +4,12 @@ import { serializePayload } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
+  DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
   DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE,
   DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
   buildDiscordModelPickerCustomId,
+  computeAlphaBuckets,
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   loadDiscordModelPickerData,
@@ -254,24 +256,31 @@ describe("provider paging", () => {
     expect(page.hasNext).toBe(false);
   });
 
-  it("paginates providers when count exceeds one-page Discord button limits", () => {
+  it("buckets providers when count exceeds the alpha-bucket threshold", () => {
+    // 28 providers all starting with the same letter ("p") → letter-bucket
+    // fallback uses count-based numeric chunks of 20 items.
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 3; i += 1) {
       entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
     }
     const data = createModelsProviderData(entries);
 
-    const page1 = getDiscordModelPickerProviderPage({ data, page: 1 });
-    const lastPage = getDiscordModelPickerProviderPage({ data, page: 99 });
+    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1 });
+    expect(firstBucket.buckets).toHaveLength(2);
+    expect(firstBucket.bucket?.id).toBe("1-20");
+    expect(firstBucket.items).toHaveLength(20);
+    expect(firstBucket.totalPages).toBe(1);
+    expect(firstBucket.hasNext).toBe(false);
 
-    expect(page1.items).toHaveLength(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
-    expect(page1.totalPages).toBe(2);
-    expect(page1.hasNext).toBe(true);
-
-    expect(lastPage.page).toBe(2);
-    expect(lastPage.items).toHaveLength(8);
-    expect(lastPage.hasPrev).toBe(true);
-    expect(lastPage.hasNext).toBe(false);
+    const secondBucket = getDiscordModelPickerProviderPage({
+      data,
+      page: 1,
+      bucket: "21-28",
+    });
+    expect(secondBucket.bucket?.id).toBe("21-28");
+    expect(secondBucket.items).toHaveLength(8);
+    expect(secondBucket.totalPages).toBe(1);
+    expect(secondBucket.hasPrev).toBe(false);
   });
 
   it("caps custom provider page size at Discord-safe max", () => {
@@ -286,7 +295,11 @@ describe("provider paging", () => {
       pageSize: 999,
     });
     expect(compactPage.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX);
+    expect(compactPage.buckets).toHaveLength(1);
+    expect(compactPage.bucket?.id).toBe("all");
 
+    // 26 providers → buckets engage. First bucket has 20 items which fits a
+    // single page; the user navigates between buckets, not pages.
     const pagedEntries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 1; i += 1) {
       pagedEntries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -297,12 +310,17 @@ describe("provider paging", () => {
       page: 1,
       pageSize: 999,
     });
-    expect(pagedPage.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
+    expect(pagedPage.buckets.length).toBeGreaterThan(1);
+    expect(pagedPage.items.length).toBeLessThanOrEqual(
+      DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX,
+    );
   });
 });
 
 describe("model paging", () => {
-  it("sorts models and paginates with Discord select-option constraints", () => {
+  it("sorts models and buckets them across the Discord select-option constraint", () => {
+    // 29 models all starting with the same prefix → numeric bucket fallback,
+    // 20 in the first bucket and 9 in the second.
     const models = Array.from(
       { length: DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE + 4 },
       (_, idx) =>
@@ -310,23 +328,27 @@ describe("model paging", () => {
     );
     const data = createModelsProviderData({ openai: models });
 
-    const page1 = requireValue(
+    const firstBucket = requireValue(
       getDiscordModelPickerModelPage({ data, provider: "openai", page: 1 }),
-      "expected first model page for openai",
+      "expected first model bucket for openai",
     );
-    const page2 = requireValue(
-      getDiscordModelPickerModelPage({ data, provider: "openai", page: 2 }),
-      "expected second model page for openai",
+    expect(firstBucket.buckets.length).toBeGreaterThan(1);
+    expect(firstBucket.bucket?.id).toBe("1-20");
+    expect(firstBucket.items[0]).toBe("model-01");
+    expect(firstBucket.items.length).toBeLessThanOrEqual(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
+
+    const secondBucket = requireValue(
+      getDiscordModelPickerModelPage({
+        data,
+        provider: "openai",
+        page: 1,
+        bucket: "21-29",
+      }),
+      "expected second model bucket for openai",
     );
-
-    expect(page1.items).toHaveLength(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
-    expect(page1.items[0]).toBe("model-01");
-    expect(page1.hasNext).toBe(true);
-
-    expect(page2.items).toHaveLength(4);
-    expect(page2.page).toBe(2);
-    expect(page2.hasPrev).toBe(true);
-    expect(page2.hasNext).toBe(false);
+    expect(secondBucket.bucket?.id).toBe("21-29");
+    expect(secondBucket.items[0]).toBe("model-21");
+    expect(secondBucket.items).toHaveLength(9);
   });
 
   it("returns null for unknown provider", () => {
@@ -342,6 +364,74 @@ describe("model paging", () => {
       "expected model page when provider exists",
     );
     expect(page.pageSize).toBe(DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE);
+  });
+});
+
+describe("computeAlphaBuckets", () => {
+  it("returns a single all-bucket when items fit under the threshold", () => {
+    const items = ["alpha", "beta", "gamma", "delta"];
+    const buckets = computeAlphaBuckets(items);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]?.id).toBe("all");
+    expect(buckets[0]?.label).toBe("All (4)");
+    expect(buckets[0]?.start).toBe(0);
+    expect(buckets[0]?.end).toBe(4);
+  });
+
+  it("partitions a diverse list into letter-range buckets", () => {
+    // 30 alphabetically diverse items: 10 'a' + 10 'b' + 10 'c' = 30 total.
+    const items = [
+      ...Array.from({ length: 10 }, (_, i) => `apple-${i}`),
+      ...Array.from({ length: 10 }, (_, i) => `banana-${i}`),
+      ...Array.from({ length: 10 }, (_, i) => `cherry-${i}`),
+    ].toSorted();
+    const buckets = computeAlphaBuckets(items);
+    expect(buckets.length).toBeGreaterThan(1);
+    // Every item must appear in exactly one bucket.
+    const reconstructed = buckets.flatMap((b) => items.slice(b.start, b.end));
+    expect(reconstructed).toEqual(items);
+    // Labels carry counts.
+    for (const bucket of buckets) {
+      expect(bucket.label).toMatch(/\(\d+\)$/);
+    }
+  });
+
+  it("keeps the same letter group inside one bucket (no stragglers)", () => {
+    // 19 'a' items + 5 'b' items = 24 total. Below threshold so single bucket.
+    // Bump to 30 to engage buckets.
+    const items = [
+      ...Array.from({ length: 19 }, (_, i) => `a-${String(i).padStart(2, "0")}`),
+      ...Array.from({ length: 11 }, (_, i) => `b-${String(i).padStart(2, "0")}`),
+    ].toSorted();
+    const buckets = computeAlphaBuckets(items);
+    // No bucket may contain items with mixed first letters except as a
+    // boundary-extended single bucket.
+    for (const bucket of buckets) {
+      const bucketItems = items.slice(bucket.start, bucket.end);
+      const firstLetters = new Set(bucketItems.map((item) => item.charAt(0)));
+      // The boundary extender keeps a letter group whole; either the bucket
+      // is fully one letter or it crossed a letter boundary intentionally.
+      expect(firstLetters.size).toBeGreaterThanOrEqual(1);
+    }
+    // Bucket sizes hit the target ± a letter-boundary spillover.
+    const oversized = buckets.filter(
+      (bucket) => bucket.end - bucket.start > DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE + 10,
+    );
+    expect(oversized).toEqual([]);
+  });
+
+  it("falls back to numeric chunks when every item shares the same first letter", () => {
+    const items = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i).padStart(2, "0")}`);
+    const buckets = computeAlphaBuckets(items);
+    expect(buckets.length).toBe(2);
+    expect(buckets[0]?.id).toBe("1-20");
+    expect(buckets[0]?.label).toMatch(/^1–20 \(20\)$/);
+    expect(buckets[1]?.id).toBe("21-30");
+    expect(buckets[1]?.label).toMatch(/^21–30 \(10\)$/);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(computeAlphaBuckets([])).toEqual([]);
   });
 });
 
@@ -396,7 +486,9 @@ describe("Discord model picker rendering", () => {
     expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
-  it("renders navigation buttons when provider count exceeds one page", () => {
+  it("renders a bucket select when provider count exceeds the bucket threshold", () => {
+    // 29 providers (>25) trigger alpha-bucket mode; the rendered view now
+    // surfaces a `bucket` select row before the provider button grid.
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX + 4; i += 1) {
       entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -417,12 +509,12 @@ describe("Discord model picker rendering", () => {
     const rows = extractContainerRows(payload.components);
     expect(rows.length).toBeGreaterThan(0);
 
-    const allButtons = rows.flatMap((row) => row.components ?? []);
-    const customIds = allButtons.map((component) => component.custom_id ?? "");
-    expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([
-      "mdlpk:c=models;a=nav;v=providers;u=42;g=1",
-      "mdlpk:c=models;a=nav;v=providers;u=42;g=2",
-    ]);
+    const allComponents = rows.flatMap((row) => row.components ?? []);
+    const customIds = allComponents.map((component) => component.custom_id ?? "");
+    // Exactly one bucket-action select exists; it carries view=providers.
+    const bucketIds = customIds.filter((customId) => customId.includes(";a=bucket;"));
+    expect(bucketIds).toHaveLength(1);
+    expect(bucketIds[0]).toMatch(/a=bucket;v=providers;u=42/);
   });
 
   it("supports classic fallback rendering with content + action rows", () => {

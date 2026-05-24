@@ -317,14 +317,16 @@ export async function replyWithDiscordModelPickerProviders(params: {
     parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
       ? parsedCurrentRef.provider
       : (data.providers[0] ?? data.resolvedDefault.provider);
-  const initialPage =
+  const initialResolved =
     parsedCurrentRef && parsedCurrentRef.provider === initialProvider
       ? resolveDiscordModelPickerPageForModel({
           data,
           provider: initialProvider,
           model: parsedCurrentRef.model,
         })
-      : 1;
+      : { page: 1 };
+  const initialPage = initialResolved.page;
+  const initialModelBucket = initialResolved.bucket;
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
@@ -333,6 +335,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
     provider: initialProvider,
     page: initialPage,
     providerPage: 1,
+    modelBucket: initialModelBucket,
     currentModel,
     currentRuntime,
     quickModels,
