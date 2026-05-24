@@ -675,6 +675,7 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
+  preserveLatestAssistantThinking?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -723,7 +724,9 @@ export async function sanitizeSessionHistory(params: {
     },
   );
   const validatedThinkingSignatures = policy.preserveSignatures
-    ? stripInvalidThinkingSignatures(sanitizedImages)
+    ? stripInvalidThinkingSignatures(sanitizedImages, {
+        preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
+      })
     : sanitizedImages;
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
