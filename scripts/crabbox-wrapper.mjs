@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,9 @@ import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoLocal = resolveCrabboxBinary(process.env, process.platform);
-const binary = repoLocal ?? resolvePathBinary("crabbox", process.env, process.platform);
+const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
+const binary =
+  repoLocal ?? pathLocal ?? resolveGitCommonCrabboxBinary(process.env, process.platform) ?? "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -32,7 +34,7 @@ function commandCandidates(command, platform) {
 function resolveCrabboxBinary(env, platform) {
   const base = resolve(repoRoot, "../crabbox/bin/crabbox");
   for (const candidate of commandCandidates(base, platform)) {
-    if (isFile(candidate)) {
+    if (isExecutableFile(candidate, platform)) {
       return candidate;
     }
   }
@@ -40,29 +42,55 @@ function resolveCrabboxBinary(env, platform) {
 }
 
 function resolvePathBinary(command, env, platform) {
-  if (platform !== "win32") {
-    return command;
-  }
-  for (const candidate of commandCandidates(command, platform)) {
-    if (isFile(candidate)) {
-      return candidate;
-    }
-  }
   const pathValue = env[resolvePathEnvKey(env)] ?? "";
   for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     for (const candidate of commandCandidates(command, platform)) {
       const fullPath = resolve(dir, candidate);
-      if (isFile(fullPath)) {
+      if (isExecutableFile(fullPath, platform)) {
         return fullPath;
       }
     }
   }
-  return command;
+  return null;
 }
 
-function isFile(path) {
+function resolveGitCommonCrabboxBinary(env, platform) {
+  const gitBinary = resolvePathBinary("git", env, platform) ?? "git";
+  const invocation = spawnInvocation(gitBinary, ["rev-parse", "--git-common-dir"], env, platform);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  if ((result.status ?? 1) !== 0) {
+    return null;
+  }
+  const gitCommonDir = result.stdout.trim();
+  if (!gitCommonDir) {
+    return null;
+  }
+  const absoluteGitCommonDir = isAbsolute(gitCommonDir)
+    ? gitCommonDir
+    : resolve(repoRoot, gitCommonDir);
+  const base = resolve(absoluteGitCommonDir, "../..", "crabbox/bin/crabbox");
+  for (const candidate of commandCandidates(base, platform)) {
+    if (isExecutableFile(candidate, platform)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isExecutableFile(path, platform) {
   try {
-    return statSync(path).isFile();
+    if (!statSync(path).isFile()) {
+      return false;
+    }
+    if (platform !== "win32") {
+      accessSync(path, constants.X_OK);
+    }
+    return true;
   } catch {
     return false;
   }
@@ -116,7 +144,7 @@ function checkedOutput(command, commandArgs) {
 }
 
 function gitOutput(commandArgs) {
-  const gitBinary = resolvePathBinary("git", process.env, process.platform);
+  const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
   const invocation = spawnInvocation(gitBinary, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,

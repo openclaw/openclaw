@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,12 @@ const repoRoot = process.cwd();
 function makeFakeCrabbox(helpText: string): string {
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-crabbox-"));
   tempDirs.push(binDir);
+  writeFakeCrabbox(binDir, helpText);
+  return binDir;
+}
+
+function writeFakeCrabbox(binDir: string, helpText: string): string {
+  mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
   const script = [
     "#!/usr/bin/env node",
@@ -31,7 +37,7 @@ function makeFakeCrabbox(helpText: string): string {
     "utf8",
   );
   chmodSync(crabboxPath, 0o755);
-  return binDir;
+  return crabboxPath;
 }
 
 function makeFakeGit(responses: Record<string, { status?: number; stdout?: string; stderr?: string }>): string {
@@ -106,6 +112,36 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toContain('"local-container"');
   });
 
+  it("finds a Crabbox checkout next to the Git common dir in linked worktrees", () => {
+    const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
+    tempDirs.push(fakeWorkspaceParent);
+    const gitCommonDir = path.join(fakeWorkspaceParent, "openclaw", ".git");
+    const crabboxBinDir = path.join(fakeWorkspaceParent, "crabbox", "bin");
+    mkdirSync(gitCommonDir, { recursive: true });
+    writeFakeCrabbox(crabboxBinDir, "provider: aws\n");
+    const gitResponses = {
+      ["rev-parse\u0000--git-common-dir"]: { stdout: `${gitCommonDir}\n` },
+    };
+    const gitBinDir = makeFakeGit(gitResponses);
+
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
+          PATH: [gitBinDir, path.dirname(process.execPath)].join(path.delimiter),
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+  });
+
   it("accepts advertised providers from wrapped Crabbox help", () => {
     const result = runWrapper(
       [
@@ -148,6 +184,27 @@ describe("scripts/crabbox-wrapper", () => {
       expect(parseFakeCrabboxOutput(result).args).toContain("aws");
     });
   }
+
+  it("falls back to normal sync decisions when git is missing from PATH", () => {
+    const binDir = makeFakeCrabbox(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: [binDir, path.dirname(process.execPath)].join(path.delimiter),
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+  });
 
   it("accepts Crabbox provider aliases when their canonical provider is advertised", () => {
     const helpText = [
