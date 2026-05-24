@@ -48,6 +48,7 @@ import type {
 } from "../planes/orch/step-executor.js";
 import { createDirectLlmBridge } from "./direct-llm-bridge.js";
 import { applyIngressPublish } from "./ingress-publish.js";
+import { createRuntimeLogger } from "./logger.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
 import {
@@ -84,6 +85,8 @@ export async function createClaworksRuntime(
     skillRun?: SkillRunFn;
   },
 ): Promise<ClaworksRuntime> {
+  const log = createRuntimeLogger(opts?.logger);
+
   // 独立部署：外部未注入 llmComplete 时，自动探测直连 LLM（Ollama / OpenAI / Anthropic）
   // 企业私域只需设置 CLAWORKS_LLM_BASE_URL + CLAWORKS_LLM_API_KEY 即可，无需 OpenClaw
   if (!opts?.llmComplete) {
@@ -94,14 +97,14 @@ export async function createClaworksRuntime(
     });
     if (directBridge) {
       opts = { ...opts, llmComplete: directBridge };
-      opts?.logger?.("[claworks] 独立 LLM bridge 已启用（直连模式）");
+      log.info("独立 LLM bridge 已启用（直连模式）");
     }
   }
 
   const dbUrl = config.data?.database_url ?? `sqlite://${join(homedir(), ".claworks", "robot.db")}`;
   const { db, close, dialect, note } = openDatabase(dbUrl);
   if (note) {
-    opts?.logger?.(`[claworks] ${note}`);
+    log.info(note);
   }
 
   const robot: RobotInfo = {
@@ -263,9 +266,7 @@ export async function createClaworksRuntime(
           await kernel.publish(t, s, p);
         })
         .catch((err: unknown) => {
-          opts?.logger?.(
-            `[claworks:hook] error: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          log.error("[claworks:hook] error", err);
         });
     },
   });
@@ -286,15 +287,15 @@ export async function createClaworksRuntime(
       publishSource: ev.source,
     });
     if (result.action === "denied") {
-      opts?.logger?.(`[claworks:ingress] denied connector event: ${ev.type} — ${result.reason}`);
+      log.warn(`[claworks:ingress] denied connector event: ${ev.type} — ${result.reason}`);
       return;
     }
     if (result.action === "observe_only") {
-      opts?.logger?.(`[claworks:ingress] observe-only: ${ev.type} from ${ev.source}`);
+      log.info(`[claworks:ingress] observe-only: ${ev.type} from ${ev.source}`);
       return;
     }
     if (result.action === "intent_routed") {
-      opts?.logger?.(
+      log.info(
         `[claworks:ingress] intent_route ${ev.type} → playbook ${result.playbookId} run=${result.runId}`,
       );
     }
@@ -500,11 +501,13 @@ export async function createClaworksRuntime(
 }
 
 export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<void> {
+  const slog = createRuntimeLogger(runtime.logger, "claworks:runtime");
   markRuntimeStarted();
   await runtime.kernel.start();
+  slog.info("运行时内核已启动");
   const hydrated = await runtime.playbookEngine.hydrateSuspendedRuns();
   if (hydrated > 0) {
-    runtime.logger?.(`[claworks] hydrated ${hydrated} waiting_hitl run(s)`);
+    slog.info(`hydrated ${hydrated} waiting_hitl run(s)`);
   }
   runtime.scheduler.reload(runtime.playbookEngine.list());
 
@@ -530,9 +533,9 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
       };
       try {
         runtime.scheduler.add(dynDef);
-        runtime.logger?.(`[claworks:schedule] 已恢复动态任务: ${playbookId} cron=${cron}`);
+        slog.info(`[schedule] 已恢复动态任务: ${playbookId} cron=${cron}`);
       } catch {
-        runtime.logger?.(`[claworks:schedule] 恢复任务失败（cron 无效）: ${playbookId}`);
+        slog.warn(`[schedule] 恢复任务失败（cron 无效）: ${playbookId}`);
       }
     }
   } catch {
@@ -555,18 +558,14 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
       try {
         await runtime.connectorManager.invoke(id, method, params);
       } catch (err) {
-        runtime.logger?.(
-          `[claworks:connector] auto_start ${id} failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        slog.error(`[connector] auto_start ${id} failed`, err);
       }
     }
   }
   await runtime.kernel.flushOutbox();
   runtime._outboxFlushTimer = setInterval(() => {
     void runtime.kernel.flushOutbox().catch((err) => {
-      runtime.logger?.(
-        `[claworks:outbox] flush failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      slog.error("[outbox] flush failed", err);
     });
   }, 30_000);
 
@@ -576,20 +575,18 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
       .expireStaleHitl()
       .then((n) => {
         if (n > 0) {
-          runtime.logger?.(`[claworks:hitl] expired ${n} stale HITL token(s)`);
+          slog.info(`[hitl] expired ${n} stale HITL token(s)`);
         }
       })
       .catch((err) => {
-        runtime.logger?.(
-          `[claworks:hitl] expiry sweep failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        slog.error("[hitl] expiry sweep failed", err);
       });
   }, 30_000);
 
   // Startup configuration health validation
   const startupWarnings = validateStartupConfig(runtime.config);
   if (startupWarnings.length > 0) {
-    startupWarnings.forEach((w) => runtime.logger?.(`[ClaWorks Startup] ${w}`));
+    startupWarnings.forEach((w) => slog.warn(`[startup] ${w}`));
     await runtime.kernel
       .publish(CW_EVENTS.SYSTEM_STARTUP_WARNINGS, "runtime", { warnings: startupWarnings })
       .catch(() => {});
