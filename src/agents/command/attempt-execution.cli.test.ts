@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { FailoverError } from "../failover-error.js";
+import { FailoverError, markPoisonedResumeOrigin } from "../failover-error.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
 
@@ -300,6 +300,200 @@ describe("CLI attempt execution", () => {
       SessionEntry
     >;
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  // Regression for clawsweeper review on #79386: when the in-runner
+  // cold retry for a poisoned-resume timeout itself fails with a
+  // different error class (a non-timeout FailoverError, or a plain
+  // Error), the original poisoned-resume signal is carried through via
+  // the POISONED_RESUME_ORIGIN marker. The outer attempt-execution
+  // cleanup MUST honour that marker and still wipe the persisted CLI
+  // binding — otherwise the next user turn would re-resume the same
+  // dead transcript and the watchdog cascade would resume.
+  it("clears the poisoned binding when the in-runner cold retry fails with a different FailoverError reason (#79386 clawsweeper)", async () => {
+    const sessionKey = "agent:main:direct:cli-resume-retry-other-failover";
+    const homeDir = path.join(tmpDir, "home");
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, "poisoned-cli-session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-poisoned-retry-other",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "poisoned-cli-session",
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": "poisoned-cli-session" },
+      claudeCliSessionId: "poisoned-cli-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    // Simulate what cli-runner.ts now does: the in-runner cold retry
+    // ran and failed with a different FailoverError reason, but the
+    // POISONED_RESUME_ORIGIN marker rides along so the outer cleanup
+    // gate matches even though the final error is not a timeout.
+    const retryErr = new FailoverError("rate limit exceeded", {
+      reason: "rate_limit",
+      provider: "claude-cli",
+      model: "opus",
+      status: 429,
+    });
+    markPoisonedResumeOrigin(retryErr);
+    runCliAgentMock
+      .mockRejectedValueOnce(retryErr)
+      // Second outer attempt (cold, no --resume) succeeds with a fresh
+      // session id. Mirrors the existing session_expired contract.
+      .mockResolvedValueOnce(makeCliResult("hello after cold restart"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "please respond",
+      runId: "run-cli-poisoned-retry-other-failover",
+    });
+
+    // The first runCliAgent call carried the poisoned --resume id (the
+    // in-runner retry happens inside that call; the test mock just
+    // observes the call signature). The second call is cold.
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("poisoned-cli-session");
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    // Persisted binding wiped — the bot's P2 concern is addressed.
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+  });
+
+  it("clears the poisoned binding when the in-runner cold retry fails with a plain Error (#79386 clawsweeper)", async () => {
+    // Same as above but the retry failure is a plain JS Error (spawn
+    // failure, a non-FailoverError thrown from inside the runner).
+    // The marker still propagates and the cleanup still runs.
+    const sessionKey = "agent:main:direct:cli-resume-retry-plain";
+    const homeDir = path.join(tmpDir, "home");
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, "poisoned-cli-session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-poisoned-retry-plain",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "poisoned-cli-session",
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": "poisoned-cli-session" },
+      claudeCliSessionId: "poisoned-cli-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const retryErr = markPoisonedResumeOrigin(new Error("spawn EAGAIN"));
+    runCliAgentMock
+      .mockRejectedValueOnce(retryErr)
+      .mockResolvedValueOnce(makeCliResult("hello after cold restart"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "please respond",
+      runId: "run-cli-poisoned-retry-plain",
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("does not clear the binding when a non-poisoned-resume error happens to be a rate_limit FailoverError (regression guard)", async () => {
+    // Belt-and-braces: a rate-limit FailoverError without the
+    // POISONED_RESUME_ORIGIN marker must NOT trigger the poisoned-
+    // binding cleanup. Only the marker + session_expired + the inline
+    // timeout check are allowed to clear the binding. This guards the
+    // tagging surface area from leaking into unrelated failures.
+    const sessionKey = "agent:main:direct:cli-rate-limit-no-marker";
+    const homeDir = path.join(tmpDir, "home");
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, "healthy-cli-session.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-no-marker",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "healthy-cli-session",
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": "healthy-cli-session" },
+      claudeCliSessionId: "healthy-cli-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    // Plain rate_limit FailoverError with NO marker.
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("rate limit exceeded", {
+        reason: "rate_limit",
+        provider: "claude-cli",
+        model: "opus",
+        status: 429,
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "please respond",
+        runId: "run-cli-rate-limit-no-marker",
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "rate_limit",
+    });
+    // Binding stays intact — the cleanup is not triggered.
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      "healthy-cli-session",
+    );
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("healthy-cli-session");
   });
 
   it("does not retry on timeout when there was no resumed Claude CLI session (cold start)", async () => {

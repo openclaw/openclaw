@@ -19,7 +19,7 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
-import { FailoverError } from "../failover-error.js";
+import { FailoverError, hasPoisonedResumeOrigin } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
@@ -543,18 +543,36 @@ export function runAgentAttempt(params: {
           err instanceof FailoverError &&
           err.reason === "timeout" &&
           isClaudeCliProvider(cliExecutionProvider);
+        // The in-runner cold retry (cli-runner.ts) tags any error it lets
+        // escape from a poisoned-resume timeout recovery attempt, so we
+        // can clear the persisted binding even when the final thrown
+        // error is something other than the original timeout (e.g. the
+        // cold retry hit a different FailoverError reason, or a plain
+        // Error). Without this, a failed cold retry would leave the
+        // poisoned sessionId in the session store and the next user turn
+        // would re-resume the same dead transcript — the exact cascade
+        // #79365 is trying to break.
+        const isPoisonedResumeRetryFailure =
+          isClaudeCliProvider(cliExecutionProvider) && hasPoisonedResumeOrigin(err);
         if (
-          err instanceof FailoverError &&
-          (err.reason === "session_expired" || isPoisonedResumeTimeout) &&
-          activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
+          (err instanceof FailoverError &&
+            (err.reason === "session_expired" || isPoisonedResumeTimeout)) ||
+          isPoisonedResumeRetryFailure
         ) {
+          if (
+            !activeCliSessionBinding?.sessionId ||
+            !params.sessionKey ||
+            !params.sessionStore ||
+            !params.storePath
+          ) {
+            throw err;
+          }
           const reason =
-            err.reason === "session_expired"
+            err instanceof FailoverError && err.reason === "session_expired"
               ? "session expired"
-              : "resumed session timeout (poisoned transcript)";
+              : isPoisonedResumeRetryFailure && !isPoisonedResumeTimeout
+                ? "resumed session timeout retry failed (poisoned transcript)"
+                : "resumed session timeout (poisoned transcript)";
           log.warn(
             `CLI ${reason}, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );

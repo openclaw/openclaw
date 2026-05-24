@@ -565,6 +565,162 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  // Regression for clawsweeper review on #79386: when the in-runner cold
+  // retry for a poisoned-resume timeout itself fails with a *different*
+  // FailoverError reason (rate_limit, billing, ...), the original
+  // poisoned-resume signal must still propagate so the outer
+  // attempt-execution catch can clear the persisted CLI session binding.
+  // Otherwise the next user turn would re-resume the same dead
+  // transcript and reignite the watchdog cascade #79365 was meant to
+  // break.
+  it("tags the rethrown retry error with POISONED_RESUME_ORIGIN when the in-runner cold retry also fails (#79386 clawsweeper)", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    // First attempt: poisoned resume hangs and the watchdog kills it
+    // (FailoverError reason=timeout).
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    // Second attempt (cold retry): different non-timeout failure mode
+    // — a rate-limit FailoverError. The naive contract would lose the
+    // poisoned-resume signal here; the marker keeps it alive for the
+    // outer attempt-execution cleanup.
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "rate limit exceeded",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const { hasPoisonedResumeOrigin } = await import("./failover-error.js");
+      let thrown: unknown;
+      try {
+        await runPreparedCliAgent({
+          ...buildPreparedContext({
+            provider: "claude-cli",
+            sessionKey: "agent:main:subagent:poisoned-retry-fail",
+            cliSessionId: "poisoned-cli-session",
+            runId: "run-poisoned-retry-fail",
+          }),
+          params: {
+            ...buildPreparedContext({
+              provider: "claude-cli",
+              sessionKey: "agent:main:subagent:poisoned-retry-fail",
+              cliSessionId: "poisoned-cli-session",
+              runId: "run-poisoned-retry-fail",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeDefined();
+      expect(hasPoisonedResumeOrigin(thrown)).toBe(true);
+      // Two attempts ran: first --resume <id>, second cold.
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+      // Hook contract: one failed agent_end (the retry surfaced as a
+      // terminal failure for this turn). No success agent_end.
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalled();
+      });
+      const successCalls = (
+        hookRunner.runAgentEnd.mock.calls as unknown as Array<
+          [event: { success?: boolean }, ...rest: unknown[]]
+        >
+      ).filter((call) => call[0]?.success === true);
+      expect(successCalls).toHaveLength(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("tags the rethrown retry error with POISONED_RESUME_ORIGIN when the cold retry throws a plain Error (#79386 clawsweeper)", async () => {
+    // Same as above but the cold retry surfaces as a non-FailoverError
+    // (the supervisor spawn itself rejects). The marker must still be
+    // present so attempt-execution clears the poisoned binding.
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    supervisorSpawnMock.mockRejectedValueOnce(new Error("spawn EAGAIN"));
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const { hasPoisonedResumeOrigin } = await import("./failover-error.js");
+      let thrown: unknown;
+      try {
+        await runPreparedCliAgent({
+          ...buildPreparedContext({
+            provider: "claude-cli",
+            sessionKey: "agent:main:subagent:poisoned-retry-plain",
+            cliSessionId: "poisoned-cli-session",
+            runId: "run-poisoned-retry-plain",
+          }),
+          params: {
+            ...buildPreparedContext({
+              provider: "claude-cli",
+              sessionKey: "agent:main:subagent:poisoned-retry-plain",
+              cliSessionId: "poisoned-cli-session",
+              runId: "run-poisoned-retry-plain",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeDefined();
+      expect(hasPoisonedResumeOrigin(thrown)).toBe(true);
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns the assembled CLI prompt in meta for raw trace consumers", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

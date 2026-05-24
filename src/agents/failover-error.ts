@@ -72,6 +72,69 @@ export function isFailoverError(err: unknown): err is FailoverError {
   );
 }
 
+/**
+ * Symbol-keyed marker attached to errors that surface from the in-runner
+ * claude-cli cold-retry recovery path (#79365). When the original turn was
+ * killed by the no-output watchdog on a resumed session (`FailoverError
+ * reason=timeout` on a claude-cli session with a persisted resume id), the
+ * runner retries cold without `--resume`. If that cold retry then fails with
+ * any other error (a different `FailoverError.reason`, a plain `Error`, etc.),
+ * the original poisoned-resume signal would be lost: the outer
+ * attempt-execution cleanup gate only matches on `session_expired` or the
+ * inline `isPoisonedResumeTimeout` check against the *final* thrown error,
+ * which now reflects the retry failure rather than the original timeout.
+ *
+ * To make the cleanup robust, the in-runner retry path tags the rethrown
+ * error with this marker before letting it propagate. The outer attempt-
+ * execution catch checks for the marker via {@link hasPoisonedResumeOrigin}
+ * and clears the persisted CLI session binding regardless of the final
+ * error's `reason`, so the next user turn does not re-resume the same
+ * poisoned transcript.
+ */
+export const POISONED_RESUME_ORIGIN: unique symbol = Symbol.for(
+  "openclaw.cli.poisonedResumeOrigin",
+);
+
+type PoisonedResumeMarked = { [POISONED_RESUME_ORIGIN]?: true };
+
+/**
+ * Tag an error as originating from a poisoned-resume timeout that was
+ * caught by the in-runner cold-retry recovery (#79365). Safe to call
+ * with any thrown value: primitives are returned unchanged, object
+ * errors get a non-enumerable, non-throwing marker property.
+ */
+export function markPoisonedResumeOrigin<T>(err: T): T {
+  if (err === null || (typeof err !== "object" && typeof err !== "function")) {
+    return err;
+  }
+  try {
+    Object.defineProperty(err as PoisonedResumeMarked, POISONED_RESUME_ORIGIN, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+      writable: false,
+    });
+  } catch {
+    // If the error is frozen / non-extensible, fall back to a best-effort
+    // direct assignment; failure here is a no-op (cleanup still works on
+    // the inline reason check for the common path).
+    try {
+      (err as PoisonedResumeMarked)[POISONED_RESUME_ORIGIN] = true;
+    } catch {
+      // ignore
+    }
+  }
+  return err;
+}
+
+/** Returns true when {@link markPoisonedResumeOrigin} has tagged this error. */
+export function hasPoisonedResumeOrigin(err: unknown): boolean {
+  if (err === null || (typeof err !== "object" && typeof err !== "function")) {
+    return false;
+  }
+  return (err as PoisonedResumeMarked)[POISONED_RESUME_ORIGIN] === true;
+}
+
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
     case "billing":

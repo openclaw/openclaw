@@ -9,7 +9,12 @@ import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
-import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
+import {
+  FailoverError,
+  isFailoverError,
+  markPoisonedResumeOrigin,
+  resolveFailoverStatus,
+} from "./failover-error.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
@@ -526,8 +531,40 @@ export async function runPreparedCliAgent(
               ctx: hookContext,
               hookRunner,
             });
+            // Carry the original poisoned-resume signal through the retry
+            // failure (#79365 / clawsweeper review on #79386). The outer
+            // attempt-execution catch uses this marker to clear the
+            // persisted CLI session binding even when the cold retry
+            // throws an unrelated error (different FailoverError.reason,
+            // a plain Error, etc.) — otherwise the original poisoned
+            // sessionId would stay in the session store and the next
+            // user turn would re-resume the same dead transcript.
+            if (isPoisonedResumeTimeout) {
+              // toCliRunFailure normalises into a thrown FailoverError or
+              // rethrows the original; in both cases we want to tag the
+              // escaping value with the poisoned-resume marker.
+              try {
+                toCliRunFailure(retryErr);
+              } catch (thrown) {
+                throw markPoisonedResumeOrigin(thrown);
+              }
+              // Unreachable: toCliRunFailure always throws (`never`).
+              /* c8 ignore next */
+              throw markPoisonedResumeOrigin(retryErr);
+            }
             return toCliRunFailure(retryErr);
           }
+        }
+        // The recovery branch above was not taken (no sessionKey, or no
+        // resumable sessionId): the outer attempt-execution catch still
+        // needs to know this was a poisoned-resume timeout so the
+        // persisted binding can be cleared as the belt-and-braces
+        // fallback. The inline FailoverError.reason === "timeout" check
+        // there is preserved for direct matches, but tagging here keeps
+        // the contract consistent even if the inline check is narrowed
+        // in the future.
+        if (isPoisonedResumeTimeout) {
+          markPoisonedResumeOrigin(err);
         }
         runAgentHarnessAgentEndHook({
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
