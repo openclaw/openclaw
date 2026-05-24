@@ -77,8 +77,14 @@ function normalizeCapabilities(
 ): NonNullable<ResolvedChannelBrokerAccount["capabilities"]> {
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
-    const platform = normalizeBrokerPlatformId(rawPlatform);
-    normalized[platform] = { ...value, platform };
+    const platform = normalizeBrokerPlatformId(value.platform ?? rawPlatform);
+    normalized[platform] = {
+      platform,
+      ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
+      ...(value.live ? { live: { ...value.live } } : {}),
+      ...(value.receive ? { receive: { ...value.receive } } : {}),
+      ...(value.native ? { native: { ...value.native } } : {}),
+    };
   }
   return normalized;
 }
@@ -177,7 +183,7 @@ export function resolveChannelBrokerAccount(params: {
     defaultPlatform,
     defaultConversationType: merged.defaultConversationType ?? "channel",
     defaultTo: normalizeOptionalString(merged.defaultTo),
-    allowFrom: merged.allowFrom ?? ["*"],
+    allowFrom: merged.allowFrom ?? [],
     capabilities: normalizeCapabilities(merged.capabilities),
     config: merged,
   };

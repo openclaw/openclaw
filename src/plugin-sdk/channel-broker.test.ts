@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BROKER_PROTOCOL_VERSION,
+  brokerPlatformSupports,
   buildBrokerConversationTarget,
   createBrokerOutboundRequest,
   createBrokerReceipt,
@@ -45,6 +46,42 @@ describe("channel-broker SDK", () => {
       conversationId: "U123",
       conversationType: "direct",
     });
+  });
+
+  it("checks platform capabilities against delivery, live, receive, and native requirements", () => {
+    const capabilities = {
+      providerId: "acme",
+      delivery: { text: true },
+      platforms: [
+        {
+          platform: "Slack",
+          delivery: { thread: true },
+          live: { draftPreview: true },
+          receive: { webhook: true },
+          native: { appApi: true },
+        },
+      ],
+    };
+
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "slack",
+        requirements: {
+          delivery: { text: true, thread: true },
+          live: { draftPreview: true },
+          receive: { webhook: true },
+          native: { appApi: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "slack",
+        requirements: { delivery: { media: true } },
+      }),
+    ).toBe(false);
   });
 
   it("creates a versioned outbound request for provider-owned delivery", () => {

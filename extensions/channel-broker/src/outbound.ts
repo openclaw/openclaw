@@ -1,8 +1,14 @@
 import {
+  BROKER_PROTOCOL_VERSION,
+  brokerPlatformSupports,
   createBrokerOutboundRequest,
+  normalizeBrokerPlatformId,
+  type BrokerDeliveryRequirements,
   type BrokerMessageAttachment,
+  type BrokerOutboundRequestV1,
   type BrokerOutboundPayload,
   type BrokerReceiptV1,
+  type BrokerReceiptStatus,
 } from "openclaw/plugin-sdk/channel-broker";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -13,9 +19,16 @@ import {
 import { resolveChannelBrokerAccount } from "./accounts.js";
 import { createBrokerRequestId, sendBrokerOutboundRequest } from "./runtime.js";
 import { parseChannelBrokerTarget } from "./target.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const CHANNEL_ID = "channel-broker" as const;
+const BROKER_RECEIPT_STATUSES = new Set<BrokerReceiptStatus>([
+  "sent",
+  "suppressed",
+  "failed",
+  "retryable",
+  "unsupported",
+]);
 
 export class ChannelBrokerProviderReceiptError extends Error {
   readonly receipt: BrokerReceiptV1;
@@ -76,18 +89,95 @@ function buildReceiptSourceResults(params: {
   }));
 }
 
+function listUnsupportedDeliveryRequirements(params: {
+  account: ResolvedChannelBrokerAccount;
+  platform: string;
+  requirements: BrokerDeliveryRequirements;
+}): string[] {
+  const platformCapabilities = params.account.capabilities[params.platform];
+  if (!platformCapabilities) {
+    return [];
+  }
+  if (
+    brokerPlatformSupports({
+      capabilities: {
+        providerId: params.account.providerId,
+        platforms: Object.values(params.account.capabilities),
+      },
+      platform: params.platform,
+      requirements: { delivery: params.requirements },
+    })
+  ) {
+    return [];
+  }
+  return Object.entries(params.requirements)
+    .filter(([, required]) => required)
+    .filter(
+      ([key]) => platformCapabilities.delivery?.[key as keyof BrokerDeliveryRequirements] !== true,
+    )
+    .map(([key]) => key);
+}
+
+function assertProviderSupportsDeliveryRequirements(params: {
+  account: ResolvedChannelBrokerAccount;
+  platform: string;
+  requirements: BrokerDeliveryRequirements;
+}): void {
+  const unsupported = listUnsupportedDeliveryRequirements(params);
+  if (unsupported.length === 0) {
+    return;
+  }
+  throw new Error(
+    `Channel broker provider ${params.account.providerId} does not support ${params.platform} delivery requirements: ${unsupported.join(", ")}.`,
+  );
+}
+
+function validateBrokerReceiptForRequest(
+  receipt: BrokerReceiptV1,
+  request: BrokerOutboundRequestV1,
+): BrokerReceiptV1 {
+  if (receipt.version !== BROKER_PROTOCOL_VERSION) {
+    throw new Error(
+      `Channel broker provider ${request.providerId} returned unsupported receipt version ${String(receipt.version)}.`,
+    );
+  }
+  if (receipt.requestId !== request.requestId) {
+    throw new Error(
+      `Channel broker provider ${request.providerId} returned receipt for request ${receipt.requestId} while OpenClaw expected ${request.requestId}.`,
+    );
+  }
+  if (receipt.providerId !== request.providerId) {
+    throw new Error(
+      `Channel broker receipt provider mismatch: expected ${request.providerId}, got ${receipt.providerId}.`,
+    );
+  }
+  const platform = normalizeBrokerPlatformId(receipt.platform);
+  if (platform !== request.platform) {
+    throw new Error(
+      `Channel broker receipt platform mismatch: expected ${request.platform}, got ${platform}.`,
+    );
+  }
+  if (!BROKER_RECEIPT_STATUSES.has(receipt.status)) {
+    throw new Error(
+      `Channel broker provider ${request.providerId} returned invalid receipt status ${String(receipt.status)}.`,
+    );
+  }
+  if (!Array.isArray(receipt.messageIds)) {
+    throw new Error(`Channel broker provider ${request.providerId} returned invalid message ids.`);
+  }
+  return {
+    ...receipt,
+    platform,
+    messageIds: receipt.messageIds.map((messageId) => messageId.trim()).filter(Boolean),
+  };
+}
+
 async function sendChannelBrokerFinal(params: {
   cfg: CoreConfig;
   accountId?: string | null;
   to: string;
   payloads: BrokerOutboundPayload[];
-  requirements: {
-    text?: boolean;
-    media?: boolean;
-    replyTo?: boolean;
-    thread?: boolean;
-    silent?: boolean;
-  };
+  requirements: BrokerDeliveryRequirements;
   receiptKind: "text" | "media";
   threadId?: string | number | null;
   replyToId?: string | number | null;
@@ -102,6 +192,17 @@ async function sendChannelBrokerFinal(params: {
   });
   const threadId = normalizeMaybeString(target.threadId);
   const replyToId = normalizeMaybeString(params.replyToId);
+  const requirements = {
+    ...params.requirements,
+    ...(replyToId ? { replyTo: true } : {}),
+    ...(threadId ? { thread: true } : {}),
+    ...(params.silent ? { silent: true } : {}),
+  } satisfies BrokerDeliveryRequirements;
+  assertProviderSupportsDeliveryRequirements({
+    account,
+    platform: target.platform,
+    requirements,
+  });
   const request = createBrokerOutboundRequest({
     requestId: createBrokerRequestId(),
     providerId: account.providerId,
@@ -122,18 +223,16 @@ async function sendChannelBrokerFinal(params: {
           },
         }
       : {}),
-    requirements: {
-      ...params.requirements,
-      ...(replyToId ? { replyTo: true } : {}),
-      ...(threadId ? { thread: true } : {}),
-      ...(params.silent ? { silent: true } : {}),
-    },
+    requirements,
   });
-  const receipt = await sendBrokerOutboundRequest({
-    account,
+  const receipt = validateBrokerReceiptForRequest(
+    await sendBrokerOutboundRequest({
+      account,
+      request,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
     request,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
+  );
   const messageId = resolvePrimaryMessageId(receipt);
   return {
     messageId,

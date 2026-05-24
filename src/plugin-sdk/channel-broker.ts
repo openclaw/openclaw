@@ -141,6 +141,13 @@ export type BrokerProviderCapabilities = {
   receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
 };
 
+export type BrokerCapabilityRequirements = {
+  delivery?: BrokerDeliveryRequirements;
+  live?: Partial<Record<"draftPreview" | "previewFinalization" | "progressUpdates", boolean>>;
+  receive?: Partial<Record<"webhook" | "polling" | "ackAfterDurableSend" | "manualAck", boolean>>;
+  native?: Record<string, boolean>;
+};
+
 export type BrokerProviderHealth = {
   providerId: string;
   state: "ok" | "degraded" | "down" | "unknown";
@@ -226,6 +233,69 @@ export function parseBrokerConversationTarget(value: string): BrokerConversation
       : {}),
     ...(threadId ? { threadId } : {}),
   };
+}
+
+function normalizeBrokerProviderCapabilities(
+  capabilities: BrokerProviderCapabilities,
+): BrokerProviderCapabilities {
+  return {
+    ...capabilities,
+    platforms: capabilities.platforms.map((entry) => ({
+      ...entry,
+      platform: normalizeBrokerPlatformId(entry.platform),
+    })),
+  };
+}
+
+export function resolveBrokerPlatformCapabilities(params: {
+  capabilities: BrokerProviderCapabilities;
+  platform: string;
+}): BrokerPlatformCapabilities | undefined {
+  const normalized = normalizeBrokerProviderCapabilities(params.capabilities);
+  const platform = normalizeBrokerPlatformId(params.platform);
+  const platformCapabilities = normalized.platforms.find((entry) => entry.platform === platform);
+  if (!platformCapabilities) {
+    return undefined;
+  }
+  return {
+    platform,
+    delivery: Object.assign({}, normalized.delivery, platformCapabilities.delivery),
+    live: Object.assign({}, normalized.live, platformCapabilities.live),
+    receive: Object.assign({}, normalized.receive, platformCapabilities.receive),
+    ...(platformCapabilities.native ? { native: { ...platformCapabilities.native } } : {}),
+  };
+}
+
+function supportsRequiredFlags(
+  supported: Record<string, boolean> | undefined,
+  required: Record<string, boolean> | undefined,
+): boolean {
+  for (const [key, value] of Object.entries(required ?? {})) {
+    if (value && !supported?.[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function brokerPlatformSupports(params: {
+  capabilities: BrokerProviderCapabilities;
+  platform: string;
+  requirements: BrokerCapabilityRequirements;
+}): boolean {
+  const platformCapabilities = resolveBrokerPlatformCapabilities({
+    capabilities: params.capabilities,
+    platform: params.platform,
+  });
+  if (!platformCapabilities) {
+    return false;
+  }
+  return (
+    supportsRequiredFlags(platformCapabilities.delivery, params.requirements.delivery) &&
+    supportsRequiredFlags(platformCapabilities.live, params.requirements.live) &&
+    supportsRequiredFlags(platformCapabilities.receive, params.requirements.receive) &&
+    supportsRequiredFlags(platformCapabilities.native, params.requirements.native)
+  );
 }
 
 export function createBrokerOutboundRequest(

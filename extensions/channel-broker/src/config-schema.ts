@@ -2,23 +2,46 @@ import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-sch
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 
+const BrokerDeliveryRequirementsSchema = z
+  .object({
+    text: z.boolean().optional(),
+    media: z.boolean().optional(),
+    payload: z.boolean().optional(),
+    silent: z.boolean().optional(),
+    replyTo: z.boolean().optional(),
+    thread: z.boolean().optional(),
+    nativeQuote: z.boolean().optional(),
+    previewFinalization: z.boolean().optional(),
+    progressUpdates: z.boolean().optional(),
+    nativeStreaming: z.boolean().optional(),
+    reconcileUnknownSend: z.boolean().optional(),
+  })
+  .strict();
+
+const BrokerLiveCapabilitiesSchema = z
+  .object({
+    draftPreview: z.boolean().optional(),
+    previewFinalization: z.boolean().optional(),
+    progressUpdates: z.boolean().optional(),
+  })
+  .strict();
+
+const BrokerReceiveCapabilitiesSchema = z
+  .object({
+    webhook: z.boolean().optional(),
+    polling: z.boolean().optional(),
+    ackAfterDurableSend: z.boolean().optional(),
+    manualAck: z.boolean().optional(),
+  })
+  .strict();
+
 const BrokerPlatformCapabilitiesSchema = z
   .object({
-    inbound: z.boolean().optional(),
-    outbound: z.boolean().optional(),
-    receipts: z.boolean().optional(),
-    threads: z.boolean().optional(),
-    topics: z.boolean().optional(),
-    attachments: z.boolean().optional(),
-    reactions: z.boolean().optional(),
-    edits: z.boolean().optional(),
-    deletes: z.boolean().optional(),
-    draftPreview: z.boolean().optional(),
-    progressPreview: z.boolean().optional(),
-    finalEdit: z.boolean().optional(),
-    businessApi: z.boolean().optional(),
-    deviceBound: z.boolean().optional(),
-    selfHosted: z.boolean().optional(),
+    platform: z.string().optional(),
+    delivery: BrokerDeliveryRequirementsSchema.optional(),
+    live: BrokerLiveCapabilitiesSchema.optional(),
+    receive: BrokerReceiveCapabilitiesSchema.optional(),
+    native: z.record(z.string(), z.boolean()).optional(),
   })
   .strict();
 

@@ -241,6 +241,45 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("rejects provider receipts that do not match the outbound request", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "stale-request",
+        providerId: "acme",
+        platform: "Telegram",
+        status: "sent",
+        messageIds: ["native-stale"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-send-current",
+      sendOutboundRequest,
+    });
+
+    await expect(
+      channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                },
+              },
+            },
+          },
+        },
+        to: "telegram:chat-1",
+        text: "hello",
+        accountId: "acme",
+      } as never),
+    ).rejects.toThrow(
+      "Channel broker provider acme returned receipt for request stale-request while OpenClaw expected broker-send-current.",
+    );
+    expect(sendOutboundRequest).toHaveBeenCalledOnce();
+  });
+
   it("rejects targets outside a provider's configured platform set", () => {
     const result = channelBrokerPlugin.outbound?.resolveTarget?.({
       cfg: {
@@ -269,6 +308,43 @@ describe("channel-broker plugin", () => {
         }),
       }),
     });
+  });
+
+  it("rejects sends that exceed declared provider delivery capabilities", async () => {
+    const sendOutboundRequest = vi.fn();
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-capability-reject-1",
+    });
+
+    await expect(
+      channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                  platforms: ["slack"],
+                  capabilities: {
+                    slack: {
+                      delivery: { text: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        to: "broker:slack:C123?threadId=1716500000.000001",
+        text: "thread proof",
+        accountId: "acme",
+      } as never),
+    ).rejects.toThrow(
+      "Channel broker provider acme does not support slack delivery requirements: thread.",
+    );
+    expect(sendOutboundRequest).not.toHaveBeenCalled();
   });
 
   it("rejects invalid broker targets during outbound resolution", () => {
