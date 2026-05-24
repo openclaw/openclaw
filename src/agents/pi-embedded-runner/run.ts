@@ -141,6 +141,7 @@ import {
   buildUsageAgentMetaFields,
   createCompactionDiagId,
   resolveActiveErrorContext,
+  resolveAssistantForFailover,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
@@ -1644,10 +1645,16 @@ export async function runEmbeddedPiAgent(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
+          const assistantForFailover = resolveAssistantForFailover({
+            provider,
+            model: modelId,
+            currentAttemptAssistant,
+            sessionLastAssistant,
+          });
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
-            assistant: currentAttemptAssistant ?? sessionLastAssistant,
+            assistant: assistantForFailover,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
@@ -1662,8 +1669,8 @@ export async function runEmbeddedPiAgent(
             accumulatedReplayState,
             attempt.replayMetadata,
           );
-          const formattedAssistantErrorText = sessionLastAssistant
-            ? formatAssistantErrorText(sessionLastAssistant, {
+          const formattedAssistantErrorText = assistantForFailover
+            ? formatAssistantErrorText(assistantForFailover, {
                 cfg: params.config,
                 sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
@@ -1671,8 +1678,8 @@ export async function runEmbeddedPiAgent(
               })
             : undefined;
           const assistantErrorText =
-            sessionLastAssistant?.stopReason === "error"
-              ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
+            assistantForFailover?.stopReason === "error"
+              ? assistantForFailover.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
             !hasOutboundDeliveryEvidence(attempt) &&
@@ -2469,7 +2476,6 @@ export async function runEmbeddedPiAgent(
             throw promptError;
           }
 
-          const assistantForFailover = currentAttemptAssistant ?? sessionLastAssistant;
           const fallbackThinking = pickFallbackThinkingLevel({
             message: assistantForFailover?.errorMessage,
             attempted: attemptedThinking,

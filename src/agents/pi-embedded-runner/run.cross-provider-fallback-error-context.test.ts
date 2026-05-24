@@ -30,15 +30,19 @@ function isCurrentAttemptAssistant(
   );
 }
 
-function setupDeepseekFallbackErrorMatchers() {
+function setupFallbackErrorMatchers(provider: string) {
   mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
     const assistant = args[0];
-    return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    return isCurrentAttemptAssistant(assistant) && assistant.provider === provider;
   });
   mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
     const assistant = args[0];
-    return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    return isCurrentAttemptAssistant(assistant) && assistant.provider === provider;
   });
+}
+
+function setupDeepseekFallbackErrorMatchers() {
+  setupFallbackErrorMatchers("deepseek");
 }
 
 function captureFormattedAssistant() {
@@ -53,13 +57,17 @@ function captureFormattedAssistant() {
   return () => lastFormattedAssistant;
 }
 
-function expectDeepseekAssistant(value: unknown) {
+function expectAssistant(value: unknown, provider: string, model: string, errorMessage: string) {
   if (!isCurrentAttemptAssistant(value)) {
-    throw new Error(`Expected DeepSeek assistant, got ${String(value)}`);
+    throw new Error(`Expected ${provider} assistant, got ${String(value)}`);
   }
-  expect(value.provider).toBe("deepseek");
-  expect(value.model).toBe("deepseek-chat");
-  expect(value.errorMessage).toBe(DEEPSEEK_ERROR_MESSAGE);
+  expect(value.provider).toBe(provider);
+  expect(value.model).toBe(model);
+  expect(value.errorMessage).toBe(errorMessage);
+}
+
+function expectDeepseekAssistant(value: unknown) {
+  expectAssistant(value, "deepseek", "deepseek-chat", DEEPSEEK_ERROR_MESSAGE);
 }
 
 function makeCrossProviderFallbackConfig() {
@@ -130,16 +138,17 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
   });
 
   it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
-    setupDeepseekFallbackErrorMatchers();
+    const anthropicErrorMessage = "429 anthropic rate limit";
+    setupFallbackErrorMatchers("anthropic");
     const getLastFormattedAssistant = captureFormattedAssistant();
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
-          errorMessage: DEEPSEEK_ERROR_MESSAGE,
-          provider: "deepseek",
-          model: "deepseek-chat",
+          errorMessage: anthropicErrorMessage,
+          provider: "anthropic",
+          model: "test-model",
           content: [],
         }),
         currentAttemptAssistant: undefined,
@@ -152,6 +161,43 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
       config: makeCrossProviderFallbackConfig(),
     });
 
-    await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow(`anthropic/test-model: ${anthropicErrorMessage}`);
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
+    const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
+    expectAssistant(rateLimitCalls.at(-1)?.[0], "anthropic", "test-model", anthropicErrorMessage);
+    expectAssistant(getLastFormattedAssistant(), "anthropic", "test-model", anthropicErrorMessage);
+  });
+
+  it("does not attribute a later candidate failure to stale session history", async () => {
+    setupDeepseekFallbackErrorMatchers();
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You have hit your ChatGPT usage limit (plus plan).",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-cross-provider-stale-session-error-context",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    const result = await promise;
+
+    expect(result.payloads.map((payload) => payload.text).join("\n")).not.toContain(
+      "ChatGPT usage limit",
+    );
+    expect(mockedIsRateLimitAssistantError).not.toHaveBeenCalled();
+    expect(getLastFormattedAssistant()).toBeUndefined();
   });
 });
