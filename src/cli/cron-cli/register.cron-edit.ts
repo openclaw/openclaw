@@ -299,7 +299,7 @@ export function registerCronEditCommand(cron: Command) {
             const delivery: Record<string, unknown> = {};
             if (hasDeliveryModeFlag) {
               delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
-            } else if (hasBestEffort) {
+            } else if (opts.bestEffortDeliver === true) {
               // Back-compat: toggling best-effort alone has historically implied announce mode.
               delivery.mode = "announce";
             }
