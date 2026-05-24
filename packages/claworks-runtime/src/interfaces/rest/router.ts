@@ -606,6 +606,25 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // GET /v1/capabilities — 列出所有已注册能力（Studio UI / 管理工具）
+      if (method === "GET" && parts[1] === "capabilities") {
+        const caps = runtime.capabilities.list().map((c) => ({
+          id: c.id,
+          verb: c.verb,
+          description: c.description,
+          owner: c.owner,
+        }));
+        sendJson(res, 200, { capabilities: caps, count: caps.length });
+        return true;
+      }
+
+      // GET /v1/runs — 全局 Playbook 运行历史（最近 50 条）
+      if (method === "GET" && parts[1] === "runs" && !parts[2]) {
+        const runs = await runtime.playbookEngine.listRuns({ limit: 50 });
+        sendJson(res, 200, { runs, count: runs.length });
+        return true;
+      }
+
       if (method === "GET" && parts[1] === "events") {
         const events = await runtime.kernel.bus.query({ limit: 50 });
         sendJson(res, 200, { events });
