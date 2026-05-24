@@ -1,10 +1,18 @@
 // Browser tests cover server context.stop running browser plugin behavior.
+
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CONFIG_DIR } from "../utils.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 const pwAiMocks = vi.hoisted(() => ({
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
+}));
+const chromeMcpMocks = vi.hoisted(() => ({
+  closeChromeMcpSession: vi.fn(async () => false),
+  ensureChromeMcpAvailable: vi.fn(async () => {}),
+  listChromeMcpTabs: vi.fn(async () => []),
 }));
 
 vi.mock("./pw-ai.js", () => pwAiMocks);
@@ -17,11 +25,7 @@ vi.mock("./chrome.js", () => ({
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test"),
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
-vi.mock("./chrome-mcp.js", () => ({
-  closeChromeMcpSession: vi.fn(async () => false),
-  ensureChromeMcpAvailable: vi.fn(async () => {}),
-  listChromeMcpTabs: vi.fn(async () => []),
-}));
+vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -70,5 +74,29 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
 
     await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: false });
     expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
+  });
+
+  it("passes Chrome MCP profile details to stop cleanup", async () => {
+    const userDataDir = path.join(CONFIG_DIR, "browser", "chrome-live", "user-data");
+    const profile = makeBrowserProfile({
+      name: "chrome-live",
+      driver: "existing-session",
+      attachOnly: true,
+      userDataDir,
+      executablePath: "/usr/bin/google-chrome-stable",
+    });
+    chromeMcpMocks.closeChromeMcpSession.mockResolvedValueOnce(true);
+    const { profileCtx } = createStopHarness(profile);
+
+    await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: true });
+    expect(chromeMcpMocks.closeChromeMcpSession).toHaveBeenCalledWith(
+      "chrome-live",
+      expect.objectContaining({
+        name: "chrome-live",
+        driver: "existing-session",
+        userDataDir,
+        cleanupBrowserProcesses: true,
+      }),
+    );
   });
 });

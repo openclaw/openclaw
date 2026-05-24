@@ -98,6 +98,11 @@ function normalizeFailureMessage(err: unknown): string {
   return trimmed || "unknown browser launch failure";
 }
 
+function isChromeMcpNoPageSelectedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /no page selected/i.test(message);
+}
+
 function resetManagedLaunchFailure(profileState: ProfileRuntimeState): void {
   profileState.managedLaunchFailure = undefined;
 }
@@ -191,11 +196,20 @@ export function createProfileAvailability({
 
   const isTransportAvailable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
-      const { ensureChromeMcpAvailable } = await getChromeMcpModule();
-      await ensureChromeMcpAvailable(profile.name, profile, {
-        ephemeral: true,
-        timeoutMs,
-      });
+      const { getChromeMcpPid, listChromeMcpTabs } = await getChromeMcpModule();
+      if (getChromeMcpPid(profile.name) == null) {
+        return false;
+      }
+      try {
+        await listChromeMcpTabs(profile.name, profile, {
+          ephemeral: true,
+          timeoutMs,
+        });
+      } catch (err) {
+        if (!isChromeMcpNoPageSelectedError(err)) {
+          throw err;
+        }
+      }
       return true;
     }
     return await isReachable(timeoutMs);
@@ -473,7 +487,7 @@ export function createProfileAvailability({
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       const { closeChromeMcpSession } = await getChromeMcpModule();
-      const stopped = await closeChromeMcpSession(profile.name);
+      const stopped = await closeChromeMcpSession(profile.name, profile);
       return { stopped };
     }
     const profileState = getProfileState();

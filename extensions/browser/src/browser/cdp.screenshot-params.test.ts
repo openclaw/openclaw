@@ -84,6 +84,7 @@ const localProfile: ResolvedBrowserProfile = {
   color: "#FF4500",
   driver: "openclaw",
   headless: false,
+  noSandbox: false,
   attachOnly: false,
 };
 

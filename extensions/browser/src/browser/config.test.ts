@@ -4,7 +4,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
-import { resolveUserPath } from "../utils.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,
   OPENCLAW_BROWSER_HEADLESS_ENV,
@@ -963,6 +963,30 @@ describe("browser config", () => {
     expect(profile?.userDataDir).toBe(
       resolveUserPath("~/Library/Application Support/BraveSoftware/Brave-Browser"),
     );
+    expect(profile?.cleanupBrowserProcesses).toBeUndefined();
+  });
+
+  it("marks only OpenClaw-managed Chrome MCP user data dirs for browser cleanup", () => {
+    const managedUserDataDir = path.join(CONFIG_DIR, "browser", "agent-chrome", "user-data");
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        "agent-chrome": {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: managedUserDataDir,
+          color: "#00AA00",
+        },
+        brave: {
+          driver: "existing-session",
+          attachOnly: true,
+          userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+          color: "#FB542B",
+        },
+      },
+    });
+
+    expect(resolveProfile(resolved, "agent-chrome")?.cleanupBrowserProcesses).toBe(true);
+    expect(resolveProfile(resolved, "brave")?.cleanupBrowserProcesses).toBeUndefined();
   });
 
   it("resolves Chrome MCP command, args, and endpoint URL for existing-session profiles", () => {

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -45,7 +45,7 @@ const describeLive = LIVE ? describe : describe.skip;
 
 type LiveFixture = {
   cdpPort: number;
-  chrome: ChildProcessWithoutNullStreams;
+  chrome: ChildProcess;
   httpPort: number;
   httpServer: Server;
   root: string;
@@ -391,7 +391,7 @@ function createLiveRouteJson(
   };
   const ctx = createBrowserRouteContext({ getState: () => state });
   const dispatcher = createBrowserRouteDispatcher(ctx);
-  return async (
+  return async <T = unknown>(
     _baseUrl: string | undefined,
     req: {
       method: BrowserDispatchRequest["method"];
@@ -400,7 +400,7 @@ function createLiveRouteJson(
       body?: unknown;
       timeoutMs?: number;
     },
-  ) => {
+  ): Promise<T> => {
     const response = await dispatcher.dispatch({
       method: req.method,
       path: req.path,
@@ -410,7 +410,7 @@ function createLiveRouteJson(
     if (response.status >= 400) {
       throw new Error(JSON.stringify(response.body));
     }
-    return response.body;
+    return response.body as T;
   };
 }
 
@@ -851,21 +851,21 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         });
         browserToolTesting.setDepsForTest({
           browserRouteJson: routeJson,
-          browserDoctor: async (_baseUrl, opts) =>
+          browserDoctor: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "GET",
               path: "/doctor",
               query: { profile: opts.profile },
               timeoutMs: opts.timeoutMs,
             }),
-          browserStatus: async (_baseUrl, opts) =>
+          browserStatus: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "GET",
               path: "/",
               query: { profile: opts.profile },
               timeoutMs: opts.timeoutMs,
             }),
-          browserStart: async (_baseUrl, opts) => {
+          browserStart: async (_baseUrl, opts: any) => {
             await routeJson(undefined, {
               method: "POST",
               path: "/start",
@@ -873,7 +873,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               timeoutMs: opts.timeoutMs,
             });
           },
-          browserStop: async (_baseUrl, opts) => {
+          browserStop: async (_baseUrl, opts: any) => {
             await routeJson(undefined, {
               method: "POST",
               path: "/stop",
@@ -881,15 +881,15 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               timeoutMs: opts.timeoutMs,
             });
           },
-          browserProfiles: async (_baseUrl, opts) =>
+          browserProfiles: async (_baseUrl, opts: any) =>
             (
-              await routeJson(undefined, {
+              await routeJson<{ profiles: any[] }>(undefined, {
                 method: "GET",
                 path: "/profiles",
                 timeoutMs: opts.timeoutMs,
               })
             ).profiles,
-          browserOpenTab: async (_baseUrl, url, opts) =>
+          browserOpenTab: async (_baseUrl, url, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/tabs/open",
@@ -897,7 +897,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               body: { url, label: opts.label },
               timeoutMs: opts.timeoutMs,
             }),
-          browserFocusTab: async (_baseUrl, focusTargetId, opts) => {
+          browserFocusTab: async (_baseUrl, focusTargetId, opts: any) => {
             await routeJson(undefined, {
               method: "POST",
               path: "/tabs/focus",
@@ -906,7 +906,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               timeoutMs: opts.timeoutMs,
             });
           },
-          browserCloseTab: async (_baseUrl, closeTargetId, opts) => {
+          browserCloseTab: async (_baseUrl, closeTargetId, opts: any) => {
             await routeJson(undefined, {
               method: "DELETE",
               path: `/tabs/${encodeURIComponent(closeTargetId)}`,
@@ -914,14 +914,14 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               timeoutMs: opts.timeoutMs,
             });
           },
-          browserNavigate: async (_baseUrl, opts) =>
+          browserNavigate: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/navigate",
               query: { profile: opts.profile },
               body: { url: opts.url, targetId: opts.targetId },
             }),
-          browserScreenshotAction: async (_baseUrl, opts) =>
+          browserScreenshotAction: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/screenshot",
@@ -929,7 +929,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               body: opts,
               timeoutMs: opts.timeoutMs,
             }),
-          browserPdfSave: async (_baseUrl, opts) =>
+          browserPdfSave: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/pdf",
@@ -942,7 +942,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
           imageResultFromFile: routeImageResult,
         });
         browserToolActionTesting.setDepsForTest({
-          browserAct: async (_baseUrl, request, opts) =>
+          browserAct: async (_baseUrl, request, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/act",
@@ -950,28 +950,28 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               body: request,
               timeoutMs: opts?.timeoutMs,
             }),
-          browserTabs: async (_baseUrl, opts) =>
+          browserTabs: async (_baseUrl, opts: any) =>
             (
-              await routeJson(undefined, {
+              await routeJson<{ tabs: any[] }>(undefined, {
                 method: "GET",
                 path: "/tabs",
                 query: { profile: opts.profile },
                 timeoutMs: opts.timeoutMs,
               })
             ).tabs,
-          browserSnapshot: async (_baseUrl, opts) =>
+          browserSnapshot: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "GET",
               path: "/snapshot",
               query: opts,
             }),
-          browserConsoleMessages: async (_baseUrl, opts) =>
+          browserConsoleMessages: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "GET",
               path: "/console",
               query: opts,
             }),
-          browserNetworkRequests: async (_baseUrl, opts) =>
+          browserNetworkRequests: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "GET",
               path: "/requests",
@@ -1288,7 +1288,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
       let targetId: string | undefined;
       try {
         const routeJson = createLiveRouteJson(profileName, fixture);
-        const browserAct = async (
+        const browserAct: any = async (
           _baseUrl: string | undefined,
           request: unknown,
           opts?: { profile?: string; timeoutMs?: number },
@@ -1485,7 +1485,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         await mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
         await writeFile(uploadPath, "openclaw roster gauntlet import");
         const routeJson = createLiveRouteJson(profileName, fixture);
-        const browserAct = async (
+        const browserAct: any = async (
           _baseUrl: string | undefined,
           request: unknown,
           opts?: { profile?: string; timeoutMs?: number },
@@ -1501,7 +1501,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
         browserToolTesting.setDepsForTest({
           browserRouteJson: routeJson,
           browserAct,
-          browserArmFileChooser: async (_baseUrl, opts) =>
+          browserArmFileChooser: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/hooks/file-chooser",
@@ -1509,7 +1509,7 @@ describeLive("browser (live): Chrome MCP isolated local fixture", () => {
               body: opts,
               timeoutMs: opts.timeoutMs,
             }),
-          browserArmDialog: async (_baseUrl, opts) =>
+          browserArmDialog: async (_baseUrl, opts: any) =>
             routeJson(undefined, {
               method: "POST",
               path: "/hooks/dialog",

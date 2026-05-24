@@ -252,6 +252,11 @@ function expectExistingSessionProfile(value: unknown) {
 
 describe("existing-session browser routes", () => {
   beforeEach(() => {
+    routeState.cdpUrl = "http://127.0.0.1:18800";
+    routeState.profileCtx.profile = {
+      driver: "existing-session" as const,
+      name: "chrome-live",
+    };
     routeState.profileCtx.ensureTabAvailable.mockClear();
     chromeMcpMocks.analyzeChromeMcpPerformanceInsight.mockClear();
     routeState.profileCtx.listTabs.mockClear();
@@ -478,6 +483,33 @@ describe("existing-session browser routes", () => {
       url: "https://example.com",
       ssrfPolicy: { allowPrivateNetwork: false },
     });
+  });
+
+  it("returns a clear unsupported error when Chrome MCP PDF has no reachable HTTP CDP endpoint", async () => {
+    const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-cdp-test-"));
+    routeState.cdpUrl = "";
+    routeState.profileCtx.profile = {
+      driver: "existing-session" as const,
+      name: "chrome-live",
+      userDataDir,
+    } as never;
+    await fs.writeFile(
+      path.join(userDataDir, "DevToolsActivePort"),
+      "9\n/devtools/browser/stale\n",
+    );
+    try {
+      const handler = getPdfPostHandler();
+      const response = createBrowserRouteResponse();
+      await handler?.({ params: {}, query: {}, body: {} }, response.res);
+
+      expect(response.statusCode).toBe(501);
+      expect(String(requireRecord(response.body, "response body").error)).toContain(
+        "Chrome MCP pipe sessions do not expose HTTP CDP for PDF generation",
+      );
+      expect(cdpMocks.printPdfViaCdp).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(userDataDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects selector-based element screenshots for existing-session profiles", async () => {

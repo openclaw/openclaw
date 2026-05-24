@@ -6,6 +6,8 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeChromeMcpPerformanceInsight,
+  collectChromeMcpBrowserProcessIdsForUserDataDirForTest,
+  collectChromeMcpProcessTreeIdsForTest,
   buildChromeMcpArgs,
   clickChromeMcpCoords,
   clickChromeMcpElement,
@@ -446,6 +448,25 @@ describe("chrome MCP page parsing", () => {
         type: "page",
       },
     ]);
+  });
+
+  it("matches only exact Chrome MCP user-data-dir processes for cleanup", () => {
+    const psOutput = [
+      "  111 /usr/bin/google-chrome-stable --user-data-dir=/tmp/agent-chrome --remote-debugging-pipe",
+      "  112 /bin/bash -c rg /tmp/agent-chrome",
+      "  113 npx -y chrome-devtools-mcp@latest --userDataDir /tmp/agent-chrome",
+      "  114 /opt/google/chrome/chrome --user-data-dir=/tmp/agent-chrome-other",
+    ].join("\n");
+
+    expect(
+      collectChromeMcpBrowserProcessIdsForUserDataDirForTest(psOutput, "/tmp/agent-chrome"),
+    ).toEqual([111, 113]);
+  });
+
+  it("collects owned Chrome MCP transport process trees for cleanup", () => {
+    const psOutput = ["  200     1", "  201   200", "  202   201", "  203     1"].join("\n");
+
+    expect(collectChromeMcpProcessTreeIdsForTest(psOutput, 200)).toEqual([202, 201, 200]);
   });
 
   it("parses Chrome MCP console message structured responses", async () => {

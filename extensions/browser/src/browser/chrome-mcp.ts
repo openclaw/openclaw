@@ -109,6 +109,7 @@ type ChromeMcpSession = {
   transport: StdioClientTransport;
   ready: Promise<void>;
   ownsProcessTree?: boolean;
+  options?: NormalizedChromeMcpProfileOptions;
 };
 
 type ChromeMcpCallOptions = {
@@ -124,6 +125,7 @@ export type ChromeMcpProfileOptions = {
   executablePath?: string;
   headless?: boolean;
   noSandbox?: boolean;
+  cleanupBrowserProcesses?: boolean;
   mcpCommand?: string;
   mcpArgs?: string[];
 };
@@ -134,6 +136,7 @@ type NormalizedChromeMcpProfileOptions = {
   executablePath?: string;
   headless?: boolean;
   noSandbox?: boolean;
+  cleanupBrowserProcesses?: boolean;
   command: string;
   extraArgs: string[];
 };
@@ -203,6 +206,10 @@ const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--categoryExtensions",
 ];
 const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
+const CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS = 1_000;
+const CHROME_MCP_BROWSER_STOP_GRACE_MS = 1_500;
+
+const execFileAsync = promisify(execFile);
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "--autoConnect",
   "--auto-connect",
@@ -639,6 +646,7 @@ function normalizeChromeMcpOptions(
     executablePath: normalizeOptionalString(options.executablePath),
     headless: typeof options.headless === "boolean" ? options.headless : undefined,
     noSandbox: options.noSandbox === true,
+    cleanupBrowserProcesses: options.cleanupBrowserProcesses === true,
     extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
   };
 }
@@ -748,6 +756,7 @@ function buildChromeMcpSessionCacheKey(
     options.executablePath ?? "",
     typeof options.headless === "boolean" ? String(options.headless) : "",
     options.noSandbox ? "true" : "",
+    options.cleanupBrowserProcesses ? "true" : "",
     options.extraArgs,
   ]);
 }
@@ -765,6 +774,7 @@ function buildChromeMcpPageStateKey(
     options.executablePath ?? "",
     typeof options.headless === "boolean" ? String(options.headless) : "",
     options.noSandbox ? "true" : "",
+    options.cleanupBrowserProcesses ? "true" : "",
     options.extraArgs,
     targetId,
   ]);
@@ -809,8 +819,10 @@ function pageStateKeyMatchesProfileName(
 async function closeChromeMcpSessionsForProfile(
   profileName: string,
   keepKey?: string,
+  fallbackOptions?: ChromeMcpOptionsInput,
 ): Promise<boolean> {
   let closed = false;
+  const cleanupOptions: NormalizedChromeMcpProfileOptions[] = [];
 
   for (const [key, pending] of Array.from(pendingSessions.entries())) {
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
@@ -824,8 +836,15 @@ async function closeChromeMcpSessionsForProfile(
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
       sessions.delete(key);
       closed = true;
+      if (session.options) {
+        cleanupOptions.push(session.options);
+      }
       await closeChromeMcpSessionHandle(session);
     }
+  }
+
+  if (fallbackOptions) {
+    cleanupOptions.push(normalizeChromeMcpOptions(fallbackOptions));
   }
 
   for (const key of Array.from(emulationStates.keys())) {
@@ -834,7 +853,209 @@ async function closeChromeMcpSessionsForProfile(
     }
   }
 
+  for (const options of dedupeChromeMcpCleanupOptions(cleanupOptions)) {
+    const killed = await terminateChromeMcpBrowserProcessesForOptions(options);
+    if (killed > 0) {
+      closed = true;
+    }
+  }
+
   return closed;
+}
+
+function dedupeChromeMcpCleanupOptions(
+  options: NormalizedChromeMcpProfileOptions[],
+): NormalizedChromeMcpProfileOptions[] {
+  const seen = new Set<string>();
+  const result: NormalizedChromeMcpProfileOptions[] = [];
+  for (const option of options) {
+    const key = JSON.stringify([
+      option.userDataDir ?? "",
+      option.browserUrl ?? "",
+      option.command,
+      option.extraArgs,
+      option.cleanupBrowserProcesses === true,
+    ]);
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(option);
+    }
+  }
+  return result;
+}
+
+function shouldCleanupChromeMcpBrowserProcesses(
+  options: NormalizedChromeMcpProfileOptions,
+): options is NormalizedChromeMcpProfileOptions & { userDataDir: string } {
+  if (
+    options.cleanupBrowserProcesses !== true ||
+    !options.userDataDir ||
+    options.browserUrl ||
+    hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)
+  ) {
+    return false;
+  }
+  const resolved = path.resolve(options.userDataDir);
+  if (resolved === path.parse(resolved).root || resolved === path.resolve(os.homedir())) {
+    return false;
+  }
+  return true;
+}
+
+function collectChromeMcpBrowserProcessIdsForUserDataDir(
+  psOutput: string,
+  userDataDir: string,
+): number[] {
+  const resolvedUserDataDir = path.resolve(userDataDir);
+  const needles = [
+    `--user-data-dir=${resolvedUserDataDir}`,
+    `--userDataDir ${resolvedUserDataDir}`,
+    `--userDataDir=${resolvedUserDataDir}`,
+  ];
+  const pids: number[] = [];
+  const includesNeedleAsArg = (command: string, needle: string): boolean => {
+    let offset = 0;
+    for (;;) {
+      const index = command.indexOf(needle, offset);
+      if (index < 0) {
+        return false;
+      }
+      const before = index === 0 ? "" : command[index - 1];
+      const after = command[index + needle.length] ?? "";
+      const beforeOk = before === "" || /\s/.test(before);
+      const afterOk = after === "" || /\s/.test(after);
+      if (beforeOk && afterOk) {
+        return true;
+      }
+      offset = index + needle.length;
+    }
+  };
+  for (const line of psOutput.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const command = match[2] ?? "";
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    if (needles.some((needle) => includesNeedleAsArg(command, needle))) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+export function collectChromeMcpBrowserProcessIdsForUserDataDirForTest(
+  psOutput: string,
+  userDataDir: string,
+): number[] {
+  return collectChromeMcpBrowserProcessIdsForUserDataDir(psOutput, userDataDir);
+}
+
+function collectProcessTreeIdsFromPsOutput(psOutput: string, rootPid: number): number[] {
+  if (!Number.isInteger(rootPid) || rootPid <= 0 || rootPid === process.pid) {
+    return [];
+  }
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of psOutput.split("\n")) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s*$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0 || pid === process.pid) {
+      continue;
+    }
+    const children = childrenByParent.get(ppid) ?? [];
+    children.push(pid);
+    childrenByParent.set(ppid, children);
+  }
+
+  const seen = new Set<number>();
+  const result: number[] = [];
+  const visit = (pid: number): void => {
+    if (seen.has(pid) || pid === process.pid) {
+      return;
+    }
+    seen.add(pid);
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      visit(childPid);
+    }
+    result.push(pid);
+  };
+  visit(rootPid);
+  return result;
+}
+
+export function collectChromeMcpProcessTreeIdsForTest(psOutput: string, rootPid: number): number[] {
+  return collectProcessTreeIdsFromPsOutput(psOutput, rootPid);
+}
+
+async function findChromeMcpBrowserProcessIdsForUserDataDir(
+  userDataDir: string,
+): Promise<number[]> {
+  if (process.platform === "win32") {
+    return [];
+  }
+  try {
+    const { stdout } = await execFileAsync("ps", ["-eo", "pid=,args="], {
+      encoding: "utf8",
+      maxBuffer: 1_000_000,
+      timeout: CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS,
+    });
+    return collectChromeMcpBrowserProcessIdsForUserDataDir(stdout, userDataDir);
+  } catch {
+    return [];
+  }
+}
+
+async function findProcessTreeIds(rootPid: number): Promise<number[]> {
+  if (process.platform === "win32") {
+    return Number.isInteger(rootPid) && rootPid > 0 && rootPid !== process.pid ? [rootPid] : [];
+  }
+  try {
+    const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid="], {
+      encoding: "utf8",
+      maxBuffer: 1_000_000,
+      timeout: CHROME_MCP_PROCESS_SCAN_TIMEOUT_MS,
+    });
+    return collectProcessTreeIdsFromPsOutput(stdout, rootPid);
+  } catch {
+    return Number.isInteger(rootPid) && rootPid > 0 && rootPid !== process.pid ? [rootPid] : [];
+  }
+}
+
+function signalProcesses(pids: number[], signal: NodeJS.Signals): number {
+  let count = 0;
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+      count += 1;
+    } catch {
+      // Process already exited or is unavailable.
+    }
+  }
+  return count;
+}
+
+async function terminateChromeMcpBrowserProcessesForOptions(
+  options: NormalizedChromeMcpProfileOptions,
+): Promise<number> {
+  if (!shouldCleanupChromeMcpBrowserProcesses(options)) {
+    return 0;
+  }
+  const pids = await findChromeMcpBrowserProcessIdsForUserDataDir(options.userDataDir);
+  const signaled = signalProcesses(pids, "SIGTERM");
+  if (signaled === 0) {
+    return 0;
+  }
+  await new Promise((resolve) => setTimeout(resolve, CHROME_MCP_BROWSER_STOP_GRACE_MS));
+  const remaining = await findChromeMcpBrowserProcessIdsForUserDataDir(options.userDataDir);
+  signalProcesses(remaining, "SIGKILL");
+  return signaled;
 }
 
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
@@ -1101,6 +1322,9 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
     transport: session.transport,
     ownsProcessTree: session.ownsProcessTree,
   });
+  if (session.options) {
+    await terminateChromeMcpBrowserProcessesForOptions(session.options);
+  }
 }
 
 async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
@@ -1154,6 +1378,7 @@ async function createRealSession(
       );
     } catch (err) {
       await closeChromeMcpClientAndProcess({ client, transport, ownsProcessTree: true });
+      await terminateChromeMcpBrowserProcessesForOptions(options);
       const stderr = getStderr();
       if (stderr) {
         log.warn(
@@ -1182,6 +1407,7 @@ async function createRealSession(
     transport,
     ready,
     ownsProcessTree: true,
+    options,
   };
 }
 
@@ -1273,6 +1499,7 @@ async function createChromeMcpSession(
   let closedAfterAbort = false;
   try {
     const session = await waitForChromeMcpPendingSession(created, signal);
+    session.options = options;
     if (signal?.aborted) {
       closedAfterAbort = true;
       await closeChromeMcpSessionHandle(session);
@@ -1757,8 +1984,11 @@ export function getChromeMcpPid(profileName: string): number | null {
 }
 
 /** Close cached Chrome MCP sessions for one profile. */
-export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
-  return await closeChromeMcpSessionsForProfile(profileName);
+export async function closeChromeMcpSession(
+  profileName: string,
+  profileOptions?: string | ChromeMcpProfileOptions,
+): Promise<boolean> {
+  return await closeChromeMcpSessionsForProfile(profileName, undefined, profileOptions);
 }
 
 /** Close every cached Chrome MCP session. */
