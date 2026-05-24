@@ -461,7 +461,7 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   <Accordion title="Retry behavior">
     **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
 
-    **Recurring retry**: exponential backoff (30s to 60m) between retries. Backoff resets after the next successful run.
+    **Recurring retry**: while a recurring job's error matches `cron.retry.retryOn` and `consecutiveErrors` is still within `cron.retry.maxAttempts`, the next run is scheduled at the configured backoff slot (`cron.retry.backoffMs`) rather than the natural cron slot. This allows transient failures on infrequent schedules (e.g. a daily cron) to retry the same day instead of waiting for the next natural slot, while preserving the backoff floor for high-frequency schedules. Once retries are exhausted or the error is permanent, the next run is the later of the natural cron/`every` slot and the backoff floor, so a high-frequency schedule cannot bypass backoff after the retry budget is gone. Backoff resets after the next successful run.
 
   </Accordion>
   <Accordion title="Maintenance">

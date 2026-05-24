@@ -991,40 +991,68 @@ export function applyJobResult(
         }
       }
     } else if (result.status === "error" && isJobEnabled(job)) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      let normalNext: number | undefined;
+      const retryConfig = resolveRetryConfig(state.deps.cronConfig);
+      const retryHint = resolveCronExecutionRetryHint(
+        result.error,
+        retryConfig.retryOn,
+        job.state.lastErrorReason,
+      );
+      const consecutive = job.state.consecutiveErrors ?? 1;
+      const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
+      const backoffNext = result.endedAt + backoff;
+      let naturalNext: number | undefined;
       try {
-        normalNext =
+        naturalNext =
           opts?.preserveSchedule && job.schedule.kind === "every"
             ? computeNextWithPreservedLastRun(result.endedAt)
             : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
-        // If the schedule expression/timezone throws (croner edge cases),
-        // record the schedule error (auto-disables after repeated failures)
-        // and fall back to backoff-only schedule so the state update is not lost.
         recordScheduleComputeError({ state, job, err });
       }
-      const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        job.schedule.kind === "cron"
-          ? resolveCronNextRunWithLowerBound({
-              state,
-              job,
-              naturalNext: normalNext,
-              lowerBoundMs: backoffNext,
-              context: "error_backoff",
-            })
-          : normalNext !== undefined
-            ? Math.max(normalNext, backoffNext)
-            : backoffNext;
+      const retryBudgetAvailable =
+        retryHint.retryable && consecutive <= retryConfig.maxAttempts;
+      let scheduledMode: "backoff" | "natural" | "natural_floor" | "unresolved";
+      if (retryBudgetAvailable) {
+        if (job.schedule.kind === "cron" && naturalNext === undefined) {
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              context: "error_backoff_retry",
+            },
+            "cron: next run unresolved; clearing schedule to avoid a refire loop",
+          );
+          job.state.nextRunAtMs = undefined;
+          scheduledMode = "unresolved";
+        } else {
+          job.state.nextRunAtMs = backoffNext;
+          scheduledMode = "backoff";
+        }
+      } else if (job.schedule.kind === "cron") {
+        job.state.nextRunAtMs = resolveCronNextRunWithLowerBound({
+          state,
+          job,
+          naturalNext,
+          lowerBoundMs: backoffNext,
+          context: "error_backoff",
+        });
+        scheduledMode = "natural_floor";
+      } else {
+        job.state.nextRunAtMs =
+          naturalNext !== undefined ? Math.max(naturalNext, backoffNext) : backoffNext;
+        scheduledMode = "natural_floor";
+      }
       state.deps.log.info(
         {
           jobId: job.id,
-          consecutiveErrors: job.state.consecutiveErrors,
+          consecutiveErrors: consecutive,
           backoffMs: backoff,
           nextRunAtMs: job.state.nextRunAtMs,
+          retryable: retryHint.retryable,
+          retryCategory: retryHint.category,
+          retryBudgetAvailable,
+          maxAttempts: retryConfig.maxAttempts,
+          scheduledMode,
         },
         "cron: applying error backoff",
       );

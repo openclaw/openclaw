@@ -1,10 +1,16 @@
 import type { SecretInput } from "./types.secrets.js";
 
-/** Error types that can trigger retries for one-shot jobs. */
+/** Error types that can trigger retries for one-shot and recurring jobs on transient errors. */
 export type CronRetryOn = "rate_limit" | "overloaded" | "network" | "timeout" | "server_error";
 
 export type CronRetryConfig = {
-  /** Max retries for transient errors before permanent disable (default: 3). */
+  /**
+   * Max retries on transient errors. For one-shot jobs, exceeding this
+   * disables the job permanently. For recurring jobs, exceeding this stops
+   * scheduling at the configured backoff slot; the next run is then the
+   * later of the natural cron/`every` slot and the backoff floor.
+   * Default: 3.
+   */
   maxAttempts?: number;
   /** Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). */
   backoffMs?: number[];
@@ -32,7 +38,13 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
-  /** Override default retry policy for one-shot jobs on transient errors. */
+  /**
+   * Override default retry policy for transient errors. Applies to one-shot
+   * jobs and to recurring jobs whose error falls in `retryOn` while
+   * consecutiveErrors <= maxAttempts. Once a recurring job exhausts its
+   * retry budget, the next run is the later of its natural cron/`every`
+   * slot and the backoff floor.
+   */
   retry?: CronRetryConfig;
   /**
    * @deprecated Legacy fallback webhook URL used only for stored jobs with notify=true.

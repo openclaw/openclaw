@@ -1685,9 +1685,9 @@ export const FIELD_HELP: Record<string, string> = {
   "cron.maxConcurrentRuns":
     "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
   "cron.retry":
-    "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
+    "Overrides the default retry policy for one-shot and recurring jobs when they fail with transient errors (rate limit, overloaded, network, server_error). For recurring jobs, while consecutiveErrors stays within maxAttempts the next run is scheduled at the configured backoff slot rather than the natural cron/every slot; once exhausted, the next run is the later of the natural slot and the backoff floor. Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
   "cron.retry.maxAttempts":
-    "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
+    "Max retries on transient errors before a one-shot job is permanently disabled, or before a recurring job stops scheduling at the configured backoff slot and instead runs no sooner than both its natural slot and the backoff floor (default: 3).",
   "cron.retry.backoffMs":
     "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
   "cron.retry.retryOn":

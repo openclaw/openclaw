@@ -2055,4 +2055,167 @@ describe("cron service timer regressions", () => {
       "cron: job run returned error status",
     );
   });
+
+  it("schedules backoff retry within the same day when daily cron fails on a retryable error (#85888)", () => {
+    const startedAt = Date.parse("2026-05-24T05:01:00.000Z");
+    const endedAt = startedAt + 104_264;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-85888-error-backoff.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "memory-distill-85888",
+      name: "memory-distill-85888",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 5 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "distill" },
+      state: { nextRunAtMs: startedAt, runningAtMs: startedAt - 1_000 },
+    });
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "error",
+      error:
+        "FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503",
+      startedAt,
+      endedAt,
+    });
+
+    const naturalNext = requireTimestamp(
+      computeJobNextRunAtMs(job, endedAt),
+      "natural next run",
+    );
+    const nextRunAtMs = requireTimestamp(job.state.nextRunAtMs, "scheduled next run");
+
+    expect(shouldDelete).toBe(false);
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(nextRunAtMs).toBeGreaterThan(endedAt);
+    expect(nextRunAtMs).toBeLessThan(naturalNext);
+    expect(nextRunAtMs - endedAt).toBeLessThan(60 * 60 * 1_000);
+  });
+
+  it("preserves backoff floor for high-frequency recurring jobs whose natural next is sooner than backoff (#85888)", () => {
+    const startedAt = Date.parse("2026-05-24T12:00:00.000Z");
+    const endedAt = startedAt + 200;
+    const everyMs = 1_000;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-85888-backoff-floor.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "high-freq-85888",
+      name: "high-freq-85888",
+      scheduledAt: startedAt,
+      schedule: { kind: "every", everyMs, anchorMs: startedAt - everyMs },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt, runningAtMs: startedAt - 50 },
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error:
+        "FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503",
+      startedAt,
+      endedAt,
+    });
+
+    const naturalNext = requireTimestamp(
+      computeJobNextRunAtMs(job, endedAt),
+      "natural next run",
+    );
+    const nextRunAtMs = requireTimestamp(job.state.nextRunAtMs, "scheduled next run");
+    expect(naturalNext).toBeLessThan(nextRunAtMs);
+    expect(nextRunAtMs - endedAt).toBeGreaterThanOrEqual(everyMs);
+    expect(job.enabled).toBe(true);
+  });
+
+  it("clears schedule on retryable cron error when next-run is unresolved (#85888)", () => {
+    const startedAt = Date.parse("2026-05-24T05:01:00.000Z");
+    const endedAt = startedAt + 50_000;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-85888-unresolved.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "memory-distill-85888-unresolved",
+      name: "memory-distill-85888-unresolved",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 5 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "distill" },
+      state: { nextRunAtMs: startedAt, runningAtMs: startedAt - 1_000 },
+    });
+    const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
+
+    try {
+      applyJobResult(state, job, {
+        status: "error",
+        error:
+          "FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503",
+        startedAt,
+        endedAt,
+      });
+
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.enabled).toBe(true);
+      expect(job.state.consecutiveErrors).toBe(1);
+    } finally {
+      nextRunSpy.mockRestore();
+    }
+  });
+
+  it("falls back to the next natural cron slot once retry budget is exhausted (#85888)", () => {
+    const startedAt = Date.parse("2026-05-24T05:01:00.000Z");
+    const endedAt = startedAt + 60_000;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-85888-exhausted.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "memory-distill-85888-exhausted",
+      name: "memory-distill-85888-exhausted",
+      scheduledAt: startedAt,
+      schedule: { kind: "cron", expr: "0 5 * * *", tz: "Asia/Shanghai" },
+      payload: { kind: "agentTurn", message: "distill" },
+      state: {
+        nextRunAtMs: startedAt,
+        runningAtMs: startedAt - 1_000,
+        consecutiveErrors: 99,
+      },
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error:
+        "FailoverError: The AI service is temporarily overloaded (overloaded_error). status=503",
+      startedAt,
+      endedAt,
+    });
+
+    const naturalNext = requireTimestamp(
+      computeJobNextRunAtMs(job, endedAt),
+      "natural next run",
+    );
+    expect(job.state.nextRunAtMs).toBe(naturalNext);
+    expect(job.enabled).toBe(true);
+  });
 });
