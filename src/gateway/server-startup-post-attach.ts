@@ -173,6 +173,7 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
 
 function scheduleProviderAuthStatePrewarm(params: {
   getConfig: () => OpenClawConfig;
+  providerAuthPrewarm?: ProviderAuthPrewarmOptions;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -186,6 +187,11 @@ function scheduleProviderAuthStatePrewarm(params: {
   let pendingRewarmReason: string | undefined;
   const isStopped = () => stopped;
   const delayMs = params.delayMs ?? PROVIDER_AUTH_PREWARM_START_DELAY_MS;
+  const shouldWarm = (cfg: OpenClawConfig): boolean =>
+    resolveProviderAuthPrewarmOptions({
+      cfg,
+      providerAuthPrewarm: params.providerAuthPrewarm,
+    }).enabled;
   void (async () => {
     const { clearCurrentProviderAuthState, warmCurrentProviderAuthState } =
       await import("../agents/model-provider-auth.js");
@@ -195,6 +201,9 @@ function scheduleProviderAuthStatePrewarm(params: {
         return;
       }
       const cfg = params.getConfig();
+      if (!shouldWarm(cfg)) {
+        return;
+      }
       rewarmInFlight = true;
       try {
         const metrics = await measureProviderAuthWarm(() =>
@@ -240,6 +249,10 @@ function scheduleProviderAuthStatePrewarm(params: {
       if (isStopped()) {
         return;
       }
+      const cfg = params.getConfig();
+      if (!shouldWarm(cfg)) {
+        return;
+      }
       clearCurrentProviderAuthState();
       scheduleAuthMapRewarm("auth-profile-failure");
     });
@@ -250,6 +263,9 @@ function scheduleProviderAuthStatePrewarm(params: {
             return;
           }
           const cfg = params.getConfig();
+          if (!shouldWarm(cfg)) {
+            return;
+          }
           const metrics = await measureProviderAuthWarm(() =>
             warmCurrentProviderAuthState(cfg, { isCancelled: isStopped }),
           );
@@ -1042,6 +1058,7 @@ export async function startGatewayPostAttachRuntime(
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
               getConfig: providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
+              providerAuthPrewarm: params.providerAuthPrewarm,
               log: params.log,
               delayMs: providerAuthPrewarm.delayMs,
             }),

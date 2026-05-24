@@ -1107,6 +1107,46 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("skips long-lived provider auth prewarm after the current config disables it", async () => {
+    vi.useFakeTimers();
+    const startupCfg = {
+      gateway: { providerAuthPrewarm: { enabled: true } },
+    } as never;
+    const disabledCfg = {
+      gateway: { providerAuthPrewarm: { enabled: false } },
+    } as never;
+    let currentCfg = startupCfg;
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    try {
+      testing.scheduleProviderAuthStatePrewarm({
+        getConfig: () => currentCfg,
+        log,
+        delayMs: 1_000,
+      });
+      currentCfg = disabledCfg;
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      if (!hook) {
+        throw new Error("Expected provider auth failure hook to be registered");
+      }
+      hook();
+      expect(hoisted.clearCurrentProviderAuthState).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts channels when channel startup is enabled", async () => {
     await withEnvAsync(
       {
