@@ -382,6 +382,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.inheritedToolPolicyVersion === 1) {
     entry.inheritedToolPolicyVersion = 1;
   }
+  if (Array.isArray(patch.runtimeToolsAllow)) {
+    entry.runtimeToolsAllow = patch.runtimeToolsAllow.filter(
+      (value): value is string => typeof value === "string",
+    );
+  }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
   }
@@ -1369,6 +1374,7 @@ export async function spawnSubagentDirect(
       inheritedToolPolicyVersion: 1,
       ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
       ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
+      ...(params.toolsAllow !== undefined ? { runtimeToolsAllow: params.toolsAllow } : {}),
       ...plan.initialSessionPatch,
       ...(swarmGroupId ? { swarmGroupId } : {}),
       ...(params.collect ? { swarmCollector: true } : {}),

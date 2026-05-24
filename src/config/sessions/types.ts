@@ -308,6 +308,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Durable embedded-runtime tool allowlist for spawned subagent sessions. */
+    runtimeToolsAllow?: string[];
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
