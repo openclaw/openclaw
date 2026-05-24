@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Installer: detect musl Linux shells such as Alpine as Linux instead of rejecting them before npm install.
 - Control UI: split large build-time runtime dependencies into stable chunks so Linux/Docker install and package builds stay below the app chunk warning threshold.
 - Scripts: run the optional Discord native opus installer through the shared pnpm launcher and Windows CI coverage so native Windows installs avoid shell-mode package-manager shims.
+- Installer: honor raw npm `min-release-age` config before falling back to a generated `--before` install filter, so npm installs no longer bypass user release-age policy. (#85491) Thanks @TurboTheTurtle.
 - Agents/MCP: bound bundled MCP `tools/list` catalog discovery so hung MCP servers do not block session tool materialization. (#85063) Thanks @nxmxbbd.
 - Scripts: run generated-module formatting through the shared pnpm launcher and Windows CI coverage so native Windows generator checks avoid shell-mode package-manager shims.
 - Channels/iMessage: advance the startup catchup cursor from live-handled rows after a completed catchup pass, including rows received while catchup is still running, so restarts do not replay them. (#85475) Thanks @TurboTheTurtle.
