@@ -211,7 +211,7 @@ function listUnsupportedDeliveryRequirements(params: {
     return [];
   }
   return Object.entries(params.requirements)
-    .filter(([, required]) => required)
+    .filter(([, required]) => Boolean(required))
     .filter(
       ([key]) => platformCapabilities.delivery?.[key as keyof BrokerDeliveryRequirements] !== true,
     )
