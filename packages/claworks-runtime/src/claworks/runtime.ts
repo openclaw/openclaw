@@ -17,6 +17,7 @@ import { createHookEngine } from "../kernel/hook-engine.js";
 import { createIngressRouter, DEFAULT_INGRESS_POLICIES } from "../kernel/ingress.js";
 import { createIntentRegistry } from "../kernel/intent-registry.js";
 import { createNotificationRouter } from "../kernel/notification-router.js";
+import { createPromptTemplateRegistry } from "../kernel/prompt-templates.js";
 import {
   createConstitutionV2,
   DEFAULT_OPERATOR_CONSTITUTION,
@@ -426,6 +427,32 @@ export async function createClaworksRuntime(
 
   // 初始化桥接注册表（LLM / 通知 / Skill 等外部服务）
   runtime.bridges = createBridgeRegistry();
+  // 将 llmComplete 同步注册到 bridges["llm"]，统一供所有组件访问
+  if (runtime.llmComplete) {
+    const fn = runtime.llmComplete;
+    runtime.bridges.register("llm", { complete: (p) => fn(p) });
+  }
+
+  // 初始化提示词模板注册表（内置 6 个弱模型脚手架模板，支持运行时扩展）
+  // render() 适配：将 {system, user} 合并为单一 prompt 字符串
+  const ptReg = createPromptTemplateRegistry();
+  runtime.promptRegistry = {
+    list: () =>
+      ptReg.list().map((t) => ({ id: t.id, template: t.user, description: t.description })),
+    render: (id, variables) => {
+      const r = ptReg.render(id, (variables ?? {}) as Record<string, string>);
+      return r.system ? `${r.system}\n\n${r.user}` : r.user;
+    },
+    register: (id, template, description) =>
+      ptReg.register({
+        id,
+        name: id,
+        description: description ?? id,
+        user: template,
+        system: "",
+        outputFormat: "text",
+      }),
+  };
 
   // 初始化卡片构建器（飞书/企微/钉钉 富交互卡片渲染）
   runtime.cardBuilder = createCardBuilder();
