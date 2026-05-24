@@ -197,6 +197,13 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      if (method === "GET" && parts[1] === "doctor") {
+        if (!(await requireRead())) return true;
+        const checks = runClaworksDoctor(runtime);
+        sendJson(res, 200, { checks, healthy: checks.every((c) => c.status !== "error") });
+        return true;
+      }
+
       if (method === "POST" && parts[1] === "doctor") {
         const url = new URL(req.url ?? "/", "http://localhost");
         let body: { fix?: boolean } = {};

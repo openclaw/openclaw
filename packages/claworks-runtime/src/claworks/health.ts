@@ -31,6 +31,18 @@ export function buildHealthPayload(runtime: ClaworksRuntime) {
       data: checks.find((c) => c.id === "database")?.status === "error" ? "error" : "ok",
       orch: checks.find((c) => c.id === "playbooks")?.status === "error" ? "error" : "ok",
     },
+    subsystems: {
+      llm: !!runtime.llmComplete || !!runtime.bridges?.get("llm"),
+      notify: !!runtime.bridges?.get("notify"),
+      cbr: !!runtime.cbrStore,
+      context_engine: !!runtime.contextEngine,
+      autonomy_scan: !!runtime._autonomyScanTimer,
+      evolution_sync: !!runtime.evolutionSync,
+      hook_engine: !!runtime.hookEngine,
+      structured_output: !!runtime.structuredOutput,
+    },
+    playbook_count: runtime.playbookEngine?.list().length ?? 0,
+    capability_count: runtime.capabilities?.list().length ?? 0,
     checks,
   };
 }
