@@ -315,7 +315,7 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
-  it("does not rebind to an old message when forceNewMessage races an in-flight send", async () => {
+  it("retains an old message when forceNewMessage races an in-flight send", async () => {
     let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
     const firstSend = new Promise<{ message_id: number }>((resolve) => {
       resolveFirstSend = resolve;
@@ -349,6 +349,7 @@ describe("createTelegramDraftStream", () => {
       textSnapshot: "Message A partial",
       parseMode: undefined,
       visibleSinceMs: supersededPreview.visibleSinceMs,
+      retain: true,
     });
     expect(typeof supersededPreview.visibleSinceMs).toBe("number");
     expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
