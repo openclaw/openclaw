@@ -286,6 +286,48 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 [Full configuration reference (all keys + examples).](https://docs.openclaw.ai/gateway/configuration)
 
+## Troubleshooting
+
+### Gateway won't start
+
+- **Port already in use**: Another process is using port 18789. Check with `lsof -i :18789` and stop the conflicting process, or change the port in your config.
+- **Node version mismatch**: OpenClaw requires Node 22.19+ (Node 24 recommended). Verify with `node -v` and upgrade if needed.
+- **Config errors**: Run `pnpm openclaw doctor` to check your configuration for common issues.
+
+### Voice/wake word not working
+
+- **macOS**: Ensure microphone permissions are granted in System Settings → Privacy & Security → Microphone. Also check that the OpenClaw app has permissions if using the menu bar app.
+- **iOS/Android**: Ensure the device is paired and connected to the same gateway. Re-pair if necessary with `openclaw devices`.
+
+### Channel integration fails
+
+- **WhatsApp**: Verify your phone number is linked correctly in the WhatsApp Web session. Re-link if session expired.
+- **Telegram**: Ensure the bot token is correct and the bot has been started with `/start`.
+- **Discord**: Check that the bot is added to your server and has the correct intents enabled.
+- **Signal**: Verify your signal-cli configuration and that the linked device is active.
+
+### Agent not responding
+
+- **Model API issues**: Check your API key is valid and you have sufficient credits/quota. Try sending a direct API request to test.
+- **Skills not loading**: Ensure skill files are in `~/.openclaw/workspace/skills/<skill>/SKILL.md` and the workspace path is correct.
+- **Memory issues**: The agent uses a persistent memory system. Try clearing `~/.openclaw/workspace/memory.db` if the assistant seems stuck.
+
+### Performance issues
+
+- **High CPU/memory**: Check with `openclaw status` and consider reducing model context window or disabling unused channels.
+- **Slow responses**: Network latency may be the cause. Try a closer API endpoint or local model.
+
+### OpenClaw doctor
+
+Run `pnpm openclaw doctor` (or `openclaw doctor`) to diagnose common issues. Add `--fix` to auto-repair when possible:
+
+```bash
+pnpm openclaw doctor
+pnpm openclaw doctor --fix
+```
+
+For more help, see the [FAQ](https://docs.openclaw.ai/help/faq) or ask on [Discord](https://discord.gg/clawd).
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=openclaw/openclaw&type=date&legend=top-left)](https://www.star-history.com/#openclaw/openclaw&type=date&legend=top-left)
