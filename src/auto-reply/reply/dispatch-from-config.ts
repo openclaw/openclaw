@@ -1637,8 +1637,15 @@ export async function dispatchReplyFromConfig(
     };
     const sendFinalPayload = async (
       payload: ReplyPayload,
+      options: { abortSignal?: AbortSignal } = {},
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      throwIfDispatchOperationAborted();
+      const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
+      const throwIfFinalDeliveryAborted = () => {
+        if (abortSignal?.aborted) {
+          throw new DispatchReplyOperationAbortedError();
+        }
+      };
+      throwIfFinalDeliveryAborted();
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
       const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
@@ -1656,11 +1663,11 @@ export async function dispatchReplyFromConfig(
         agentId: sessionAgentId,
         accountId: replyRoute.accountId,
       });
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
-        abortSignal: getDispatchAbortSignal(),
+        abortSignal,
       });
       if (result) {
         if (!result.ok) {
@@ -1723,7 +1730,10 @@ export async function dispatchReplyFromConfig(
         let queuedFinal = false;
         let routedFinalCount = 0;
         if (text && !suppressDelivery) {
-          const handledReply = await sendFinalPayload({ text });
+          const handledReply = await sendFinalPayload(
+            { text },
+            { abortSignal: getPreDispatchAbortSignal() },
+          );
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
         }

@@ -8,6 +8,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -758,6 +759,66 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         counts: { tool: 0, block: 0, final: 0 },
       },
     });
+    expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("suppresses handled before_dispatch final delivery after active source abort", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "before_dispatch",
+    );
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({
+      handled: true,
+      text: "handled by hook",
+    });
+    let ttsStarted!: () => void;
+    let releaseTts!: () => void;
+    const ttsStartedPromise = new Promise<void>((resolve) => {
+      ttsStarted = resolve;
+    });
+    const releaseTtsPromise = new Promise<void>((resolve) => {
+      releaseTts = resolve;
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      ttsStarted();
+      await releaseTtsPromise;
+      return (paramsUnknown as { payload: ReplyPayload }).payload;
+    });
+    mocks.routeReply.mockClear();
+    const existingOperation = createReplyOperation({
+      sessionKey: "agent:already-active-handled",
+      sessionId: "already-active-session",
+      resetTriggered: false,
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:already-active-handled",
+      BodyForAgent: "hook handles while an operation is already active",
+    });
+
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(),
+    });
+
+    await ttsStartedPromise;
+    expect(replyRunRegistry.abort("agent:already-active-handled")).toBe(true);
+    releaseTts();
+
+    await expect(dispatchPromise).resolves.toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(existingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(getActiveReplyRunCount()).toBe(0);
   });
