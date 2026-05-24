@@ -16,6 +16,7 @@ export function stripMarkdown(text: string): string {
   result = result.replace(/^>\s?(.*)$/gm, "$1");
   result = result.replace(/^[-*_]{3,}$/gm, "");
   result = result.replace(/`([^`]+)`/g, "$1");
+  result = result.replace(/\|+/g, "");
   result = result.replace(/\n{3,}/g, "\n\n");
 
   return result.trim();
