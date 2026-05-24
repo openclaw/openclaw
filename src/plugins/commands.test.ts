@@ -1112,7 +1112,6 @@ describe("registerPluginCommand", () => {
     let receivedCtx:
       | {
           runtimeContext?: {
-            authProfileId?: string;
             llm?: {
               complete?: unknown;
             };
@@ -1142,7 +1141,6 @@ describe("registerPluginCommand", () => {
     });
 
     expect(result).toEqual({ text: "ok" });
-    expect(receivedCtx?.runtimeContext?.authProfileId).toBe("openai-codex:claude@example.com");
     expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
   });
 

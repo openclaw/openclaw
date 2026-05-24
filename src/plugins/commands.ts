@@ -183,11 +183,10 @@ function buildPluginCommandRuntimeContext(params: {
 }): PluginCommandContext["runtimeContext"] {
   const sessionKey = params.sessionKey?.trim();
   const agentId = sessionKey ? parsePluginCommandAgentId(sessionKey) : undefined;
-  if (!sessionKey && !agentId && !params.authProfileId) {
+  if (!sessionKey && !agentId) {
     return undefined;
   }
   return {
-    ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
     llm: createRuntimeLlm({
       getConfig: () => params.config,
       authority: {
