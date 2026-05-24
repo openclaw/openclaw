@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { getTelegramRuntime } from "./runtime.js";
 
-const MAX_ENTRIES = 2_048;
+export const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
 const STORE_NAMESPACE_PREFIX = "telegram.topic-name-cache";
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
@@ -70,8 +71,16 @@ function namespaceForScope(scope: string): string {
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
 }
 
+export function resolveTopicNameCachePath(storePath: string): string {
+  return `${storePath}.telegram-topic-names.json`;
+}
+
 export function resolveTopicNameCacheScope(storePath: string): string {
   return storePath;
+}
+
+export function resolveTopicNameCacheNamespace(scope: string): string {
+  return namespaceForScope(scope);
 }
 
 function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
@@ -79,13 +88,13 @@ function openTopicNamePersistentStore(namespace: string): TopicNamePersistentSto
     topicNameStoreFactoryForTest?.(namespace) ??
     getTelegramRuntime().state.openKeyedStore<TopicEntry>({
       namespace,
-      maxEntries: MAX_ENTRIES,
+      maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
     })
   );
 }
 
 function evictOldest(store: TopicNameStore): string | undefined {
-  if (store.size <= MAX_ENTRIES) {
+  if (store.size <= TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES) {
     return undefined;
   }
   let oldestKey: string | undefined;
@@ -219,6 +228,21 @@ export async function getTopicEntry(
   scope?: string,
 ): Promise<TopicEntry | undefined> {
   return (await getTopicStore(scope)).get(cacheKey(chatId, threadId));
+}
+
+export async function listTelegramLegacyTopicNameCacheEntries(params: {
+  persistedPath: string;
+  maxEntries?: number;
+}): Promise<Array<{ key: string; value: TopicEntry }>> {
+  const { value } = await readJsonFileWithFallback<Record<string, unknown>>(
+    params.persistedPath,
+    {},
+  );
+  return Object.entries(value)
+    .filter((entry): entry is [string, TopicEntry] => isTopicEntry(entry[1]))
+    .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
+    .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
+    .map(([key, entry]) => ({ key, value: entry }));
 }
 
 export async function clearTopicNameCache(): Promise<void> {
