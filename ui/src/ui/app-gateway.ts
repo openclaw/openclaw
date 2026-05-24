@@ -693,9 +693,15 @@ function handleTerminalChatEvent(
       });
     }
   }
-  // Reload history when tools were used so the persisted tool results
-  // replace the now-cleared streaming state.
+  // Reload history when tools were used only if the terminal event did not carry
+  // a renderable assistant message. Source-reply finals already contain the UI
+  // response; an immediate transcript reload replaces the optimistic user bubble
+  // with the persisted copy and causes a visible disappear/reappear flicker.
   if (hadToolEvents && state === "final") {
+    if (activeRunIdBeforeEvent && !shouldReloadHistoryForFinalEvent(payload)) {
+      flushQueue();
+      return false;
+    }
     const completedRunId = runId ?? null;
     void loadChatHistory(host as unknown as ChatState).finally(() => {
       if (completedRunId && host.chatRunId && host.chatRunId !== completedRunId) {
