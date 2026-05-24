@@ -148,6 +148,25 @@ describe("install.sh", () => {
     );
   });
 
+  it("counts the verify stage when --verify is enabled", () => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "parse_args --verify",
+        "configure_install_stage_total",
+        'ui_stage "Preparing environment"',
+        'ui_stage "Installing OpenClaw"',
+        'ui_stage "Finalizing setup"',
+        'ui_stage "Verifying installation"',
+      ].join("\n"),
+      { TERM: "dumb" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[4/4] Verifying installation");
+    expect(result.stdout).not.toContain("[4/3] Verifying installation");
+  });
+
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
     expect(script).toMatch(
       /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
