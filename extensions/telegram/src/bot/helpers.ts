@@ -208,6 +208,10 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
+  // Set when the caller has already authorized the sender by some other config
+  // path (e.g. commands.allowFrom) and the pairing-store outcome cannot change
+  // the decision. Lets command auth survive transient store I/O failures.
+  skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
@@ -254,6 +258,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     senderId: params.senderId,
     isGroup: params.isGroup ?? false,
     effectiveDmPolicy,
+    skipPairingStoreRead: params.skipPairingStoreRead,
     readChannelAllowFromStore: params.readChannelAllowFromStore,
   });
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
@@ -318,9 +323,10 @@ export async function loadTelegramPairingStoreIfNeeded(params: {
   senderId?: string;
   isGroup: boolean;
   effectiveDmPolicy: DmPolicy;
+  skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
 }): Promise<string[]> {
-  if (params.isGroup || params.effectiveDmPolicy !== "pairing") {
+  if (params.skipPairingStoreRead || params.isGroup || params.effectiveDmPolicy !== "pairing") {
     return [];
   }
   const configuredDmAllowed = await isTelegramDmAllowedByConfiguredAllowFrom({
