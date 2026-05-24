@@ -3,9 +3,11 @@ import type { A2aAgentCard } from "./types.js";
 
 export function buildA2aAgentCard(runtime: ClaworksRuntime, baseUrl?: string): A2aAgentCard {
   const url = baseUrl ?? runtime.robot.endpoint;
+  const role = runtime.robot.role ?? "";
+  const description = role ? `ClaWorks robot — ${role}` : "ClaWorks industrial robot";
   return {
     name: runtime.robot.name,
-    description: "ClaWorks industrial robot",
+    description,
     url,
     version: runtime.robot.version,
     capabilities: {

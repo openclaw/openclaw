@@ -120,4 +120,33 @@ export type ClaworksRobotConfig = {
     model?: string;
   };
   connectors?: Record<string, ConnectorConfigInput>;
+  /**
+   * 离线进化同步配置（私域机器人 ↔ 互联网/商业模型 数据交换）。
+   */
+  evolution?: {
+    /** 自动导出间隔（小时，默认不自动导出；0 = 禁用） */
+    auto_export_interval_hours?: number;
+    /** 导出文件目录（默认 ~/.claworks/evolution/exports） */
+    export_dir?: string;
+    /** 进化包导入目录（默认 ~/.claworks/evolution/packs，支持 watchdir 自动导入） */
+    pack_import_dir?: string;
+    /** 是否监控 pack_import_dir 并自动导入（默认 false） */
+    auto_import_watch?: boolean;
+    /** 收集数据的天数窗口（默认 30） */
+    data_window_days?: number;
+  };
+  /**
+   * Playbook 及 Kernel 超时配置（统一入口，避免多处散落）。
+   * 也可通过 kernel.hitl_timeout_seconds 单独设置 HITL 超时。
+   */
+  timeout_seconds?: {
+    /** 单个 Playbook 步骤超时（默认 30s） */
+    step?: number;
+    /** 整个 Playbook 执行超时（默认 300s） */
+    playbook?: number;
+    /** LLM 调用超时（默认 60s） */
+    llm?: number;
+    /** 连接器调用超时（默认 30s） */
+    connector?: number;
+  };
 };
