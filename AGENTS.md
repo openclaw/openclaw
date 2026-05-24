@@ -105,6 +105,13 @@ Skills own workflows; root owns hard policy and routing.
 - Maintainers: may skip/ignore `Real behavior proof` when local tests or Crabbox verified behavior; record proof in PR verification.
 - `/landpr`: use `~/.codex/prompts/landpr.md`; do not idle on `auto-response` or `check-docs`.
 
+## Engineering Principles
+
+- Think before coding: analyze architecture, boundaries, and failure modes first.
+- Prefer simplicity: delete code before adding. Fewer lines = less maintenance.
+- Surgical edits: change only what's needed. Never refactor adjacent code incidentally.
+- Stay goal-driven: each step should clearly advance the objective.
+
 ## Code
 
 - TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
