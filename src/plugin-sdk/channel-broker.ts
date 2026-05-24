@@ -418,7 +418,7 @@ function supportsRequiredFlags(
   required: Record<string, boolean> | undefined,
 ): boolean {
   for (const [key, value] of Object.entries(required ?? {})) {
-    if (value === true && supported?.[key] !== true) {
+    if (value && !supported?.[key]) {
       return false;
     }
   }
