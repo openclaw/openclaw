@@ -107,6 +107,13 @@ export async function bridgeImMessage(
     _im_group_id: normalized.groupId,
     _im_message: normalized.text,
     _ingress_decision: decision.action,
+    // 规范化别名：Playbook 可通过 event.payload.text / payload.text 等方式访问
+    text: normalized.text,
+    user_id: normalized.userId,
+    channel: normalized.channel,
+    message_id: normalized.messageId,
+    group_id: normalized.groupId ?? null,
+    timestamp: new Date().toISOString(),
     ...normalized.extra,
   };
 

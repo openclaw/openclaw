@@ -53,6 +53,17 @@ function serveDashboard(res: ServerResponse): void {
 export function createClaworksRestHandler(
   runtime: ClaworksRuntime,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  // 速率限制器在 handler 创建时初始化一次，整个 handler 生命周期内共享同一实例
+  // 避免每次请求创建新实例导致速率限制形同虚设
+  const configLimits = runtime.config.kernel;
+  const rateLimiter =
+    configLimits?.rate_limit_max_requests || configLimits?.rate_limit_window_ms
+      ? createRateLimiter({
+          maxRequests: configLimits.rate_limit_max_requests,
+          windowMs: configLimits.rate_limit_window_ms,
+        })
+      : _apiRateLimiter;
+
   return async (req, res) => {
     const method = req.method ?? "GET";
     const rawPath = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -77,16 +88,8 @@ export function createClaworksRestHandler(
     // 速率限制：跳过 GET /v1/health 和 GET /v1/metrics（监控探针）
     const isMonitorEndpoint = method === "GET" && (parts[1] === "health" || parts[1] === "metrics");
     if (!isMonitorEndpoint) {
-      const configLimits = runtime.config.kernel;
-      const limiter =
-        configLimits?.rate_limit_max_requests || configLimits?.rate_limit_window_ms
-          ? createRateLimiter({
-              maxRequests: configLimits.rate_limit_max_requests,
-              windowMs: configLimits.rate_limit_window_ms,
-            })
-          : _apiRateLimiter;
       const rlKey = resolveRateLimitKey("rest", auth.subjectId);
-      const rlResult = limiter.consume(rlKey);
+      const rlResult = rateLimiter.consume(rlKey);
       if (!rlResult.allowed) {
         res.setHeader("Retry-After", String(Math.ceil(rlResult.retryAfterMs / 1000)));
         res.setHeader("X-RateLimit-Remaining", "0");

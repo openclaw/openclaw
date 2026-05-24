@@ -83,4 +83,28 @@ describe("bridgeImMessage", () => {
     expect(result.action).toBe("published");
     expect(runtime.kernel.publish).toHaveBeenCalled();
   });
+
+  it("payload includes normalized fields text/user_id/channel/timestamp", async () => {
+    const runtime = mockRuntime({ rbacAllowed: true, ingressAction: "kernel" });
+    await bridgeImMessage(runtime, {
+      channel: "feishu",
+      messageId: "m4",
+      userId: "u4",
+      text: "查一下知识库",
+      groupId: "g1",
+    });
+    const [, , payload] = (runtime.kernel.publish as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(payload.text).toBe("查一下知识库");
+    expect(payload.user_id).toBe("u4");
+    expect(payload.channel).toBe("feishu");
+    expect(payload.group_id).toBe("g1");
+    expect(typeof payload.timestamp).toBe("string");
+    // raw fields still present
+    expect(payload._im_message).toBe("查一下知识库");
+    expect(payload._im_user_id).toBe("u4");
+  });
 });

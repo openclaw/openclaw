@@ -1124,12 +1124,19 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
       const v = vars[key];
       return v != null && v !== "" ? String(v) : fallback;
     })
-    .replace(/\{\{\s*(\w+)\.(\w+)\s*\}\}/g, (_, obj, field) => {
-      const objVal = vars[obj];
-      if (objVal && typeof objVal === "object" && !Array.isArray(objVal)) {
-        return String((objVal as Record<string, unknown>)[field] ?? "");
+    .replace(/\{\{\s*([\w]+(?:\.[\w]+)+)\s*\}\}/g, (_, path) => {
+      // 处理任意深度路径：{{ a.b }}、{{ a.b.c }}、{{ event.payload.text }} 等
+      const parts = (path as string).split(".");
+      let cur: unknown = vars;
+      for (const part of parts) {
+        if (cur && typeof cur === "object" && !Array.isArray(cur)) {
+          cur = (cur as Record<string, unknown>)[part];
+        } else {
+          cur = undefined;
+          break;
+        }
       }
-      return "";
+      return cur != null ? (typeof cur === "object" ? JSON.stringify(cur) : String(cur)) : "";
     })
     .replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => String(vars[key] ?? ""));
 

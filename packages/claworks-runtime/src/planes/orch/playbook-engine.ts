@@ -235,6 +235,8 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         ...input,
         payload: input,
         trigger: input, // {{trigger.xxx}} 语法支持
+        // {{event.payload.xxx}} 语法支持（与 payload.xxx / trigger.xxx 等价）
+        event: { payload: input },
         _now: new Date().toISOString(),
         _now_ts: Date.now(),
         _now_date: new Date().toLocaleDateString("zh-CN"),

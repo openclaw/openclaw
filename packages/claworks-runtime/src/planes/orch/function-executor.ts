@@ -51,28 +51,66 @@ export async function executeFunction(
   if (name === "publish_event_from_intent") {
     const intent = String(params.intent ?? "none");
     const extracted = (params.extracted ?? {}) as Record<string, unknown>;
+    const extraFields = (params.extra_fields ?? {}) as Record<string, unknown>;
     const source = String(params.source ?? "im-bridge:intent");
     const correlationId = params.correlation_id ? String(params.correlation_id) : undefined;
 
     // 系统级 intent 映射（base Pack 保留，业务 intent 由各 Pack 注册）
     // workflow/knowledge Pack 为 YAML-only（无 TS entry），在此注册基础映射。
     const SYSTEM_INTENT_MAP: Record<string, string> = {
+      // 系统操作
       hitl_approve: "hitl.approve_requested",
-      kb_query: "kb.query_requested",
-      query_kb: "knowledge.query_requested",
-      knowledge_query: "knowledge.query_requested",
       pack_reload: "system.pack_reload_requested",
+      // 知识库
+      kb_query: "kb.query_requested",
+      query_kb: "kb.query_requested",
+      knowledge_query: "kb.query_requested",
+      kb_ingest: "kb.ingest_requested",
+      // 任务
       create_task: "task.create_requested",
+      task_create: "task.create_requested",
       list_tasks: "task.list_requested",
-      approve_request: "approval.requested",
+      task_query: "task.query_requested",
+      // 审批
+      approve_request: "approval.create_requested",
+      approval_create: "approval.create_requested",
+      approval_decide: "approval.decision_input",
+      // 告警
+      alarm_report: "alarm.report_requested",
+      // 工单
+      workorder_create: "workorder.create_requested",
+      workorder_query: "workorder.query_requested",
+      // 设备状态
+      equipment_status: "equipment.status_requested",
+      // 报表
+      report_request: "report.generate_requested",
+      daily_report_submit: "daily_report.submit_requested",
+      // 会议 / 公告
+      meeting_create: "meeting.created",
+      announcement: "announcement.publish",
+      // 报价/投标
+      quote_request: "quote.create_requested",
+      bid_request: "bid.create_requested",
+      // 事故
+      incident_report: "incident.created",
+      // 交接班
+      shift_handover: "shift.handover_requested",
+      // 维保
+      maintenance_query: "maintenance.query_requested",
+      // 安全
+      safety_alert: "safety.alert_reported",
+      // 弱模型兜底（非业务意图不发布事件）
+      chat: "none",
+      help: "none",
+      unknown: "none",
     };
 
     // 优先查 Pack 注册的 IntentRegistry
     const registryMapping = deps.intentRegistry?.resolve(intent);
     const eventType = registryMapping?.eventType ?? SYSTEM_INTENT_MAP[intent] ?? `intent.${intent}`;
 
-    if (intent === "none") {
-      return { status: "skipped", intent, reason: "no matching business event" };
+    if (intent === "none" || eventType === "none") {
+      return { status: "skipped", intent, reason: "non-business intent, no event published" };
     }
 
     if (!registryMapping && !SYSTEM_INTENT_MAP[intent]) {
@@ -82,7 +120,12 @@ export async function executeFunction(
     }
 
     if (deps.publishEvent) {
-      await deps.publishEvent(eventType, source, { ...extracted, _intent: intent }, correlationId);
+      await deps.publishEvent(
+        eventType,
+        source,
+        { ...extracted, ...extraFields, _intent: intent },
+        correlationId,
+      );
       return { status: "published", eventType, source, intent };
     }
     return { status: "stub", eventType, source, intent };

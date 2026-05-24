@@ -220,6 +220,77 @@ describe("function: publish_event_from_intent", () => {
     expect(result?.status).toMatch(/published|stub/);
   });
 
+  it("maps kb_query intent to kb.query_requested", async () => {
+    let publishedType = "";
+    const publishEvent = vi.fn().mockImplementation(async (type: string) => {
+      publishedType = type;
+    });
+    const ctx = makeCtx({ publishEvent });
+    const run = makeRun();
+    const step = {
+      kind: "function" as const,
+      id: "s1",
+      functionApiName: "publish_event_from_intent",
+      params: {
+        intent: "kb_query",
+        extracted: { query: "查维修手册" },
+        source: "im:feishu:u1",
+      },
+      output: "result",
+    };
+    await executePlaybookStep(step, ctx, run, makeDeps({ objectStore: ctx.objectStore }));
+    const result = ctx.variables.result as Record<string, unknown>;
+    expect(result?.status).toBe("published");
+    expect(result?.eventType).toBe("kb.query_requested");
+    expect(publishedType).toBe("kb.query_requested");
+  });
+
+  it("passes extra_fields to published event payload", async () => {
+    let publishedPayload: Record<string, unknown> = {};
+    const publishEvent = vi
+      .fn()
+      .mockImplementation(async (_type: string, _src: string, payload: Record<string, unknown>) => {
+        publishedPayload = payload;
+      });
+    const ctx = makeCtx({ publishEvent });
+    const run = makeRun();
+    const step = {
+      kind: "function" as const,
+      id: "s1",
+      functionApiName: "publish_event_from_intent",
+      params: {
+        intent: "alarm_report",
+        extracted: { equipment_id: "E1" },
+        extra_fields: { text: "报警了", user_id: "u1", layer: "intent_router" },
+        source: "im:feishu:u1",
+      },
+      output: "result",
+    };
+    await executePlaybookStep(step, ctx, run, makeDeps({ objectStore: ctx.objectStore }));
+    expect(publishedPayload.text).toBe("报警了");
+    expect(publishedPayload.user_id).toBe("u1");
+    expect(publishedPayload.layer).toBe("intent_router");
+    expect(publishedPayload._intent).toBe("alarm_report");
+  });
+
+  it("skips non-business intents (chat/help/unknown)", async () => {
+    for (const intent of ["chat", "help", "unknown"]) {
+      const publishEvent = vi.fn();
+      const ctx = makeCtx({ publishEvent });
+      const run = makeRun();
+      const step = {
+        kind: "function" as const,
+        id: "s1",
+        functionApiName: "publish_event_from_intent",
+        params: { intent },
+        output: "result",
+      };
+      await executePlaybookStep(step, ctx, run, makeDeps({ objectStore: ctx.objectStore }));
+      const result = ctx.variables.result as Record<string, unknown>;
+      expect(result?.status).toBe("skipped");
+    }
+  });
+
   it("returns skipped for 'none' intent", async () => {
     const ctx = makeCtx();
     const run = makeRun();
