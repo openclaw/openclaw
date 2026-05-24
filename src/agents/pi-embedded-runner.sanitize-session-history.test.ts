@@ -1720,6 +1720,75 @@ describe("sanitizeSessionHistory", () => {
     expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
   });
 
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
+  ])(
+    "preserves signed thinking tool ids for $label when preserveSignatures is false",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("retry"),
+        makeAssistantMessage([
+          {
+            type: "thinking",
+            thinking: "internal",
+            thinkingSignature: "sig_1",
+          },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ] as unknown as AssistantMessage["content"]),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        }),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        policy: {
+          sanitizeMode: "full",
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict",
+          preserveNativeAnthropicToolUseIds: false,
+          repairToolUseResultPairing: true,
+          preserveSignatures: false,
+          sanitizeThinkingSignatures: false,
+          dropThinkingBlocks: false,
+          applyGoogleTurnOrdering: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: true,
+          allowSyntheticToolResults: false,
+        },
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        {
+          type: "thinking",
+          thinking: "internal",
+          thinkingSignature: "sig_1",
+        },
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      ]);
+      expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "call_1",
+      );
+    },
+  );
+
   it("keeps earlier mutable ids from colliding with later preserved signed ids", async () => {
     setNonGoogleModelApi();
 

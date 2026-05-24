@@ -696,10 +696,13 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
-    modelApi: params.modelApi,
-    policy,
-  });
+  const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
+  const allowProviderOwnedThinkingReplay =
+    shouldAllowProviderOwnedThinkingReplay({
+      modelApi: params.modelApi,
+      policy,
+    }) ||
+    (signedThinkingProvider && !policy.dropThinkingBlocks);
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" ||
     params.modelApi === "openai-codex-responses" ||
@@ -734,7 +737,7 @@ export async function sanitizeSessionHistory(params: {
   // signatures once the assistant turn is no longer latest in the outbound
   // request.
   const validatedThinkingSignatures =
-    providerRequiresSignedThinking(params.provider) || policy.preserveSignatures
+    signedThinkingProvider || policy.preserveSignatures
       ? stripInvalidThinkingSignatures(sanitizedImages, {
           preserveLatestAssistant: params.preserveLatestAssistantThinking ?? true,
         })
