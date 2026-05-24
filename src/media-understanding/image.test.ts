@@ -1097,16 +1097,15 @@ describe("describeImageWithModel", () => {
     expect(options.timeoutMs).toBe(1000);
 
     const assertion = expect(result).rejects.toThrow(
-      "image description request timed out after 1000ms",
+      `image description request timed out after 1000ms (setup took ${slowSetupMs}ms before provider request started)`,
     );
     await vi.advanceTimersByTimeAsync(1000);
     await assertion;
     expect(options.signal.aborted).toBe(true);
   });
 
-  it("uses a fixed internal timeout for image runtime setup", async () => {
+  it("rejects when image runtime setup exceeds the request timeout", async () => {
     vi.useFakeTimers();
-    const setupTimeoutMs = 15_000;
     resolveModelAsyncMock.mockImplementationOnce(() => new Promise(() => {}));
 
     const result = describeImageWithModel({
@@ -1122,12 +1121,9 @@ describe("describeImageWithModel", () => {
     });
 
     const assertion = expect(result).rejects.toThrow(
-      `image description setup timed out after ${setupTimeoutMs}ms before the request started`,
+      "image description setup timed out after 25ms before provider request started",
     );
-    await vi.advanceTimersByTimeAsync(setupTimeoutMs - 1);
-    await Promise.resolve();
-    expect(completeMock).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(25);
     await assertion;
     expect(completeMock).not.toHaveBeenCalled();
   });
