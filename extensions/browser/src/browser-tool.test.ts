@@ -1762,6 +1762,21 @@ describe("browser tool external content wrapping", () => {
     });
 
     await tool.execute?.("call-1", {
+      action: "heap-snapshot",
+      operation: "class-nodes",
+      path: "/tmp/heap.heapsnapshot",
+      id: "42",
+      profile: "user",
+    });
+    expect(browserActionsMocks.browserRouteJson).toHaveBeenLastCalledWith(undefined, {
+      method: "POST",
+      path: "/heap-snapshot/class-nodes",
+      query: { profile: "user" },
+      body: expect.objectContaining({ path: "/tmp/heap.heapsnapshot", id: 42 }),
+      timeoutMs: undefined,
+    });
+
+    await tool.execute?.("call-1", {
       action: "lighthouse",
       mode: "snapshot",
       device: "desktop",

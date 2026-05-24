@@ -454,7 +454,15 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
 
 function readNumberParam(params: Record<string, unknown>, key: string): number | undefined {
   const value = params[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function readRecordParam(params: Record<string, unknown>, key: string) {
