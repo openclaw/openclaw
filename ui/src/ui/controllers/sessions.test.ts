@@ -1262,6 +1262,36 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5.4");
   });
 
+  it("copies creation timestamps from websocket event payloads", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:dashboard:abc",
+            kind: "direct",
+            updatedAt: 20,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:dashboard:abc",
+      sessionId: "sess-dashboard",
+      ts: 2,
+      sessionStartedAt: 10,
+      updatedAt: 30,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]?.updatedAt).toBe(30);
+    expect(state.sessionsResult?.sessions[0]?.sessionStartedAt).toBe(10);
+  });
+
   it("clears old token totals when the gateway marks the measurement stale", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {

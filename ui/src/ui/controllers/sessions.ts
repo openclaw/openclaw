@@ -123,6 +123,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "reasoningLevel",
   "runtimeMs",
   "sessionId",
+  "sessionStartedAt",
   "spawnedBy",
   "startedAt",
   "status",
