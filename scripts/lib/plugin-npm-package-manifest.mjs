@@ -8,6 +8,7 @@ import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mjs";
+import { resolveNpmRunner } from "../npm-runner.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -136,28 +137,26 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
-function npmInvocation() {
-  if (process.platform !== "win32") {
-    return { args: [], command: "npm" };
-  }
-  const npmCliPath = path.join(
-    path.dirname(process.execPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
-  if (fs.existsSync(npmCliPath)) {
-    return { args: [npmCliPath], command: process.execPath };
-  }
-  return { args: [], command: "npm.cmd", shell: true };
+export function resolvePluginNpmCommand(args, params = {}) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
 }
 
-function spawnNpmSync(args, options) {
-  const invocation = npmInvocation();
-  return spawnSync(invocation.command, [...invocation.args, ...args], {
+function spawnNpmSync(args, options = {}) {
+  const invocation = resolvePluginNpmCommand(args, { env: options.env ?? process.env });
+  return spawnSync(invocation.command, invocation.args, {
     ...options,
-    ...(invocation.shell ? { shell: invocation.shell } : {}),
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
   });
 }
 
