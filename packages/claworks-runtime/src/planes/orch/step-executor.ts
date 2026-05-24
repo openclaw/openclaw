@@ -932,7 +932,165 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
   // Expand Jinja-style for loops before other replacements
   const expanded = expandJinjaForLoops(template, vars);
 
-  let out = expanded
+  // ── Jinja2 过滤器管道处理 ─────────────────────────────────────────────────
+  // 将 {{ expr | filter1 | filter2(...) }} 模式展开后应用过滤器
+  const applyFilters = (value: unknown, filterStr: string): string => {
+    let result: unknown = value;
+    // 拆分过滤器链：按 | 分隔（但不在括号内）
+    const filters = filterStr.split(/\s*\|\s*(?=[a-z_A-Z])/);
+    for (const f of filters) {
+      const filterName = f.match(/^(\w+)/)?.[1] ?? "";
+      const argStr = f.match(/\(([^)]*)\)/)?.[1];
+      switch (filterName) {
+        case "lower":
+          result = String(result ?? "").toLowerCase();
+          break;
+        case "upper":
+          result = String(result ?? "").toUpperCase();
+          break;
+        case "trim":
+          result = String(result ?? "").trim();
+          break;
+        case "length":
+          result = Array.isArray(result) ? result.length : String(result ?? "").length;
+          break;
+        case "default": {
+          const dflt = argStr?.replace(/^['"]|['"]$/g, "") ?? "";
+          if (result == null || result === "" || result === false) result = dflt;
+          break;
+        }
+        case "tojson":
+          try {
+            result = JSON.stringify(result);
+          } catch {
+            result = "{}";
+          }
+          break;
+        case "fromjson":
+          try {
+            result = JSON.parse(String(result ?? "{}"));
+          } catch {
+            result = {};
+          }
+          break;
+        case "int":
+          result = parseInt(String(result ?? "0"), 10) || 0;
+          break;
+        case "float":
+          result = parseFloat(String(result ?? "0")) || 0;
+          break;
+        case "string":
+          result = String(result ?? "");
+          break;
+        case "replace": {
+          const parts = argStr?.match(/['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]/);
+          if (parts)
+            result = String(result ?? "")
+              .split(parts[1])
+              .join(parts[2]);
+          break;
+        }
+        case "join": {
+          const sep = argStr?.replace(/^['"]|['"]$/g, "") ?? ", ";
+          result = Array.isArray(result) ? result.join(sep) : String(result ?? "");
+          break;
+        }
+        case "split": {
+          const sep = argStr?.replace(/^['"]|['"]$/g, "") ?? " ";
+          result = String(result ?? "").split(sep);
+          break;
+        }
+        case "first":
+          result = Array.isArray(result) ? result[0] : String(result ?? "")[0];
+          break;
+        case "last":
+          result = Array.isArray(result)
+            ? result[result.length - 1]
+            : String(result ?? "").slice(-1);
+          break;
+        case "regex_search": {
+          const pattern = argStr?.replace(/^['"]|['"]$/g, "") ?? "";
+          try {
+            result = new RegExp(pattern, "i").test(String(result ?? "")) ? "true" : "";
+          } catch {
+            result = "";
+          }
+          break;
+        }
+        case "capitalize":
+          result =
+            String(result ?? "")
+              .charAt(0)
+              .toUpperCase() + String(result ?? "").slice(1);
+          break;
+        case "abs":
+          result = Math.abs(Number(result ?? 0));
+          break;
+        case "round":
+          result = Math.round(Number(result ?? 0));
+          break;
+        case "list":
+          result = Array.isArray(result) ? result : [result];
+          break;
+        case "unique":
+          result = Array.isArray(result) ? [...new Set(result)] : result;
+          break;
+        case "sort":
+          result = Array.isArray(result) ? [...result].sort() : result;
+          break;
+        case "reverse":
+          result = Array.isArray(result)
+            ? [...result].reverse()
+            : String(result ?? "")
+                .split("")
+                .reverse()
+                .join("");
+          break;
+        // 忽略未知过滤器，保持原值
+        default:
+          break;
+      }
+    }
+    return typeof result === "object" ? JSON.stringify(result) : String(result ?? "");
+  };
+
+  // 替换含过滤器管道的 {{ expr | filter... }} 表达式
+  const withFilters = expanded.replace(
+    /\{\{\s*([^{}|]+?)\s*\|\s*([^{}]+?)\s*\}\}/g,
+    (match, exprPart, filtersPart) => {
+      // 先解析 exprPart 的基础值
+      const trimmedExpr = exprPart.trim();
+      // 先做简单的变量查找
+      let baseValue: unknown = undefined;
+      // 支持 a.b 路径访问
+      const pathMatch = trimmedExpr.match(/^([\w.]+)$/);
+      if (pathMatch) {
+        const parts = pathMatch[1].split(".");
+        let cur: unknown = vars;
+        for (const part of parts) {
+          if (cur && typeof cur === "object") {
+            cur = (cur as Record<string, unknown>)[part];
+          } else {
+            cur = undefined;
+            break;
+          }
+        }
+        baseValue = cur;
+      }
+      // payload.get('key') 支持
+      const pgm = trimmedExpr.match(/^payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)$/);
+      if (pgm) baseValue = payload[pgm[1]];
+
+      if (baseValue === undefined) {
+        // 对未知路径先做正常 interpolate 再应用过滤器
+        const simpleInterp = match.replace(/\s*\|[^}]+$/, " }}");
+        return applyFilters(simpleInterp, filtersPart);
+      }
+      return applyFilters(baseValue, filtersPart);
+    },
+  );
+
+  let out = withFilters
     .replace(/\{\{\s*payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)\s*\}\}/g, (_, key) =>
       String(payload[key] ?? ""),
     )
