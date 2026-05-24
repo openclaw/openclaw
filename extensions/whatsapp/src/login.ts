@@ -6,6 +6,7 @@ import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env
 import { resolveWhatsAppAccount } from "./accounts.js";
 import {
   clearStalePhoneCodePairingAuthIfNeeded,
+  hasWebCredsSync,
   restoreCredsFromBackupIfNeeded,
 } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
@@ -187,6 +188,7 @@ export async function loginWebWithPhoneCode(
     runtime,
   });
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
+  const hasExistingLinkedCreds = hasWebCredsSync(account.authDir);
   const readySignal = createWhatsAppPairingCodeReadySignal(
     Math.max(socketTiming.connectTimeoutMs ?? 0, PHONE_CODE_PAIRING_WINDOW_MS),
   );
@@ -198,7 +200,7 @@ export async function loginWebWithPhoneCode(
     qrTimeoutMs: PHONE_CODE_PAIRING_WINDOW_MS,
   });
   try {
-    if (!sock.authState.creds.registered) {
+    if (!hasExistingLinkedCreds && !sock.authState.creds.registered) {
       await readySignal.wait(sock);
       const code = await sock.requestPairingCode(normalizedPhoneNumber);
       runtime.log(success(`WhatsApp pairing code: ${formatPairingCode(code)}`));
