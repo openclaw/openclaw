@@ -90,7 +90,7 @@ run_wizard_cmd() {
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
   # Run under script to keep an interactive TTY for clack prompts.
-  script -q -f -c "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
+  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
   wizard_pid=$!
   exec 3>"$input_fifo"
 
@@ -176,18 +176,16 @@ send_reset_config_only() {
 send_channels_flow() {
   # Configure channels via configure wizard. Use the remove-config branch for
   # a stable no-op smoke path when the config starts empty.
-  wait_for_log "Where will the Gateway run?" 120
-  send $'\r' 0.6
-  wait_for_log "Configure/link" 120
+  # Section-scoped configure flows skip gateway run-mode selection.
+  wait_for_log "Channel setup" 120
   send $'\e[B\r' 0.8
   # Keep stdin open until wizard exits.
   send "" 2.0
 }
 
 send_skills_flow() {
-  # configure --section skills still runs the configure wizard.
-  wait_for_log "Where will the Gateway run?" 120
-  send $'\r' 0.6
+  # configure --section skills still runs the configure wizard, without the
+  # gateway run-mode prompt used by the full wizard.
   wait_for_log "Configure skills now?" 120
   send $'n\r' 0.8
   send "" 2.0

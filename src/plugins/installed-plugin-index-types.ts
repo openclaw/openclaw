@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate } from "./discovery.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -101,6 +101,7 @@ export type InstalledPluginIndexRecord = {
   origin: PluginManifestRecord["origin"];
   enabled: boolean;
   enabledByDefault?: boolean;
+  enabledByDefaultOnPlatforms?: readonly string[];
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
   compat: readonly PluginCompatCode[];
@@ -129,6 +130,7 @@ export type LoadInstalledPluginIndexParams = {
   installRecords?: Record<string, PluginInstallRecord>;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  discovery?: PluginDiscoveryResult;
   now?: () => Date;
 };
 

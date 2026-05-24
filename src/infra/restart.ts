@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -39,6 +39,7 @@ let restartCycleToken = 0;
 let emittedRestartToken = 0;
 let consumedRestartToken = 0;
 let emittedRestartReason: string | undefined;
+let emittedRestartIntent: GatewayRestartIntent | undefined;
 let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
@@ -91,11 +92,13 @@ type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
 
 export type GatewayRestartIntent = {
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
@@ -125,20 +128,21 @@ export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
   intent?: GatewayRestartIntent;
+  reason?: string;
 }): boolean {
   const targetPid = normalizeRestartIntentPid(opts.targetPid);
   if (targetPid === null) {
     return false;
   }
   const env = opts.env ?? process.env;
-  let tmpPath: string | undefined;
   try {
     const intentPath = resolveGatewayRestartIntentPath(env);
-    fs.mkdirSync(path.dirname(intentPath), { recursive: true });
+    const reason = normalizeRestartIntentReason(opts.reason ?? opts.intent?.reason);
     const payload: GatewayRestartIntentPayload = {
       kind: "gateway-restart",
       pid: targetPid,
       createdAt: Date.now(),
+      ...(reason ? { reason } : {}),
       ...(opts.intent?.force ? { force: true } : {}),
       ...(typeof opts.intent?.waitMs === "number" &&
       Number.isFinite(opts.intent.waitMs) &&
@@ -146,25 +150,14 @@ export function writeGatewayRestartIntentSync(opts: {
         ? { waitMs: Math.floor(opts.intent.waitMs) }
         : {}),
     };
-    tmpPath = path.join(
-      path.dirname(intentPath),
-      `.${path.basename(intentPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
-    );
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(tmpPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
-    } finally {
-      if (fd !== undefined) {
-        fs.closeSync(fd);
-      }
-    }
-    fs.renameSync(tmpPath, intentPath);
+    replaceFileAtomicSync({
+      filePath: intentPath,
+      content: `${JSON.stringify(payload)}\n`,
+      mode: 0o600,
+      tempPrefix: ".gateway-restart-intent",
+    });
     return true;
   } catch (err) {
-    if (tmpPath) {
-      unlinkGatewayRestartIntentFileSync(tmpPath);
-    }
     restartLog.warn(`failed to write gateway restart intent: ${String(err)}`);
     return false;
   }
@@ -183,14 +176,17 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
       Number.isFinite(parsed.pid) &&
       typeof parsed.createdAt === "number" &&
       Number.isFinite(parsed.createdAt) &&
+      (parsed.reason === undefined || typeof parsed.reason === "string") &&
       (parsed.force === undefined || typeof parsed.force === "boolean") &&
       (parsed.waitMs === undefined ||
         (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
     ) {
+      const reason = normalizeRestartIntentReason(parsed.reason);
       return {
         kind: "gateway-restart",
         pid: parsed.pid,
         createdAt: parsed.createdAt,
+        ...(reason ? { reason } : {}),
         ...(parsed.force ? { force: true } : {}),
         ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
       };
@@ -199,6 +195,11 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
     return null;
   }
   return null;
+}
+
+function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
+  const normalized = reason?.trim();
+  return normalized ? normalized.slice(0, 200) : undefined;
 }
 
 export function consumeGatewayRestartIntentPayloadSync(
@@ -230,6 +231,7 @@ export function consumeGatewayRestartIntentPayloadSync(
     return null;
   }
   return {
+    ...(payload.reason ? { reason: payload.reason } : {}),
     ...(payload.force ? { force: true } : {}),
     ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
   };
@@ -290,7 +292,10 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
  * Both scheduleGatewaySigusr1Restart and the config watcher should use this
  * to ensure only one restart fires.
  */
-export function emitGatewayRestart(reasonOverride?: string): boolean {
+export function emitGatewayRestart(
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+): boolean {
   if (hasUnconsumedRestartSignal()) {
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
@@ -300,7 +305,8 @@ export function emitGatewayRestart(reasonOverride?: string): boolean {
   clearPendingScheduledRestart();
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
-  emittedRestartReason = reasonOverride ?? pendingRestartReason;
+  emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
+  emittedRestartIntent = intent;
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
@@ -377,6 +383,19 @@ export function peekGatewaySigusr1RestartReason(): string | undefined {
 }
 
 /**
+ * Reads and clears only the in-memory intent for the current emitted SIGUSR1 cycle.
+ * The restart reason and cycle token are advanced by markGatewaySigusr1RestartHandled().
+ */
+export function consumeGatewaySigusr1RestartIntent(): GatewayRestartIntent | null {
+  if (!hasUnconsumedRestartSignal()) {
+    return null;
+  }
+  const intent = emittedRestartIntent ?? null;
+  emittedRestartIntent = undefined;
+  return intent;
+}
+
+/**
  * Mark the currently emitted SIGUSR1 restart cycle as consumed by the run loop.
  * This explicitly advances the cycle state instead of resetting emit guards inside
  * consumeGatewaySigusr1RestartAuthorization().
@@ -385,12 +404,14 @@ export function markGatewaySigusr1RestartHandled(): void {
   if (hasUnconsumedRestartSignal()) {
     consumedRestartToken = emittedRestartToken;
     emittedRestartReason = undefined;
+    emittedRestartIntent = undefined;
   }
 }
 
 function rollBackGatewayRestartEmission(): void {
   emittedRestartToken = consumedRestartToken;
   emittedRestartReason = undefined;
+  emittedRestartIntent = undefined;
   consumeGatewaySigusr1RestartAuthorization();
 }
 
@@ -426,6 +447,7 @@ function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
 async function emitPreparedGatewayRestart(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
+  intent?: GatewayRestartIntent,
 ): Promise<void> {
   let nextHooks = hooks ?? pendingRestartEmitHooks;
   if (!hooks) {
@@ -452,7 +474,7 @@ async function emitPreparedGatewayRestart(
     pendingRestartEmitHooks = undefined;
   }
 
-  const emitted = emitGatewayRestart(reasonOverride);
+  const emitted = emitGatewayRestart(reasonOverride, intent);
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
@@ -470,6 +492,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   pollMs?: number;
   maxWaitMs?: number;
   reason?: string;
+  timeoutIntent?: GatewayRestartIntent;
 }): void {
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
@@ -522,7 +545,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, opts.timeoutIntent);
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
@@ -640,7 +663,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
-  // Fall back to bootstrap (re-register from plist) + kickstart.
+  // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
   const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
@@ -662,6 +685,9 @@ export function triggerOpenClawRestart(): RestartAttempt {
       detail: formatSpawnDetail(boot),
       tried,
     };
+  }
+  if (boot.status === 0) {
+    return { ok: true, method: "launchctl", tried };
   }
   const retryArgs = ["kickstart", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);
@@ -721,6 +747,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
       emittedRestartReason = reason;
+      if (emittedRestartIntent) {
+        // Preserve the already-authorized force bit; only the display/recovery reason is upgraded.
+        emittedRestartIntent = { ...emittedRestartIntent, reason };
+      }
     }
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
@@ -808,10 +838,14 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         return;
       }
       const cfg = getRuntimeConfig();
+      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+        cfg.gateway?.reload?.deferralTimeoutMs,
+      );
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
-        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(cfg.gateway?.reload?.deferralTimeoutMs),
+        maxWaitMs: deferralTimeoutMs,
         reason: scheduledReason,
+        timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
       });
     },
     Math.max(0, requestedDueAt - nowMs),
@@ -828,7 +862,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   };
 }
 
-export const __testing = {
+export const testing = {
   resetSigusr1State() {
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
@@ -838,8 +872,10 @@ export const __testing = {
     emittedRestartToken = 0;
     consumedRestartToken = 0;
     emittedRestartReason = undefined;
+    emittedRestartIntent = undefined;
     lastRestartEmittedAt = 0;
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
   },
 };
+export { testing as __testing };

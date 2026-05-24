@@ -9,6 +9,7 @@ const {
   buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
+  findUnmatchedExplicitTestTargets,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
@@ -62,6 +63,14 @@ const {
     pnpmArgs: string[];
     watchMode: boolean;
   }>;
+  findUnmatchedExplicitTestTargets: (
+    args: string[],
+    cwd?: string,
+  ) => Array<{
+    target: string;
+    reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
+    includePattern?: string;
+  }>;
   parseTestProjectsArgs: (
     args: string[],
     cwd?: string,
@@ -97,12 +106,8 @@ const {
   ) => number;
 };
 
-const VITEST_NODE_PREFIX = [
-  "exec",
-  "node",
-  "--no-maglev",
-  expect.stringMatching(/(?:^|[\\/])node_modules[\\/]vitest[\\/]vitest\.mjs$/),
-];
+const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -563,11 +568,11 @@ describe("test-projects args", () => {
       },
     );
 
-    expect(specs[0]?.env).toMatchObject({
-      KEEP_ME: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
-    });
+    const firstEnv = specs[0]?.env;
+    expect(firstEnv?.KEEP_ME).toBe("1");
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
@@ -718,17 +723,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-matrix.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/matrix/src/channel.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes bluebubbles extension tests to the bluebubbles config", () => {
-    expect(buildVitestRunPlans(["extensions/bluebubbles/src/monitor.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
         watchMode: false,
       },
     ]);
@@ -899,10 +893,10 @@ describe("test-projects args", () => {
     });
     expect(
       resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {
@@ -954,9 +948,10 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-discord.config.ts",
         forwardedArgs: [],
         includePatterns: [
-          "extensions/discord/src/api-barrel.test.ts",
           "extensions/discord/src/channel-actions.contract.test.ts",
+          "extensions/discord/src/channel.message-adapter.test.ts",
           "extensions/discord/src/channel.test.ts",
+          "extensions/discord/src/durable-delivery.test.ts",
           "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
           "extensions/discord/src/monitor/message-handler.queue.test.ts",
           "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
@@ -1007,6 +1002,64 @@ describe("test-projects args", () => {
     ]);
     expect(spec?.includeFilePath).toContain("openclaw-vitest-include-");
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
+  });
+
+  it("rejects explicit test file targets that do not exist", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/not-a-real-openclaw-test.test.ts"])).toEqual([
+      {
+        target: "src/not-a-real-openclaw-test.test.ts",
+        reason: "path-does-not-exist",
+      },
+    ]);
+  });
+
+  it("rejects explicit globs that match no files", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/**/not-a-real-openclaw-test.test.ts"])).toEqual([
+      {
+        target: "src/**/not-a-real-openclaw-test.test.ts",
+        reason: "glob-matched-no-files",
+      },
+    ]);
+  });
+
+  it("rejects explicit non-test file targets with no sibling tests", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "src", "lonely", "runtime.ts"), "export {};\n");
+
+      expect(findUnmatchedExplicitTestTargets(["src/lonely/runtime.ts"], tempDir)).toEqual([
+        {
+          target: "src/lonely/runtime.ts",
+          reason: "target-matched-no-test-files",
+          includePattern: "src/lonely/**/*.test.ts",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit untracked test files that exist on disk", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "src", "new.test.ts"), "test('new', () => {});\n");
+
+      expect(findUnmatchedExplicitTestTargets(["src/new.test.ts"], tempDir)).toEqual([]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit Vitest config targets routed as whole config runs", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(["test/vitest/vitest.contracts-channel-surface.config.ts"]),
+    ).toEqual([]);
+  });
+
+  it("accepts sentinel targets routed as whole config runs", () => {
+    expect(findUnmatchedExplicitTestTargets(["ui/src/test-helpers/control-ui-e2e.ts"])).toEqual([]);
   });
 
   it("skips channel contract configs with no matching external include patterns", () => {

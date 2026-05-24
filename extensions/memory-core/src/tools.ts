@@ -5,6 +5,7 @@ import {
   jsonResult,
   readNumberParam,
   readStringParam,
+  type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
@@ -34,6 +36,50 @@ import {
   MemorySearchSchema,
   searchMemoryCorpusSupplements,
 } from "./tools.shared.js";
+
+type MemorySearchToolResult =
+  | (MemorySearchResult & { corpus: MemorySource })
+  | MemoryCorpusSearchResult;
+
+function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
+  return results.toSorted((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    return left.path.localeCompare(right.path);
+  });
+}
+
+function mergeMemorySearchCorpusResults(params: {
+  memoryResults: MemorySearchToolResult[];
+  supplementResults: MemorySearchToolResult[];
+  maxResults: number;
+  balanceCorpora: boolean;
+}): MemorySearchToolResult[] {
+  const memoryResults = sortMemorySearchToolResults(params.memoryResults);
+  const supplementResults = sortMemorySearchToolResults(params.supplementResults);
+  if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
+    return sortMemorySearchToolResults([...memoryResults, ...supplementResults]).slice(
+      0,
+      params.maxResults,
+    );
+  }
+
+  const perCorpusCap = Math.ceil(params.maxResults / 2);
+  const selectedMemory = memoryResults.slice(0, perCorpusCap);
+  const selectedSupplements = supplementResults.slice(0, perCorpusCap);
+  const selected = [...selectedMemory, ...selectedSupplements];
+  if (selected.length < params.maxResults) {
+    selected.push(
+      ...sortMemorySearchToolResults([
+        ...memoryResults.slice(selectedMemory.length),
+        ...supplementResults.slice(selectedSupplements.length),
+      ]).slice(0, params.maxResults - selected.length),
+    );
+  }
+
+  return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+}
 
 function buildRecallKey(
   result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
@@ -220,11 +266,18 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
+          const pluginConfig = resolveMemoryCorePluginConfig(cfg);
+          const dreamingEnabled = resolveMemoryDreamingConfig({
+            pluginConfig,
+            cfg,
+          }).enabled;
+          const dreaming = resolveMemoryDeepDreamingConfig({
+            pluginConfig,
+            cfg,
+          });
           const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<
-            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
-          > = [];
+          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: MemorySource }> = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
@@ -263,6 +316,7 @@ export function createMemorySearchTool(options: {
             });
             rawResults = await filterMemorySearchHitsBySessionVisibility({
               cfg,
+              agentId,
               requesterSessionKey: options.agentSessionKey,
               sandboxed: options.sandboxed === true,
               hits: rawResults,
@@ -281,19 +335,17 @@ export function createMemorySearchTool(options: {
                 : decorated;
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,
-              corpus: "memory" as const,
+              corpus: result.source,
             }));
-            const sleepTimezone = resolveMemoryDeepDreamingConfig({
-              pluginConfig: resolveMemoryCorePluginConfig(cfg),
-              cfg,
-            }).timezone;
-            queueShortTermRecallTracking({
-              workspaceDir: status.workspaceDir,
-              query,
-              rawResults,
-              surfacedResults: memoryResults,
-              timezone: sleepTimezone,
-            });
+            if (dreamingEnabled) {
+              queueShortTermRecallTracking({
+                workspaceDir: status.workspaceDir,
+                query,
+                rawResults,
+                surfacedResults: memoryResults,
+                timezone: dreaming.timezone,
+              });
+            }
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
@@ -319,14 +371,15 @@ export function createMemorySearchTool(options: {
                 corpus: requestedCorpus,
               })
             : [];
-          const results = [...surfacedMemoryResults, ...supplementResults]
-            .toSorted((left, right) => {
-              if (left.score !== right.score) {
-                return right.score - left.score;
-              }
-              return left.path.localeCompare(right.path);
-            })
-            .slice(0, Math.max(1, maxResults ?? 10));
+          // Wiki and memory scores use incomparable scales, so corpus=all first
+          // balances candidate selection and then backfills any unused slots.
+          const effectiveMax = Math.max(1, maxResults ?? 10);
+          const results = mergeMemorySearchCorpusResults({
+            memoryResults: surfacedMemoryResults,
+            supplementResults,
+            maxResults: effectiveMax,
+            balanceCorpora: requestedCorpus === "all",
+          });
           return jsonResult({
             results,
             provider,

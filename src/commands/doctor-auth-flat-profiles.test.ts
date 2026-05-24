@@ -66,8 +66,10 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toHaveLength(1);
-    expect(result.warnings).toEqual([]);
+    expect(result.changes).toStrictEqual([
+      `Rewrote ${authPath} to the canonical auth profile format (backup: ${authPath}.legacy-flat.123.bak).`,
+    ]);
+    expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
       version: 1,
       profiles: {
@@ -96,8 +98,63 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacy);
+  });
+
+  it("moves aws-sdk auth profile markers into config metadata", async () => {
+    const state = await makeTestState();
+    const legacy = {
+      version: 1,
+      profiles: {
+        "amazon-bedrock:default": {
+          type: "aws-sdk",
+          createdAt: "2026-03-15T10:00:00.000Z",
+        },
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-openrouter",
+        },
+      },
+    };
+    const authPath = await state.writeAuthProfiles(legacy);
+    const cfg = {};
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg,
+      prompter: makePrompter(true),
+      now: () => 456,
+    });
+
+    expect(result.detected).toEqual([authPath]);
+    expect(result.changes).toStrictEqual([
+      `Moved aws-sdk profile metadata from ${authPath} to auth.profiles (backup: ${authPath}.aws-sdk-profile.456.bak).`,
+    ]);
+    expect(result.warnings).toStrictEqual([]);
+    expect(cfg).toEqual({
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            mode: "aws-sdk",
+          },
+        },
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual({
+      version: 1,
+      profiles: {
+        "openrouter:default": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-openrouter",
+        },
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(`${authPath}.aws-sdk-profile.456.bak`, "utf8"))).toEqual(
+      legacy,
+    );
   });
 });

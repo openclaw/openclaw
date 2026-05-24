@@ -13,6 +13,10 @@ UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
+FRESHNESS_VERSION="${OPENCLAW_INSTALL_FRESHNESS_VERSION:-latest}"
+# npm min-release-age is days; 10000 keeps the control failure independent of normal release cadence.
+FRESHNESS_MIN_RELEASE_AGE="${OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE:-10000}"
+FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.14.1}"
 HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"
 INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-900}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -145,11 +149,22 @@ resolve_update_baseline_version() {
   UPDATE_BASELINE_VERSION="$resolved_version"
 }
 
+run_installer_for_package_spec() {
+  local install_url="$1"
+  local package_spec="$2"
+
+  timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+    bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
+    _ "$install_url" "$package_spec"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
-    echo "==> Install latest release tarball"
-    npm_install_global "install latest release tarball" --omit=optional "$FRESH_TAG_URL"
+    echo "==> Run official installer one-liner for latest release tarball"
+    OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 \
+      run_with_heartbeat "installer latest release tarball" \
+        run_installer_for_package_spec "$INSTALL_URL" "$FRESH_TAG_URL"
     print_install_audit "fresh install"
 
     echo "==> Verify installed version"
@@ -257,7 +272,7 @@ run_update_smoke() {
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
-      env npm_config_omit=optional NPM_CONFIG_OMIT=optional \
+      env npm_config_omit=optional NPM_CONFIG_OMIT=optional OPENCLAW_ALLOW_ROOT=1 \
       openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
   )"
   update_status=$?
@@ -391,6 +406,75 @@ run_npm_global_smoke() {
   echo "OK"
 }
 
+run_freshness_smoke() {
+  local freshness_spec="${PACKAGE_NAME}@${FRESHNESS_VERSION}"
+  local expected_version
+  local current_npm_version
+  local policy_home
+  local plain_stdout_file
+  local plain_stderr_file
+  local plain_status
+  policy_home="$(mktemp -d)"
+  plain_stdout_file="$(mktemp)"
+  plain_stderr_file="$(mktemp)"
+  printf "min-release-age=%s\n" "$FRESHNESS_MIN_RELEASE_AGE" >"${policy_home}/.npmrc"
+
+  current_npm_version="$(npm --version 2>/dev/null || true)"
+  if [[ "$current_npm_version" != "$FRESHNESS_NPM_VERSION" ]]; then
+    echo "==> Install npm with min-release-age support: npm@$FRESHNESS_NPM_VERSION"
+    npm_install_global "install npm freshness-capable release" "npm@${FRESHNESS_NPM_VERSION}"
+  fi
+
+  expected_version="$(quiet_npm view "$freshness_spec" version 2>/dev/null || true)"
+  if [[ -z "$expected_version" ]]; then
+    echo "ERROR: failed to resolve $freshness_spec" >&2
+    return 1
+  fi
+
+  echo "package=$PACKAGE_NAME version=$FRESHNESS_VERSION resolved=$expected_version npm=$(npm --version) min_release_age=$FRESHNESS_MIN_RELEASE_AGE"
+  echo "==> Verify user npm freshness policy blocks plain npm install"
+  set +e
+  HOME="$policy_home" NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
+    timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+      npm \
+      --loglevel=error \
+      --logs-max=0 \
+      --no-update-notifier \
+      --no-fund \
+      --no-audit \
+      --no-progress \
+      install -g "$freshness_spec" \
+    >"$plain_stdout_file" 2>"$plain_stderr_file"
+  plain_status=$?
+  set -e
+  if [[ "$plain_status" -eq 0 ]]; then
+    echo "ERROR: plain npm install unexpectedly succeeded under min-release-age policy" >&2
+    return 1
+  fi
+  if ! grep -Eiq "No matching version|No versions available|ETARGET|ENOVERSIONS|notarget|min-release-age|minimum release age|before" \
+    "$plain_stdout_file" "$plain_stderr_file"; then
+    echo "ERROR: plain npm install failed without expected freshness evidence" >&2
+    cat "$plain_stdout_file"
+    cat "$plain_stderr_file" >&2
+    return 1
+  fi
+
+  echo "==> Run installer with same npm freshness policy"
+  env \
+    HOME="$policy_home" \
+    NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
+    OPENCLAW_NO_ONBOARD=1 \
+    OPENCLAW_NO_PROMPT=1 \
+    bash -c 'curl -fsSL "$1" | bash -s -- --install-method npm --version "$2" --no-prompt --no-onboard' \
+    _ "$INSTALL_URL" "$FRESHNESS_VERSION"
+
+  echo "==> Verify installed version"
+  print_install_audit "freshness install"
+  verify_installed_cli "$PACKAGE_NAME" "$expected_version"
+
+  echo "OK"
+}
+
 case "$SMOKE_MODE" in
   install)
     run_install_smoke
@@ -400,6 +484,9 @@ case "$SMOKE_MODE" in
     ;;
   npm-global)
     run_npm_global_smoke
+    ;;
+  freshness)
+    run_freshness_smoke
     ;;
   *)
     echo "ERROR: unsupported OPENCLAW_INSTALL_SMOKE_MODE=$SMOKE_MODE" >&2

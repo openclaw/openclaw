@@ -360,6 +360,29 @@ function mockNoApprovalRouteRegistration() {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  record: Record<string, unknown> | undefined,
+  expected: Record<string, unknown>,
+) {
+  if (!record) {
+    throw new Error("expected record");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (Array.isArray(value)) {
+      expect(record[key]).toEqual(value);
+    } else {
+      expect(record[key]).toBe(value);
+    }
+  }
+}
+
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
@@ -463,12 +486,15 @@ describe("exec approvals", () => {
         interval: 1,
       })
       .toBe(approvalId);
-    expect(
-      (invokeParams as { params?: { suppressNotifyOnExit?: boolean } } | undefined)?.params,
-    ).toMatchObject({
-      suppressNotifyOnExit: true,
-    });
-    await expect.poll(() => agentParams, { timeout: 2000, interval: 1 }).toBeTruthy();
+    const nodeInvokeParams = requireRecord(
+      requireRecord(invokeParams, "node invoke").params,
+      "node invoke params",
+    );
+    expect(nodeInvokeParams.suppressNotifyOnExit).toBe(true);
+    await expect.poll(() => agentParams !== undefined, { timeout: 2000, interval: 1 }).toBe(true);
+    const agent = requireRecord(agentParams, "agent followup params");
+    expect(String(agent.message)).toContain(`id=${approvalId}`);
+    expect(agent.sessionKey).toBe("agent:main:main");
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -697,9 +723,10 @@ describe("exec approvals", () => {
     });
 
     expect(durable.details.status).toBe("approval-pending");
-    expect(durable.details).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    expect(requireRecord(durable.details, "durable details").allowedDecisions).toEqual([
+      "allow-once",
+      "deny",
+    ]);
     expect(getResultText(durable)).toContain("Reply with: /approve ");
     expect(getResultText(durable)).toContain("allow-once|deny");
     expect(getResultText(durable)).not.toContain("allow-once|allow-always|deny");
@@ -819,9 +846,10 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    expect(result.details).toMatchObject({
-      allowedDecisions: ["allow-once", "deny"],
-    });
+    expect(requireRecord(result.details, "result details").allowedDecisions).toEqual([
+      "allow-once",
+      "deny",
+    ]);
     expect(calls).toContain("exec.approval.request");
   });
 
@@ -936,13 +964,11 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliver: false,
-        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+    });
+    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "An async command the user already approved has completed.",
@@ -977,18 +1003,16 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        channel: "discord",
-        to: "123",
-        accountId: "default",
-        threadId: "456",
-        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
+    expect(String(agentCalls[0]?.idempotencyKey)).toContain("exec-approval-followup:");
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
@@ -1040,17 +1064,15 @@ describe("exec approvals", () => {
     resolveDecision?.({ decision: "allow-once" });
 
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        deliver: true,
-        bestEffortDeliver: true,
-        channel: "discord",
-        to: "123",
-        accountId: "default",
-        threadId: "456",
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:discord:channel:123",
+      deliver: true,
+      bestEffortDeliver: true,
+      channel: "discord",
+      to: "123",
+      accountId: "default",
+      threadId: "456",
+    });
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "If the task requires more steps, continue from this result before replying to the user.",
@@ -1059,7 +1081,35 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
+  it("waits for native webchat approval and returns approved gateway output as a foreground result", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "webchat",
+    });
+
+    const result = await tool.execute("call-gw-native-webchat", {
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("webchat-ok");
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("keeps approved internal commands asynchronous without a webchat turn source", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -1084,16 +1134,14 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
 
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(agentCalls[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliver: false,
-      }),
-    );
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+    });
     expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
-  it("uses a deny-specific followup prompt so prior output is not reused", async () => {
+  it("does not spawn a gateway followup agent when approval is denied", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1124,15 +1172,8 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(typeof agentCalls[0]?.message).toBe("string");
-    expect(agentCalls[0]?.message).toContain("An async command did not run.");
-    expect(agentCalls[0]?.message).toContain(
-      "Do not mention, summarize, or reuse output from any earlier run in this session.",
-    );
-    expect(agentCalls[0]?.message).not.toContain(
-      "An async command the user already approved has completed.",
-    );
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(agentCalls).toHaveLength(0);
   });
 
   it("requires a separate approval for each elevated command after allow-once", async () => {
@@ -1208,28 +1249,25 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
   });
 
-  it("runs a skill wrapper chain without prompting when the wrapper is allowlisted", async () => {
+  it("runs a direct skill wrapper command without prompting when the wrapper is allowlisted", async () => {
     if (process.platform === "win32") {
       return;
     }
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
     try {
-      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
       const binDir = path.join(tempDir, "bin");
       const wrapperPath = path.join(binDir, "gog-wrapper");
-      await fs.mkdir(skillDir, { recursive: true });
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(skillPath, "# gog skill\n");
       await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
       await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
 
       await writeExecApprovalsConfig({
         version: 1,
         defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
         agents: {
           main: {
-            allowlist: [{ pattern: wrapperPath }],
+            allowlist: [{ pattern: trustedWrapperPath }],
           },
         },
       });
@@ -1245,13 +1283,72 @@ describe("exec approvals", () => {
       });
 
       const result = await tool.execute("call-skill-wrapper", {
-        command: `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
+        command: `${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
         workdir: tempDir,
       });
 
       expect(result.details.status).toBe("completed");
       expect(getResultText(result)).toContain('{"events":[]}');
       expect(calls).not.toContain("exec.approval.request");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires approval for the legacy skill display prelude even when the wrapper is allowlisted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prelude-"));
+    try {
+      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const binDir = path.join(tempDir, "bin");
+      const wrapperPath = path.join(binDir, "gog-wrapper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(skillPath, "# gog skill\n");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+      await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
+
+      await writeExecApprovalsConfig({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: trustedWrapperPath }],
+          },
+        },
+      });
+
+      const calls: string[] = [];
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        calls.push(method);
+        if (method === "exec.approval.request") {
+          return acceptedApprovalResponse(params);
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "on-miss",
+        security: "allowlist",
+        approvalRunningNoticeMs: 0,
+      });
+
+      const command = `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`;
+      const result = await tool.execute("call-skill-prelude", {
+        command,
+        workdir: tempDir,
+      });
+
+      expectPendingCommandText(result, command);
+      expect(calls).toContain("exec.approval.request");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1370,11 +1467,11 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-ok");
 
-    expect(vi.mocked(callGatewayTool)).toHaveBeenCalledWith(
-      "exec.approval.request",
-      expect.anything(),
-      expect.anything(),
-      expect.objectContaining({ expectFinal: false }),
+    const approvalRequestCall = vi
+      .mocked(callGatewayTool)
+      .mock.calls.find(([method]) => method === "exec.approval.request");
+    expect(requireRecord(approvalRequestCall?.[3], "approval request options").expectFinal).toBe(
+      false,
     );
     expect(
       vi
@@ -1443,17 +1540,13 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
-    expect(systemRunInvoke).toMatchObject({
-      command: "system.run",
-      params: {
-        approved: true,
-        approvalDecision: "allow-once",
-        systemRunPlan: preparedPlan,
-      },
-    });
-    expect((systemRunInvoke as { params?: { runId?: string } }).params?.runId).toEqual(
-      expect.any(String),
-    );
+    const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
+    expect(systemRun.command).toBe("system.run");
+    const params = requireRecord(systemRun.params, "system.run params");
+    expect(params.approved).toBe(true);
+    expect(params.approvalDecision).toBe("allow-once");
+    expect(params.systemRunPlan).toStrictEqual(preparedPlan);
+    expect(params.runId).toBeTypeOf("string");
   });
 
   it("explains cron no-route denials with a host-policy fix hint", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
@@ -42,7 +43,7 @@ describe("tui session actions", () => {
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state: createBaseState(),
       agentNames: new Map(),
@@ -85,7 +86,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
       state,
       updateFooter,
       updateAutocompleteProvider,
@@ -96,6 +97,13 @@ describe("tui session actions", () => {
 
     await Promise.resolve();
     expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(listSessions).toHaveBeenNthCalledWith(1, {
+      limit: TUI_SESSION_LOOKUP_LIMIT,
+      search: "agent:main:main",
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "main",
+    });
 
     resolveFirst?.({
       ts: Date.now(),
@@ -283,7 +291,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state,
       agentNames: new Map(),
@@ -336,6 +344,123 @@ describe("tui session actions", () => {
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("aborts the in-flight runId when only pendingChatRunId is set", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const addSystem = vi.fn();
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: "run-pending",
+    });
+
+    const { abortActive } = createSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-pending",
+    });
+    expect(addSystem).not.toHaveBeenCalledWith("no active run");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
+  it("coalesces repeated no-active-run abort notices", async () => {
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+
+    const { abortActive } = createTestSessionActions({
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+    });
+
+    await abortActive();
+
+    expect(addSystem).toHaveBeenCalledWith("no active run", {
+      coalesceConsecutive: true,
+    });
+    expect(requestRender).toHaveBeenCalledOnce();
+  });
+
+  it("does not abort local post-turn maintenance while finishing context", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const addSystem = vi.fn();
+    const requestRender = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-finishing",
+      pendingChatRunId: null,
+      activityStatus: "finishing context",
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+      opts: { local: true },
+      state,
+    });
+
+    await abortActive();
+
+    expect(abortChat).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is finishing context; wait for it to finish before aborting",
+    );
+    expect(requestRender).toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-finishing");
+  });
+
+  it("aborts the queued pending run after a local finishing turn accepts the next send", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: "run-finishing",
+      pendingChatRunId: "run-queued",
+      activityStatus: "waiting",
+    });
+
+    const { abortActive } = createTestSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      opts: { local: true },
+      state,
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-queued",
+    });
+    expect(state.pendingChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
   });
 
   it("remembers the selected session after history loads", async () => {

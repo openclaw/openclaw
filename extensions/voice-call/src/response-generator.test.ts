@@ -3,15 +3,65 @@ import { VoiceCallConfigSchema } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { generateVoiceResponse } from "./response-generator.js";
 
+type TestSessionEntry = {
+  sessionId: string;
+  updatedAt: number;
+  providerOverride?: string;
+  modelOverride?: string;
+  modelOverrideSource?: string;
+  model?: string;
+  modelProvider?: string;
+  contextTokens?: number;
+  authProfileOverride?: string;
+};
+
+type EmbeddedAgentArgs = {
+  extraSystemPrompt: string;
+  provider?: string;
+  model?: string;
+  sessionKey?: string;
+  sandboxSessionKey?: string;
+  agentDir?: string;
+  agentId?: string;
+  workspaceDir?: string;
+  sessionFile?: string;
+  toolsAllow?: string[];
+};
+
 function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
-  const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
+  const sessionStore: Record<string, TestSessionEntry> = {};
   const saveSessionStore = vi.fn(async () => {});
   const updateSessionStore = vi.fn(
-    async (
-      _storePath: string,
-      mutator: (store: Record<string, { sessionId: string; updatedAt: number }>) => unknown,
-    ) => {
+    async (_storePath: string, mutator: (store: Record<string, TestSessionEntry>) => unknown) => {
       return await mutator(sessionStore);
+    },
+  );
+  const getSessionEntry = vi.fn(
+    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  );
+  const patchSessionEntry = vi.fn(
+    async (params: {
+      sessionKey: string;
+      fallbackEntry?: TestSessionEntry;
+      replaceEntry?: boolean;
+      update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+    }) => {
+      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
+      if (!existing) {
+        return null;
+      }
+      const patch = params.update({ ...existing });
+      if (!patch) {
+        return existing;
+      }
+      const next = params.replaceEntry ? (patch as TestSessionEntry) : { ...existing, ...patch };
+      sessionStore[params.sessionKey] = next;
+      return next;
+    },
+  );
+  const upsertSessionEntry = vi.fn(
+    async (params: { sessionKey: string; entry: TestSessionEntry }) => {
+      sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
   const runEmbeddedPiAgent = vi.fn(async () => ({
@@ -53,6 +103,9 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       loadSessionStore: () => sessionStore,
       saveSessionStore,
       updateSessionStore,
+      getSessionEntry,
+      patchSessionEntry,
+      upsertSessionEntry,
       resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
@@ -62,6 +115,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     runEmbeddedPiAgent,
     saveSessionStore,
     updateSessionStore,
+    patchSessionEntry,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -73,21 +127,23 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
 
 function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) {
   const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
-  const firstCall = calls[0];
-  if (!firstCall) {
-    throw new Error("voice response generator did not invoke the embedded agent");
-  }
-  const args = firstCall[0] as
-    | {
-        extraSystemPrompt?: string;
-        provider?: string;
-        model?: string;
-      }
-    | undefined;
+  const firstCall = requireFirstMockCall(
+    calls,
+    "voice response generator embedded agent invocation",
+  );
+  const args = firstCall[0] as Partial<EmbeddedAgentArgs> | undefined;
   if (!args?.extraSystemPrompt) {
     throw new Error("voice response generator did not pass the spoken-output contract prompt");
   }
-  return args;
+  return args as EmbeddedAgentArgs;
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 async function runGenerateVoiceResponse(
@@ -167,9 +223,17 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedPiAgent, updateSessionStore, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedPiAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
+    sessionStore["voice:15550001111"] = {
+      sessionId: "existing-session",
+      updatedAt: 100,
+      model: "old-model",
+      modelProvider: "old-provider",
+      contextTokens: 123,
+      authProfileOverride: "old-auth-profile",
+    };
     const voiceConfig = VoiceCallConfigSchema.parse({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
@@ -186,22 +250,28 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Pinned model works.");
-    expect(sessionStore["voice:15550001111"]).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-4.1-nano",
-      modelOverrideSource: "auto",
+    const pinnedSessionEntry = sessionStore["voice:15550001111"];
+    expect(pinnedSessionEntry?.providerOverride).toBe("openai");
+    expect(pinnedSessionEntry?.modelOverride).toBe("gpt-4.1-nano");
+    expect(pinnedSessionEntry?.modelOverrideSource).toBe("auto");
+    expect(pinnedSessionEntry?.model).toBeUndefined();
+    expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
+    expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
+    expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
+    const patchSessionEntryCall = requireFirstMockCall(
+      patchSessionEntry.mock.calls,
+      "session entry patch",
+    );
+    expect(patchSessionEntryCall[0]).toMatchObject({
+      storePath: "/tmp/openclaw/main/sessions.json",
+      sessionKey: "voice:15550001111",
+      replaceEntry: true,
     });
-    expect(updateSessionStore).toHaveBeenCalledWith(
-      "/tmp/openclaw/main/sessions.json",
-      expect.any(Function),
-    );
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "gpt-4.1-nano",
-        sessionKey: "voice:15550001111",
-      }),
-    );
+    expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.provider).toBe("openai");
+    expect(args.model).toBe("gpt-4.1-nano");
+    expect(args.sessionKey).toBe("voice:15550001111");
   });
 
   it("uses the persisted per-call session key for classic responses", async () => {
@@ -225,14 +295,13 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("Fresh call context.");
-    expect(sessionStore["voice:call:call-123"]).toBeDefined();
+    const perCallSessionEntry = sessionStore["voice:call:call-123"];
+    expect(perCallSessionEntry?.sessionId).toBeTypeOf("string");
+    expect(perCallSessionEntry?.sessionId).not.toBe("");
     expect(sessionStore["voice:15550001111"]).toBeUndefined();
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "voice:call:call-123",
-        sandboxSessionKey: "agent:main:voice:call:call-123",
-      }),
-    );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.sessionKey).toBe("voice:call:call-123");
+    expect(args.sandboxSessionKey).toBe("agent:main:voice:call:call-123");
   });
 
   it("uses the main agent workspace when voice config omits agentId", async () => {
@@ -244,6 +313,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentIdentity,
       resolveStorePath,
       resolveSessionFilePath,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -261,18 +331,23 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "main",
-    });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/main",
+    const defaultSessionEntry = sessionStore["voice:15550001111"];
+    if (!defaultSessionEntry) {
+      throw new Error("Expected default voice session entry");
+    }
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      defaultSessionEntry.sessionId,
+      defaultSessionEntry,
+      {
         agentId: "main",
-        sandboxSessionKey: "agent:main:voice:15550001111",
-        workspaceDir: "/tmp/openclaw/workspace/main",
-        sessionFile: "/tmp/openclaw/main/sessions/session.jsonl",
-      }),
+      },
     );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
+    expect(args.agentId).toBe("main");
+    expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
+    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
+    expect(args.sessionFile).toBe("/tmp/openclaw/main/sessions/session.jsonl");
   });
 
   it("uses the configured voice response agent workspace", async () => {
@@ -284,6 +359,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentIdentity,
       resolveStorePath,
       resolveSessionFilePath,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -305,17 +381,57 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(resolveSessionFilePath).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
-      agentId: "voice",
-    });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/voice",
+    const voiceSessionEntry = sessionStore["voice:15550001111"];
+    if (!voiceSessionEntry) {
+      throw new Error("Expected routed voice session entry");
+    }
+    expect(resolveSessionFilePath).toHaveBeenCalledWith(
+      voiceSessionEntry.sessionId,
+      voiceSessionEntry,
+      {
         agentId: "voice",
-        sandboxSessionKey: "agent:voice:voice:15550001111",
-        workspaceDir: "/tmp/openclaw/workspace/voice",
-        sessionFile: "/tmp/openclaw/voice/sessions/session.jsonl",
-      }),
+      },
     );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
+    expect(args.agentId).toBe("voice");
+    expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
+    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
+    expect(args.sessionFile).toBe("/tmp/openclaw/voice/sessions/session.jsonl");
+  });
+
+  it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
+    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([
+      { text: '{"spoken":"No tools needed."}' },
+    ]);
+    const coreConfig = {
+      agents: {
+        list: [
+          {
+            id: "voice",
+            tools: { allow: [] },
+          },
+        ],
+      },
+    } as CoreConfig;
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({
+        agentId: "voice",
+        responseModel: "ollama/qwen2.5:1.5b",
+        responseTimeoutMs: 5000,
+      }),
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("No tools needed.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.agentId).toBe("voice");
+    expect(args.toolsAllow).toStrictEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
@@ -30,6 +30,7 @@ export type QaTransportReportParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
 };
 
 export type QaTransportGatewayConfig = Pick<OpenClawConfig, "channels" | "messages">;
@@ -136,7 +137,12 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
           sinceIndex,
           cursorSpace: "all",
         });
-        return await check();
+        const value = await check();
+        assertNoFailureReplies(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
+        return value;
       },
       timeoutMs,
       intervalMs,

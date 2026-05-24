@@ -2,9 +2,9 @@ import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
-  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -32,6 +32,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -47,7 +48,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -56,6 +56,7 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
+import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatFastModeLabel } from "./status-labels.js";
 
@@ -79,6 +80,7 @@ export type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  configuredDefaultModelLabel?: string;
   runtimeContextTokens?: number;
   explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
@@ -97,6 +99,7 @@ export type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
+  uptimeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -198,51 +201,6 @@ function resolveExecutionLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw Pi Default",
-  codex: "OpenAI Codex",
-  "codex-cli": "OpenAI Codex",
-  "claude-cli": "Claude CLI",
-  "google-gemini-cli": "Gemini CLI",
-};
-
-function resolveAgentRuntimeLabel(
-  args: Pick<StatusArgs, "config" | "sessionEntry" | "resolvedHarness"> & {
-    fallbackProvider?: string;
-  },
-): string {
-  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
-  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
-  if (acpAgent) {
-    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
-    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
-    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
-  }
-
-  const runtimeRaw =
-    normalizeOptionalString(args.resolvedHarness) ??
-    normalizeOptionalString(args.sessionEntry?.agentRuntimeOverride) ??
-    normalizeOptionalString(args.sessionEntry?.agentHarnessId);
-  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
-  if (runtime && runtime !== "auto" && runtime !== "default") {
-    return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
-  }
-
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
-    return (
-      AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
-      `${provider} (cli)`
-    );
-  }
-
-  return AGENT_RUNTIME_LABELS.pi;
-}
-
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
@@ -253,6 +211,36 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   const totalLabel = formatTokenCount(total);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
+};
+
+const formatEstimatedContextBudgetTokens = (
+  status: SessionEntry["contextBudgetStatus"] | undefined,
+  contextTokens: number | null | undefined,
+) => {
+  if (!status || status.source !== "pre-prompt-estimate") {
+    return null;
+  }
+  const estimatedPromptTokens =
+    typeof status.estimatedPromptTokens === "number" &&
+    Number.isFinite(status.estimatedPromptTokens) &&
+    status.estimatedPromptTokens >= 0
+      ? Math.floor(status.estimatedPromptTokens)
+      : undefined;
+  if (estimatedPromptTokens === undefined) {
+    return null;
+  }
+  const ctx =
+    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
+      ? contextTokens
+      : typeof status.contextTokenBudget === "number" &&
+          Number.isFinite(status.contextTokenBudget) &&
+          status.contextTokenBudget > 0
+        ? status.contextTokenBudget
+        : undefined;
+  const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
+  const totalLabel = formatTokenCount(estimatedPromptTokens);
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
 };
 
 export const formatContextUsageShort = (
@@ -541,6 +529,19 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
+function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
+  if (!entry?.modelOverride) {
+    return false;
+  }
+  if (entry.modelOverrideSource === "user") {
+    return true;
+  }
+  if (entry.modelOverrideSource === "auto") {
+    return false;
+  }
+  return !hasSessionAutoModelFallbackProvenance(entry);
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -696,12 +697,21 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: selectedModel,
     allowAsyncLoad: false,
   });
-  const activeContextTokens = resolveContextTokensForModel({
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
     allowAsyncLoad: false,
   });
+  const activeContextTokens =
+    typeof explicitRuntimeContextTokens === "number" &&
+    typeof resolvedActiveContextTokens === "number"
+      ? Math.min(explicitRuntimeContextTokens, resolvedActiveContextTokens)
+      : (explicitRuntimeContextTokens ?? resolvedActiveContextTokens);
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -713,13 +723,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
       : undefined;
+  const cappedPersistedContextTokens =
+    typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
+      ? Math.min(persistedContextTokens, activeContextTokens)
+      : persistedContextTokens;
   const agentContextTokens =
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
-      : undefined;
-  const explicitRuntimeContextTokens =
-    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
-      ? args.runtimeContextTokens
       : undefined;
   const explicitConfiguredContextTokens =
     typeof args.explicitConfiguredContextTokens === "number" &&
@@ -732,14 +742,18 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
+  const cappedAgentContextTokens =
+    typeof agentContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(agentContextTokens, activeContextTokens)
+        : agentContextTokens
+      : undefined;
   const channelOverrideContextTokens = channelModelNote
     ? (explicitRuntimeContextTokens ??
       cappedConfiguredContextTokens ??
       (typeof activeContextTokens === "number"
-        ? typeof agentContextTokens === "number"
-          ? Math.min(agentContextTokens, activeContextTokens)
-          : activeContextTokens
-        : agentContextTokens))
+        ? (cappedAgentContextTokens ?? activeContextTokens)
+        : cappedAgentContextTokens))
     : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
@@ -788,7 +802,11 @@ export function buildStatusMessage(args: StatusArgs): string {
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
         model: contextLookupModel,
         contextTokensOverride:
-          channelOverrideContextTokens ?? persistedContextTokens ?? agentContextTokens,
+          channelOverrideContextTokens ??
+          cappedPersistedContextTokens ??
+          cappedConfiguredContextTokens ??
+          cappedAgentContextTokens ??
+          explicitRuntimeContextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
@@ -834,8 +852,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const contextUsageLabel =
+    totalTokens == null || totalTokens === 0
+      ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
+        formatTokens(totalTokens, contextTokens ?? null))
+      : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
@@ -885,27 +908,36 @@ export function buildStatusMessage(args: StatusArgs): string {
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
+  const selectedModelLabel = modelRefs.selected.label || "unknown";
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    selectedModelLabel,
+    activeModelLabel,
+  );
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
-  const selectedAuthLabelValue =
-    args.modelAuth ??
-    (selectedAuthMode && selectedAuthMode !== "unknown" ? selectedAuthMode : undefined);
+  const rawSelectedAuthLabelValue =
+    selectedAuthMode && selectedAuthMode !== "unknown"
+      ? (args.modelAuth ?? selectedAuthMode)
+      : undefined;
   const activeAuthMode =
     normalizeAuthMode(args.activeModelAuth) ?? resolveModelAuthMode(activeProvider, args.config);
   const activeAuthLabelValue =
-    args.activeModelAuth ??
-    (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
-  const selectedModelLabel = modelRefs.selected.label || "unknown";
+    activeAuthMode && activeAuthMode !== "unknown"
+      ? (args.activeModelAuth ?? activeAuthMode)
+      : undefined;
+  const selectedAuthLabelValue =
+    rawSelectedAuthLabelValue ?? (runtimeAliasModelEquivalent ? activeAuthLabelValue : undefined);
   const fallbackState = resolveActiveFallbackState({
     selectedModelRef: selectedModelLabel,
     activeModelRef: activeModelLabel,
     state: entry,
   });
-  const effectiveCostAuthMode = fallbackState.active
-    ? activeAuthMode
-    : (selectedAuthMode ?? activeAuthMode);
-  const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
-  const costConfig = showCost
+  const hasUsage =
+    typeof inputTokens === "number" ||
+    typeof outputTokens === "number" ||
+    typeof cacheRead === "number" ||
+    typeof cacheWrite === "number";
+  const costConfig = hasUsage
     ? resolveModelCostConfig({
         provider: activeProvider,
         model: activeModel,
@@ -913,22 +945,38 @@ export function buildStatusMessage(args: StatusArgs): string {
         allowPluginNormalization: false,
       })
     : undefined;
-  const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
-  const cost =
-    showCost && hasUsage
-      ? estimateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined;
-  const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
+  const cost = hasUsage
+    ? estimateUsageCost({
+        usage: {
+          input: inputTokens ?? undefined,
+          output: outputTokens ?? undefined,
+          cacheRead: cacheRead ?? undefined,
+          cacheWrite: cacheWrite ?? undefined,
+        },
+        cost: costConfig,
+      })
+    : undefined;
+  const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
+  const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const configDefaultDiffersFromSession =
+    sessionHasPersistedModelSelection &&
+    configuredDefaultModelLabel &&
+    selectedModelLabel !== configuredDefaultModelLabel &&
+    !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel);
+  const modelLines = configDefaultDiffersFromSession
+    ? [
+        `🧠 Configured default: ${configuredDefaultModelLabel}`,
+        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
+        "⚠️ Reason: session override",
+        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
+        `↩️ Clear with: /model ${configuredDefaultModelLabel} or /reset`,
+        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      ]
+    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
@@ -961,7 +1009,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   return [
     versionLine,
     args.timeLine,
-    modelLine,
+    args.uptimeLine,
+    ...modelLines,
     configuredFallbacksLine,
     fallbackLine,
     usageCostLine,

@@ -21,6 +21,12 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+function isIpv6UnavailableError(err: unknown): boolean {
+  const code =
+    typeof err === "object" && err !== null ? (err as { code?: unknown }).code : undefined;
+  return code === "EAFNOSUPPORT" || code === "EADDRNOTAVAIL";
+}
+
 function createOpenGatewayClient(requestTimeoutMs: number): {
   client: GatewayClient;
   send: ReturnType<typeof vi.fn>;
@@ -156,6 +162,63 @@ describe("GatewayClient", () => {
     }
   }, 4000);
 
+  test("connects to IPv6 loopback while managed proxy Gateway-only mode is active", async () => {
+    wss = new WebSocketServer({ host: "::1", port: 0 });
+    const bind = await new Promise<{ port: number } | null>((resolve, reject) => {
+      wss?.once("listening", () => {
+        const address = wss?.address();
+        if (address === undefined || address === null || typeof address === "string") {
+          reject(new Error("IPv6 WebSocket server did not bind to a TCP port"));
+          return;
+        }
+        resolve({ port: address.port });
+      });
+      wss?.once("error", (err) => {
+        if (isIpv6UnavailableError(err)) {
+          wss = null;
+          resolve(null);
+          return;
+        }
+        reject(err);
+      });
+    });
+    if (bind === null) {
+      return;
+    }
+
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:9",
+      loopbackMode: "gateway-only",
+    });
+    const onConnectError = vi.fn();
+    const connected = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("IPv6 loopback Gateway client did not connect"));
+      }, 2000);
+      wss?.once("connection", (socket) => {
+        clearTimeout(timeout);
+        socket.close(1000, "done");
+        resolve();
+      });
+    });
+    const client = new GatewayClient({
+      url: `ws://[::1]:${bind.port}`,
+      connectChallengeTimeoutMs: 1000,
+      onConnectError,
+    });
+
+    try {
+      expect(client.start()).toBeUndefined();
+      await connected;
+      expect(onConnectError).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      await stopProxy(handle);
+    }
+  }, 5000);
+
   test("lets pending requests own their timeout when ticks are missing", async () => {
     vi.useFakeTimers();
     try {
@@ -242,6 +305,90 @@ describe("GatewayClient", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const send = vi.fn();
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: (data: string) => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send,
+      close: vi.fn(),
+    };
+
+    const onAccepted = vi.fn();
+    const requestPromise = client.request<{ status: string }>("agent", undefined, {
+      expectFinal: true,
+      onAccepted,
+    });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+
+    (
+      client as unknown as {
+        handleMessage: (raw: string) => void;
+      }
+    ).handleMessage(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "accepted", runId: "run-1" },
+      }),
+    );
+
+    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+    (
+      client as unknown as {
+        handleMessage: (raw: string) => void;
+      }
+    ).handleMessage(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "ok" },
+      }),
+    );
+
+    await expect(requestPromise).resolves.toEqual({ status: "ok" });
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+
+  test("aborts in-flight requests from caller AbortSignal", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const send = vi.fn();
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send,
+      close: vi.fn(),
+    };
+
+    const controller = new AbortController();
+    const requestPromise = client.request("status", undefined, {
+      signal: controller.signal,
+      timeoutMs: null,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+    controller.abort();
+
+    await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
   });
 
   test("clamps oversized explicit request timeouts before scheduling", async () => {

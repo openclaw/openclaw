@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -31,6 +31,30 @@ function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   };
 }
 
+const noThinkingReferenceCases = [
+  { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
+  { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
+];
+
+function createNoThinkingMessages(): AgentMessage[] {
+  return [
+    castAgentMessage({ role: "user", content: "hello" }),
+    castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+  ];
+}
+
+describe("thinking-free history contract", () => {
+  it.each(noThinkingReferenceCases)(
+    "$name returns the original reference when no thinking blocks are present",
+    ({ drop }) => {
+      const messages = createNoThinkingMessages();
+
+      const result = drop(messages);
+      expect(result).toBe(messages);
+    },
+  );
+});
+
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
     const assistant = castAgentMessage({
@@ -47,16 +71,6 @@ describe("isAssistantMessageWithContent", () => {
 });
 
 describe("dropThinkingBlocks", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropThinkingBlocks(messages);
-    expect(result).toBe(messages);
-  });
-
   it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
     const { assistant, messages, result } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal" },
@@ -159,16 +173,6 @@ describe("dropThinkingBlocks", () => {
 });
 
 describe("dropReasoningFromHistory", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropReasoningFromHistory(messages);
-    expect(result).toBe(messages);
-  });
-
   it("strips assistant reasoning from prior completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),
@@ -275,7 +279,58 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(result).toBe(messages);
   });
 
-  it("strips thinking blocks with missing, empty, or blank signatures", () => {
+  it("preserves invalid thinking signatures on the latest assistant message", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "missing" },
+          { type: "thinking", thinking: "empty", thinkingSignature: "" },
+          { type: "thinking", thinking: "blank", thinkingSignature: "   " },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(result).toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "missing" },
+      { type: "thinking", thinking: "empty", thinkingSignature: "" },
+      { type: "thinking", thinking: "blank", thinkingSignature: "   " },
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("can strip invalid thinking signatures from the latest assistant message", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "missing" },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages, { preserveLatestAssistant: false });
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("strips thinking blocks with missing, empty, or blank signatures from older assistant messages", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -287,6 +342,8 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -305,6 +362,8 @@ describe("stripInvalidThinkingSignatures", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "" }],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -313,7 +372,7 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
   });
 
-  it("strips redacted thinking blocks with invalid opaque signatures", () => {
+  it("strips redacted thinking blocks with invalid opaque signatures from older assistant messages", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -324,6 +383,8 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -449,10 +510,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
   });
 
   it("retries with visible assistant text when stripping thinking leaves content", async () => {
@@ -483,10 +547,41 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
 
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
+  it("retries Bedrock-style invalid thinking signature errors", async () => {
+    let callCount = 0;
+    const bedrockThinkingError = new Error(
+      "ValidationException: invalid signature on thinking block in message history",
+    );
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        return Promise.reject(bedrockThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(bedrockThinkingError);
+    expect(callCount).toBe(2);
   });
 
   it("does not retry when the stream fails after yielding a chunk", async () => {
@@ -530,6 +625,34 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       rateLimitError,
     );
     expect(callCount).toBe(1);
+  });
+
+  it("allows each provider call to recover once", async () => {
+    let callCount = 0;
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        return Promise.reject(anthropicThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+    const context = {
+      messages: castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+        },
+      ]),
+    };
+
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
+
+    expect(callCount).toBe(4);
   });
 
   it("preserves result() for synchronous event streams", async () => {

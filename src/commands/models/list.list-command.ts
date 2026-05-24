@@ -1,6 +1,7 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -71,12 +72,10 @@ export async function modelsListCommand(
   }
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveOpenClawAgentDir },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
     import("../../agents/auth-profiles/store.js"),
-    import("../../agents/agent-paths.js"),
     import("../../agents/agent-scope.js"),
     import("../../agents/workspace.js"),
   ]);
@@ -84,11 +83,21 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
-  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    workspaceDir,
+    metadataSnapshot,
+  });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];
@@ -105,6 +114,7 @@ export async function modelsListCommand(
         enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        metadataSnapshot,
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
@@ -155,6 +165,8 @@ export async function modelsListCommand(
       local: opts.local,
     },
     skipRuntimeModelSuppression,
+    metadataSnapshot,
+    workspaceDir,
   });
   const rows: ModelRow[] = [];
 

@@ -23,8 +23,11 @@ export type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
+  AcpRuntimeTurn,
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
+  AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "../acp/runtime/types.js";
 
@@ -96,6 +99,7 @@ export async function tryDispatchAcpReplyHook(
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
+    shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
     recordProcessed: ctx.recordProcessed,

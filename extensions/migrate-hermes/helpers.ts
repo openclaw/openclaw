@@ -6,52 +6,34 @@ import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { parse as parseYaml } from "yaml";
 
+const HOME_SHORTHAND_RE = /^~(?=$|[\\/])/u;
+const UNSAFE_NAME_CHARS_RE = /[^a-z0-9._-]+/g;
+const EDGE_DASHES_RE = /^-+|-+$/g;
+
 export function resolveHomePath(input: string): string {
-  if (input === "~") {
-    return os.homedir();
-  }
-  if (input.startsWith("~/")) {
-    return path.join(os.homedir(), input.slice(2));
-  }
-  return path.resolve(input);
+  const value = input.trim();
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, os.homedir())) : value;
 }
 
 export async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return await pathExists(filePath);
 }
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(dirPath)).isDirectory();
-  } catch {
-    return false;
-  }
+  const stat = await fs.stat(dirPath).catch(() => undefined);
+  return stat?.isDirectory() === true;
 }
 
 export function sanitizeName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9._-]+/g, "-")
-    .replaceAll(/^-+|-+$/g, "");
+  const normalized = name.trim().toLowerCase().replaceAll(UNSAFE_NAME_CHARS_RE, "-");
+  return normalized.replaceAll(EDGE_DASHES_RE, "");
 }
 
 export async function readText(filePath: string | undefined): Promise<string | undefined> {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return undefined;
-  }
+  return filePath ? await fs.readFile(filePath, "utf8").catch(() => undefined) : undefined;
 }
 
 export function parseEnv(content: string | undefined): Record<string, string> {
@@ -126,7 +108,11 @@ export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
     const content = await fs.readFile(item.source, "utf8");
     const header = `\n\n<!-- Imported from Hermes: ${path.basename(item.source)} -->\n\n`;
     await fs.mkdir(path.dirname(item.target), { recursive: true });
-    await fs.appendFile(item.target, `${header}${content.trimEnd()}\n`, "utf8");
+    await appendRegularFile({
+      filePath: item.target,
+      content: `${header}${content.trimEnd()}\n`,
+      rejectSymlinkParents: true,
+    });
     return { ...item, status: "migrated" };
   } catch (err) {
     return markMigrationItemError(item, err instanceof Error ? err.message : String(err));

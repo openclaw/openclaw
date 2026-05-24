@@ -4,7 +4,11 @@ import officialExternalProviderCatalog from "../../scripts/lib/official-external
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import type { PluginPackageInstall } from "./manifest.js";
+import type {
+  PluginManifestChannelConfig,
+  PluginManifestContracts,
+  PluginPackageInstall,
+} from "./manifest.js";
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -22,7 +26,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation")[];
+  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type OfficialExternalProviderCatalogProvider = {
@@ -60,6 +64,8 @@ export type OfficialExternalPluginCatalogManifest = {
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall;
+  contracts?: PluginManifestContracts;
+  channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
 export type OfficialExternalPluginCatalogEntry = {
@@ -196,5 +202,17 @@ export function getOfficialExternalPluginCatalogEntry(
   }
   return listOfficialExternalPluginCatalogEntries().find((entry) =>
     resolveOfficialExternalPluginLookupIds(entry).includes(normalized),
+  );
+}
+
+export function getOfficialExternalPluginCatalogEntryForPackage(
+  packageName: string | undefined,
+): OfficialExternalPluginCatalogEntry | undefined {
+  const normalized = packageName?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return listOfficialExternalPluginCatalogEntries().find(
+    (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }

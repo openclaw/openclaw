@@ -21,7 +21,7 @@ import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getHeader,
-  resolveTrustedHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
@@ -43,7 +43,7 @@ const log = createSubsystemLogger("gateway/sessions-history-sse");
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
     return null;
@@ -61,7 +61,7 @@ function shouldStreamSse(req: IncomingMessage): boolean {
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  return new URL(req.url ?? "/", "http://localhost");
 }
 
 function resolveLimit(req: IncomingMessage): number | undefined {
@@ -118,8 +118,9 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  // HTTP callers must declare the same least-privilege operator scopes they
-  // intend to use over WS so both transport surfaces enforce the same gate.
+  // Session history intentionally uses the shared-secret HTTP trust model:
+  // token/password bearer auth grants default operator scopes so simple API key
+  // callers can read their own history without a scope header.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
     res,
@@ -128,7 +129,7 @@ export async function handleSessionHistoryHttpRequest(
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
     operatorMethod: "chat.history",
-    resolveOperatorScopes: resolveTrustedHttpOperatorScopes,
+    resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
   if (!authResult) {
     return true;
@@ -285,7 +286,10 @@ export async function handleSessionHistoryHttpRequest(
     if (!currentRequestAuth.ok) {
       return false;
     }
-    const requestedScopes = resolveTrustedHttpOperatorScopes(req, currentRequestAuth.requestAuth);
+    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
+      req,
+      currentRequestAuth.requestAuth,
+    );
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
@@ -327,8 +331,20 @@ export async function handleSessionHistoryHttpRequest(
           const nextEvent = sseState.appendInlineMessage({
             message: update.message,
             messageId: update.messageId,
+            messageSeq: update.messageSeq,
           });
           if (!nextEvent) {
+            return;
+          }
+          if (nextEvent.shouldRefresh) {
+            sentHistory = await sseState.refreshAsync();
+            sseWrite(res, "history", {
+              sessionKey: target.canonicalKey,
+              ...sentHistory,
+            });
+            return;
+          }
+          if (nextEvent.message === undefined) {
             return;
           }
           sentHistory = sseState.snapshot();

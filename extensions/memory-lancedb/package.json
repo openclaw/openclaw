@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-lancedb",
-  "version": "2026.5.3",
+  "version": "2026.5.24",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
   "repository": {
     "type": "git",
@@ -8,9 +8,10 @@
   },
   "type": "module",
   "dependencies": {
-    "@lancedb/lancedb": "^0.27.2",
-    "openai": "^6.35.0",
-    "typebox": "1.1.37"
+    "@lancedb/lancedb": "0.29.0",
+    "apache-arrow": "18.1.0",
+    "openai": "6.38.0",
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -25,12 +26,13 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.5.3"
+      "pluginApi": ">=2026.5.24"
     },
     "build": {
-      "openclawVersion": "2026.5.3"
+      "openclawVersion": "2026.5.24"
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

@@ -26,6 +26,11 @@ function normalizeModelId(id: string | null | undefined): string {
   return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
+export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
 export function normalizeOpenAIReasoningEffort(effort: string): string {
   return effort === "minimal" ? "minimal" : effort;
 }
@@ -33,6 +38,9 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
 function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
+  }
+  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+    return [];
   }
   const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
   if (!Array.isArray(raw)) {

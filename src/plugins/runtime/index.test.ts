@@ -98,9 +98,9 @@ function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?
 }
 
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  keys.forEach((key) => {
+  for (const key of keys) {
     expect(typeof value[key]).toBe("function");
-  });
+  }
 }
 
 function expectRunCommandOutcome(params: {
@@ -188,7 +188,10 @@ describe("plugin runtime command execution", () => {
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
     resetHeartbeatWakeStateForTests();
-    const handler = vi.fn(async () => ({ status: "skipped" as const, reason: "disabled" }));
+    const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
     setHeartbeatWakeHandler(handler);
     try {
       createPluginRuntime().system.requestHeartbeatNow({
@@ -196,13 +199,12 @@ describe("plugin runtime command execution", () => {
         coalesceMs: 0,
       });
       await vi.advanceTimersByTimeAsync(1);
-      expect(handler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source: "other",
-          intent: "immediate",
-          reason: "legacy-plugin",
-        }),
-      );
+      const request = handler.mock.calls[0]?.[0] as
+        | { source?: string; intent?: string; reason?: string }
+        | undefined;
+      expect(request?.source).toBe("other");
+      expect(request?.intent).toBe("immediate");
+      expect(request?.reason).toBe("legacy-plugin");
     } finally {
       resetHeartbeatWakeStateForTests();
       vi.useRealTimers();
@@ -245,6 +247,7 @@ describe("plugin runtime command execution", () => {
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",
+          "extractStructuredWithModel",
           "describeVideoFile",
         ]);
         expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(
@@ -308,6 +311,10 @@ describe("plugin runtime command execution", () => {
           "resolveAgentDir",
         ]);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
+          "getSessionEntry",
+          "listSessionEntries",
+          "patchSessionEntry",
+          "upsertSessionEntry",
           "updateSessionStore",
           "updateSessionStoreEntry",
           "resolveSessionFilePath",
@@ -317,8 +324,7 @@ describe("plugin runtime command execution", () => {
     {
       name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.modelAuth).toBeDefined();
-        expectFunctionKeys(runtime.modelAuth as Record<string, unknown>, [
+        expectFunctionKeys(runtime.modelAuth, [
           "getApiKeyForModel",
           "getRuntimeAuthForModel",
           "resolveApiKeyForProvider",
@@ -359,24 +365,23 @@ describe("plugin runtime command execution", () => {
       mode: "api-key",
     });
 
-    await expect(
-      runtime.modelAuth.getApiKeyForModel({
-        model: model as never,
-        cfg,
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        store: { version: 1, profiles: {} },
-      } as never),
-    ).resolves.toMatchObject({ apiKey: "model-key" });
-    await expect(
-      runtime.modelAuth.resolveApiKeyForProvider({
-        provider: "workspace-cloud",
-        cfg,
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        store: { version: 1, profiles: {} },
-      } as never),
-    ).resolves.toMatchObject({ apiKey: "provider-key" });
+    const modelAuth = await runtime.modelAuth.getApiKeyForModel({
+      model: model as never,
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      store: { version: 1, profiles: {} },
+    } as never);
+    expect(modelAuth.apiKey).toBe("model-key");
+
+    const providerAuth = await runtime.modelAuth.resolveApiKeyForProvider({
+      provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      store: { version: 1, profiles: {} },
+    } as never);
+    expect(providerAuth.apiKey).toBe("provider-key");
 
     expect(runtimeModelAuthMocks.getApiKeyForModel).toHaveBeenCalledWith({
       model,
@@ -390,7 +395,7 @@ describe("plugin runtime command execution", () => {
     });
   });
 
-  it("keeps subagent unavailable by default even after gateway initialization", async () => {
+  it("keeps subagent unavailable by default even after gateway initialization", () => {
     const { runtime } = createGatewaySubagentRunFixture();
 
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });

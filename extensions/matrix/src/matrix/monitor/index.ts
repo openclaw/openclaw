@@ -50,6 +50,7 @@ import {
 } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
@@ -79,8 +80,15 @@ function resolveMatrixStreamingMode(streaming: MatrixConfig["streaming"]): Matri
   if (streaming === "quiet") {
     return "quiet";
   }
+  if (streaming === "progress") {
+    return "progress";
+  }
   if (isMatrixStreamingConfig(streaming)) {
-    if (streaming.mode === "partial" || streaming.mode === "quiet") {
+    if (
+      streaming.mode === "partial" ||
+      streaming.mode === "quiet" ||
+      streaming.mode === "progress"
+    ) {
       return streaming.mode;
     }
   }
@@ -91,6 +99,9 @@ function resolveMatrixPreviewToolProgress(streaming: MatrixConfig["streaming"]):
   if (!isMatrixStreamingConfig(streaming)) {
     return true;
   }
+  if (resolveMatrixStreamingMode(streaming) === "progress") {
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+  }
   return streaming.preview?.toolProgress ?? true;
 }
 
@@ -100,7 +111,7 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["stream
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveMatrixPreviewToolProgress,
   resolveMatrixPreviewToolProgressEnabled,
   resolveMatrixStreamingMode,
@@ -335,14 +346,40 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
     const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+    const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
+      const roomInfoForConfig = needsRoomAliasesForConfig
+        ? await getRoomInfo(roomId, { includeAliases: true })
+        : undefined;
+      const aliases = roomInfoForConfig
+        ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
+        : [];
+      return (
+        resolveMatrixRoomConfig({
+          rooms: roomsConfig,
+          roomId,
+          aliases,
+        }).matchSource === "direct"
+      );
+    };
     const directTracker = createDirectRoomTracker(client, {
       log: logVerboseMessage,
+      isExplicitlyConfiguredRoom,
       canPromoteRecentInvite: async (roomId) =>
         shouldPromoteRecentInviteRoom({
           roomId,
           roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
           rooms: roomsConfig,
         }),
+      ...(dmSessionScope === "per-room"
+        ? {
+            canPromoteUnmappedStrictRoom: async (roomId) =>
+              shouldPromoteRecentInviteRoom({
+                roomId,
+                roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+                rooms: roomsConfig,
+              }),
+          }
+        : {}),
       shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
         try {
           const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -368,6 +405,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       core,
       cfg,
       accountId: effectiveAccountId,
+      accountConfig,
       runtime,
       logger,
       logVerboseMessage,
@@ -516,3 +554,4 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
+export { testing as __testing };

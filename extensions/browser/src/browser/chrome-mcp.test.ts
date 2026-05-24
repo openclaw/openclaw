@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
@@ -9,11 +12,18 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
+  takeChromeMcpScreenshot,
+  takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
   name: string;
   arguments?: Record<string, unknown>;
+};
+type ToolCallMock = {
+  mock: {
+    calls: Array<[ToolCall]>;
+  };
 };
 
 type ChromeMcpSessionFactory = Exclude<
@@ -78,6 +88,15 @@ function createFakeSession(): ChromeMcpSession {
         ],
       };
     }
+    if (name === "take_screenshot") {
+      const filePath = typeof args?.filePath === "string" ? args.filePath : undefined;
+      const format = args?.format === "jpeg" ? "jpeg" : "png";
+      if (!filePath) {
+        throw new Error("missing filePath");
+      }
+      await fs.writeFile(`${filePath}.${format}`, Buffer.from(`screenshot:${format}`));
+      return { content: [{ type: "text", text: `Saved screenshot to ${filePath}.${format}.` }] };
+    }
     throw new Error(`unexpected tool ${name}`);
   });
 
@@ -103,6 +122,7 @@ describe("chrome MCP page parsing", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -127,11 +147,25 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("reads screenshot files with the extension written by chrome-devtools-mcp", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      takeChromeMcpScreenshot({
+        profileName: "chrome-live",
+        targetId: "1",
+        format: "jpeg",
+      }),
+    ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
+  });
+
   it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
     expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
       "-y",
       "chrome-devtools-mcp@latest",
       "--autoConnect",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--userDataDir",
@@ -150,6 +184,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -165,6 +200,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--wsEndpoint",
       "ws://127.0.0.1:9222/devtools/browser/abc",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -187,6 +223,36 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("lets explicit Chrome MCP usage-statistics args override the default opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--usage-statistics",
+    ]);
+  });
+
+  it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--no-usage-statistics",
+    ]);
+  });
+
   it("omits the npx package prefix for a custom Chrome MCP command", () => {
     expect(
       buildChromeMcpArgs({
@@ -196,9 +262,122 @@ describe("chrome MCP page parsing", () => {
     ).toEqual([
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
+  });
+
+  it("redacts remote CDP URL secrets from attach failures", async () => {
+    const secretToken = "browserless-secret-token-1234567890"; // pragma: allowlist secret
+    const user = "browser-user";
+    const password = "browser-password-1234567890"; // pragma: allowlist secret
+    const cdpUrl = `wss://${user}:${password}@browserless.example/chrome?token=${secretToken}`;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
+    await fs.writeFile(
+      fakeMcpCommand,
+      `#!/usr/bin/env node
+      const cdpUrl = process.argv.find((arg) => arg.includes("browserless.example")) ?? "";
+      let input = "";
+      process.stdin.on("data", (chunk) => {
+        input += chunk;
+        const match = input.match(/"id"\\s*:\\s*(\\d+)/);
+        if (!match) return;
+        const body = JSON.stringify({
+          jsonrpc: "2.0",
+          id: Number(match[1]),
+          error: { code: -32000, message: "attach failed for " + cdpUrl },
+        });
+        process.stdout.write(body + "\\n");
+      });
+    `,
+    );
+    await fs.chmod(fakeMcpCommand, 0o755);
+
+    let message = "";
+    try {
+      await ensureChromeMcpAvailable(
+        "remote-profile",
+        {
+          cdpUrl,
+          mcpCommand: fakeMcpCommand,
+        },
+        { ephemeral: true },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(message).toContain("Chrome MCP existing-session attach failed");
+    expect(message).toContain("attach failed");
+    expect(message).toContain("browserless.example");
+    expect(message).not.toContain(cdpUrl);
+    expect(message).not.toContain(user);
+    expect(message).not.toContain(password);
+    expect(message).not.toContain(secretToken);
+  });
+
+  it("redacts home-relative user data dirs from attach failures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
+    const homeDir = os.homedir();
+    const userDataDir = path.join(
+      homeDir,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+      "Profile 1",
+    );
+    const attachFailureDetail = `attach failed for ${userDataDir}`;
+    const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
+    await fs.writeFile(
+      fakeMcpCommand,
+      `#!/usr/bin/env node
+      let input = "";
+      process.stdin.on("data", (chunk) => {
+        input += chunk;
+        const match = input.match(/"id"\\s*:\\s*(\\d+)/);
+        if (!match) return;
+        const body = JSON.stringify({
+          jsonrpc: "2.0",
+          id: Number(match[1]),
+          error: { code: -32000, message: ${JSON.stringify(attachFailureDetail)} },
+        });
+        process.stdout.write(body + "\\n");
+      });
+    `,
+    );
+    await fs.chmod(fakeMcpCommand, 0o755);
+
+    let message = "";
+    try {
+      await ensureChromeMcpAvailable(
+        "home-profile",
+        {
+          userDataDir,
+          mcpCommand: fakeMcpCommand,
+        },
+        { ephemeral: true },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(message).toContain("Chrome MCP existing-session attach failed");
+    expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain(
+      "attach failed for ~/Library/Application Support/Google/Chrome/Profile 1",
+    );
+    expect(message).not.toContain(homeDir);
+    expect(message).not.toContain(userDataDir);
   });
 
   it("parses new_page text responses and returns the created tab", async () => {
@@ -232,9 +411,9 @@ describe("chrome MCP page parsing", () => {
       name: "new_page",
       arguments: { url: "about:blank", timeout: 5000 },
     });
-    expect(session.client.callTool).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "navigate_page" }),
-    );
+    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const callNames = callToolMock.mock.calls.map(([call]) => call.name);
+    expect(callNames).not.toContain("navigate_page");
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
@@ -349,10 +528,13 @@ describe("chrome MCP page parsing", () => {
 
   it("reuses a single pending session for concurrent requests", async () => {
     let factoryCalls = 0;
-    let releaseFactory!: () => void;
+    let releaseFactory: (() => void) | undefined;
     const factoryGate = new Promise<void>((resolve) => {
       releaseFactory = resolve;
     });
+    if (!releaseFactory) {
+      throw new Error("Expected Chrome MCP factory release callback to be initialized");
+    }
 
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
@@ -627,12 +809,11 @@ describe("chrome MCP page parsing", () => {
       // intentionally no timeoutMs
     });
 
-    expect(session.client.callTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "navigate_page",
-        arguments: expect.objectContaining({ timeout: 20_000 }),
-      }),
-    );
+    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const navigateCall = callToolMock.mock.calls.find(
+      ([call]) => call.name === "navigate_page",
+    )?.[0];
+    expect(navigateCall?.arguments?.timeout).toBe(20_000);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {
@@ -676,6 +857,27 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
+  it("forwards an explicit timeoutMs to take_snapshot via the callTool race", async () => {
+    vi.useFakeTimers();
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(
+      async () => new Promise<never>(() => {}),
+    ) as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const snapshotPromise = takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      timeoutMs: 75,
+    });
+    void snapshotPromise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(75);
+
+    await expect(snapshotPromise).rejects.toThrow(/Chrome MCP "take_snapshot".*timed out/);
+    vi.useRealTimers();
+  });
+
   it("honors timeoutMs for ephemeral availability probes", async () => {
     vi.useFakeTimers();
     const closeMock = vi.fn().mockResolvedValue(undefined);
@@ -703,6 +905,68 @@ describe("chrome MCP page parsing", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     await expectation;
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts home-relative profile labels from availability timeout diagnostics", async () => {
+    vi.useFakeTimers();
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () =>
+      ({
+        client: {
+          callTool: vi.fn(),
+          listTools: vi.fn(),
+          close: closeMock,
+          connect: vi.fn(),
+        },
+        transport: {
+          pid: 123,
+        },
+        ready: new Promise<void>(() => {}),
+      }) as unknown as ChromeMcpSession;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const homeDir = os.homedir();
+    const profileName = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
+    const promise = ensureChromeMcpAvailable(profileName, undefined, {
+      ephemeral: true,
+      timeoutMs: 50,
+    });
+    void promise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(promise).rejects.toThrow(/timed out after 50ms/i);
+    await expect(promise).rejects.toThrow("~/Library/Application Support/Google/Chrome");
+    await expect(promise).rejects.not.toThrow(homeDir);
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors abort signals while waiting for ephemeral availability probes", async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () =>
+      ({
+        client: {
+          callTool: vi.fn(),
+          listTools: vi.fn(),
+          close: closeMock,
+          connect: vi.fn(),
+        },
+        transport: {
+          pid: 123,
+        },
+        ready: new Promise<void>(() => {}),
+      }) as unknown as ChromeMcpSession;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const promise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      ephemeral: true,
+      signal: ctrl.signal,
+    });
+    ctrl.abort(new Error("status budget exhausted"));
+
+    await expect(promise).rejects.toThrow(/status budget exhausted/);
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 });

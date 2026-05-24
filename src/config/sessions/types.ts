@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -78,6 +79,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  promptToolNamesHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 };
@@ -107,6 +109,33 @@ export type SessionCompactionCheckpoint = {
   firstKeptEntryId?: string;
   preCompaction: SessionCompactionTranscriptReference;
   postCompaction: SessionCompactionTranscriptReference;
+};
+
+export type SessionContextBudgetStatusRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
+
+export type SessionContextBudgetStatus = {
+  schemaVersion: 1;
+  source: "pre-prompt-estimate";
+  updatedAt: number;
+  provider: string;
+  model: string;
+  route: SessionContextBudgetStatusRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  contextTokenBudget: number;
+  promptBudgetBeforeReserve: number;
+  reserveTokens: number;
+  effectiveReserveTokens: number;
+  remainingPromptBudgetTokens: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  messageCount: number;
+  unwindowedMessageCount: number;
+  sessionId?: string;
 };
 
 export type SessionPluginDebugEntry = {
@@ -147,6 +176,30 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
+export type LaneExecutionState =
+  | "active"
+  | "draining"
+  | "suspended"
+  | "resuming"
+  | "circuit_open"
+  | "failed_handoff";
+
+export interface QuotaSuspension {
+  schemaVersion: 1;
+  suspendedAt: number; // epoch ms
+  reason: "quota_exhausted" | "manual" | "circuit_open";
+  failedProvider: string;
+  failedModel: string;
+  /** Recovery briefing text injected into the next attempt when state === "resuming". */
+  summary?: string;
+  /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
+  snapshotRef?: string;
+  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  laneId?: string;
+  expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
+  state: LaneExecutionState; // State machine check for hot-path
+}
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -165,6 +218,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
@@ -184,14 +239,24 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Session-scoped tool deny entries inherited from the caller that created this session. */
+  inheritedToolDeny?: string[];
+  /** Session-scoped tool allow entries inherited from the caller that created this session. */
+  inheritedToolAllow?: string[];
   /** Plugin id that created this session through api.runtime.subagent. */
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
+  /** Quota cascade protection and state-aware failover status. */
+  quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
+  /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
+  usageFamilyKey?: string;
+  /** Session ids known to belong to this usage lineage, including archived predecessors. */
+  usageFamilySessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
@@ -237,6 +302,9 @@ export type SessionEntry = {
    * Resets only preserve user-driven overrides.
    */
   modelOverrideSource?: "auto" | "user";
+  /** Selected model that produced the current auto fallback override. */
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
@@ -251,20 +319,25 @@ export type SessionEntry = {
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
-  queueMode?:
-    | "steer"
-    | "followup"
-    | "collect"
-    | "steer-backlog"
-    | "steer+backlog"
-    | "queue"
-    | "interrupt";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
   queueDebounceMs?: number;
   queueCap?: number;
   queueDrop?: "old" | "new" | "summarize";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  /** Frozen reply text that needs delivery. */
+  pendingFinalDeliveryText?: string | null;
+  /** Original delivery context (channel, recipient, etc). */
+  pendingFinalDeliveryContext?: DeliveryContext;
+  /** Durable send intent backing pending final delivery, when already created. */
+  pendingFinalDeliveryIntentId?: string | null;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -290,6 +363,7 @@ export type SessionEntry = {
   fallbackNoticeActiveModel?: string;
   fallbackNoticeReason?: string;
   contextTokens?: number;
+  contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
@@ -306,6 +380,7 @@ export type SessionEntry = {
   groupChannel?: string;
   space?: string;
   origin?: SessionOrigin;
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;
@@ -569,6 +644,11 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+  };
+  currentTurn?: {
+    kind?: "user_request" | "room_event";
+    promptChars: number;
+    runtimeContextChars: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;

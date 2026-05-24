@@ -49,6 +49,7 @@ type BuildTrajectoryArtifactsParams = {
   timedOutDuringToolExecution: boolean;
   promptError?: string;
   promptErrorSource?: string | null;
+  terminalError?: string;
   usage?: unknown;
   promptCache?: unknown;
   compactionCount: number;
@@ -176,9 +177,13 @@ function buildSkillsCapture(
   if (!skillsSnapshot) {
     return undefined;
   }
+  const filteredResolvedSkills =
+    skillsSnapshot.resolvedSkills?.filter(
+      (skill) => typeof skill.name === "string" && skill.name.length > 0,
+    ) ?? [];
   const entries =
-    skillsSnapshot.resolvedSkills && skillsSnapshot.resolvedSkills.length > 0
-      ? skillsSnapshot.resolvedSkills.map((skill) => ({
+    filteredResolvedSkills.length > 0
+      ? filteredResolvedSkills.map((skill) => ({
           id: skill.name,
           name: skill.name,
           description: skill.description,
@@ -189,17 +194,19 @@ function buildSkillsCapture(
           disableModelInvocation: skill.disableModelInvocation,
           available: true,
         }))
-      : skillsSnapshot.skills.map((skill) => ({
-          id: skill.name,
-          name: skill.name,
-          primaryEnv: skill.primaryEnv,
-          requiredEnv: skill.requiredEnv,
-          available: true,
-        }));
+      : skillsSnapshot.skills
+          .filter((skill) => typeof skill.name === "string" && skill.name.length > 0)
+          .map((skill) => ({
+            id: skill.name,
+            name: skill.name,
+            primaryEnv: skill.primaryEnv,
+            requiredEnv: skill.requiredEnv,
+            available: true,
+          }));
   return {
     snapshotVersion: skillsSnapshot.version,
     skillFilter: toSortedUniqueStrings(skillsSnapshot.skillFilter),
-    entries: entries.toSorted((left, right) => left.name.localeCompare(right.name)),
+    entries: entries.toSorted((left, right) => (left.name ?? "").localeCompare(right.name ?? "")),
   };
 }
 
@@ -307,6 +314,7 @@ export function buildTrajectoryArtifacts(
     timedOutDuringToolExecution: params.timedOutDuringToolExecution,
     promptError: params.promptError,
     promptErrorSource: params.promptErrorSource,
+    terminalError: params.terminalError,
     usage: params.usage,
     promptCache: params.promptCache,
     compactionCount: params.compactionCount,

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import {
@@ -11,7 +11,7 @@ import {
   resetCommandQueueStateForTest,
 } from "../process/command-queue.js";
 import {
-  __testing as recoveryTesting,
+  testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
@@ -58,6 +58,54 @@ describe("stuck session recovery integration", () => {
     operation.complete();
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+  });
+
+  it("aborts registered pre-run lane work and drains queued messages", async () => {
+    const sessionKey = "agent:main:active-pre-run";
+    const sessionId = "active-pre-run-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    let markActiveStarted!: () => void;
+    const activeStarted = new Promise<void>((resolve) => {
+      markActiveStarted = resolve;
+    });
+
+    const active = enqueueCommandInLane(
+      lane,
+      () =>
+        new Promise<"aborted">((resolve) => {
+          markActiveStarted();
+          if (operation.abortSignal.aborted) {
+            resolve("aborted");
+            return;
+          }
+          operation.abortSignal.addEventListener("abort", () => resolve("aborted"), { once: true });
+        }),
+      { warnAfterMs: Number.MAX_SAFE_INTEGER },
+    );
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(getQueueSize(lane)).toBe(2);
+    await activeStarted;
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    await expect(active).resolves.toBe("aborted");
+    await expect(queued).resolves.toBe("drained");
+    expect(outcome.status).toBe("aborted");
+    expect(getQueueSize(lane)).toBe(0);
   });
 
   it("does not reset a blocked lane while unregistered lane work is still active", async () => {

@@ -1,3 +1,11 @@
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
+import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
+import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -9,6 +17,8 @@ export type AgentWaitTerminalSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -87,11 +97,13 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         stopReason?: unknown;
         livenessState?: unknown;
         yielded?: unknown;
+        timeoutPhase?: unknown;
+        providerStarted?: unknown;
         result?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
-  if (status === "accepted" || status === "started" || status === "in_flight") {
+  if (isNonTerminalAgentRunStatus(status)) {
     return null;
   }
 
@@ -101,22 +113,43 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
   const yielded = payload?.yielded === true || resultMeta?.yielded === true;
+  const timeoutPhase =
+    normalizeAgentRunTimeoutPhase(payload?.timeoutPhase) ??
+    normalizeAgentRunTimeoutPhase(resultMeta?.timeoutPhase);
+  const providerStarted =
+    normalizeProviderStarted(payload?.providerStarted) ??
+    normalizeProviderStarted(resultMeta?.providerStarted);
   const errorMessage =
     typeof payload?.error === "string"
       ? payload.error
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const normalizedError =
+    abortedStopReason && !errorMessage ? AGENT_RUN_ABORTED_ERROR : errorMessage;
 
   if (status === "ok" || status === "timeout") {
+    const normalized = normalizeBlockedLivenessWaitStatus({
+      status: abortedStopReason ? "error" : status,
+      livenessState,
+      error: normalizedError,
+    });
     return {
-      status,
+      status: normalized.status,
       startedAt,
       endedAt,
-      error: status === "timeout" ? errorMessage : undefined,
+      error:
+        normalized.status === "error"
+          ? normalized.error
+          : normalized.status === "timeout"
+            ? normalizedError
+            : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(providerStarted !== undefined ? { providerStarted } : {}),
     };
   }
   if (status === "error" || !entry.ok) {
@@ -128,6 +161,8 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(providerStarted !== undefined ? { providerStarted } : {}),
     };
   }
   return null;
@@ -250,7 +285,7 @@ export function setGatewayDedupeEntry(params: {
   notifyWaiters(runId);
 }
 
-export const __testing = {
+export const testing = {
   getWaiterCount(runId?: string): number {
     if (runId) {
       return AGENT_WAITERS_BY_RUN_ID.get(runId)?.size ?? 0;
@@ -265,3 +300,4 @@ export const __testing = {
     AGENT_WAITERS_BY_RUN_ID.clear();
   },
 };
+export { testing as __testing };

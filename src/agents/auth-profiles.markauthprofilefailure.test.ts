@@ -17,7 +17,11 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
-import { calculateAuthProfileCooldownMs, markAuthProfileFailure } from "./auth-profiles/usage.js";
+import {
+  calculateAuthProfileCooldownMs,
+  markAuthProfileFailure,
+  setAuthProfileFailureHook,
+} from "./auth-profiles/usage.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
 
@@ -349,8 +353,7 @@ describe("markAuthProfileFailure", () => {
     expect(stats?.failureCounts?.rate_limit).toBe(1);
     const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
     // calculateAuthProfileCooldownMs(1) = 30_000 (stepped: 30s -> 1m -> 5m)
-    expect(cooldownMs).toBeLessThan(60_000);
-    expect(cooldownMs).toBeGreaterThan(0);
+    expectCooldownInRange(cooldownMs, 25_000, 35_000);
   });
 
   it("does not persist cooldown windows for OpenRouter profiles", async () => {
@@ -373,6 +376,46 @@ describe("markAuthProfileFailure", () => {
 
       const reloaded = ensureAuthProfileStore(agentDir);
       expect(reloaded.usageStats?.["openrouter:default"]).toBeUndefined();
+    });
+  });
+
+  it("fires the auth profile failure hook so callers can self-heal", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const hook = vi.fn();
+      setAuthProfileFailureHook(hook);
+      try {
+        await markAuthProfileFailure({
+          store,
+          profileId: "anthropic:default",
+          reason: "auth",
+          agentDir,
+        });
+        expect(hook).toHaveBeenCalledTimes(1);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
+
+  it("does not break failure recording when the hook throws", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const throwingHook = vi.fn(() => {
+        throw new Error("boom");
+      });
+      setAuthProfileFailureHook(throwingHook);
+      try {
+        await markAuthProfileFailure({
+          store,
+          profileId: "anthropic:default",
+          reason: "auth",
+          agentDir,
+        });
+        expect(throwingHook).toHaveBeenCalledTimes(1);
+        // Failure still got recorded despite the hook throwing.
+        expect(store.usageStats?.["anthropic:default"]?.errorCount ?? 0).toBeGreaterThan(0);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
     });
   });
 });

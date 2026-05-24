@@ -74,7 +74,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     In task mode, due timestamps are only advanced after a real heartbeat run
     completes. Skipped runs do not mark tasks as completed.
 
-    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
 
   </Accordion>
 
@@ -534,7 +534,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
     [Qwen Cloud](/providers/qwen),
-    [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
+    [MiniMax](/providers/minimax), [Z.AI (GLM)](/providers/zai),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
@@ -561,7 +561,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
     Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
-    Models](/providers/glm).
+    Models](/providers/zai).
 
   </Accordion>
 
@@ -578,9 +578,10 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
-    Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or the
-    OpenClaw Claude-login path with Extra Usage enabled).
+    Anthropic's 1M context window (a GA-capable 1M Claude 4.x model or legacy
+    `context1m: true` config). That only works when your credential is eligible
+    for long-context billing (API key billing or the OpenClaw Claude-login path
+    with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -594,29 +595,28 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="How does Codex auth work?">
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
-    `openai/gpt-5.5` with `agentRuntime.id: "codex"` for the common setup:
-    ChatGPT/Codex subscription auth plus native Codex app-server execution. Use
-    `openai-codex/gpt-5.5` only when you want Codex OAuth through the default
-    PI runner. Use `openai/gpt-5.5` without the Codex runtime override for
-    direct OpenAI API-key access.
+    `openai/gpt-5.5` for the common setup: ChatGPT/Codex subscription auth plus
+    native Codex app-server execution. `openai-codex/gpt-*` model refs are
+    legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
+    access remains available for non-agent OpenAI API surfaces and for agent
+    models through an ordered `openai-codex` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
   <Accordion title="Why does OpenClaw still mention openai-codex?">
     `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
-    It is also the explicit PI model prefix for Codex OAuth:
+    Older configs also used it as a model prefix:
 
-    - `openai/gpt-5.5` + `agentRuntime.id: "codex"` = ChatGPT/Codex subscription auth with native Codex runtime
-    - `openai-codex/gpt-5.5` = Codex OAuth route in PI
-    - `openai/gpt-5.5` without a Codex runtime override = direct OpenAI API-key route in PI
+    - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns
+    - `openai-codex/gpt-5.5` = legacy model route repaired by `openclaw doctor --fix`
+    - `openai/gpt-5.5` plus an ordered `openai-codex` API-key profile = API-key auth for an OpenAI agent model
     - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex`. For native Codex
-    runtime, keep the model ref as `openai/gpt-5.5` and set
-    `agentRuntime.id: "codex"`. Use `openai-codex/*` model refs only for PI
-    runs.
+    `openclaw models auth login --provider openai-codex`. Keep the model ref as
+    `openai/gpt-5.5`; `openai-codex/*` model refs are legacy config that
+    `openclaw doctor --fix` rewrites.
 
   </Accordion>
 
@@ -670,22 +670,22 @@ and troubleshooting see the main [FAQ](/help/faq).
     No. OpenClaw runs on macOS or Linux (Windows via WSL2). A Mac mini is optional - some people
     buy one as an always-on host, but a small VPS, home server, or Raspberry Pi-class box works too.
 
-    You only need a Mac **for macOS-only tools**. For iMessage, use [BlueBubbles](/channels/bluebubbles) (recommended) - the BlueBubbles server runs on any Mac, and the Gateway can run on Linux or elsewhere. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
+    You only need a Mac **for macOS-only tools**. For iMessage, use [iMessage](/channels/imessage) with `imsg` on any Mac signed into Messages. If the Gateway runs on Linux or elsewhere, set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on that Mac. If you want other macOS-only tools, run the Gateway on a Mac or pair a macOS node.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes), [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>
 
   <Accordion title="Do I need a Mac mini for iMessage support?">
     You need **some macOS device** signed into Messages. It does **not** have to be a Mac mini -
-    any Mac works. **Use [BlueBubbles](/channels/bluebubbles)** (recommended) for iMessage - the BlueBubbles server runs on macOS, while the Gateway can run on Linux or elsewhere.
+    any Mac works. **Use [iMessage](/channels/imessage)** with `imsg`; the Gateway can run on that Mac, or it can run elsewhere with an SSH wrapper `cliPath`.
 
     Common setups:
 
-    - Run the Gateway on Linux/VPS, and run the BlueBubbles server on any Mac signed into Messages.
+    - Run the Gateway on Linux/VPS, and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg` on a Mac signed into Messages.
     - Run everything on the Mac if you want the simplest single-machine setup.
 
-    Docs: [BlueBubbles](/channels/bluebubbles), [Nodes](/nodes),
+    Docs: [iMessage](/channels/imessage), [Nodes](/nodes),
     [Mac remote mode](/platforms/mac/remote).
 
   </Accordion>

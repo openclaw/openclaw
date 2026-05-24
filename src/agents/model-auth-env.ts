@@ -18,12 +18,13 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
-type EnvApiKeyLookupOptions = {
+export type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -102,14 +103,14 @@ export function resolveEnvApiKey(
   options: EnvApiKeyLookupOptions = {},
 ): EnvApiKeyResult | null {
   const normalizedProvider = normalizeProviderIdForAuth(provider);
-  const normalized = options.aliasMap
-    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
-    : resolveProviderIdForAuth(provider, { env });
   const lookupParams = {
     config: options.config,
     workspaceDir: options.workspaceDir,
     env,
   };
+  const normalized = options.aliasMap
+    ? (options.aliasMap[normalizedProvider] ?? normalizedProvider)
+    : resolveProviderIdForAuth(provider, lookupParams);
   const candidateMap = options.candidateMap ?? resolveProviderEnvApiKeyCandidates(lookupParams);
   const authEvidenceMap = options.authEvidenceMap ?? resolveProviderEnvAuthEvidence(lookupParams);
   const applied = new Set(getShellEnvAppliedKeys());
@@ -141,6 +142,9 @@ export function resolveEnvApiKey(
   }
 
   if (Array.isArray(candidates)) {
+    return null;
+  }
+  if (options.skipSetupProviderFallback === true) {
     return null;
   }
 

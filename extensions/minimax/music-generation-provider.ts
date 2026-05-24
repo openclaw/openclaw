@@ -2,17 +2,16 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
-  MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
+  fetchProviderDownloadResponse,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
@@ -89,13 +88,14 @@ async function downloadTrackFromUrl(params: {
   timeoutMs?: number;
   fetchFn: typeof fetch;
 }): Promise<GeneratedMusicAsset> {
-  const response = await fetchWithTimeout(
-    params.url,
-    { method: "GET" },
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    params.fetchFn,
-  );
-  await assertOkOrThrowHttpError(response, "MiniMax generated music download failed");
+  const response = await fetchProviderDownloadResponse({
+    url: params.url,
+    init: { method: "GET" },
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    provider: "minimax",
+    requestFailedMessage: "MiniMax generated music download failed",
+  });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
   return {
@@ -103,14 +103,6 @@ async function downloadTrackFromUrl(params: {
     mimeType,
     fileName: `track-1.${ext}`,
   };
-}
-
-function buildPrompt(req: MusicGenerationRequest): string {
-  const parts = [req.prompt.trim()];
-  if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-    parts.push(`Target duration: about ${Math.max(1, Math.round(req.durationSeconds))} seconds.`);
-  }
-  return parts.join("\n\n");
 }
 
 function resolveMinimaxMusicModel(model: string | undefined): string {
@@ -137,7 +129,6 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         maxTracks: 1,
         supportsLyrics: true,
         supportsInstrumental: true,
-        supportsDuration: true,
         supportsFormat: true,
         supportedFormats: ["mp3"],
       },
@@ -186,7 +177,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
       const lyrics = normalizeOptionalString(req.lyrics);
       const body = {
         model,
-        prompt: buildPrompt(req),
+        prompt: req.prompt.trim(),
         ...(req.instrumental === true ? { is_instrumental: true } : {}),
         ...(lyrics ? { lyrics } : req.instrumental === true ? {} : { lyrics_optimizer: true }),
         output_format: "url",
@@ -250,9 +241,6 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
             ...(audioUrl ? { audioUrl } : {}),
             instrumental: req.instrumental === true,
             ...(lyrics ? { requestedLyrics: true } : {}),
-            ...(typeof req.durationSeconds === "number"
-              ? { requestedDurationSeconds: req.durationSeconds }
-              : {}),
           },
         };
       } finally {

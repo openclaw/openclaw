@@ -69,7 +69,7 @@ That makes the common Codex debugging loop short: notice the bad behavior in
 Telegram, Discord, or another channel, run `/diagnostics`, approve once, share
 the report with support, then run the printed `codex resume <thread-id>` command
 locally if you want to inspect the native Codex thread yourself. See
-[Codex harness](/plugins/codex-harness#inspect-a-codex-thread-from-the-cli) for
+[Codex harness](/plugins/codex-harness#inspect-codex-threads-locally) for
 that inspection workflow.
 
 ## What the export contains
@@ -117,10 +117,19 @@ diagnostics are enabled. It is for operational facts, not content.
 The same diagnostic heartbeat records liveness samples when the Gateway keeps
 running but the Node.js event loop or CPU looks saturated. These
 `diagnostic.liveness.warning` events include event-loop delay, event-loop
-utilization, CPU-core ratio, and active/waiting/queued session counts. Idle
-samples stay in telemetry at `info` level; they are only logged as Gateway
-warnings when diagnostic work is active, waiting, or queued. They do not
-restart the Gateway by themselves.
+utilization, CPU-core ratio, active/waiting/queued session counts, the current
+startup/runtime phase when known, recent phase spans, and bounded active/queued
+work labels. Idle samples stay in telemetry at `info` level. Liveness samples
+become Gateway warnings only when work is waiting or queued, or when active work
+overlaps with sustained event-loop delay. Transient max-delay spikes during
+otherwise healthy background work stay in debug logs. They do not restart the
+Gateway by themselves.
+
+Startup phases also emit `diagnostic.phase.completed` events with wall-clock and
+CPU timing. Stalled embedded-run diagnostics mark `terminalProgressStale=true`
+when the last bridge progress looked terminal, such as a raw response item or
+response completion event, but the Gateway still considers the embedded run
+active.
 
 Inspect the live recorder:
 
@@ -179,6 +188,21 @@ diagnostic event collection:
 
 Disabling diagnostics reduces bug-report detail. It does not affect normal
 Gateway logging.
+
+Critical memory pressure snapshots are off by default. To keep diagnostics
+events and also capture the pre-OOM stability snapshot:
+
+```json5
+{
+  diagnostics: {
+    memoryPressureSnapshot: true,
+  },
+}
+```
+
+Use this only on hosts that can tolerate the extra file-system scan and snapshot
+write during critical memory pressure. Normal memory pressure events still
+record RSS, heap, threshold, and growth facts when the snapshot is off.
 
 ## Related
 

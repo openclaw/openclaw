@@ -32,7 +32,7 @@ describe("scripts/run-vitest", () => {
         OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
         PATH: "/usr/bin",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("parses the optional no-output timeout env", () => {
@@ -67,7 +67,7 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_LOCAL_CHECK: "1",
       PATH: "/usr/bin",
     });
@@ -83,7 +83,7 @@ describe("scripts/run-vitest", () => {
         },
         "linux",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       CI: "true",
       OPENCLAW_LOCAL_CHECK: "0",
       PATH: "/usr/bin",
@@ -99,8 +99,9 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      PATH: "/usr/bin",
       RAYON_NUM_THREADS: "1",
       TOKIO_WORKER_THREADS: "1",
     });
@@ -117,8 +118,9 @@ describe("scripts/run-vitest", () => {
         },
         "darwin",
       ).env,
-    ).toMatchObject({
+    ).toEqual({
       OPENCLAW_VITEST_MAX_WORKERS: "2",
+      PATH: "/usr/bin",
       RAYON_NUM_THREADS: "8",
       TOKIO_WORKER_THREADS: "6",
     });
@@ -128,6 +130,11 @@ describe("scripts/run-vitest", () => {
     expect(
       shouldSuppressVitestStderrLine(
         "\u001b[33m[PLUGIN_TIMINGS] Warning:\u001b[0m plugin `foo` was slow\n",
+      ),
+    ).toBe(true);
+    expect(
+      shouldSuppressVitestStderrLine(
+        "\u001b[33m[PLUGIN_TIMINGS] \u001b[0mYour build spent significant time in plugin `externalize-deps`.\n",
       ),
     ).toBe(true);
     expect(shouldSuppressVitestStderrLine("real failure output\n")).toBe(false);

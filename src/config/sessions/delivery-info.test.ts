@@ -3,20 +3,36 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { SessionEntry } from "./types.js";
 
-const storeState = vi.hoisted(() => ({
-  store: {} as Record<string, SessionEntry>,
-}));
+const storeState = vi.hoisted(() => {
+  const state = {
+    store: {} as Record<string, SessionEntry>,
+    stores: {} as Record<string, Record<string, SessionEntry>>,
+    loadSessionStore: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+    readSessionStoreSnapshot: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+  };
+  return state;
+});
 
 vi.mock("../io.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
+  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+    opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
 vi.mock("./store.js", () => ({
-  loadSessionStore: () => storeState.store,
+  loadSessionStore: storeState.loadSessionStore,
+  readSessionStoreSnapshot: storeState.readSessionStoreSnapshot,
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: () => [
+    { agentId: "main", storePath: "/tmp/sessions.json" },
+    { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },
+    { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
+  ],
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
@@ -35,6 +51,9 @@ beforeAll(async () => {
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
+  storeState.stores = {};
+  storeState.loadSessionStore.mockClear();
+  storeState.readSessionStoreSnapshot.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
@@ -74,6 +93,21 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("uses session-store snapshots for direct session keys", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    storeState.store[sessionKey] = buildEntry({
+      channel: "webchat",
+      to: "webchat:user-123",
+      accountId: "default",
+    });
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result.deliveryContext?.to).toBe("webchat:user-123");
+    expect(storeState.readSessionStoreSnapshot).toHaveBeenCalledWith("/tmp/sessions.json");
+    expect(storeState.loadSessionStore).not.toHaveBeenCalled();
+  });
+
   it("returns deliveryContext for direct session keys", () => {
     const sessionKey = "agent:main:webchat:dm:user-123";
     storeState.store[sessionKey] = buildEntry({
@@ -81,6 +115,35 @@ describe("extractDeliveryInfo", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-123",
+        accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("does not build the normalized index when an exact routable key is present", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    storeState.store = new Proxy(
+      {
+        [sessionKey]: buildEntry({
+          channel: "webchat",
+          to: "webchat:user-123",
+          accountId: "default",
+        }),
+      },
+      {
+        ownKeys() {
+          throw new Error("normalized index should not be built");
+        },
+      },
+    );
 
     const result = extractDeliveryInfo(sessionKey);
 
@@ -112,6 +175,57 @@ describe("extractDeliveryInfo", () => {
         accountId: "workspace-1",
       },
       threadId: "1234567890.123456",
+    });
+  });
+
+  it("looks up deliveryContext in per-agent session stores", () => {
+    const sessionKey = "agent:worker:webchat:dm:user-456";
+    storeState.stores["/tmp/sessions.json"] = {};
+    storeState.stores["/tmp/worker-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("continues across per-agent stores until it finds a routable deliveryContext", () => {
+    const sessionKey = "agent:shadow:webchat:dm:user-789";
+    storeState.stores["/tmp/sessions.json"] = {
+      [sessionKey]: {
+        sessionId: "stale-shadow",
+        updatedAt: Date.now() - 1000,
+      },
+    };
+    storeState.stores["/tmp/shadow-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
+      },
+      threadId: undefined,
     });
   });
 
@@ -156,7 +270,7 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
-        threadId: "77",
+        threadId: 77,
       },
       threadId: undefined,
     });
@@ -181,6 +295,157 @@ describe("extractDeliveryInfo", () => {
         channel: "matrix",
         to: "room:!MixedCase:example.org",
         accountId: undefined,
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("continues candidate session keys until it finds the freshest routable entry", () => {
+    const sessionKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "stale-session",
+      updatedAt: Date.now() - 1000,
+      origin: {
+        provider: "matrix",
+      },
+    };
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-session",
+      updatedAt: Date.now(),
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:Example.Org",
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: undefined,
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("prefers an older routable direct entry over a fresher normalized alias without a route", () => {
+    const sessionKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "direct-routable-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-normalized-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+      },
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("prefers an older routable normalized alias over a fresher non-routable alias", () => {
+    const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
+    const routableAlias = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-normalized-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+      },
+    };
+    storeState.store[routableAlias] = {
+      sessionId: "older-routable-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const queriedKey = `agent:main:signal:group:${mixedGroupId}`;
+    const legacyKey = queriedKey.toLowerCase();
+    storeState.store[legacyKey] = buildEntry({
+      channel: "signal",
+      to: `signal:group:${mixedGroupId}`,
+      accountId: "default",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "signal",
+        to: `signal:group:${mixedGroupId}`,
+        accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("prefers the freshest routable alias even when the normalized key is already routable", () => {
+    const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    const fresherAlias = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    storeState.store[canonicalKey] = {
+      sessionId: "older-canonical-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!mixedcase:example.org",
+        accountId: "matrix-account",
+      },
+    };
+    storeState.store[fresherAlias] = {
+      sessionId: "fresh-alias-session",
+      updatedAt: Date.now(),
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
       },
       threadId: undefined,
     });

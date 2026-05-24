@@ -1,24 +1,42 @@
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+
 import {
+  assertManagedProxyAllowsCdpUrl,
   getDirectAgentForCdp,
   hasProxyEnv,
+  withManagedProxyForCdpUrl,
   withNoProxyForCdpUrl,
   withNoProxyForLocalhost,
 } from "./cdp-proxy-bypass.js";
 
 beforeEach(() => {
   vi.useRealTimers();
+  registerManagedProxyBrowserCdpBypassMock.mockReset();
+  registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
 
 function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -305,6 +323,100 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
       delete process.env.no_proxy;
     }
   });
+
+  it("extends both NO_PROXY casings when only one casing already covers loopback", async () => {
+    const coveredNoProxy = "localhost,127.0.0.1,[::1],myhost.internal";
+    const staleLowerNoProxy = "myhost.internal";
+    process.env.NO_PROXY = coveredNoProxy;
+    process.env.no_proxy = staleLowerNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        expect(process.env.NO_PROXY).toBe(`${coveredNoProxy},localhost,127.0.0.1,[::1]`);
+        expect(process.env.no_proxy).toBe(`${staleLowerNoProxy},localhost,127.0.0.1,[::1]`);
+      });
+
+      expect(process.env.NO_PROXY).toBe(coveredNoProxy);
+      expect(process.env.no_proxy).toBe(staleLowerNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+
+  it("mirrors lowercase-only bypass entries into uppercase during the lease", async () => {
+    const lowerNoProxy = "corp.internal";
+    delete process.env.NO_PROXY;
+    process.env.no_proxy = lowerNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        expect(process.env.NO_PROXY).toBe(`${lowerNoProxy},localhost,127.0.0.1,[::1]`);
+        expect(process.env.no_proxy).toBe(`${lowerNoProxy},localhost,127.0.0.1,[::1]`);
+      });
+
+      expect(process.env.NO_PROXY).toBeUndefined();
+      expect(process.env.no_proxy).toBe(lowerNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+
+  it("restores untouched NO_PROXY casing when the lowercase value changes", async () => {
+    const userNoProxy = "internal.corp";
+    process.env.NO_PROXY = userNoProxy;
+    process.env.no_proxy = userNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+        expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+        delete process.env.no_proxy;
+      });
+
+      expect(process.env.NO_PROXY).toBe(userNoProxy);
+      expect(process.env.no_proxy).toBeUndefined();
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+
+  it("does not treat substring matches as complete loopback coverage", async () => {
+    const userNoProxy = "notlocalhost,127.0.0.10,[::1].example";
+    process.env.NO_PROXY = userNoProxy;
+    process.env.no_proxy = userNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+        expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+      });
+
+      expect(process.env.NO_PROXY).toBe(userNoProxy);
+      expect(process.env.no_proxy).toBe(userNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
 });
 
 describe("withNoProxyForCdpUrl", () => {
@@ -340,5 +452,81 @@ describe("withNoProxyForCdpUrl", () => {
       delete process.env.NO_PROXY;
       delete process.env.no_proxy;
     }
+  });
+
+  it("restores untouched NO_PROXY when no_proxy was deleted during execution", async () => {
+    process.env.HTTP_PROXY = "http://proxy:8080";
+    process.env.NO_PROXY = "corp.internal";
+    process.env.no_proxy = "corp.internal";
+    try {
+      await withNoProxyForCdpUrl("http://127.0.0.1:9222", async () => {
+        expect(process.env.NO_PROXY).toBe("corp.internal,localhost,127.0.0.1,[::1]");
+        expect(process.env.no_proxy).toBe("corp.internal,localhost,127.0.0.1,[::1]");
+        delete process.env.no_proxy;
+      });
+      expect(process.env.NO_PROXY).toBe("corp.internal");
+      expect(process.env.no_proxy).toBeUndefined();
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
+});
+
+describe("withManagedProxyForCdpUrl", () => {
+  it("registers the exact CDP URL and releases after the operation", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl("http://127.0.0.1:9222/json/version", () => "ok");
+
+    expect(result).toBe("ok");
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("releases the exact CDP URL when the operation throws", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    expect(() =>
+      withManagedProxyForCdpUrl("ws://127.0.0.1:9222/devtools/browser/abc", () => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact CDP URL registered until an async operation settles", async () => {
+    const release = vi.fn();
+    const deferred = createDeferred<string>();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl(
+      "http://127.0.0.1:9222/json/version",
+      () => deferred.promise,
+    );
+
+    expect(release).not.toHaveBeenCalled();
+    deferred.resolve("ok");
+    await expect(result).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same scoped registration for launch policy preflight", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    assertManagedProxyAllowsCdpUrl("http://127.0.0.1:9222");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith("http://127.0.0.1:9222");
+    expect(release).toHaveBeenCalledOnce();
   });
 });

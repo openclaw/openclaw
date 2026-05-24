@@ -1,7 +1,12 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
+import {
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -15,23 +20,71 @@ type SetupCliBackendRuntimeEntry = {
   };
 };
 
+type SetupCliBackendRuntimeLookupParams = {
+  backend: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
 const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
-let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
+type BundledSetupCliBackendCache = {
+  configFingerprint: string;
+  entries: SetupCliBackendRuntimeEntry[];
+};
 
-export const __testing = {
+let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
+let cachedBundledSetupCliBackends: BundledSetupCliBackendCache | undefined;
+
+export const testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
+    cachedBundledSetupCliBackends = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
     setupRegistryRuntimeModule = module;
   },
 };
 
-function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
-  return snapshot.plugins.flatMap((plugin) => {
+function resolveMetadataSnapshotForSetupCliBackends(
+  params: Omit<SetupCliBackendRuntimeLookupParams, "backend"> = {},
+): {
+  snapshot: PluginMetadataSnapshot;
+  cacheable: boolean;
+} {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params.config ?? {},
+    env,
+    ...(workspaceDir !== undefined
+      ? {
+          workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        }
+      : {}),
+  });
+  return {
+    snapshot,
+    cacheable: true,
+  };
+}
+
+function resolveBundledSetupCliBackends(
+  params: Omit<SetupCliBackendRuntimeLookupParams, "backend"> = {},
+): SetupCliBackendRuntimeEntry[] {
+  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
+  const configFingerprint = snapshot.configFingerprint;
+  if (
+    cacheable &&
+    configFingerprint &&
+    cachedBundledSetupCliBackends?.configFingerprint === configFingerprint
+  ) {
+    return cachedBundledSetupCliBackends.entries;
+  }
+  const entries = snapshot.plugins.flatMap((plugin) => {
     if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
       return [];
     }
@@ -43,6 +96,10 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
         }) satisfies SetupCliBackendRuntimeEntry,
     );
   });
+  if (cacheable && configFingerprint) {
+    cachedBundledSetupCliBackends = { configFingerprint, entries };
+  }
+  return entries;
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
@@ -57,16 +114,18 @@ function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {
       // Try source/runtime candidates in order.
     }
   }
+  setupRegistryRuntimeModule = null;
   return null;
 }
 
-export function resolvePluginSetupCliBackendRuntime(params: { backend: string }) {
+export function resolvePluginSetupCliBackendRuntime(params: SetupCliBackendRuntimeLookupParams) {
   const normalized = normalizeProviderId(params.backend);
   const runtime = loadSetupRegistryRuntime();
   if (runtime !== null) {
     return runtime.resolvePluginSetupCliBackend(params);
   }
-  return resolveBundledSetupCliBackends().find(
+  return resolveBundledSetupCliBackends(params).find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
 }
+export { testing as __testing };

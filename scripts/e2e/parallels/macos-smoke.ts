@@ -12,6 +12,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixProviderOnlyPluginIsolationScript,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
@@ -24,6 +25,7 @@ import {
   startHostServer,
   warn,
   writeJson,
+  writeSummaryMarkdown,
   type HostServer,
   type Mode,
   type PackageArtifact,
@@ -114,7 +116,7 @@ const defaultOptions = (): MacosOptions => ({
   modelId: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "macOS 26.3.1 latest",
+  snapshotHint: "macOS 26.5 latest",
   targetPackageSpec: "",
   vmName: "macOS Tahoe",
 });
@@ -125,7 +127,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "macOS Tahoe"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "macOS 26.3.1 latest"
+                             Default: "macOS 26.5 latest"
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -728,6 +730,12 @@ class MacosSmoke {
     this.guestSh(String.raw`/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
+printf 'preflight.user=%s\n' "$(whoami)"
+printf 'preflight.home=%s\n' "$HOME"
+printf 'preflight.path=%s\n' "$PATH"
+printf 'preflight.umask=%s\n' "$(umask)"
+printf 'preflight.npmRoot=%s\n' "$(${guestNpm} root -g 2>/dev/null || true)"
+${guestNpm} uninstall -g openclaw >/dev/null 2>&1 || true
 rm -rf "$HOME/.openclaw"
 rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   }
@@ -844,7 +852,7 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-/opt/homebrew/bin/node /opt/homebrew/bin/npm install --prefix "$bootstrap_root" --no-save pnpm@10
+/opt/homebrew/bin/node /opt/homebrew/bin/npm install --prefix "$bootstrap_root" --no-save pnpm@11
 "$bootstrap_bin/pnpm" --version`);
   }
 
@@ -863,7 +871,7 @@ const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 config.update = { ...(config.update || {}), channel: "dev" };
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
 ${guestNode} ${guestOpenClawEntry} --version
 ${guestNode} ${guestOpenClawEntry} update status --json`,
     );
@@ -970,6 +978,17 @@ echo "dashboard HTML did not become ready" >&2
 exit 1`);
   }
 
+  private restrictAgentTurnPlugins(): void {
+    this.guestSh(
+      posixProviderOnlyPluginIsolationScript({
+        fallbackPluginId: this.options.provider,
+        homeFallback: this.guestHome(),
+        modelId: this.auth.modelId,
+        nodeCommand: guestNode,
+      }),
+    );
+  }
+
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
@@ -993,6 +1012,7 @@ rm -f "$provider_config_batch"`);
       "--strict-json",
     ]);
     this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
+    this.restrictAgentTurnPlugins();
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 agent_ok=false
@@ -1004,7 +1024,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
+  )} --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("macos")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"
@@ -1060,7 +1080,7 @@ fi`,
 
   private async extractLastVersion(phaseName: string): Promise<string> {
     const log = await readFile(path.join(this.runDir, `${phaseName}.log`), "utf8").catch(() => "");
-    const matches = [...log.matchAll(/openclaw\s+([0-9][^\s]*)/g)];
+    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
     return matches.at(-1)?.[1] ?? "";
   }
 
@@ -1104,6 +1124,18 @@ fi`,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
     await writeJson(summaryPath, summary);
+    await writeSummaryMarkdown({
+      lines: [
+        `- vm: ${summary.vm}`,
+        `- target: ${summary.targetPackageSpec || "current main"}`,
+        `- fresh: ${summary.freshMain.status} ${summary.freshMain.version}`,
+        `- fresh gateway/dashboard/agent: ${summary.freshMain.gateway}/${summary.freshMain.dashboard}/${summary.freshMain.agent}`,
+        `- upgrade: ${summary.upgrade.status} ${summary.upgrade.mainVersion}`,
+        `- logs: ${summary.runDir}`,
+      ],
+      summaryPath,
+      title: "macOS Parallels Smoke",
+    });
     return summaryPath;
   }
 

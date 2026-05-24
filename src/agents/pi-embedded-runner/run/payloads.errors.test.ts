@@ -1,5 +1,6 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -40,6 +41,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  const expectNoPayloadTextContaining = (
+    payloads: ReturnType<typeof buildPayloads>,
+    needle: string,
+  ) => {
+    expect(payloads.map((payload) => payload.text ?? "").join("\n")).not.toContain(needle);
+  };
+
   function expectSinglePayloadSummary(
     payloads: ReturnType<typeof buildPayloads>,
     expected: { text: string; isError?: boolean },
@@ -77,7 +85,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
   });
 
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
@@ -90,8 +98,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("Edit"))).toBe(false);
-    expect(payloads.some((payload) => payload.text?.includes("missing"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "Edit");
+    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
@@ -118,7 +126,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
+    expect(payloads.map((payload) => payload.text)).not.toContain(errorJsonPretty);
   });
 
   it("suppresses raw error JSON from fallback assistant text", () => {
@@ -127,7 +135,25 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "request_id");
+  });
+
+  it("does not expose provider request ids from generic internal errors", () => {
+    const rawError =
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "The AI service returned an internal error. Please try again in a moment.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "request ID");
+    expectNoPayloadTextContaining(payloads, "req_synthetic_provider_request_001");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -142,6 +168,69 @@ describe("buildEmbeddedRunPayloads", () => {
       text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
       isError: true,
     });
+  });
+
+  it("suppresses aborted assistant partial text and surfaces a clean timeout error", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [
+        "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+      ],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          {
+            type: "text",
+            text: "Need answer concise mention not fully E2E tested tomorrow.\n[[reply_to_current]] Final draft",
+          },
+        ],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "Need answer concise");
+    expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
+  });
+
+  it("suppresses aborted assistant reasoning text as well as partial answer text", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: ["partial answer that should not leak"],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "request timed out",
+        content: [
+          { type: "thinking", thinking: "partial hidden reasoning" },
+          { type: "text", text: "partial answer that should not leak" },
+        ],
+      }),
+      reasoningLevel: "on",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request timed out.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
+    expectNoPayloadTextContaining(payloads, "partial answer that should not leak");
+  });
+
+  it("does not replay a stale previous assistant when an aborted run has no new text", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "Previous completed assistant reply" }],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("includes provider and model context for billing errors", () => {
@@ -181,7 +270,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
@@ -256,7 +345,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
+  it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "toolUse",
@@ -276,7 +365,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "code 1",
+      absentDetail: "code 1",
     });
   });
 
@@ -328,13 +417,14 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it.each([
     {
-      name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
+      name: "suppresses mutating tool errors when messages.suppressToolErrors is enabled",
       payload: {
         lastToolError: { toolName: "write", error: "connection timeout" },
         config: { messages: { suppressToolErrors: true } },
       },
       title: "Write",
       absentDetail: "connection timeout",
+      suppressed: true,
     },
     {
       name: "shows recoverable tool errors for mutating tools",
@@ -352,8 +442,12 @@ describe("buildEmbeddedRunPayloads", () => {
       title: "Browser",
       absentDetail: "connection timeout",
     },
-  ])("$name", ({ payload, title, absentDetail }) => {
+  ])("$name", ({ payload, title, absentDetail, suppressed }) => {
     const payloads = buildPayloads(payload);
+    if (suppressed) {
+      expect(payloads).toEqual([]);
+      return;
+    }
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
@@ -369,6 +463,29 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.isError).toBe(true);
     expect(payloads[1]?.text).toContain("Write");
     expect(payloads[1]?.text).not.toContain("missing");
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
+      undefined,
+    );
+  });
+
+  it("shows exec tool errors when assistant output claims success", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The script is ready to use and saved in your workspace."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "/bin/bash: line 1: python: command not found",
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("The script is ready to use and saved in your workspace.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Exec");
+    expect(payloads[1]?.text).not.toContain("python: command not found");
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
+      undefined,
+    );
   });
 
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
@@ -428,6 +545,17 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text });
   });
 
+  it("suppresses exec warnings when assistant output explicitly acknowledges the command failure", () => {
+    const text = "I couldn't run the command because python was not found.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "exec", error: "/bin/bash: line 1: python: command not found" },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
@@ -451,7 +579,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
     const warningText = seed[0]?.text;
-    expect(warningText).toBeTruthy();
+    expect(warningText).toBe("⚠️ ✍️ Write failed");
 
     const payloads = buildPayloads({
       assistantTexts: [warningText ?? ""],
@@ -466,10 +594,22 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
-  it("includes non-recoverable tool error details when verbose mode is on", () => {
+  it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      absentDetail: "connection timeout",
+    });
+  });
+
+  it("includes non-recoverable tool error details when verbose mode is full", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      verboseLevel: "full",
     });
 
     expectSingleToolErrorPayload(payloads, {

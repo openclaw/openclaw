@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 export async function main(argv = process.argv.slice(2)) {
   const timed = argv.includes("--timed");
@@ -12,8 +12,8 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
     !includeArchitecture
       ? {
-          name: "deprecated internal config API guard",
-          args: ["check:deprecated-internal-config-api"],
+          name: "deprecated API usage guard",
+          args: ["check:deprecated-api-usage"],
         }
       : null,
     { name: "temp path guard", args: ["check:temp-path-guardrails"] },
@@ -39,11 +39,18 @@ export async function main(argv = process.argv.slice(2)) {
           name: "plugin-sdk wildcard re-exports",
           args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
         },
+        {
+          name: "deprecated channel access seams",
+          args: ["lint:extensions:no-deprecated-channel-access"],
+        },
+        { name: "media download helper guard", args: ["check:media-download-helpers"] },
         { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
         { name: "tool display", args: ["tool-display:check"] },
         { name: "host env policy", args: ["check:host-env-policy:swift"] },
         { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
         { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+        { name: "npm shrinkwrap guard", args: ["deps:shrinkwrap:check"] },
+        { name: "package patch guard", args: ["deps:patches:check"] },
       ],
     },
     {
@@ -104,30 +111,22 @@ async function runSerial(commands) {
   return results;
 }
 
-async function runCommand(command) {
+export async function runCommand(command, runManagedCommandImpl = runManagedCommand) {
   const startedAt = performance.now();
-  const child = spawn("pnpm", command.args, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
-
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      resolve({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: 1,
-      });
+  let status = 1;
+  try {
+    status = await runManagedCommandImpl({
+      args: command.args,
+      bin: "pnpm",
     });
-    child.once("close", (status) => {
-      resolve({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: status ?? 1,
-      });
-    });
-  });
+  } catch (error) {
+    console.error(error);
+  }
+  return {
+    name: command.name,
+    durationMs: performance.now() - startedAt,
+    status,
+  };
 }
 
 function printSummary(timings) {

@@ -2,14 +2,13 @@ import http from "node:http";
 import https from "node:https";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
-  QaBusConversation,
-  QaBusEvent,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusPollResult,
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
 } from "./protocol.js";
 
 export type {
@@ -30,6 +29,7 @@ export type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
   QaBusWaitForInput,
 } from "./protocol.js";
 
@@ -95,7 +95,9 @@ async function postJson<T>(
     );
 
     const onAbort = () => {
-      request.destroy(abortError());
+      const error = abortError();
+      request.destroy(error);
+      reject(error);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => {
@@ -202,6 +204,7 @@ export async function sendQaBusMessage(params: {
   threadId?: string;
   replyToId?: string;
   attachments?: import("./protocol.js").QaBusAttachment[];
+  toolCalls?: QaBusToolCall[];
 }) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
 }

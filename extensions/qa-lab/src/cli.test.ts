@@ -45,17 +45,29 @@ const {
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
+  runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
+  runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
+  runMantisTelegramDesktopBuilderCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
   runQaCoverageReportCommand: vi.fn(),
+  runQaJsonlReplayCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
+  runMantisBeforeAfterCommand: vi.fn(),
+  runMantisDesktopBrowserSmokeCommand: vi.fn(),
+  runMantisDiscordSmokeCommand: vi.fn(),
+  runMantisSlackDesktopSmokeCommand: vi.fn(),
+  runMantisTelegramDesktopBuilderCommand: vi.fn(),
 }));
 
 const { listQaRunnerCliContributions } = vi.hoisted(() => ({
@@ -63,6 +75,24 @@ const { listQaRunnerCliContributions } = vi.hoisted(() => ({
     createAvailableQaRunnerContribution(),
   ]),
 }));
+
+function requireQaTelegramOptions() {
+  const [call] = runQaTelegramCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa telegram command call");
+  }
+  const [options] = call;
+  return options;
+}
+
+function requireQaSuiteOptions() {
+  const [call] = runQaSuiteCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa suite command call");
+  }
+  const [options] = call;
+  return options;
+}
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
   listQaRunnerCliContributions,
@@ -72,11 +102,20 @@ vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
   runQaTelegramCommand,
 }));
 
+vi.mock("./mantis/cli.runtime.js", () => ({
+  runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
+  runMantisDiscordSmokeCommand,
+  runMantisSlackDesktopSmokeCommand,
+  runMantisTelegramDesktopBuilderCommand,
+}));
+
 vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
 }));
@@ -92,9 +131,15 @@ describe("qa cli registration", () => {
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
     runQaCoverageReportCommand.mockReset();
+    runQaJsonlReplayCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
+    runMantisBeforeAfterCommand.mockReset();
+    runMantisDesktopBrowserSmokeCommand.mockReset();
+    runMantisDiscordSmokeCommand.mockReset();
+    runMantisSlackDesktopSmokeCommand.mockReset();
+    runMantisTelegramDesktopBuilderCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -107,10 +152,300 @@ describe("qa cli registration", () => {
 
   it("registers discovered and built-in live transport subcommands", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa).toBeDefined();
-    expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials", "coverage"]),
-    );
+    if (!qa) {
+      throw new Error("expected qa command");
+    }
+    const commandNames = qa.commands.map((command) => command.name());
+    expect(commandNames).toContain(TEST_QA_RUNNER.commandName);
+    expect(commandNames).toContain("telegram");
+    expect(commandNames).toContain("mantis");
+    expect(commandNames).toContain("credentials");
+    expect(commandNames).toContain("coverage");
+  });
+
+  it("does not expose a control-ui token flag on qa ui", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const ui = qa?.commands.find((command) => command.name() === "ui");
+    if (!ui) {
+      throw new Error("expected qa ui command");
+    }
+
+    expect(ui.options.map((option) => option.long)).not.toContain("--control-ui-token");
+  });
+
+  it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "discord-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/discord-smoke",
+      "--guild-id",
+      "123456789012345678",
+      "--channel-id",
+      "223456789012345678",
+      "--token-file",
+      "/tmp/mantis-token",
+      "--message",
+      "hello from mantis",
+      "--skip-post",
+    ]);
+
+    expect(runMantisDiscordSmokeCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa-e2e/mantis/discord-smoke",
+      guildId: "123456789012345678",
+      channelId: "223456789012345678",
+      tokenEnv: undefined,
+      tokenFile: "/tmp/mantis-token",
+      tokenFileEnv: undefined,
+      message: "hello from mantis",
+      skipPost: true,
+    });
+  });
+
+  it("routes mantis before/after flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "run",
+      "--transport",
+      "discord",
+      "--scenario",
+      "discord-status-reactions-tool-only",
+      "--baseline",
+      "origin/main",
+      "--candidate",
+      "HEAD",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "maintainer",
+      "--skip-install",
+      "--skip-build",
+    ]);
+
+    expect(runMantisBeforeAfterCommand).toHaveBeenCalledWith({
+      baseline: "origin/main",
+      candidate: "HEAD",
+      credentialRole: "maintainer",
+      credentialSource: "convex",
+      fastMode: true,
+      outputDir: ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenario: "discord-status-reactions-tool-only",
+      skipBuild: true,
+      skipInstall: true,
+      transport: "discord",
+    });
+  });
+
+  it("routes mantis desktop browser smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/desktop-browser",
+      "--browser-url",
+      "https://openclaw.ai/docs",
+      "--html-file",
+      "qa-artifacts/timeline.html",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "30m",
+      "--ttl",
+      "90m",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: "https://openclaw.ai/docs",
+      crabboxBin: "/tmp/crabbox",
+      htmlFile: "qa-artifacts/timeline.html",
+      idleTimeout: "30m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser",
+      provider: "hetzner",
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: "90m",
+    });
+  });
+
+  it("does not shadow mantis desktop browser runtime env defaults", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: undefined,
+      crabboxBin: undefined,
+      htmlFile: undefined,
+      idleTimeout: undefined,
+      keepLease: undefined,
+      leaseId: undefined,
+      machineClass: undefined,
+      outputDir: undefined,
+      provider: undefined,
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: undefined,
+    });
+  });
+
+  it("routes mantis Slack desktop smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "slack-desktop-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/slack-desktop",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--market",
+      "on-demand",
+      "--machine-class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--fresh-pr",
+      "openclaw/openclaw#85141",
+      "--idle-timeout",
+      "45m",
+      "--ttl",
+      "120m",
+      "--slack-url",
+      "https://app.slack.com/client/T123/C123",
+      "--provider-mode",
+      "live-frontier",
+      "--model",
+      "openai/gpt-5.5",
+      "--alt-model",
+      "openai/gpt-5.5",
+      "--scenario",
+      "slack-canary",
+      "--credential-source",
+      "env",
+      "--credential-role",
+      "maintainer",
+      "--fast",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
+      alternateModel: "openai/gpt-5.5",
+      crabboxBin: "/tmp/crabbox",
+      credentialRole: "maintainer",
+      credentialSource: "env",
+      fastMode: true,
+      freshPr: "openclaw/openclaw#85141",
+      gatewaySetup: undefined,
+      idleTimeout: "45m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      market: "on-demand",
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
+      primaryModel: "openai/gpt-5.5",
+      provider: "hetzner",
+      providerMode: "live-frontier",
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: ["slack-canary"],
+      slackChannelId: undefined,
+      slackUrl: "https://app.slack.com/client/T123/C123",
+      ttl: "120m",
+    });
+  });
+
+  it("routes mantis Telegram desktop builder flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "telegram-desktop-builder",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/telegram-desktop",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--machine-class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "45m",
+      "--ttl",
+      "120m",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "ci",
+      "--hydrate-mode",
+      "prehydrated",
+      "--telegram-profile-archive-env",
+      "TELEGRAM_PROFILE_TGZ_B64",
+      "--telegram-profile-dir",
+      "/home/crabbox/.local/share/TelegramDesktop",
+      "--no-gateway-setup",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisTelegramDesktopBuilderCommand).toHaveBeenCalledWith({
+      crabboxBin: "/tmp/crabbox",
+      credentialRole: "ci",
+      credentialSource: "convex",
+      gatewaySetup: false,
+      hydrateMode: "prehydrated",
+      idleTimeout: "45m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/telegram-desktop",
+      provider: "hetzner",
+      repoRoot: "/tmp/openclaw-repo",
+      telegramProfileArchiveEnv: "TELEGRAM_PROFILE_TGZ_B64",
+      telegramProfileDir: "/home/crabbox/.local/share/TelegramDesktop",
+      ttl: "120m",
+    });
   });
 
   it("routes coverage report flags into the qa runtime command", async () => {
@@ -130,6 +465,55 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       output: ".artifacts/qa-coverage.md",
       json: true,
+      tools: false,
+    });
+  });
+
+  it("routes tool coverage report flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--tools",
+      "--summary",
+      ".artifacts/runtime-summary.json",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      tools: true,
+      json: false,
+      summary: ".artifacts/runtime-summary.json",
+    });
+  });
+
+  it("routes JSONL replay flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "jsonl-replay",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--transcripts",
+      "qa/scenarios/jsonl-replay",
+      "--runtime-pair",
+      "pi,codex",
+      "--provider-mode",
+      "mock-openai",
+      "--output-dir",
+      ".artifacts/qa-e2e/jsonl-replay-test",
+    ]);
+
+    expect(runQaJsonlReplayCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      transcripts: "qa/scenarios/jsonl-replay",
+      runtimePair: "pi,codex",
+      providerMode: "mock-openai",
+      outputDir: ".artifacts/qa-e2e/jsonl-replay-test",
     });
   });
 
@@ -143,16 +527,16 @@ describe("qa cli registration", () => {
     const telegram = qa?.commands.find((command) => command.name() === "telegram");
     const optionNames = telegram?.options.map((option) => option.long) ?? [];
 
-    expect(optionNames).toEqual(
-      expect.arrayContaining(["--credential-source", "--credential-role"]),
-    );
+    expect(optionNames).toContain("--credential-source");
+    expect(optionNames).toContain("--credential-role");
+    expect(optionNames).toContain("--list-scenarios");
   });
 
   it("registers standalone provider server commands from the provider registry", async () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["mock-openai", "aimock"]),
-    );
+    const commandNames = qa?.commands.map((command) => command.name()) ?? [];
+    expect(commandNames).toContain("mock-openai");
+    expect(commandNames).toContain("aimock");
 
     await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "44080"]);
 
@@ -194,30 +578,55 @@ describe("qa cli registration", () => {
       fastMode: false,
       allowFailures: false,
       scenarioIds: [],
+      listScenarios: false,
       sutAccountId: "sut",
       credentialSource: undefined,
       credentialRole: undefined,
     });
   });
 
+  it("forwards --list-scenarios for telegram runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "telegram", "--list-scenarios"]);
+
+    const options = requireQaTelegramOptions();
+    expect(options.listScenarios).toBe(true);
+  });
+
   it("forwards --allow-failures for telegram runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "telegram", "--allow-failures"]);
 
-    expect(runQaTelegramCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailures: true,
-      }),
-    );
+    const options = requireQaTelegramOptions();
+    expect(options.allowFailures).toBe(true);
   });
 
   it("forwards --allow-failures for suite runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "suite", "--allow-failures"]);
 
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailures: true,
-      }),
-    );
+    const options = requireQaSuiteOptions();
+    expect(options.allowFailures).toBe(true);
+  });
+
+  it("forwards --pack for suite runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
+
+    const options = requireQaSuiteOptions();
+    expect(options.pack).toBe("personal-agent");
+  });
+
+  it("forwards --runtime-parity-tier for suite runs", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "suite",
+      "--runtime-parity-tier",
+      "standard",
+      "--runtime-parity-tier",
+      "optional,soak",
+    ]);
+
+    const options = requireQaSuiteOptions();
+    expect(options.runtimeParityTier).toEqual(["standard", "optional,soak"]);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

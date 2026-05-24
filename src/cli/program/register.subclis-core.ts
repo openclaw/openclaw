@@ -25,7 +25,15 @@ import {
 
 export { getSubCliCommandsWithSubcommands };
 
-type SubCliRegistrar = (program: Command) => Promise<void> | void;
+export type SubCliRegistrationContext = {
+  purpose?: "runtime" | "completion";
+};
+
+type SubCliRegistrar = (
+  program: Command,
+  argv: string[],
+  context: SubCliRegistrationContext,
+) => Promise<void> | void;
 
 function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   if (name !== "gateway") {
@@ -39,7 +47,7 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
 }
 
 async function registerGatewayRunOnly(program: Command): Promise<void> {
-  const { addGatewayRunCommand } = await import("../gateway-cli/run.js");
+  const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
@@ -51,20 +59,21 @@ async function registerGatewayRunOnly(program: Command): Promise<void> {
 
 async function registerSubCliWithPluginCommands(
   program: Command,
+  argv: string[],
   registerSubCli: () => Promise<void>,
   pluginCliPosition: "before" | "after",
 ) {
-  const invocation = resolveCliArgvInvocation(process.argv);
+  const invocation = resolveCliArgvInvocation(argv);
   const shouldRegisterPluginCommands =
     !invocation.hasHelpOrVersion &&
-    (invocation.commandPath.length <= 1 ||
-      resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never");
-  const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
   if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
   if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }
@@ -119,11 +128,15 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       loadModule: () => import("../exec-policy-cli.js"),
       exportName: "registerExecPolicyCli",
     },
-    {
-      commandNames: ["nodes"],
-      loadModule: () => import("../nodes-cli.js"),
-      exportName: "registerNodesCli",
+  ]),
+  {
+    commandNames: ["nodes"],
+    register: async (program, argv) => {
+      const mod = await import("../nodes-cli.js");
+      await mod.registerNodesCli(program, argv);
     },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       commandNames: ["devices"],
       loadModule: () => import("../devices-cli.js"),
@@ -192,9 +205,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ]),
   {
     commandNames: ["pairing"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../pairing-cli.js");
           mod.registerPairingCli(program);
@@ -205,9 +219,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   },
   {
     commandNames: ["plugins"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../plugins-cli.js");
           mod.registerPluginsCli(program);
@@ -216,12 +231,16 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       );
     },
   },
-  ...defineImportedProgramCommandGroupSpecs([
-    {
-      commandNames: ["channels"],
-      loadModule: () => import("../channels-cli.js"),
-      exportName: "registerChannelsCli",
+  {
+    commandNames: ["channels"],
+    register: async (program, argv, context) => {
+      const mod = await import("../channels-cli.js");
+      await mod.registerChannelsCli(program, argv, {
+        includeSetupOptions: context.purpose === "completion",
+      });
     },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       commandNames: ["directory"],
       loadModule: () => import("../directory-cli.js"),
@@ -250,13 +269,18 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ]),
 ];
 
-function resolveSubCliCommandGroups(): CommandGroupEntry[] {
+function resolveSubCliCommandGroups(
+  argv: string[],
+  context: SubCliRegistrationContext = {},
+): CommandGroupEntry[] {
   const descriptors = getSubCliEntryDescriptors();
   const descriptorNames = new Set(descriptors.map((descriptor) => descriptor.name));
   return buildCommandGroupEntries(
     descriptors,
     entrySpecs.filter((spec) => spec.commandNames.every((name) => descriptorNames.has(name))),
-    (register) => register,
+    (register) => async (program) => {
+      await register(program, argv, context);
+    },
   );
 }
 
@@ -268,17 +292,18 @@ export async function registerSubCliByName(
   program: Command,
   name: string,
   argv: string[] = process.argv,
+  context: SubCliRegistrationContext = {},
 ): Promise<boolean> {
   if (shouldRegisterGatewayRunOnly(name, argv)) {
     await registerGatewayRunOnly(program);
     return true;
   }
-  return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);
+  return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
   const { primary } = resolveCliArgvInvocation(argv);
-  registerCommandGroups(program, resolveSubCliCommandGroups(), {
+  registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),
     primary,
     registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),

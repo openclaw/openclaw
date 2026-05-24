@@ -71,6 +71,7 @@ struct OnboardingWizardView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
@@ -203,14 +204,7 @@ struct OnboardingWizardView: View {
                             return
                         }
                         if let message = self.detectQRCode(from: data) {
-                            if let link = GatewayConnectDeepLink.fromSetupCode(message) {
-                                self.handleScannedLink(link)
-                                return
-                            }
-                            if let url = URL(string: message),
-                               let route = DeepLinkParser.parse(url),
-                               case let .gateway(link) = route
-                            {
+                            if let link = GatewayConnectDeepLink.fromSetupInput(message) {
                                 self.handleScannedLink(link)
                                 return
                             }
@@ -224,9 +218,9 @@ struct OnboardingWizardView: View {
                 if let currentProblem = self.currentProblem {
                     GatewayProblemDetailsSheet(
                         problem: currentProblem,
-                        primaryActionTitle: "Retry",
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(currentProblem),
                         onPrimaryAction: {
-                            Task { await self.retryLastAttempt() }
+                            Task { await self.handleGatewayProblemPrimaryAction(currentProblem) }
                         })
                 }
             }
@@ -601,9 +595,9 @@ struct OnboardingWizardView: View {
                 if let problem = self.currentProblem {
                     GatewayProblemBanner(
                         problem: problem,
-                        primaryActionTitle: "Retry connection",
+                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
                         onPrimaryAction: {
-                            Task { await self.retryLastAttempt() }
+                            Task { await self.handleGatewayProblemPrimaryAction(problem) }
                         },
                         onShowDetails: {
                             self.showGatewayProblemDetails = true
@@ -751,18 +745,20 @@ struct OnboardingWizardView: View {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualTLS = link.tls
-        let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
-        if let token = link.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
-            self.gatewayToken = token
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayToken = ""
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: GatewaySettingsStore.currentInstanceID())
         }
-        if let password = link.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
-            self.gatewayPassword = password
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayPassword = ""
+        self.saveGatewayBootstrapToken(setupAuth.bootstrapToken)
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
         }
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
+        }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code…"
@@ -944,7 +940,7 @@ struct OnboardingWizardView: View {
     }
 
     private func saveGatewayCredentials(token: String, password: String) {
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         guard !trimmedInstanceId.isEmpty else { return }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
@@ -953,7 +949,7 @@ struct OnboardingWizardView: View {
     }
 
     private func saveGatewayBootstrapToken(_ token: String?) {
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         guard !trimmedInstanceId.isEmpty else { return }
         let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         GatewaySettingsStore.saveGatewayBootstrapToken(trimmedToken, instanceId: trimmedInstanceId)
@@ -1008,7 +1004,16 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectManual(host: host, port: self.manualPort, useTLS: self.manualTLS)
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.gatewayToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.gatewayPassword)
+        self.pendingManualAuthOverride = nil
+        await self.gatewayController.connectManual(
+            host: host,
+            port: self.manualPort,
+            useTLS: self.manualTLS,
+            authOverride: authOverride)
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
@@ -1020,6 +1025,36 @@ struct OnboardingWizardView: View {
         }
         defer { self.connectingGatewayID = nil }
         await self.gatewayController.connectLastKnown()
+    }
+
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
+        if problem.suggestsOnboardingReset { return "Scan QR again" }
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    }
+
+    private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.suggestsOnboardingReset {
+            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
+            self.gatewayToken = ""
+            self.gatewayPassword = ""
+            self.connectingGatewayID = nil
+            self.connectMessage = nil
+            self.issue = .none
+            self.pairingRequestId = nil
+            self.statusLine = "Scan a fresh setup QR code from this gateway."
+            self.step = .connect
+            self.showQRScanner = true
+            return
+        }
+        if problem.canTrustRotatedCertificate {
+            self.connectingGatewayID = "trust-certificate"
+            self.connectMessage = "Updating gateway certificate…"
+            self.statusLine = "Updating gateway certificate…"
+            defer { self.connectingGatewayID = nil }
+            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
+            return
+        }
+        await self.retryLastAttempt()
     }
 }
 

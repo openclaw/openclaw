@@ -4,6 +4,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_STARTUP_CASES = ["default", "oneInternalHook", "allInternalHooks"];
 const DEFAULT_QA_SCENARIOS = [
@@ -135,20 +137,26 @@ function readJsonIfExists(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function runStep(name, command, args) {
+function runStep(name, command, args, options = {}) {
   console.error(`[gateway-cpu] start ${name}`);
   const result = spawnSync(command, args, {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
+    ...options,
   });
   const status = result.status ?? (result.signal ? 1 : 0);
   console.error(`[gateway-cpu] ${status === 0 ? "pass" : "fail"} ${name}`);
   return { name, status, signal: result.signal ?? null };
 }
 
-function pnpmCommand() {
-  return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+function pnpmCommand(args) {
+  return createPnpmRunnerSpawnSpec({
+    cwd: process.cwd(),
+    env: process.env,
+    pnpmArgs: args,
+    stdio: "inherit",
+  });
 }
 
 function toRepoRelativePath(absolutePath) {
@@ -157,43 +165,6 @@ function toRepoRelativePath(absolutePath) {
     throw new Error(`Output path must stay inside the repo root: ${absolutePath}`);
   }
   return relativePath;
-}
-
-function collectObservations(params) {
-  const observations = [];
-  for (const result of params.startup?.results ?? []) {
-    const cpuCoreMax = result.summary?.cpuCoreRatio?.max;
-    const wallMax = result.summary?.readyzMs?.max ?? result.summary?.healthzMs?.max;
-    if (
-      typeof cpuCoreMax === "number" &&
-      typeof wallMax === "number" &&
-      cpuCoreMax >= params.cpuCoreWarn &&
-      wallMax >= params.hotWallWarnMs
-    ) {
-      observations.push({
-        kind: "startup-cpu-hot",
-        id: result.id,
-        cpuCoreRatioMax: cpuCoreMax,
-        wallMsMax: wallMax,
-      });
-    }
-  }
-  const qaCpuCoreRatio = params.qa?.metrics?.gatewayCpuCoreRatio;
-  const qaWallMs = params.qa?.metrics?.wallMs;
-  if (
-    typeof qaCpuCoreRatio === "number" &&
-    typeof qaWallMs === "number" &&
-    qaCpuCoreRatio >= params.cpuCoreWarn &&
-    qaWallMs >= params.hotWallWarnMs
-  ) {
-    observations.push({
-      kind: "qa-cpu-hot",
-      id: "qa-suite",
-      cpuCoreRatio: qaCpuCoreRatio,
-      wallMs: qaWallMs,
-    });
-  }
-  return observations;
 }
 
 async function main() {
@@ -223,25 +194,26 @@ async function main() {
   }
 
   if (!options.skipQa) {
+    const qaCommand = pnpmCommand([
+      "openclaw",
+      "qa",
+      "suite",
+      "--provider-mode",
+      "mock-openai",
+      "--concurrency",
+      "1",
+      "--output-dir",
+      qaOutputArg,
+      ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
+    ]);
     steps.push(
-      runStep("qa suite", pnpmCommand(), [
-        "openclaw",
-        "qa",
-        "suite",
-        "--provider-mode",
-        "mock-openai",
-        "--concurrency",
-        "1",
-        "--output-dir",
-        qaOutputArg,
-        ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
-      ]),
+      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options),
     );
   }
 
   const startup = readJsonIfExists(startupOutput);
   const qa = readJsonIfExists(path.join(qaOutputDir, "qa-suite-summary.json"));
-  const observations = collectObservations({
+  const observations = collectGatewayCpuObservations({
     startup,
     qa,
     cpuCoreWarn: options.cpuCoreWarn,

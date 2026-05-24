@@ -17,10 +17,18 @@ function expectFencesBalanced(chunks: string[]) {
   }
 }
 
+function requireChunk(chunks: string[], index: number): string {
+  const chunk = chunks[index];
+  if (chunk === undefined) {
+    throw new Error(`expected chunk ${index}`);
+  }
+  return chunk;
+}
+
 function expectChunkLengths(chunks: string[], expectedLengths: number[]) {
   expect(chunks).toHaveLength(expectedLengths.length);
   expectedLengths.forEach((length, index) => {
-    expect(chunks[index]?.length).toBe(length);
+    expect(requireChunk(chunks, index).length).toBe(length);
   });
 }
 
@@ -191,8 +199,8 @@ describe("chunkText", () => {
       text: "This is a message that should break nicely near a word boundary.",
       limit: 30,
       assert: (chunks: string[], text: string) => {
-        expect(chunks[0]?.length).toBeLessThanOrEqual(30);
-        expect(chunks[1]?.length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 0).length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 1).length).toBeLessThanOrEqual(30);
         expectNormalizedChunkJoin(chunks, text);
       },
     },
@@ -322,6 +330,26 @@ describe("resolveTextChunkLimit", () => {
       options: undefined,
       expected: 4000,
     },
+    {
+      name: "honors webchat textChunkLimit override from config",
+      cfg: {
+        channels: {
+          webchat: { textChunkLimit: 16000 },
+        },
+      },
+      provider: "webchat" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 16000,
+    },
+    {
+      name: "falls back to default when webchat has no override",
+      cfg: { channels: {} },
+      provider: "webchat" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 4000,
+    },
   ] as const)("$name", ({ cfg, provider, accountId, options, expected }) => {
     expect(resolveTextChunkLimit(cfg as never, provider, accountId, options)).toBe(expected);
   });
@@ -338,7 +366,8 @@ describe("chunkMarkdownText", () => {
         const text = `${prefix}\n\n${fence}\n\n${suffix}`;
 
         const chunks = chunkMarkdownText(text, 40);
-        expect(chunks.some((chunk) => chunk.trimEnd() === fence)).toBe(true);
+        const intactFenceChunks = chunks.filter((chunk) => chunk.trimEnd() === fence);
+        expect(intactFenceChunks.length).toBeGreaterThan(0);
         expectFencesBalanced(chunks);
       },
     },
@@ -394,7 +423,7 @@ describe("chunkMarkdownText", () => {
       run: () => {
         const text = `(${"a".repeat(80)})`;
         const chunks = chunkMarkdownText(text, 20);
-        expect(chunks[0]?.length).toBe(20);
+        expect(requireChunk(chunks, 0).length).toBe(20);
         expect(chunks.join("")).toBe(text);
       },
     },
@@ -475,7 +504,7 @@ describe("chunkByNewline", () => {
   });
 
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
-    expect(chunkByNewline(text, 100)).toEqual([]);
+    expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
 });
 
@@ -569,12 +598,18 @@ describe("resolveChunkMode", () => {
   it.each([
     { cfg: undefined, provider: "telegram", accountId: undefined, expected: "length" },
     { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: undefined, provider: "bluebubbles", accountId: undefined, expected: "length" },
+    { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+    {
+      cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
+      provider: "webchat",
+      accountId: undefined,
+      expected: "newline",
+    },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",
     ({ cfg, provider, accountId, expected }) => {

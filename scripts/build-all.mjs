@@ -10,8 +10,16 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 const BUILD_CACHE_VERSION = 2;
+const PNPM_STEP_NODE_FALLBACKS = new Map([
+  ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
+  [
+    "build:plugin-sdk:dts",
+    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+  ],
+  ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+]);
 export const BUILD_ALL_STEPS = [
-  { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
+  { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
   {
     label: "check-cli-bootstrap-imports",
@@ -35,17 +43,18 @@ export const BUILD_ALL_STEPS = [
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
+        "packages/memory-host-sdk/src",
         "src/types",
         "src/video-generation/dashscope-compatible.ts",
         "src/video-generation/types.ts",
       ],
-      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/src"],
+      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/packages", "dist/plugin-sdk/src"],
     },
   },
   {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
-    args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
+    args: ["--experimental-strip-types", "scripts/write-plugin-sdk-entry-dts.ts"],
   },
   {
     label: "check-plugin-sdk-exports",
@@ -53,23 +62,19 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/check-plugin-sdk-exports.mjs"],
   },
   {
-    label: "canvas-a2ui-copy",
-    kind: "node",
-    args: ["--import", "tsx", "scripts/canvas-a2ui-copy.ts"],
-    cache: {
-      inputs: ["scripts/canvas-a2ui-copy.ts", "src/canvas-host/a2ui"],
-      outputs: ["dist/canvas-host/a2ui/index.html", "dist/canvas-host/a2ui/a2ui.bundle.js"],
-    },
+    label: "plugins:assets:copy",
+    kind: "pnpm",
+    pnpmArgs: ["plugins:assets:copy"],
   },
   {
     label: "copy-hook-metadata",
     kind: "node",
-    args: ["--import", "tsx", "scripts/copy-hook-metadata.ts"],
+    args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
   },
   {
     label: "copy-export-html-templates",
     kind: "node",
-    args: ["--import", "tsx", "scripts/copy-export-html-templates.ts"],
+    args: ["--experimental-strip-types", "scripts/copy-export-html-templates.ts"],
     cache: {
       inputs: [
         "scripts/copy-export-html-templates.ts",
@@ -82,7 +87,7 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-build-info",
     kind: "node",
-    args: ["--import", "tsx", "scripts/write-build-info.ts"],
+    args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
   },
   {
     label: "write-cli-startup-metadata",
@@ -92,14 +97,14 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-cli-compat",
     kind: "node",
-    args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
+    args: ["--experimental-strip-types", "scripts/write-cli-compat.ts"],
   },
 ];
 
 export const BUILD_ALL_PROFILES = {
   full: BUILD_ALL_STEPS.map((step) => step.label),
   ciArtifacts: [
-    "canvas:a2ui:bundle",
+    "plugins:assets:build",
     "tsdown",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
@@ -108,7 +113,7 @@ export const BUILD_ALL_PROFILES = {
     "build:plugin-sdk:dts",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "canvas-a2ui-copy",
+    "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
     "write-build-info",
@@ -121,6 +126,15 @@ export const BUILD_ALL_PROFILES = {
     "runtime-postbuild",
     "build-stamp",
     "runtime-postbuild-stamp",
+  ],
+  cliStartup: [
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
+    "write-cli-compat",
   ],
 };
 
@@ -157,6 +171,18 @@ export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
   if (step.kind === "pnpm") {
+    const nodeFallbackArgs =
+      env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" ? PNPM_STEP_NODE_FALLBACKS.get(step.label) : undefined;
+    if (nodeFallbackArgs) {
+      return {
+        command: params.nodeExecPath ?? nodeBin,
+        args: nodeFallbackArgs,
+        options: {
+          stdio: "inherit",
+          env,
+        },
+      };
+    }
     const runner = resolvePnpmRunner({
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
@@ -220,6 +246,14 @@ function listCacheFiles(rootDir, entries, fsImpl) {
     .toSorted();
 }
 
+function portableRelativePath(rootDir, filePath) {
+  return path.relative(rootDir, filePath).split(path.sep).join("/");
+}
+
+function normalizePortablePath(filePath) {
+  return filePath.replaceAll("\\", "/");
+}
+
 function resolveCachePaths(rootDir, step) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
@@ -234,7 +268,7 @@ function hashInputFiles(rootDir, files, fsImpl) {
   const hash = createHash("sha256");
   hash.update(`v${BUILD_CACHE_VERSION}\0`);
   for (const file of files) {
-    hash.update(path.relative(rootDir, file));
+    hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
     hash.update(fsImpl.readFileSync(file));
     hash.update("\0");
@@ -279,8 +313,10 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  const relativeOutputFiles = outputFiles.map((file) => path.relative(rootDir, file));
-  const stampedOutputs = Array.isArray(stamp?.outputs) ? stamp.outputs : [];
+  const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
+  const stampedOutputs = Array.isArray(stamp?.outputs)
+    ? stamp.outputs.map((entry) => normalizePortablePath(entry))
+    : [];
   const stampMatches = stamp?.version === BUILD_CACHE_VERSION && stamp.signature === signature;
   const actualOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);

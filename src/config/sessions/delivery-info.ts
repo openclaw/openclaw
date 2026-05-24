@@ -1,43 +1,57 @@
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../../gateway/session-store-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { loadSessionStore } from "./store.js";
-export { parseSessionThreadInfo } from "./thread-info.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
+import { readSessionStoreSnapshot } from "./store.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
+import type { SessionEntry } from "./types.js";
+export { parseSessionThreadInfo };
 
-export function extractDeliveryInfo(sessionKey: string | undefined): {
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): context is {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+} {
+  return Boolean(context?.channel && context?.to);
+}
+
+export function extractDeliveryInfo(
+  sessionKey: string | undefined,
+  options?: { cfg?: OpenClawConfig },
+): {
   deliveryContext:
-    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   threadId: string | undefined;
 } {
-  const hasRoutableDeliveryContext = (context?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  }): context is {
-    channel: string;
-    to: string;
-    accountId?: string;
-    threadId?: string | number;
-  } => Boolean(context?.channel && context?.to);
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
   if (!sessionKey || !baseSessionKey) {
     return { deliveryContext: undefined, threadId };
   }
 
   let deliveryContext:
-    | { channel?: string; to?: string; accountId?: string; threadId?: string }
+    | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
     | undefined;
   try {
-    const cfg = getRuntimeConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
-    const store = loadSessionStore(storePath);
-    let entry = store[sessionKey];
+    const cfg = options?.cfg ?? getRuntimeConfig();
+    const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
+    let entry = lookup.entry;
     let storedDeliveryContext = deliveryContextFromSession(entry);
     if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
-      entry = store[baseSessionKey];
+      entry = lookup.baseEntry;
       storedDeliveryContext = deliveryContextFromSession(entry);
     }
     if (hasRoutableDeliveryContext(storedDeliveryContext)) {
@@ -45,14 +59,169 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
         channel: storedDeliveryContext.channel,
         to: storedDeliveryContext.to,
         accountId: storedDeliveryContext.accountId,
-        threadId:
-          storedDeliveryContext.threadId != null
-            ? String(storedDeliveryContext.threadId)
-            : undefined,
+        threadId: storedDeliveryContext.threadId,
       };
     }
   } catch {
     // ignore: best-effort
   }
   return { deliveryContext, threadId };
+}
+
+function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
+  const paths = new Set<string>();
+  paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (target.agentId === agentId) {
+      paths.add(target.storePath);
+    }
+  }
+  return [...paths];
+}
+
+function asSessionEntry(entry: unknown): SessionEntry | undefined {
+  return entry as SessionEntry | undefined;
+}
+
+function findSessionEntryInStore(
+  store: ReturnType<typeof readSessionStoreSnapshot>,
+  keys: readonly string[],
+) {
+  let normalizedIndex: Map<string, SessionEntry> | undefined;
+  let bestEntry: SessionEntry | undefined;
+  let bestUpdatedAt = 0;
+  let bestRoutable = false;
+  const acceptCandidate = (candidate: unknown) => {
+    if (!candidate) {
+      return;
+    }
+    const entry = candidate as SessionEntry;
+    const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const candidateUpdatedAt = entry.updatedAt ?? 0;
+    if (
+      !bestEntry ||
+      (candidateRoutable && !bestRoutable) ||
+      (candidateRoutable === bestRoutable && candidateUpdatedAt > bestUpdatedAt)
+    ) {
+      bestEntry = entry;
+      bestUpdatedAt = candidateUpdatedAt;
+      bestRoutable = candidateRoutable;
+    }
+  };
+  for (const key of keys) {
+    const trimmed = key.trim();
+    const normalized = normalizeStoreSessionKey(key);
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    let foundRoutableCandidate = false;
+    if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(asSessionEntry(store[normalized])),
+      );
+      acceptCandidate(store[normalized]);
+    }
+    if (
+      foldedLegacyKey !== normalized &&
+      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey)
+    ) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(asSessionEntry(store[foldedLegacyKey])),
+      );
+      acceptCandidate(store[foldedLegacyKey]);
+    }
+    if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(asSessionEntry(store[trimmed])),
+      );
+      acceptCandidate(store[trimmed]);
+    }
+    if (trimmed !== normalized || !foundRoutableCandidate) {
+      normalizedIndex ??= buildFreshestSessionEntryIndex(store);
+      const freshest = normalizedIndex.get(normalized);
+      acceptCandidate(freshest);
+      if (foldedLegacyKey !== normalized) {
+        acceptCandidate(normalizedIndex.get(foldedLegacyKey));
+      }
+    }
+  }
+  return bestEntry;
+}
+
+function buildFreshestSessionEntryIndex(
+  store: Readonly<Record<string, unknown>>,
+): Map<string, SessionEntry> {
+  const index = new Map<string, SessionEntry>();
+  for (const [key, candidate] of Object.entries(store)) {
+    const entry = asSessionEntry(candidate);
+    if (!entry) {
+      continue;
+    }
+    const normalized = normalizeStoreSessionKey(key);
+    const existing = index.get(normalized);
+    const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
+    if (
+      !existing ||
+      (entryRoutable && !existingRoutable) ||
+      (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
+    ) {
+      index.set(normalized, entry);
+    }
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    if (foldedLegacyKey === normalized) {
+      continue;
+    }
+    const foldedExisting = index.get(foldedLegacyKey);
+    const foldedExistingRoutable = hasRoutableDeliveryContext(
+      deliveryContextFromSession(foldedExisting),
+    );
+    if (
+      !foldedExisting ||
+      (entryRoutable && !foldedExistingRoutable) ||
+      (entryRoutable === foldedExistingRoutable &&
+        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
+    ) {
+      index.set(foldedLegacyKey, entry);
+    }
+  }
+  return index;
+}
+
+function loadDeliverySessionEntry(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  baseSessionKey: string;
+}) {
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const canonicalBaseKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.baseSessionKey,
+  });
+  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const sessionKeys = [params.sessionKey, canonicalKey];
+  const baseKeys = [params.baseSessionKey, canonicalBaseKey];
+  let fallback:
+    | {
+        entry: ReturnType<typeof findSessionEntryInStore>;
+        baseEntry: ReturnType<typeof findSessionEntryInStore>;
+      }
+    | undefined;
+  for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
+    const store = readSessionStoreSnapshot(storePath);
+    const entry = findSessionEntryInStore(store, sessionKeys);
+    const baseEntry = findSessionEntryInStore(store, baseKeys);
+    if (!entry && !baseEntry) {
+      continue;
+    }
+    fallback ??= { entry, baseEntry };
+    if (
+      hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
+      hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))
+    ) {
+      return { entry, baseEntry };
+    }
+  }
+  return fallback ?? { entry: undefined, baseEntry: undefined };
 }

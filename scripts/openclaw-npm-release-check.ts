@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
@@ -15,6 +15,7 @@ import {
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
   name?: string;
@@ -63,8 +64,10 @@ export type NpmDistTagMirrorAuth = {
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
+const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -181,6 +184,10 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/^git\+/, "")
     .replace(/\.git$/i, "")
     .replace(/\/+$/, "");
+}
+
+function isLocalDependencySpec(value: string | undefined): boolean {
+  return /^(?:file|link|workspace):/u.test(value ?? "");
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
@@ -319,6 +326,11 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
+  if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
+    errors.push(
+      `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
+    );
+  }
   if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
     errors.push(
       `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
@@ -424,33 +436,69 @@ function loadPackageJson(): PackageJson {
 }
 
 function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(basename(value).toLowerCase());
+  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(portableBasename(value).toLowerCase());
 }
+
+function portableBasename(value: string): string {
+  return value.split(/[/\\]/u).at(-1) ?? value;
+}
+
+type NpmCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
 
 export function resolveNpmCommandInvocation(
   params: {
+    comSpec?: string;
+    npmArgs?: string[];
     npmExecPath?: string;
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): { command: string; args: string[] } {
+): NpmCommandInvocation {
+  const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
-  const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
+  const platform = params.platform ?? process.platform;
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: nodeExecPath, args: [npmExecPath] };
+    const name = portableBasename(npmExecPath).toLowerCase();
+    if (platform === "win32" && (name.endsWith(".cmd") || name.endsWith(".bat"))) {
+      return {
+        command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, npmArgs)],
+        windowsVerbatimArguments: true,
+      };
+    }
+    if (platform === "win32" && name.endsWith(".exe")) {
+      return { command: npmExecPath, args: npmArgs };
+    }
+    if (name.endsWith(".js") || name.endsWith(".cjs") || name.endsWith(".mjs")) {
+      return { command: nodeExecPath, args: [npmExecPath, ...npmArgs] };
+    }
+    return { command: npmExecPath, args: npmArgs };
   }
 
-  return { command: npmCommand, args: [] };
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine("npm.cmd", npmArgs)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return { command: "npm", args: npmArgs };
 }
 
 function runNpmCommand(args: string[]): string {
-  const invocation = resolveNpmCommandInvocation();
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
+  const invocation = resolveNpmCommandInvocation({ npmArgs: args });
+  return execFileSync(invocation.command, invocation.args, {
     encoding: "utf8",
     maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 }
 
@@ -583,6 +631,19 @@ function collectPackedTarballErrors(): string[] {
   ];
 }
 
+function collectNpmShrinkwrapErrors(): string[] {
+  try {
+    execFileSync(process.execPath, ["scripts/generate-npm-shrinkwrap.mjs", "--check"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return [];
+  } catch (error) {
+    return [`npm-shrinkwrap.json must match package dependencies: ${describeExecFailure(error)}`];
+  }
+}
+
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
@@ -657,8 +718,9 @@ async function main(): Promise<number> {
   if (!skipPackValidation) {
     await writePackageDistInventory(process.cwd());
   }
+  const shrinkwrapErrors = skipPackValidation ? [] : collectNpmShrinkwrapErrors();
   const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
-  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
+  const errors = [...metadataErrors, ...tagErrors, ...shrinkwrapErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {

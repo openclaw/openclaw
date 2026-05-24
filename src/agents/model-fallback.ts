@@ -3,8 +3,10 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -17,6 +19,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
 } from "./failover-error.js";
 import {
@@ -24,14 +27,24 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  isModelFallbackDecisionLogEnabled,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
+import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
+import {
+  type ModelManifestNormalizationContext,
+  modelKey,
+  normalizeModelRef,
+} from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -40,6 +53,7 @@ import {
 } from "./model-selection-resolve.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -81,6 +95,18 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+};
+
+type ModelFallbackRuntimeContext = {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+  prepareAgentHarnessRuntime?: (params: {
+    provider: string;
+    model: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => Promise<void> | void;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -220,6 +246,9 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
+    if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
@@ -311,6 +340,57 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
+function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | undefined): boolean {
+  const normalized = normalizeOptionalString(runtime);
+  if (!normalized) {
+    return false;
+  }
+  return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
+}
+
+async function assertModelFallbackCandidateHarnessAvailable(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<void> {
+  if (!params.cfg) {
+    return;
+  }
+  const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
+    params.provider,
+    params.model,
+  );
+  if (isCliProvider(params.provider, params.cfg)) {
+    return;
+  }
+  const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
+  const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+    return;
+  }
+  if (
+    agentRuntime === "auto" ||
+    agentRuntime === "pi" ||
+    (agentRuntime === "codex" && agentRuntimeSource === "implicit")
+  ) {
+    return;
+  }
+  await params.prepareAgentHarnessRuntime?.({
+    provider: params.provider,
+    model: params.model,
+    agentHarnessRuntimeOverride,
+  });
+  if (!getRegisteredAgentHarness(agentRuntime)) {
+    throw new MissingAgentHarnessError(agentRuntime);
+  }
+}
+
 function recordFailedCandidateAttempt(params: {
   attempts: FallbackAttempt[];
   candidate: ModelCandidate;
@@ -357,6 +437,22 @@ function recordFailedCandidateAttempt(params: {
   });
 }
 
+function appendFailedCandidateAttempt(params: {
+  attempts: FallbackAttempt[];
+  candidate: ModelCandidate;
+  error: unknown;
+}): void {
+  const described = describeFailoverError(params.error);
+  params.attempts.push({
+    provider: params.candidate.provider,
+    model: params.candidate.model,
+    error: described.rawError ?? described.message,
+    reason: described.reason ?? "unknown",
+    status: described.status,
+    code: described.code,
+  });
+}
+
 function findLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
@@ -380,10 +476,25 @@ function throwFallbackFailureSummary(params: {
   formatAttempt: (attempt: FallbackAttempt) => string;
   soonestCooldownExpiry?: number | null;
   attribution?: FailoverAttribution;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
+
+  if (params.attribution?.sessionId) {
+    void suspendSession({
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      sessionId: params.attribution.sessionId,
+      laneId: params.attribution.lane,
+      reason: "circuit_open",
+      failedProvider: params.attempts[params.attempts.length - 1]?.provider ?? "unknown",
+      failedModel: params.attempts[params.attempts.length - 1]?.model ?? "unknown",
+    });
+  }
+
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
   throw new FallbackSummaryError(
@@ -437,18 +548,22 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   return soonest;
 }
 
-function resolveImageFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  defaultProvider: string;
-  modelOverride?: string;
-}): ModelCandidate[] {
+export function resolveImageFallbackCandidates(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    defaultProvider: string;
+    modelOverride?: string;
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addExplicitCandidate, addAllowlistedCandidate } =
     createModelCandidateCollector(allowlist);
@@ -458,6 +573,7 @@ function resolveImageFallbackCandidates(params: {
       raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
       return;
@@ -489,7 +605,7 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
-function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
   const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
   if (configuredPrimary?.trim()) {
     const aliasIndex = buildModelAliasIndex({
@@ -508,82 +624,87 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   return DEFAULT_PROVIDER;
 }
 
-function resolveFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-}): ModelCandidate[] {
+export const testing = {
+  resolveFallbackCandidates,
+  resolveImageFallbackCandidates,
+  resolveCooldownDecision,
+  resolveSessionSuspensionReason,
+} as const;
+
+function resolveFallbackCandidates(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
         cfg: params.cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
+        manifestPlugins: params.manifestPlugins,
       })
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
   const modelRaw = normalizeOptionalString(params.model) || defaultModel;
-  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
-  const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw, {
+    manifestPlugins: params.manifestPlugins,
+  });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
     defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
   const resolvedModelAlias = resolveModelRefFromString({
     raw: modelRaw,
     defaultProvider: providerRaw,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
   });
   const resolvedProviderModelAlias = resolveModelRefFromString({
     raw: `${providerRaw}/${modelRaw}`,
     defaultProvider,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
   });
+  const resolvedBareModelAlias =
+    resolvedModelAlias?.alias &&
+    (resolvedModelAlias.ref.provider === normalizedPrimary.provider ||
+      normalizedPrimary.provider === defaultProvider)
+      ? resolvedModelAlias.ref
+      : null;
   const resolvedPrimary =
-    (resolvedModelAlias?.alias ? resolvedModelAlias.ref : null) ??
     (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+    resolvedBareModelAlias ??
     normalizedPrimary;
-  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
+  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model, {
+    manifestPlugins: params.manifestPlugins,
+  });
 
   addExplicitCandidate(effectivePrimary);
 
-  const modelFallbacks = (() => {
-    if (params.fallbacksOverride !== undefined) {
-      return params.fallbacksOverride;
-    }
-    const configuredFallbacks = resolveAgentModelFallbackValues(
-      params.cfg?.agents?.defaults?.model,
-    );
-    // When user runs a different provider than config, only use configured fallbacks
-    // if the current model is already in that chain (e.g. session on first fallback).
-    if (effectivePrimary.provider !== configuredPrimary.provider) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          raw,
-          defaultProvider,
-          aliasIndex,
-        });
-        return resolved ? sameModelCandidate(resolved.ref, effectivePrimary) : false;
-      });
-      return isConfiguredFallback ? configuredFallbacks : [];
-    }
-    // Same provider: always use full fallback chain (model version differences within provider).
-    return configuredFallbacks;
-  })();
+  const modelFallbacks =
+    params.fallbacksOverride !== undefined
+      ? params.fallbacksOverride
+      : resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
       raw,
       defaultProvider,
       aliasIndex,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
       continue;
@@ -680,7 +801,7 @@ function shouldProbePrimaryDuringCooldown(params: {
 }
 
 /** @internal – exposed for unit tests only */
-export const _probeThrottleInternals = {
+export const probeThrottleInternals = {
   lastProbeAttempt,
   MIN_PROBE_INTERVAL_MS,
   PROBE_MARGIN_MS,
@@ -702,6 +823,11 @@ type CooldownDecision =
       type: "attempt";
       reason: FailoverReason;
       markProbe: boolean;
+    }
+  | {
+      type: "suspend_lanes";
+      reason: FailoverReason;
+      leaderCandidate?: ModelCandidate;
     };
 
 function resolveCooldownDecision(params: {
@@ -754,9 +880,9 @@ function resolveCooldownDecision(params: {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
-      type: "skip",
+      type: "suspend_lanes",
       reason: inferredReason,
-      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+      leaderCandidate: params.candidate,
     };
   }
 
@@ -765,9 +891,9 @@ function resolveCooldownDecision(params: {
     (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
-      type: "skip",
+      type: "suspend_lanes",
       reason: inferredReason,
-      error: `Provider ${params.candidate.provider} is in cooldown (all profiles unavailable)`,
+      leaderCandidate: params.candidate,
     };
   }
 
@@ -778,29 +904,41 @@ function resolveCooldownDecision(params: {
   };
 }
 
-export async function runWithModelFallback<T>(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  lane?: string;
-  agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-  run: ModelFallbackRunFn<T>;
-  onError?: ModelFallbackErrorHandler;
-  onFallbackStep?: ModelFallbackStepHandler;
-  classifyResult?: ModelFallbackResultClassifier<T>;
-}): Promise<ModelFallbackRunResult<T>> {
+export async function runWithModelFallback<T>(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    runId?: string;
+    sessionId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+    prepareAgentHarnessRuntime?: (params: {
+      provider: string;
+      model: string;
+      agentHarnessRuntimeOverride?: string;
+    }) => Promise<void> | void;
+    lane?: string;
+    agentDir?: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+    run: ModelFallbackRunFn<T>;
+    onError?: ModelFallbackErrorHandler;
+    onFallbackStep?: ModelFallbackStepHandler;
+    classifyResult?: ModelFallbackResultClassifier<T>;
+    skipAuthProfileRuntime?: boolean;
+  } & ModelManifestNormalizationContext,
+): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    manifestPlugins: params.manifestPlugins,
   });
   const authRuntime =
-    params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+    !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
       ? await loadModelFallbackAuthRuntime()
       : null;
   const authStore = authRuntime
@@ -815,6 +953,9 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      return;
+    }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);
@@ -823,6 +964,10 @@ export async function runWithModelFallback<T>(params: {
   const observeFailedCandidate = async (
     failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
   ) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      appendFailedCandidateAttempt(failedAttempt);
+      return;
+    }
     const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);
@@ -834,6 +979,14 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    await assertModelFallbackCandidateHarnessAvailable({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+      prepareAgentHarnessRuntime: params.prepareAgentHarnessRuntime,
+      ...candidate,
+    });
     const isPrimary = i === 0;
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
@@ -866,6 +1019,56 @@ export async function runWithModelFallback<T>(params: {
           authStore,
           profileIds,
         });
+
+        if (decision.type === "suspend_lanes") {
+          const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error,
+            reason: decision.reason,
+          });
+
+          if (params.sessionId) {
+            emitFailoverEvent({
+              sessionId: params.sessionId,
+              lane: params.lane,
+              fromProvider: candidate.provider,
+              fromModel: candidate.model,
+              reason: decision.reason,
+              suspended: true,
+            });
+            void suspendSession({
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+              sessionId: params.sessionId,
+              laneId: params.lane,
+              reason: resolveSessionSuspensionReason(decision.reason),
+              failedProvider: candidate.provider,
+              failedModel: candidate.model,
+            });
+          }
+
+          await observeDecision({
+            decision: "skip_candidate",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lane: params.lane,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            reason: decision.reason,
+            error,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+            profileCount: profileIds.length,
+          });
+          continue;
+        }
 
         if (decision.type === "skip") {
           attempts.push({
@@ -997,6 +1200,14 @@ export async function runWithModelFallback<T>(params: {
     }
     const err = attemptRun.error;
     {
+      // Local runtime coordination errors (session write-lock timeout, embedded
+      // attempt session takeover) are not provider/model failures. Aborting
+      // here prevents the fallback chain from consuming candidates retrying
+      // the same local condition and surfacing a misleading "All models
+      // failed" summary. See #83510.
+      if (isNonProviderRuntimeCoordinationError(err)) {
+        throw err;
+      }
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
         if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
@@ -1009,6 +1220,9 @@ export async function runWithModelFallback<T>(params: {
       // that may have a smaller context window and fail worse.
       const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        throw err;
+      }
+      if (isMissingAgentHarnessError(err)) {
         throw err;
       }
       const normalized =
@@ -1115,6 +1329,8 @@ export async function runWithModelFallback<T>(params: {
       candidates,
     }),
     attribution: { sessionId: params.sessionId, lane: params.lane },
+    cfg: params.cfg,
+    agentDir: params.agentDir,
   });
 }
 
@@ -1174,5 +1390,7 @@ export async function runWithImageModelFallback<T>(params: {
     lastError,
     label: "image models",
     formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+    cfg: params.cfg,
   });
 }
+export { testing as __testing };

@@ -1,10 +1,8 @@
-import type {
-  SilentReplyPolicyShape,
-  SilentReplyRewriteShape,
-} from "../shared/silent-reply-policy.js";
+import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentToolModelConfig,
   AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
@@ -19,6 +17,8 @@ import type { MemorySearchConfig } from "./types.tools.js";
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
+export type SubagentDelegationMode = "suggest" | "prefer";
+export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -34,6 +34,8 @@ export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
+  /** Optional agent execution runtime for this specific provider/model entry. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };
@@ -92,6 +94,17 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
+export type AgentRunRetriesConfig = {
+  /** Base number of run retry iterations (default: 24). */
+  base?: number;
+  /** Additional run retry iterations per fallback profile (default: 8). */
+  perProfile?: number;
+  /** Minimum limit for run retry iterations (default: 32). */
+  min?: number;
+  /** Maximum limit for run retry iterations (default: 160). */
+  max?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -147,6 +160,8 @@ export type CliBackendConfig = {
   imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
@@ -194,13 +209,13 @@ export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageModel?: AgentModelConfig;
+  imageModel?: AgentToolModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageGenerationModel?: AgentModelConfig;
+  imageGenerationModel?: AgentToolModelConfig;
   /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  videoGenerationModel?: AgentModelConfig;
+  videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  musicGenerationModel?: AgentModelConfig;
+  musicGenerationModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to
@@ -209,7 +224,7 @@ export type AgentDefaultsConfig = {
    */
   mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  pdfModel?: AgentModelConfig;
+  pdfModel?: AgentToolModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
   pdfMaxBytesMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
@@ -222,8 +237,6 @@ export type AgentDefaultsConfig = {
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
-  /** Whether disallowed silent replies should be rewritten by conversation type. */
-  silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
@@ -262,8 +275,8 @@ export type AgentDefaultsConfig = {
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
-   * - once: inject once per unique truncation signature (default)
-   * - always: inject on every run with truncation
+   * - once: inject once per unique truncation signature
+   * - always: inject on every run with truncation (default)
    */
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
@@ -294,6 +307,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Outer run loop retry iteration boundaries. */
+  runRetries?: AgentRunRetriesConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**
@@ -316,6 +331,12 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /**
+   * Detail mode for user-visible tool progress in /verbose and editable progress drafts.
+   * - explain: compact human summary (default)
+   * - raw: include raw command/detail when available
+   */
+  toolProgressDetail?: "explain" | "raw";
   /** Default reasoning level when no /reasoning directive is present. */
   reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */
@@ -345,6 +366,11 @@ export type AgentDefaultsConfig = {
    * Default: 1200.
    */
   imageMaxDimensionPx?: number;
+  /**
+   * Image compression/detail preference for image-tool media loading.
+   * Default: auto, which adapts to provider/model limits and image count.
+   */
+  imageQuality?: AgentImageQualityPreference;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
@@ -396,13 +422,13 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
-     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
      * Cron lanes are always treated as busy for heartbeat deferral.
      */
     skipWhenBusy?: boolean;
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
+     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
      *
      * Default: false (only the final heartbeat payload is delivered).
      */
@@ -412,7 +438,9 @@ export type AgentDefaultsConfig = {
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
-    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
+    delegationMode?: SubagentDelegationMode;
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
@@ -428,7 +456,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;

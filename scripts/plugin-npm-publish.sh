@@ -84,6 +84,11 @@ build_package_runtime() {
   node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
 }
 
+check_package_shrinkwrap() {
+  log "Package-local shrinkwrap check: ${package_dir}"
+  node scripts/generate-npm-shrinkwrap.mjs --package-dir "${package_dir}" --check >&2
+}
+
 mirror_auth_token=""
 case "${mirror_auth_source}" in
   node-auth-token)
@@ -132,9 +137,11 @@ if [[ "${mode}" == "--dry-run" ]]; then
 fi
 
 build_package_runtime
+check_package_shrinkwrap
 
 if [[ "${mode}" == "--pack-dry-run" ]]; then
-  node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
+  OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
     npm pack --dry-run --json --ignore-scripts
   exit 0
 fi
@@ -143,7 +150,8 @@ fi
   cleanup_files=()
   trap 'rm -f "${cleanup_files[@]}"' EXIT
   run_with_manifest_overlay() {
-    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+    OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+      node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
   }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then
@@ -166,8 +174,13 @@ fi
     for dist_tag in "${mirror_dist_tags[@]}"; do
       [[ -n "${dist_tag}" ]] || continue
       echo "Mirroring ${package_name}@${package_version} onto dist-tag ${dist_tag}"
-      NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
-        npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"
+      if ! NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
+        npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"; then
+        if [[ "${mirror_auth_requirement}" == "required" ]]; then
+          exit 1
+        fi
+        echo "Warning: optional npm dist-tag mirror failed for ${package_name}@${package_version} -> ${dist_tag}; published package remains live." >&2
+      fi
     done
   fi
 )

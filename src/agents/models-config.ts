@@ -7,13 +7,20 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
@@ -24,21 +31,6 @@ async function readFileMtimeMs(pathname: string): Promise<number | null> {
   } catch {
     return null;
   }
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return `{${entries
-    .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
-    .join(",")}}`;
 }
 
 async function buildModelsJsonFingerprint(params: {
@@ -82,7 +74,15 @@ async function readExistingModelsFile(pathname: string): Promise<{
   parsed: unknown;
 }> {
   try {
-    const raw = await fs.readFile(pathname, "utf8");
+    const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
+      path.basename(pathname),
+    );
+    if (raw === null) {
+      return {
+        raw: "",
+        parsed: null,
+      };
+    }
     return {
       raw,
       parsed: JSON.parse(raw) as unknown,
@@ -105,9 +105,7 @@ export async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
 ): Promise<void> {
-  const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, contents, { mode: 0o600 });
-  await fs.rename(tempPath, targetPath);
+  await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
 }
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {
@@ -176,11 +174,13 @@ export async function ensureOpenClawModelsJson(
       : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
-    getCurrentPluginMetadataSnapshot({
+    resolvePluginMetadataSnapshot({
       config: cfg,
+      env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: workspaceDir === undefined,
     });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
+  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const targetPath = path.join(agentDir, "models.json");
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,

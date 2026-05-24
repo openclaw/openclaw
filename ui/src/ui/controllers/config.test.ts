@@ -55,6 +55,14 @@ function createRequestWithConfigGet() {
   });
 }
 
+function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = request.mock.calls[index];
+  if (!call) {
+    throw new Error("expected client request call");
+  }
+  return call;
+}
+
 describe("applyConfigSnapshot", () => {
   it("does not clobber form edits while dirty", () => {
     const state = createState();
@@ -78,13 +86,17 @@ describe("applyConfigSnapshot", () => {
   it("updates config form when clean", () => {
     const state = createState();
     applyConfigSnapshot(state, {
-      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local", runtimeOnly: true } },
       valid: true,
       issues: [],
       raw: "{}",
     });
 
     expect(state.configForm).toEqual({ gateway: { mode: "local" } });
+    expect(state.configSnapshot?.config).toEqual({
+      gateway: { mode: "local", runtimeOnly: true },
+    });
   });
 
   it("sets configRawOriginal when clean for change detection", () => {
@@ -176,7 +188,8 @@ describe("applyConfigSnapshot", () => {
     state.configFormMode = "raw";
 
     applyConfigSnapshot(state, {
-      config: { gateway: { mode: "local" } },
+      sourceConfig: { gateway: { mode: "local" } },
+      config: { gateway: { mode: "local", runtimeOnly: true } },
       valid: true,
       issues: [],
       raw: null,
@@ -213,7 +226,11 @@ describe("updateConfigFormValue", () => {
   it("seeds from snapshot when form is null", () => {
     const state = createState();
     state.configSnapshot = {
-      config: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
+      sourceConfig: { channels: { telegram: { botToken: "t" } }, gateway: { mode: "local" } },
+      config: {
+        channels: { telegram: { botToken: "t" } },
+        gateway: { mode: "local", runtimeOnly: true },
+      },
       valid: true,
       issues: [],
       raw: "{}",
@@ -258,6 +275,104 @@ describe("updateConfigFormValue", () => {
 
     updateConfigFormValue(state, ["gateway", "port"], 18789);
 
+    expect(state.configFormDirty).toBe(false);
+  });
+
+  it("removes only automatically added plugin allow entries", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek"],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+    updateConfigFormValue(state, ["plugins", "allow"], ["openai", "deepseek", "firecrawl"]);
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek", "firecrawl"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+  });
+
+  it("preserves empty plugin allowlists when enabling a plugin", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: [],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
     expect(state.configFormDirty).toBe(false);
   });
 });
@@ -392,7 +507,7 @@ describe("resetConfigPendingChanges", () => {
     resetConfigPendingChanges(state);
 
     expect(state.configFormDirty).toBe(false);
-    expect(state.configForm).toEqual({});
+    expect(state.configForm).toStrictEqual({});
     expect(state.configRaw).toBe("");
   });
 });
@@ -573,8 +688,9 @@ describe("applyConfig", () => {
 
     await applyConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.apply");
-    const params = request.mock.calls[0]?.[1] as {
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as {
       raw: string;
       baseHash: string;
       sessionKey: string;
@@ -615,8 +731,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     expect(params.baseHash).toBe("hash-original");
   });
 
@@ -645,8 +762,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown; enabled: unknown };
     };
@@ -670,13 +788,143 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown };
     };
     expect(parsed.gateway.port).toBe("18789");
     expect(params.baseHash).toBe("hash-save-2");
+  });
+
+  it("drops stale loaded redacted placeholders before config.set in form mode", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    state.configFormOriginal = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    state.configRawOriginal = '{\n  gateway: {\n    mode: "remote"\n  }\n}\n';
+    state.configSnapshot = { hash: "hash-save-redacted" };
+
+    await saveConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      gateway: { mode: string; remote?: { token?: string } };
+    };
+    expect(parsed).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+    expect(params.baseHash).toBe("hash-save-redacted");
+  });
+
+  it("submits source config instead of runtime-materialized provider defaults", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    applyConfigSnapshot(state, {
+      hash: "hash-source-provider",
+      sourceConfig: {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openai" },
+            },
+          },
+        },
+        ui: { theme: "light" },
+      },
+      config: {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openai" },
+              baseUrl: "",
+            },
+          },
+        },
+        ui: { theme: "light" },
+      },
+      valid: true,
+      issues: [],
+      raw: '{\n  "models": {\n    "providers": {\n      "openai": {\n        "agentRuntime": { "id": "openai" }\n      }\n    }\n  },\n  "ui": { "theme": "light" }\n}\n',
+    });
+
+    updateConfigFormValue(state, ["ui", "theme"], "dark");
+    await saveConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      models: { providers: { openai: { agentRuntime: { id: string }; baseUrl?: string } } };
+      ui: { theme: string };
+    };
+    expect(parsed.models.providers.openai.agentRuntime.id).toBe("openai");
+    expect(parsed.models.providers.openai).not.toHaveProperty("baseUrl");
+    expect(parsed.ui.theme).toBe("dark");
+    expect(params.baseHash).toBe("hash-source-provider");
+  });
+
+  it("drops stale loaded redacted placeholders before config.apply and keeps session key", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:web:dm:test";
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    state.configFormOriginal = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    state.configRawOriginal = '{\n  ui: { theme: "dark" }\n}\n';
+    state.configSnapshot = { hash: "hash-apply-redacted" };
+
+    await applyConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as { raw: string; baseHash: string; sessionKey: string };
+    expect(JSON.parse(params.raw)).toEqual({
+      ui: { theme: "dark" },
+    });
+    expect(params.baseHash).toBe("hash-apply-redacted");
+    expect(params.sessionKey).toBe("agent:main:web:dm:test");
   });
 });
 

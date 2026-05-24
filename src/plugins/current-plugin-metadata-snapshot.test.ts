@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  captureCurrentPluginMetadataSnapshotState,
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
+  restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -14,11 +16,13 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 function createSnapshot(
   params: {
     config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    registrySource?: PluginMetadataSnapshot["registrySource"];
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index: {
       version: 1,
@@ -87,6 +91,19 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
   });
 
+  it("can opt into reusing the stored workspace scope for unscoped control-plane readers", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/a" });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        config,
+        allowWorkspaceScopedSnapshot: true,
+      }),
+    ).toBe(snapshot);
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
@@ -98,6 +115,32 @@ describe("current plugin metadata snapshot", () => {
         config: { plugins: { load: { paths: ["/plugins/two"] } } },
       }),
     ).toBeUndefined();
+  });
+
+  it("rejects configless default-discovery reuse for snapshots created with load paths", () => {
+    const config = { plugins: { allow: ["demo"], load: { paths: ["/plugins/one"] } } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts configless default-discovery reuse for snapshots created without load paths", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        requireDefaultDiscoveryContext: true,
+      }),
+    ).toBe(snapshot);
   });
 
   it("rejects a current snapshot when env-resolved plugin load paths change", () => {
@@ -147,11 +190,55 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot({ config: autoEnabledConfig })).toBeUndefined();
   });
 
+  it("accepts explicit compatible configs for gateway runtime reuse", () => {
+    const sourceConfig = { channels: { telegram: { botToken: "token" } } };
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: { allow: ["telegram"] },
+    };
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir: "/workspace" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config: sourceConfig,
+      compatibleConfigs: [runtimeConfig],
+      workspaceDir: "/workspace",
+    });
+
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: sourceConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir: "/workspace" }),
+    ).toBe(snapshot);
+  });
+
   it("clears the current snapshot", () => {
     setCurrentPluginMetadataSnapshot(createSnapshot());
     clearCurrentPluginMetadataSnapshot();
 
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("does not keep derived registry snapshots as the current snapshot", () => {
+    const persisted = createSnapshot({ registrySource: "persisted" });
+    setCurrentPluginMetadataSnapshot(persisted);
+    setCurrentPluginMetadataSnapshot(createSnapshot({ registrySource: "derived" }));
+
+    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("restores a captured current snapshot state", () => {
+    const firstConfig = { plugins: { allow: ["first"] } };
+    const secondConfig = { plugins: { allow: ["second"] } };
+    const first = createSnapshot({ config: firstConfig });
+    const second = createSnapshot({ config: secondConfig });
+    setCurrentPluginMetadataSnapshot(first, { config: firstConfig });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(second, { config: secondConfig });
+    restoreCurrentPluginMetadataSnapshotState(captured);
+
+    expect(getCurrentPluginMetadataSnapshot({ config: firstConfig })).toBe(first);
+    expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
   });
 
   it("clears the current snapshot when the persisted installed index changes", () => {

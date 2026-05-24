@@ -159,8 +159,18 @@ export const ko: TranslationMap = {
     store: "저장소: {path}",
     active: "활성",
     limit: "제한",
+    filters: "필터",
+    showFilters: "필터 표시",
+    hideFilters: "필터 숨기기",
+    sourceFilters: "세션 소스 필터",
     global: "전역",
     unknown: "알 수 없음",
+    showArchived: "보관된 세션 표시",
+    activeTooltip: "최근 {count}분 이내에 업데이트됨.",
+    limitTooltip: "로드할 최대 세션 수.",
+    globalTooltip: "전역 세션 포함.",
+    unknownTooltip: "알 수 없는 세션 포함.",
+    showArchivedTooltip: "보관된 세션 포함.",
     minutesPlaceholder: "분",
     searchPlaceholder: "키, 에이전트, 레이블, 종류로 필터링…",
     selected: "{count}개 선택됨",
@@ -179,6 +189,8 @@ export const ko: TranslationMap = {
     verbose: "상세",
     reasoning: "추론",
     noSessions: "세션을 찾을 수 없습니다.",
+    noSessionsMatchFilters: "필터와 일치하는 세션이 없습니다.",
+    showAll: "모두 보기",
     inherit: "상속",
     defaultOption: "기본값({value})",
     offExplicit: "꺼짐(명시적)",
@@ -191,13 +203,34 @@ export const ko: TranslationMap = {
     autoThreshold: "자동 임계값",
     overflowRetry: "오버플로 재시도",
     timeoutRetry: "타임아웃 재시도",
-    tokenRange: "{before} → {after} 토큰",
+    tokenRange: "{before} to {after} 토큰",
     tokensBefore: "{count} 토큰 전",
     tokenDeltaUnavailable: "토큰 델타를 사용할 수 없음",
     checkpoints: "{count}개 체크포인트",
     checkpoint: "{count}개 체크포인트",
-    showCheckpoints: "체크포인트 표시",
-    hideCheckpoints: "체크포인트 숨기기",
+    showSessionDetails: "{count}의 세션 세부 정보 표시",
+    hideSessionDetails: "{count}의 세션 세부 정보 숨기기",
+    sessionDetails: "세션 세부 정보",
+    compactionHistory: "압축 기록",
+    status: "상태",
+    statusLive: "실시간",
+    statusIdle: "유휴",
+    statusUnknown: "알 수 없음",
+    statusRunning: "실행 중",
+    statusDone: "완료",
+    statusFailed: "실패",
+    statusKilled: "종료됨",
+    statusTimeout: "시간 초과",
+    model: "모델",
+    provider: "제공업체",
+    runtime: "런타임",
+    surface: "표면",
+    subject: "제목",
+    room: "방",
+    space: "스페이스",
+    sessionId: "세션 ID",
+    activeRun: "활성 실행",
+    archived: "보관됨",
     loadingCheckpoints: "체크포인트 불러오는 중…",
     noCheckpoints: "이 세션에 기록된 압축 체크포인트가 없습니다.",
     noSummary: "캡처된 요약이 없습니다.",
@@ -313,6 +346,12 @@ export const ko: TranslationMap = {
     eventLogTitle: "이벤트 로그",
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
+  },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
   },
   execApproval: {
     expiresIn: "expires in {time}",
@@ -658,10 +697,6 @@ export const ko: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
-    },
     common: {
       emptyValue: "—",
       unknown: "알 수 없음",
@@ -680,6 +715,16 @@ export const ko: TranslationMap = {
       today: "오늘",
       last7d: "7일",
       last30d: "30일",
+      last90d: "90일",
+      last1y: "1년",
+      all: "전체",
+    },
+    scope: {
+      instance: "현재 인스턴스",
+      instanceHint: "각 논리 세션의 활성 세션 id만 표시합니다.",
+      family: "기록 계보",
+      familyHint: "알려진 순환된 transcript 기반 세션 id를 집계합니다.",
+      familyIncluded: "기록 계보에 {count}개의 세션 인스턴스가 포함됩니다.",
     },
     filters: {
       title: "필터",
@@ -721,6 +766,16 @@ export const ko: TranslationMap = {
       sessionsCsv: "세션 CSV",
       dailyCsv: "일별 CSV",
       json: "JSON",
+    },
+    cacheStatus: {
+      warning:
+        "사용량 캐시가 백그라운드에서 다시 빌드되고 있습니다. 표시된 합계가 최신이 아닐 수 있습니다.",
+      title: "{status}: 대기 중 {pending}, 오래됨 {stale}, 캐시됨 {cached}",
+      status: {
+        refreshing: "새로 고치는 중",
+        stale: "오래됨",
+        partial: "부분적",
+      },
     },
     empty: {
       title: "날짜 범위부터 시작하세요",
@@ -888,6 +943,93 @@ export const ko: TranslationMap = {
     showPassword: "비밀번호 표시",
     hidePassword: "비밀번호 숨기기",
     togglePasswordVisibility: "비밀번호 표시 여부 전환",
+    failure: {
+      rawError: "원시 오류",
+      docsAuth: "Control UI 인증 문서",
+      docsPairing: "장치 페어링 문서",
+      docsInsecure: "안전하지 않은 HTTP 문서",
+      authRequired: {
+        title: "인증 필요",
+        summary:
+          "Gateway에 연결할 수 있지만 이 브라우저가 연결되기 전에 일치하는 토큰 또는 비밀번호가 필요합니다.",
+        stepPaste: "openclaw dashboard --no-open의 토큰을 붙여넣거나 구성된 비밀번호를 입력하세요.",
+        stepGenerate:
+          "토큰이 구성되어 있지 않으면 Gateway 호스트에서 openclaw doctor --generate-gateway-token을 실행하세요.",
+        stepConnect: "자격 증명을 업데이트한 뒤 Connect를 다시 클릭하세요.",
+      },
+      authFailed: {
+        title: "인증이 일치하지 않음",
+        summary:
+          "제공한 자격 증명이 거부되었습니다. 가장 흔한 원인은 오래된 토큰이거나 다른 Gateway URL에서 복사한 토큰입니다.",
+        stepDashboard:
+          "openclaw dashboard --no-open을 실행하고 새 URL을 열거나 해당 토큰을 붙여넣으세요.",
+        stepReplace:
+          "오래된 토큰/비밀번호 값을 교체하세요. 다른 Gateway URL의 토큰을 재사용하지 마세요.",
+        stepMode:
+          "한 번에 하나의 일치하는 인증 모드만 사용하세요. 토큰 모드에는 gateway token, 비밀번호 모드에는 비밀번호를 사용합니다.",
+      },
+      rateLimited: {
+        title: "실패한 시도가 너무 많음",
+        summary: "Gateway가 이 클라이언트의 인증 시도를 일시적으로 제한하고 있습니다.",
+        stepStop: "이 탭에서 잠시 재시도를 중지하세요.",
+        stepWait: "인증 제한기가 식을 때까지 기다린 뒤 수정된 자격 증명으로 다시 연결하세요.",
+        stepCheckClients:
+          "공유 호스트라면 다른 클라이언트가 잘못된 재시도를 반복하는지 확인하세요.",
+      },
+      pairing: {
+        title: "장치 페어링 필요",
+        scopeTitle: "Scope 업그레이드 대기 중",
+        roleTitle: "역할 업그레이드 대기 중",
+        metadataTitle: "장치 새로 고침 대기 중",
+        summary: "이 브라우저가 Control UI를 사용하려면 Gateway 호스트의 일회성 승인이 필요합니다.",
+        upgradeSummary:
+          "이 브라우저는 이미 알려져 있지만 요청한 액세스가 변경되어 새 승인이 필요합니다.",
+        stepList: "Gateway 호스트에서 openclaw devices list를 실행하세요.",
+        stepApproveId: "이 요청을 승인하세요: openclaw devices approve {requestId}.",
+        stepApprove: "해당 목록에서 대기 중인 브라우저/장치 요청을 승인하세요.",
+        stepReconnect: "승인이 완료된 뒤 다시 연결하세요.",
+      },
+      insecure: {
+        title: "안전한 브라우저 컨텍스트 필요",
+        summary:
+          "이 페이지는 일반 HTTP에서 실행 중이므로 브라우저가 Gateway가 기대하는 장치 ID를 만들 수 없습니다.",
+        stepHttps:
+          "HTTPS/Tailscale Serve를 사용하거나 Gateway 호스트에서 http://127.0.0.1:18789를 여세요.",
+        stepLocalCompat:
+          "로컬 토큰 전용 호환성을 위해 gateway.controlUi.allowInsecureAuth: true를 설정하세요.",
+        stepAvoidDisable: "원격 HTTP 액세스를 위해 장치 인증을 비활성화하지 마세요.",
+      },
+      origin: {
+        title: "브라우저 origin이 허용되지 않음",
+        summary: "Gateway가 Control UI 연결을 수락하기 전에 이 페이지 origin을 거부했습니다.",
+        stepAllowedOrigins: "이 브라우저 origin을 gateway.controlUi.allowedOrigins에 추가하세요.",
+        stepFullOrigin:
+          "와일드카드 패턴이 아니라 http://localhost:5173 같은 전체 origin을 사용하세요.",
+        stepRestart: "허용 origin을 변경한 뒤 Gateway를 다시 시작하거나 다시 로드하세요.",
+      },
+      protocol: {
+        title: "프로토콜 불일치",
+        summary:
+          "제공된 Control UI와 실행 중인 Gateway가 지원되는 연결 프로토콜에 동의하지 않습니다.",
+        stepDashboard:
+          "UI와 Gateway가 같은 설치에서 오도록 openclaw dashboard로 제공된 dashboard를 다시 여세요.",
+        stepDevUi:
+          "pnpm ui:dev를 사용하는 경우 현재 checkout 기준으로 개발 UI를 다시 빌드하거나 다시 시작하세요.",
+        stepRestart:
+          "OpenClaw를 업데이트한 뒤 Gateway를 다시 시작하여 현재 프로토콜을 제공하게 하세요.",
+      },
+      network: {
+        title: "연결할 수 없음",
+        summary:
+          "브라우저가 Gateway 연결을 완료할 수 없습니다. 자격 증명을 다시 시도하기 전에 대상과 전송 방식을 확인하세요.",
+        stepGateway:
+          "openclaw status 또는 openclaw gateway run으로 Gateway가 실행 중인지 확인하세요.",
+        stepUrl:
+          "WebSocket URL을 확인하고 Gateway가 HTTPS/Tailscale Serve 뒤에 있으면 wss://를 사용하세요.",
+        stepDashboard:
+          "openclaw dashboard --no-open으로 dashboard를 다시 열어 현재 URL과 인증 세부 정보를 다시 복사하세요.",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
@@ -895,6 +1037,10 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    autoScrollMode: "자동 스크롤 모드",
+    autoScrollAlways: "항상",
+    autoScrollNearBottom: "하단 근처",
+    autoScrollOff: "끔",
     focusToggle: "집중 모드 전환(사이드바 + 페이지 헤더 숨기기)",
     hideCronSessions: "Cron 세션 숨기기",
     showCronSessions: "Cron 세션 표시",
@@ -909,6 +1055,48 @@ export const ko: TranslationMap = {
     updating: "업데이트 중…",
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
+    switchedSession: "{session}(으)로 전환됨",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "내보내기",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stillListening: "계속 듣는 중",
+      talkTranscript: "음성 대화 기록",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "에이전트별로 세션 필터링",
+      session: "Chat session",
+      sessionSearch: "세션 검색",
+      clearSessionSearch: "세션 검색 지우기",
+      loadMoreSessions: "세션 더 불러오기",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "영어",
@@ -1017,6 +1205,9 @@ export const ko: TranslationMap = {
       ascending: "오름차순",
       descending: "내림차순",
       reset: "재설정",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "일치하는 작업이 없습니다.",
       loading: "로딩 중...",
       loadMore: "작업 더 불러오기",
@@ -1052,6 +1243,7 @@ export const ko: TranslationMap = {
     form: {
       editJob: "작업 편집",
       newJob: "새 작업",
+      advancedJob: "Advanced job",
       updateSubtitle: "선택한 예약 작업을 업데이트합니다.",
       createSubtitle: "예약된 웨이크업 또는 에이전트 실행을 생성합니다.",
       required: "필수",

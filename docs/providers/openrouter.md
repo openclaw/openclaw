@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
@@ -58,6 +59,7 @@ Bundled fallback examples:
 | --------------------------------- | ---------------------------- |
 | `openrouter/auto`                 | OpenRouter automatic routing |
 | `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
+| `openrouter/moonshotai/kimi-k2.5` | Kimi K2.5 via MoonshotAI     |
 
 ## Image generation
 
@@ -106,6 +108,34 @@ second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
 ratios. Video-to-video is not registered for OpenRouter because the upstream
 video generation API currently accepts text and image references.
 
+## Music generation
+
+OpenRouter can also back the `music_generate` tool through chat completions
+audio output. Use an OpenRouter audio model under
+`agents.defaults.musicGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "openrouter/google/lyria-3-pro-preview",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+The bundled OpenRouter music provider defaults to
+`google/lyria-3-pro-preview` and also exposes
+`google/lyria-3-clip-preview`. OpenClaw sends `modalities: ["text",
+"audio"]`, enables streaming, collects the streamed audio chunks, and saves
+the result as generated media for channel delivery. Reference images are
+accepted for Lyria models through the shared `music_generate image=...`
+parameter.
+
 ## Text-to-speech
 
 OpenRouter can also be used as a TTS provider through its OpenAI-compatible
@@ -132,6 +162,29 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
 If `messages.tts.providers.openrouter.apiKey` is omitted, TTS reuses
 `models.providers.openrouter.apiKey`, then `OPENROUTER_API_KEY`.
 
+## Speech-to-text (inbound audio)
+
+OpenRouter can transcribe inbound voice/audio attachments through the shared
+`tools.media.audio` path using its STT endpoint (`/audio/transcriptions`).
+This applies to any channel plugin that forwards inbound voice/audio into
+media understanding preflight.
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "openrouter", model: "openai/whisper-large-v3-turbo" }],
+      },
+    },
+  },
+}
+```
+
+OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
+`input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
+
 ## Authentication and headers
 
 OpenRouter uses a Bearer token with your API key under the hood.
@@ -139,11 +192,11 @@ OpenRouter uses a Bearer token with your API key under the hood.
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:
 
-| Header                    | Value                 |
-| ------------------------- | --------------------- |
-| `HTTP-Referer`            | `https://openclaw.ai` |
-| `X-OpenRouter-Title`      | `OpenClaw`            |
-| `X-OpenRouter-Categories` | `cli-agent`           |
+| Header                    | Value                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `HTTP-Referer`            | `https://openclaw.ai`                                                                                  |
+| `X-OpenRouter-Title`      | `OpenClaw`                                                                                             |
+| `X-OpenRouter-Categories` | `cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent` |
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
@@ -153,6 +206,39 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
 ## Advanced configuration
 
 <AccordionGroup>
+  <Accordion title="Response caching">
+    OpenRouter response caching is opt-in. Enable it per OpenRouter model with
+    model params:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/auto": {
+              params: {
+                responseCache: true,
+                responseCacheTtlSeconds: 300,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw sends `X-OpenRouter-Cache: true` and, when configured,
+    `X-OpenRouter-Cache-TTL`. `responseCacheClear: true` forces a refresh for
+    the current request and stores the replacement response. Snake_case aliases
+    (`response_cache`, `response_cache_ttl_seconds`, and
+    `response_cache_clear`) are also accepted.
+
+    This is separate from provider prompt caching and from OpenRouter's
+    Anthropic `cache_control` markers. It is only applied on verified
+    `openrouter.ai` routes, not custom proxy base URLs.
+
+  </Accordion>
+
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep the
     OpenRouter-specific Anthropic `cache_control` markers that OpenClaw uses for
@@ -178,7 +264,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     On verified OpenRouter routes, `openrouter/deepseek/deepseek-v4-flash` and
     `openrouter/deepseek/deepseek-v4-pro` fill missing `reasoning_content` on
     replayed assistant turns so thinking/tool conversations keep DeepSeek V4's
-    required follow-up shape.
+    required follow-up shape. OpenClaw sends OpenRouter-supported
+    `reasoning_effort` values for these routes; `xhigh` is the highest advertised
+    level, and stale `max` overrides are mapped to `xhigh`.
   </Accordion>
 
   <Accordion title="OpenAI-only request shaping">
@@ -194,8 +282,58 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Provider routing metadata">
-    If you pass OpenRouter provider routing under model params, OpenClaw forwards
-    it as OpenRouter routing metadata before the shared stream wrappers run.
+    OpenRouter supports a `provider` request object for underlying provider
+    routing. Configure a default policy for all OpenRouter text-model requests
+    with `models.providers.openrouter.params.provider`:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openrouter: {
+            params: {
+              provider: {
+                sort: "latency",
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw forwards that object to OpenRouter as the request `provider`
+    payload. Use OpenRouter's documented snake_case fields, including `sort`,
+    `only`, `ignore`, `order`, `allow_fallbacks`, `require_parameters`,
+    `data_collection`, `quantizations`, `max_price`, `preferred_max_latency`,
+    `preferred_min_throughput`, `zdr`, and `enforce_distillable_text`.
+
+    Per-model params still override the provider-wide routing object:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-6": {
+              params: {
+                provider: {
+                  order: ["anthropic"],
+                  allow_fallbacks: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    This only applies on OpenRouter chat-completions routes. Direct Anthropic,
+    Google, OpenAI, or custom provider routes ignore OpenRouter routing params.
+
   </Accordion>
 </AccordionGroup>
 

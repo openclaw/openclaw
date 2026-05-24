@@ -1,4 +1,4 @@
-import { type Api, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -27,7 +27,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
-  hasAuthForProvider,
+  hasProviderAuthForTool,
   hasToolModelConfig,
   resolveDefaultModelRef,
   type ToolModelConfig,
@@ -135,6 +135,7 @@ type CapabilityProvider = {
   id: string;
   aliases?: string[];
   defaultModel?: string;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -157,11 +158,41 @@ function findCapabilityProviderById<T extends CapabilityProvider>(params: {
   );
 }
 
+function parseCapabilityModelRefForProviders(params: {
+  providers: CapabilityProvider[];
+  raw?: string;
+  parseModelRef: ParseGenerationModelRef;
+}): GenerationModelRef | null {
+  const raw = normalizeOptionalString(params.raw);
+  if (!raw) {
+    return null;
+  }
+  const parsed = params.parseModelRef(raw);
+  if (
+    parsed &&
+    findCapabilityProviderById({
+      providers: params.providers,
+      providerId: parsed.provider,
+    })
+  ) {
+    return parsed;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((model) => normalizeOptionalString(model) === raw);
+  });
+  if (provider) {
+    return { provider: provider.id, model: raw };
+  }
+  return parsed;
+}
+
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: T[];
   provider?: T;
   providerId?: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -173,8 +204,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({
+      ? hasProviderAuthForTool({
           provider: params.providerId,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         })
@@ -186,8 +219,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({
+  return hasProviderAuthForTool({
     provider: provider.id,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
@@ -200,7 +235,16 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   parseModelRef: ParseGenerationModelRef;
 }): T | undefined {
   const selectedRef =
-    params.parseModelRef(params.modelOverride) ?? params.parseModelRef(params.modelConfig.primary);
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelOverride,
+      parseModelRef: params.parseModelRef,
+    }) ??
+    parseCapabilityModelRefForProviders({
+      providers: params.providers,
+      raw: params.modelConfig.primary,
+      parseModelRef: params.parseModelRef,
+    });
   if (!selectedRef) {
     return undefined;
   }
@@ -212,6 +256,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
 
 function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
@@ -228,6 +273,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
         providers: params.providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       })
@@ -270,6 +316,7 @@ function resolveCapabilityModelCandidatesForTool(params: {
 
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
@@ -287,10 +334,13 @@ export function resolveCapabilityModelConfigForTool(params: {
   };
   return buildToolModelConfigFromCandidates({
     explicit,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
       providers: getProviders(),
@@ -300,6 +350,7 @@ export function resolveCapabilityModelConfigForTool(params: {
         providers: getProviders(),
         providerId,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -328,6 +379,7 @@ export function hasGenerationToolAvailability(params: {
         providers,
         provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -357,8 +409,10 @@ export function hasGenerationToolAvailability(params: {
     contract: params.providerKey,
     config: params.cfg,
   }).some((providerId) =>
-    hasAuthForProvider({
+    hasProviderAuthForTool({
       provider: providerId,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
     }),

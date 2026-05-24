@@ -35,7 +35,9 @@ describe("plugin contract registry", () => {
 
   it("loads bundled non-provider capability registries without import-time failure", () => {
     expect(providerContractLoadError).toBeUndefined();
-    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+    expect(Array.from(pluginRegistrationContractRegistry)).toStrictEqual(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+    );
   });
 
   it.each([
@@ -59,6 +61,11 @@ describe("plugin contract registry", () => {
       name: "does not duplicate bundled media provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
+    },
+    {
+      name: "does not duplicate bundled meeting-notes source provider ids",
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.meetingNotesSourceProviderIds),
     },
     {
       name: "does not duplicate bundled realtime transcription provider ids",
@@ -99,14 +106,26 @@ describe("plugin contract registry", () => {
       const plugin = registry.plugins.find(
         (entry) => entry.origin === "bundled" && entry.id === pluginId,
       );
-      expect(plugin?.providerAuthChoices).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            provider: pluginId,
-            onboardingScopes: ["image-generation"],
-          }),
-        ]),
-      );
+      expect(plugin?.providerAuthChoices).toEqual([
+        {
+          provider: pluginId,
+          method: "api-key",
+          choiceId: pluginId === "alibaba" ? "alibaba-model-studio-api-key" : "runway-api-key",
+          choiceLabel: pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+          groupId: pluginId,
+          groupLabel: pluginId === "alibaba" ? "Alibaba Model Studio" : "Runway",
+          groupHint: pluginId === "alibaba" ? "DashScope / Model Studio API key" : "API key",
+          onboardingScopes: ["image-generation"],
+          optionKey: pluginId === "alibaba" ? "alibabaModelStudioApiKey" : "runwayApiKey",
+          cliFlag: pluginId === "alibaba" ? "--alibaba-model-studio-api-key" : "--runway-api-key",
+          cliOption:
+            pluginId === "alibaba"
+              ? "--alibaba-model-studio-api-key <key>"
+              : "--runway-api-key <key>",
+          cliDescription:
+            pluginId === "alibaba" ? "Alibaba Model Studio API key" : "Runway API key",
+        },
+      ]);
     }
   });
 
@@ -116,18 +135,22 @@ describe("plugin contract registry", () => {
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
 
-    expect(plugin?.providerAuthChoices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          provider: "github-copilot",
-          method: "device",
-          choiceId: "github-copilot",
-          optionKey: "githubCopilotToken",
-          cliFlag: "--github-copilot-token",
-          cliOption: "--github-copilot-token <token>",
-        }),
-      ]),
-    );
+    expect(plugin?.providerAuthChoices).toEqual([
+      {
+        provider: "github-copilot",
+        method: "device",
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        choiceHint: "Device login with your GitHub account",
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub + local proxy",
+        optionKey: "githubCopilotToken",
+        cliFlag: "--github-copilot-token",
+        cliOption: "--github-copilot-token <token>",
+        cliDescription: "GitHub Copilot OAuth token",
+      },
+    ]);
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {
@@ -158,6 +181,17 @@ describe("plugin contract registry", () => {
       predicate: (plugin) =>
         plugin.origin === "bundled" &&
         (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
+    });
+  });
+
+  it("covers every bundled meeting-notes source plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.meetingNotesSourceProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.meetingNotesSourceProviders?.length ?? 0) > 0,
     });
   });
 

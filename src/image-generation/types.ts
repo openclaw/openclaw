@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedImageAsset = {
@@ -75,6 +76,7 @@ export type ImageGenerationRequest = {
   background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
   providerOptions?: ImageGenerationProviderOptions;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type ImageGenerationResult = {
@@ -125,6 +127,8 @@ export type ImageGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;

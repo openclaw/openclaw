@@ -1,11 +1,16 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
-import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
@@ -13,11 +18,13 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
 type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -25,13 +32,16 @@ export type ToolCallSummary = {
   meta?: string;
   mutatingAction: boolean;
   actionFingerprint?: string;
+  fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
+  acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
+  execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -62,6 +72,8 @@ export type EmbeddedPiSubscribeState = {
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
+  lastDeliveredBlockReplyText?: string;
+  toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
@@ -85,6 +97,8 @@ export type EmbeddedPiSubscribeState = {
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
@@ -92,6 +106,7 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
+  messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -99,6 +114,7 @@ export type EmbeddedPiSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
     "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
@@ -181,18 +197,22 @@ type ToolHandlerParams = Pick<
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onExecutionPhase"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "toolProgressDetail"
 >;
 
 type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "acceptedSessionSpawns"
   | "toolSummaryById"
+  | "execLiveUpdateStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"
@@ -208,10 +228,12 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
+  | "messagingToolSourceReplyPayloads"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "toolExecutionSinceLastBlockReply"
 >;
 
 export type ToolHandlerContext = {
@@ -229,6 +251,6 @@ export type ToolHandlerContext = {
 };
 
 export type EmbeddedPiSubscribeEvent =
-  | AgentEvent
+  | AgentSessionEvent
   | { type: string; [k: string]: unknown }
   | { type: "message_start"; message: AgentMessage };

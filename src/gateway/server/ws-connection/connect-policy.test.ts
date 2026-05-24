@@ -135,6 +135,36 @@ describe("ws connect policy", () => {
         isControlUi: false,
         controlUiAuthPolicy: policy,
         trustedProxyAuthOk: false,
+        localBackendSelfPairingOk: true,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("allow");
+
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "node",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
+        localBackendSelfPairingOk: true,
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: false,
+        isLocalClient: true,
+      }).kind,
+    ).toBe("reject-device-required");
+
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
+        controlUiAuthPolicy: policy,
+        trustedProxyAuthOk: false,
         sharedAuthOk: false,
         authOk: false,
         hasSharedAuth: true,
@@ -224,7 +254,7 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(bypass, "operator", false)).toBe(true);
     expect(shouldSkipControlUiPairing(bypass, "node", false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, "operator", false)).toBe(false);
-    expect(shouldSkipControlUiPairing(strict, "operator", true)).toBe(true);
+    expect(shouldSkipControlUiPairing(strict, "operator", true)).toBe(false);
   });
 
   test("auth.mode=none skips pairing for operator control-ui only", () => {
@@ -387,7 +417,7 @@ describe("ws connect policy", () => {
         decision: { kind: "allow" },
         controlUiAuthPolicy: nonControlUi,
         preserveInsecureLocalControlUiScopes: false,
-        authMethod: undefined,
+        authMethod: "trusted-proxy",
         trustedProxyAuthOk: true,
       }),
     ).toBe(true);

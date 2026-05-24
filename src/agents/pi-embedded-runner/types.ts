@@ -1,8 +1,17 @@
 import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
-import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type {
+  CliSessionBinding,
+  SessionContextBudgetStatus,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../pi-embedded-messaging.types.js";
+import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -31,6 +40,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
   /**
@@ -45,8 +55,10 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
+  contextBudgetStatus?: SessionContextBudgetStatus;
 };
 
 export type TraceAttempt = {
@@ -131,6 +143,8 @@ export type EmbeddedPiRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   yielded?: boolean;
@@ -140,7 +154,8 @@ export type EmbeddedPiRunMeta = {
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
-      | "retry_limit";
+      | "retry_limit"
+      | "hook_block";
     message: string;
   };
   failureSignal?: EmbeddedRunFailureSignal;
@@ -169,6 +184,7 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;
   }>;
   meta: EmbeddedPiRunMeta;
@@ -176,12 +192,18 @@ export type EmbeddedPiRunResult = {
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if a deterministic approval prompt was sent through the tool-result channel.
+  didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
   // Media URLs successfully sent via messaging tools during the run.
   messagingToolSentMediaUrls?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  // Message-tool replies delivered to the active internal UI source.
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  // Child sessions successfully accepted by sessions_spawn during the run.
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.

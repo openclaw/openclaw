@@ -1,4 +1,4 @@
-import type { ModelApi, ModelCompatConfig } from "../config/types.models.js";
+import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 
 export type ModelCatalogInput = "text" | "image" | "document";
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
@@ -9,6 +9,38 @@ export type ModelCatalogSource =
   | "cache"
   | "config"
   | "runtime-refresh";
+
+export type UnifiedModelCatalogKind =
+  | "text"
+  | "image_generation"
+  | "video_generation"
+  | "music_generation";
+
+export type UnifiedModelCatalogSource =
+  | "manifest"
+  | "provider-index"
+  | "static"
+  | "live"
+  | "cache"
+  | "configured"
+  | "runtime-refresh";
+
+export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
+  kind: UnifiedModelCatalogKind;
+  provider: string;
+  model: string;
+  label?: string;
+  source: UnifiedModelCatalogSource;
+  default?: boolean;
+  configured?: boolean;
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+  authEnvVars?: readonly string[];
+  docsPath?: string;
+  fetchedAt?: number;
+  expiresAt?: number;
+  warnings?: readonly string[];
+};
 
 export type ModelCatalogTieredCost = {
   input: number;
@@ -39,6 +71,7 @@ export type ModelCatalogModel = {
   maxTokens?: number;
   cost?: ModelCatalogCost;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   status?: ModelCatalogStatus;
   statusReason?: string;
   replaces?: string[];
@@ -74,6 +107,7 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  runtimeAugment?: boolean;
 };
 
 export type NormalizedModelCatalogRow = {
@@ -94,6 +128,7 @@ export type NormalizedModelCatalogRow = {
   maxTokens?: number;
   cost?: ModelCatalogCost;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   statusReason?: string;
   replaces?: string[];
   replacedBy?: string;

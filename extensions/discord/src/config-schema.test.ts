@@ -76,6 +76,32 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts suppressEmbeds at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      suppressEmbeds: true,
+      accounts: {
+        noisy: {
+          suppressEmbeds: false,
+        },
+      },
+    });
+
+    expect(cfg.suppressEmbeds).toBe(true);
+    expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
+  });
+
+  it("rejects Telegram-only native tool-progress draft config", () => {
+    const issues = expectInvalidDiscordConfig({
+      streaming: {
+        preview: {
+          nativeToolProgress: true,
+        },
+      },
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("streaming.preview");
+  });
+
   it("accepts Discord application IDs at top-level and account scope", () => {
     const cfg = expectValidDiscordConfig({
       applicationId: "123456789012345678",
@@ -147,16 +173,119 @@ describe("discord config schema", () => {
     expect(cfg.voice?.model).toBe("openai/gpt-5.4-mini");
   });
 
+  it("accepts voice agent session target routing", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        agentSession: {
+          mode: "target",
+          target: "channel:123456789012345678",
+        },
+      },
+    });
+
+    expect(cfg.voice?.agentSession).toEqual({
+      mode: "target",
+      target: "channel:123456789012345678",
+    });
+  });
+
+  it("accepts Discord realtime voice modes", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        mode: "agent-proxy",
+        model: "openai-codex/gpt-5.5",
+        followUsersEnabled: true,
+        followUsers: ["58398277829140480"],
+        realtime: {
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          toolPolicy: "safe-read-only",
+          consultPolicy: "always",
+          requireWakeName: true,
+          wakeNames: ["Molty"],
+          bootstrapContextFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
+          bargeIn: true,
+          minBargeInAudioEndMs: 500,
+          providers: {
+            openai: {
+              apiKey: "sk-test",
+              voice: "marin",
+            },
+          },
+        },
+      },
+    });
+
+    expect(cfg.voice?.mode).toBe("agent-proxy");
+    expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.followUsersEnabled).toBe(true);
+    expect(cfg.voice?.followUsers).toEqual(["58398277829140480"]);
+    expect(cfg.voice?.realtime?.provider).toBe("openai");
+    expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
+    expect(cfg.voice?.realtime?.voice).toBe("cedar");
+    expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
+    expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+    expect(cfg.voice?.realtime?.requireWakeName).toBe(true);
+    expect(cfg.voice?.realtime?.wakeNames).toEqual(["Molty"]);
+    expect(cfg.voice?.realtime?.bootstrapContextFiles).toEqual([
+      "IDENTITY.md",
+      "USER.md",
+      "SOUL.md",
+    ]);
+    expect(cfg.voice?.realtime?.bargeIn).toBe(true);
+    expect(cfg.voice?.realtime?.minBargeInAudioEndMs).toBe(500);
+  });
+
+  it("rejects invalid Discord realtime voice modes", () => {
+    for (const voice of [
+      { mode: "realtime" },
+      { mode: "talk-buffer" },
+      { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
+      { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
+      { mode: "bidi", realtime: { bootstrapContextFiles: ["AGENTS.md"] } },
+      { mode: "agent-proxy", realtime: { wakeNames: [""] } },
+      { mode: "agent-proxy", realtime: { debounceMs: 10_001 } },
+      { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
+      { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },
+      { agentSession: { mode: "target" } },
+      { followUsers: [""] },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
+  });
+
   it("accepts Discord voice timing overrides", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
         connectTimeoutMs: 45_000,
         reconnectGraceMs: 20_000,
+        captureSilenceGraceMs: 3_500,
       },
     });
 
     expect(cfg.voice?.connectTimeoutMs).toBe(45_000);
     expect(cfg.voice?.reconnectGraceMs).toBe(20_000);
+    expect(cfg.voice?.captureSilenceGraceMs).toBe(3_500);
+  });
+
+  it("accepts Discord voice allowed channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        allowedChannels: [{ guildId: "123", channelId: "456" }],
+      },
+    });
+
+    expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
+  });
+
+  it("rejects invalid Discord voice allowed channels", () => {
+    for (const voice of [
+      { allowedChannels: [{ guildId: "", channelId: "456" }] },
+      { allowedChannels: [{ guildId: "123", channelId: "" }] },
+    ]) {
+      expectInvalidDiscordConfig({ voice });
+    }
   });
 
   it("rejects invalid Discord voice timing overrides", () => {
@@ -165,6 +294,8 @@ describe("discord config schema", () => {
       { connectTimeoutMs: 120_001 },
       { reconnectGraceMs: -1 },
       { reconnectGraceMs: 1.5 },
+      { captureSilenceGraceMs: 0 },
+      { captureSilenceGraceMs: 30_001 },
     ]) {
       expectInvalidDiscordConfig({ voice });
     }
@@ -194,6 +325,15 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.users).toEqual(["333"]);
     expect(cfg.guilds?.["123"]?.channels?.general?.roles).toEqual(["444"]);
     expect(cfg.execApprovals?.approvers).toEqual(["555"]);
+  });
+
+  it.each([true, false, "auto"] as const)("accepts execApprovals.enabled=%s", (enabled) => {
+    const cfg = expectValidDiscordConfig({ execApprovals: { enabled } });
+    expect(cfg.execApprovals?.enabled).toBe(enabled);
+  });
+
+  it("rejects execApprovals.enabled with other string values", () => {
+    expectInvalidDiscordConfig({ execApprovals: { enabled: "on" } });
   });
 
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {
@@ -263,6 +403,35 @@ describe("discord config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("accepts agentComponents.ttlMs at channel and account scope", () => {
+    const res = DiscordConfigSchema.safeParse({
+      agentComponents: {
+        ttlMs: 86_400_000,
+      },
+      accounts: {
+        work: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid agentComponents.ttlMs values", () => {
+    for (const ttlMs of [0, -1, 1.5, 86_400_001]) {
+      const res = DiscordConfigSchema.safeParse({
+        agentComponents: {
+          ttlMs,
+        },
+      });
+
+      expect(res.success).toBe(false);
+    }
   });
 
   it("accepts agentComponents.enabled at account scope", () => {

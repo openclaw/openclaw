@@ -1,3 +1,4 @@
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   buildPairingConnectRecoveryTitle,
   describePairingConnectRequirement,
@@ -63,7 +64,7 @@ export function buildStatusAgentsValue(params: {
   const pending =
     params.agentStatus.bootstrapPendingCount > 0
       ? `${params.agentStatus.bootstrapPendingCount} bootstrap file${params.agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
-      : "no bootstrap files";
+      : "no workspaces bootstrapping";
   const def = params.agentStatus.agents.find((a) => a.id === params.agentStatus.defaultId);
   const defActive =
     def?.lastActiveAgeMs != null ? params.formatTimeAgo(def.lastActiveAgeMs) : "unknown";
@@ -168,8 +169,13 @@ export function buildStatusMemoryValue(
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
-    const state = params.resolveMemoryVectorState(params.memory.vector);
-    const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+    const vector =
+      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+        ? { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+        : params.memory.vector;
+    const state = params.resolveMemoryVectorState(vector);
+    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
     parts.push(colorByTone(state.tone, label));
   }
   if (params.memory.fts) {
@@ -268,6 +274,15 @@ export function buildStatusHealthRows(params: {
       Detail: formatEventLoopHealthDetail(params.health.eventLoop),
     });
   }
+  if (params.health.modelPricing?.state === "degraded") {
+    rows.push({
+      Item: "Model pricing",
+      Status: params.warn("WARN"),
+      Detail: `optional pricing refresh degraded${
+        params.health.modelPricing.detail ? `: ${params.health.modelPricing.detail}` : ""
+      }`,
+    });
+  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -315,27 +330,62 @@ export function buildStatusSessionsRows(params: {
   muted: (value: string) => string;
 }) {
   if (params.recent.length === 0) {
-    return [
-      {
-        Key: params.muted("no sessions yet"),
-        Kind: "",
-        Age: "",
-        Model: "",
-        Tokens: "",
-        ...(params.verbose ? { Cache: "" } : {}),
-      },
-    ];
+    return [];
   }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
     Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
+    Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),
   }));
+}
+
+export function buildStatusModelSelectionLines(params: {
+  recent: SessionsRecentLike[];
+  limit?: number;
+  shortenText: (value: string, maxLen: number) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}) {
+  const mismatches = params.recent.filter((sess) => {
+    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
+      return false;
+    }
+    return (
+      sess.configuredModel !== sess.selectedModel &&
+      !areRuntimeModelRefsEquivalent(sess.configuredModel, sess.selectedModel)
+    );
+  });
+  if (mismatches.length === 0) {
+    return [];
+  }
+
+  const limit = params.limit ?? 3;
+  const lines: string[] = [];
+  for (const sess of mismatches.slice(0, limit)) {
+    const key = params.shortenText(sess.key, 48);
+    const configured = sess.configuredModel ?? "unknown";
+    const selected = sess.selectedModel ?? "unknown";
+    lines.push(
+      params.warn(
+        `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`,
+      ),
+      `  Configured default: ${configured}`,
+      `  Session selected: ${selected}`,
+      `  Reason: ${sess.modelSelectionReason ?? "session override"}`,
+      `  Clear with: /model ${configured} or /reset`,
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    );
+  }
+  if (mismatches.length > limit) {
+    lines.push(params.muted(`  … +${mismatches.length - limit} more pinned session(s)`));
+  }
+  return lines;
 }
 
 export function buildStatusFooterLines(params: {

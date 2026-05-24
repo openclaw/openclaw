@@ -1,5 +1,10 @@
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { isGoogleGemini3ProModel, isGoogleGemini3ThinkingLevelModel } from "./thinking-api.js";
 
 type GoogleApiCarrier = {
   api?: string | null;
@@ -10,6 +15,7 @@ type GoogleProviderConfigLike = GoogleApiCarrier & {
 };
 
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_MODEL_ID_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -152,9 +158,7 @@ export function normalizeGoogleProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
   let nextProvider = provider;
-  const shouldNormalizeModelIds =
-    providerKey === "google-vertex" ||
-    shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, nextProvider);
+  const shouldNormalizeModelIds = GOOGLE_MODEL_ID_PROVIDERS.has(providerKey);
 
   if (shouldNormalizeModelIds) {
     const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
@@ -174,4 +178,31 @@ export function normalizeGoogleProviderConfig(
   }
 
   return nextProvider;
+}
+
+export function resolveGoogleThinkingProfile({
+  modelId,
+  reasoning,
+}: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile | undefined {
+  const normalizedModelId = normalizeGoogleModelId(modelId);
+  const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(normalizedModelId);
+  if (reasoning === false && !isGemini3ThinkingModel) {
+    return undefined;
+  }
+
+  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(normalizedModelId)
+    ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
+    : [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ];
+
+  return {
+    levels,
+    ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
+  };
 }

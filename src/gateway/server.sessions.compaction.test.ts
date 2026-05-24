@@ -5,6 +5,7 @@ import { expect, test, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
+  onceMessage,
   piSdkMock,
   rpcReq,
   startConnectedServerWithClient,
@@ -92,10 +93,27 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(listedCheckpoints.ok).toBe(true);
   expect(listedCheckpoints.payload?.key).toBe("agent:main:main");
   expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
-  expect(listedCheckpoints.payload?.checkpoints[0]).toMatchObject({
+  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual({
     checkpointId: "checkpoint-1",
+    sessionKey: "agent:main:main",
+    sessionId: fixture.sessionId,
+    createdAt: checkpointCreatedAt,
+    reason: "manual",
     summary: "checkpoint summary",
     tokensBefore: 123,
+    tokensAfter: 45,
+    firstKeptEntryId: fixture.preCompactionLeafId,
+    preCompaction: {
+      sessionId: fixture.preCompactionSession.getSessionId(),
+      sessionFile: fixture.preCompactionSessionFile,
+      leafId: fixture.preCompactionLeafId,
+    },
+    postCompaction: {
+      sessionId: fixture.sessionId,
+      sessionFile: fixture.sessionFile,
+      leafId: fixture.postCompactionLeafId,
+      entryId: fixture.postCompactionLeafId,
+    },
   });
 
   const checkpoint = await rpcReq<{
@@ -144,8 +162,10 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
   const branchedSessionFile = branched.payload?.entry.sessionFile;
-  expect(branchedSessionFile).toBeTruthy();
-  const branchedSession = SessionManager.open(branchedSessionFile!, dir);
+  if (!branchedSessionFile) {
+    throw new Error("expected branched compaction session file");
+  }
+  const branchedSession = SessionManager.open(branchedSessionFile, dir);
   expect(branchedSession.getEntries()).toHaveLength(
     fixture.preCompactionSession.getEntries().length,
   );
@@ -195,8 +215,10 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
   expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
   const restoredSessionFile = restored.payload?.entry.sessionFile;
-  expect(restoredSessionFile).toBeTruthy();
-  const restoredSession = SessionManager.open(restoredSessionFile!, dir);
+  if (!restoredSessionFile) {
+    throw new Error("expected restored compaction session file");
+  }
+  const restoredSession = SessionManager.open(restoredSessionFile, dir);
   expect(restoredSession.getEntries()).toHaveLength(
     fixture.preCompactionSession.getEntries().length,
   );
@@ -223,11 +245,47 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       main: sessionStoreEntry("sess-main", {
         thinkingLevel: "medium",
         reasoningLevel: "stream",
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: Date.now() - 5_000,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 120,
+          contextTokenBudget: 200,
+          promptBudgetBeforeReserve: 180,
+          reserveTokens: 20,
+          effectiveReserveTokens: 20,
+          remainingPromptBudgetTokens: 60,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        },
       }),
     },
   });
 
   const { ws } = await openClient();
+  await rpcReq(ws, "sessions.subscribe", {});
+  const startEventPromise = onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.operation" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "start",
+  );
+  const endEventPromise = onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.operation" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
+  );
   const compacted = await rpcReq<{
     ok: true;
     key: string;
@@ -240,26 +298,93 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
+  const startEvent = await startEventPromise;
+  const endEvent = await endEventPromise;
+  const startPayload = startEvent.payload as {
+    operationId?: string;
+    sessionKey?: string;
+    ts?: number;
+  };
+  const endPayload = endEvent.payload as {
+    operationId?: string;
+    sessionKey?: string;
+    completed?: boolean;
+    ts?: number;
+  };
+  expect(startPayload).toMatchObject({
+    operation: "compact",
+    phase: "start",
+    sessionKey: "agent:main:main",
+  });
+  expect(endPayload).toMatchObject({
+    operation: "compact",
+    phase: "end",
+    sessionKey: "agent:main:main",
+    completed: true,
+  });
+  expect(startPayload.operationId).toBeTruthy();
+  expect(endPayload.operationId).toBe(startPayload.operationId);
+  expect(typeof startPayload.ts).toBe("number");
+  expect(typeof endPayload.ts).toBe("number");
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      sessionFile: expect.stringMatching(/sess-main\.jsonl$/),
-      config: expect.any(Object),
-      provider: expect.any(String),
-      model: expect.any(String),
-      thinkLevel: "medium",
-      reasoningLevel: "stream",
-      trigger: "manual",
-    }),
+  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
+    | {
+        agentHarnessId?: string;
+        allowGatewaySubagentBinding?: boolean;
+        bashElevated?: unknown;
+        config?: unknown;
+        model?: string;
+        provider?: string;
+        reasoningLevel?: string;
+        sessionFile?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        thinkLevel?: string;
+        trigger?: string;
+        workspaceDir?: string;
+      }
+    | undefined;
+  if (!compactionCall) {
+    throw new Error("expected embedded compaction call");
+  }
+  const callConfig = compactionCall.config as {
+    agents?: { defaults?: { model?: { primary?: unknown }; workspace?: unknown } };
+  };
+  expect(compactionCall.sessionId).toBe("sess-main");
+  expect(compactionCall.sessionKey).toBe("agent:main:main");
+  if (!compactionCall.sessionFile) {
+    throw new Error("expected embedded compaction session file");
+  }
+  expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
+  expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
+  expect(callConfig.agents?.defaults?.workspace).toBe(
+    path.join(os.tmpdir(), "openclaw-gateway-test"),
   );
+  expect(compactionCall.provider).toBe("anthropic");
+  expect(compactionCall.model).toBe("claude-opus-4-6");
+  expect(compactionCall.allowGatewaySubagentBinding).toBe(true);
+  expect(compactionCall.agentHarnessId).toBeUndefined();
+  expect(compactionCall.thinkLevel).toBe("medium");
+  expect(compactionCall.reasoningLevel).toBe("stream");
+  expect(compactionCall.bashElevated).toEqual({
+    enabled: false,
+    allowed: false,
+    defaultLevel: "off",
+  });
+  expect(compactionCall.trigger).toBe("manual");
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean }
+    {
+      compactionCount?: number;
+      contextBudgetStatus?: unknown;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
   >;
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
+  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
 

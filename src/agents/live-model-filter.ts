@@ -18,16 +18,14 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
-  "openai/gpt-5.2",
-  "openai-codex/gpt-5.2",
+  "openai/gpt-5.5",
+  "openai-codex/gpt-5.5",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4.3",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
@@ -127,7 +125,7 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   if (provider === "openai" || provider === "openai-codex") {
-    return modelName !== "gpt-5.2";
+    return modelName !== "gpt-5.5";
   }
   return !modelName.startsWith("gpt-5.2");
 }
@@ -194,6 +192,21 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
     return false;
   }
   return isHighSignalClaudeModelId(id);
+}
+
+export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const key = toCanonicalHighSignalLiveModelKey(ref);
+  return key !== null && HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(key);
+}
+
+export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key) => {
+    const separatorIndex = key.indexOf("/");
+    return {
+      provider: key.slice(0, separatorIndex),
+      id: key.slice(separatorIndex + 1),
+    };
+  });
 }
 
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {

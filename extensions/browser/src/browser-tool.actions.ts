@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
@@ -13,9 +13,13 @@ import {
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
+  resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -114,7 +118,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -364,6 +368,8 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  const snapshotTimeoutMs =
+    normalizePositiveTimeoutMs(input.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -378,6 +384,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
+    timeoutMs: snapshotTimeoutMs,
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -387,6 +394,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
+          timeoutMs: snapshotTimeoutMs,
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,
@@ -404,6 +412,31 @@ export async function executeSnapshotAction(params: {
   }
   params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
+    const dialogStateFields = {
+      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
+    };
+    if (snapshot.blockedByDialog) {
+      const wrapped = wrapBrowserExternalJson({
+        kind: "snapshot",
+        payload: {
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      });
+      return {
+        content: [{ type: "text" as const, text: wrapped.wrappedText }],
+        details: {
+          ...wrapped.safeDetails,
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      };
+    }
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
       source: "browser",
@@ -423,6 +456,7 @@ export async function executeSnapshotAction(params: {
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
       refsFallback,
+      ...dialogStateFields,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -437,6 +471,7 @@ export async function executeSnapshotAction(params: {
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
         details: safeDetails,
+        imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
     return {
@@ -457,6 +492,8 @@ export async function executeSnapshotAction(params: {
         targetId: snapshot.targetId,
         url: snapshot.url,
         nodeCount: snapshot.nodes.length,
+        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
         externalContent: {
           untrusted: true,
           source: "browser",
@@ -574,3 +611,4 @@ export async function executeActAction(params: {
     throw err;
   }
 }
+export { testing as __testing };

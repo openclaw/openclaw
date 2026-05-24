@@ -29,6 +29,7 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionsShowArchived: false,
     sessionsExpandedCheckpointKey: null,
     sessionsCheckpointItemsByKey: {},
     sessionsCheckpointLoadingKey: null,
@@ -87,6 +88,7 @@ describe("createSessionAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:dashboard:abc");
     expect(state.sessionsLoading).toBe(false);
@@ -149,6 +151,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -160,7 +163,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -194,7 +197,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -243,12 +246,362 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
 });
 
 describe("loadSessions", () => {
+  it("hides explicitly archived sessions by default", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 2 },
+          {
+            key: "agent:main:subagent:archived",
+            kind: "direct",
+            updatedAt: 1,
+            status: "done",
+            archived: true,
+          },
+        ],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(state.sessionsResult?.count).toBe(1);
+  });
+
+  it("includes explicitly archived sessions when explicitly shown", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 2 },
+          {
+            key: "agent:main:subagent:archived",
+            kind: "direct",
+            updatedAt: 1,
+            status: "done",
+            archived: true,
+          },
+        ],
+      };
+    });
+    const state = createState(request, { sessionsShowArchived: true });
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+      "agent:main:subagent:archived",
+    ]);
+    expect(state.sessionsResult?.count).toBe(2);
+  });
+
+  it("keeps terminal non-archived sessions visible by default", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 2 },
+          {
+            key: "agent:main:subagent:done",
+            kind: "direct",
+            updatedAt: 1,
+            status: "done",
+          },
+        ],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state);
+
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+      "agent:main:subagent:done",
+    ]);
+    expect(state.sessionsResult?.count).toBe(2);
+  });
+
+  it("uses session list terminal state to clear stale local run tracking", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn(async (method: string) => {
+        if (method !== "sessions.list") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: 2,
+              hasActiveRun: true,
+              status: "done",
+            },
+          ],
+        };
+      });
+      const state = createState(request) as SessionsState & {
+        sessionKey: string;
+        chatRunId: string | null;
+        chatStream: string | null;
+        chatStreamStartedAt: number | null;
+        chatRunStatus?: unknown;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+      };
+      state.sessionKey = "main";
+      state.chatRunId = "run-1";
+      state.chatStream = "Visible answer";
+      state.chatStreamStartedAt = 123;
+      state.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      state.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      state.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+
+      await loadSessions(state);
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
+      expect(state.compactionStatus).toBeNull();
+      expect(state.compactionClearTimer).toBeNull();
+      expect(state.fallbackStatus).toBeNull();
+      expect(state.fallbackClearTimer).toBeNull();
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits the active-window cutoff when archived sessions are shown", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "120",
+      sessionsFilterLimit: "50",
+      sessionsShowArchived: true,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("applies the active-window cutoff while archived sessions are hidden", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "120",
+      sessionsFilterLimit: "50",
+      sessionsShowArchived: false,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      activeMinutes: 120,
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("forwards scoped agent refreshes to sessions.list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      agentId: "ops",
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "ops",
+    });
+  });
+
+  it("forwards search and offset overrides to sessions.list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        totalCount: 3,
+        limitApplied: 1,
+        offset: 2,
+        nextOffset: null,
+        hasMore: false,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:dashboard:telegram", kind: "direct", updatedAt: 3 }],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: 0,
+      limit: 1,
+      offset: 2,
+      search: "telegram",
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 1,
+      offset: 2,
+      search: "telegram",
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("appends paged session rows without duplicating existing rows", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 2,
+        totalCount: 4,
+        limitApplied: 2,
+        offset: 2,
+        nextOffset: null,
+        hasMore: false,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:dashboard:b", kind: "direct", updatedAt: 2 },
+          { key: "agent:main:dashboard:c", kind: "direct", updatedAt: 1 },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        totalCount: 4,
+        limitApplied: 2,
+        nextOffset: 2,
+        hasMore: true,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:dashboard:a", kind: "direct", updatedAt: 4 },
+          { key: "agent:main:dashboard:b", kind: "direct", updatedAt: 3 },
+        ],
+      },
+    });
+
+    await loadSessions(state, { limit: 2, offset: 2, append: true });
+
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:dashboard:a",
+      "agent:main:dashboard:b",
+      "agent:main:dashboard:c",
+    ]);
+    expect(state.sessionsResult?.count).toBe(3);
+    expect(state.sessionsResult?.totalCount).toBe(4);
+    expect(state.sessionsResult?.hasMore).toBe(false);
+    expect(state.sessionsResult?.nextOffset).toBeNull();
+  });
+
   it("coalesces overlapping refreshes instead of dropping the latest request", async () => {
     let resolveFirst: () => void = () => undefined;
     const firstBlocker = new Promise<void>((resolve) => {
@@ -272,7 +625,7 @@ describe("loadSessions", () => {
         ts: 2,
         path: "(multiple)",
         count: 0,
-        defaults: {},
+        defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],
       };
     });
@@ -294,10 +647,12 @@ describe("loadSessions", () => {
       limit: 10,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsLoading).toBe(false);
@@ -380,6 +735,7 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
       key: "agent:main:main",
@@ -391,6 +747,482 @@ describe("loadSessions", () => {
 });
 
 describe("applySessionsChangedEvent", () => {
+  it("removes deleted sessions instead of keeping archived rows visible", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:main", kind: "direct", updatedAt: 1 },
+          { key: "agent:main:old", kind: "direct", updatedAt: 1 },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:old",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(state.sessionsResult?.count).toBe(1);
+  });
+
+  it("does not synthesize new sessions from partial events without a store-backed row", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:ephemeral",
+      reason: "message",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
+  });
+
+  it("applies partial events only to existing source-of-truth rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "message",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions).toEqual([
+      { key: "agent:main:main", kind: "direct", updatedAt: 1 },
+    ]);
+  });
+
+  it("drops rows that become explicitly archived while archived sessions are hidden", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:subagent:done", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:subagent:done",
+      sessionId: "sess-done",
+      status: "done",
+      archived: true,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
+  });
+
+  it("keeps terminal status updates visible while archived sessions are hidden", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:subagent:done", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:subagent:done",
+      sessionId: "sess-done",
+      status: "done",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions).toHaveLength(1);
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:subagent:done");
+    expect(state.sessionsResult?.sessions[0]?.status).toBe("done");
+  });
+
+  it("clears preserved active-run flags on terminal status updates", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+      status: "done",
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+      endedAt: 2,
+    });
+  });
+
+  it("clears the local chat run when an applied websocket patch makes the current session terminal", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-1",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("clears the local chat run when a lifecycle patch maps the client run id", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "client-run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "agent-run-1",
+      clientRunId: "client-run-1",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "client-run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("does not clear a new local run from a send patch with stale terminal status", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      reason: "send",
+      status: "done",
+      hasActiveRun: true,
+      updatedAt: 4,
+      ts: 4,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a newer local run from a runless older terminal patch", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 10,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 10,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 20,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 12,
+      updatedAt: 12,
+      ts: 12,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(20);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a newer local run from an older terminal websocket patch", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-old",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a new local run from unrelated session updates", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-2",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:side",
+      sessionId: "sess-side",
+      kind: "direct",
+      status: "running",
+      hasActiveRun: true,
+      updatedAt: 4,
+      ts: 4,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "inserted" });
+    expect(state.chatRunId).toBe("run-2");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
   it("updates fresh context usage from websocket event payloads", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -413,6 +1245,7 @@ describe("applySessionsChangedEvent", () => {
 
     const applied = applySessionsChangedEvent(state, {
       sessionKey: "agent:main:main",
+      sessionId: "sess-main",
       ts: 2,
       totalTokens: 190_000,
       totalTokensFresh: true,
@@ -422,13 +1255,11 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.ts).toBe(2);
-    expect(state.sessionsResult?.sessions[0]).toMatchObject({
-      key: "agent:main:main",
-      totalTokens: 190_000,
-      totalTokensFresh: true,
-      contextTokens: 200_000,
-      model: "gpt-5.4",
-    });
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:main");
+    expect(state.sessionsResult?.sessions[0]?.totalTokens).toBe(190_000);
+    expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(true);
+    expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+    expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5.4");
   });
 
   it("clears old token totals when the gateway marks the measurement stale", () => {
@@ -453,6 +1284,7 @@ describe("applySessionsChangedEvent", () => {
 
     applySessionsChangedEvent(state, {
       sessionKey: "agent:main:main",
+      sessionId: "sess-main",
       totalTokensFresh: false,
       contextTokens: 200_000,
     });
@@ -497,7 +1329,7 @@ describe("applySessionsChangedEvent", () => {
     ]);
   });
 
-  it("reports when websocket event payloads insert new rows", () => {
+  it("reports when reliable websocket event payloads insert new rows", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
@@ -510,6 +1342,7 @@ describe("applySessionsChangedEvent", () => {
 
     const applied = applySessionsChangedEvent(state, {
       sessionKey: "agent:main:new",
+      sessionId: "sess-new",
       ts: 2,
       kind: "direct",
       updatedAt: 2,
@@ -517,10 +1350,8 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "inserted" });
     expect(state.sessionsResult?.count).toBe(1);
-    expect(state.sessionsResult?.sessions[0]).toMatchObject({
-      key: "agent:main:new",
-      kind: "direct",
-      updatedAt: 2,
-    });
+    expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:new");
+    expect(state.sessionsResult?.sessions[0]?.kind).toBe("direct");
+    expect(state.sessionsResult?.sessions[0]?.updatedAt).toBe(2);
   });
 });

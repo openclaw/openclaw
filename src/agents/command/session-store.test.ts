@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
-import { clearCliSessionInStore, updateSessionStoreAfterAgentRun } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  recordCliCompactionInStore,
+  updateSessionStoreAfterAgentRun,
+} from "./session-store.js";
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
@@ -118,6 +122,15 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    rewriteSessionFileForNewSessionId: (params: {
+      sessionFile?: string;
+      previousSessionId: string;
+      nextSessionId: string;
+    }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
+    resolveSessionFilePathOptions: (params: unknown) => params,
+    resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
+      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -156,7 +169,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-
       const result: EmbeddedPiRunResult = {
         meta: {
           durationMs: 1,
@@ -383,8 +395,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.acp).toBeDefined();
-      expect(staleInMemory[sessionKey]?.acp).toBeDefined();
+      expect(persisted?.acp?.backend).toBe("acpx");
+      expect(persisted?.acp?.agent).toBe("codex");
+      expect(persisted?.acp?.runtimeSessionName).toBe("runtime-1");
+      expect(persisted?.acp?.mode).toBe("persistent");
+      expect(persisted?.acp?.state).toBe("idle");
+      expect(staleInMemory[sessionKey]?.acp).toEqual(persisted?.acp);
     });
   });
 
@@ -433,14 +449,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted).toMatchObject({
-        status: "done",
-        startedAt: 1_000,
-        endedAt: 1_900,
-        runtimeMs: 900,
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      });
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.startedAt).toBe(1_000);
+      expect(persisted?.endedAt).toBe(1_900);
+      expect(persisted?.runtimeMs).toBe(900);
+      expect(persisted?.modelProvider).toBe("openai");
+      expect(persisted?.model).toBe("gpt-5.4");
       expect(staleInMemory[sessionKey]?.status).toBe("done");
     });
   });
@@ -621,6 +635,140 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists estimated context budget status without marking stale usage fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-context-budget-status";
+      const sessionId = "test-context-budget-status-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 21225,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "minimax",
+            model: "MiniMax-M2.7",
+            contextBudgetStatus: {
+              schemaVersion: 1,
+              source: "pre-prompt-estimate",
+              updatedAt: 123,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              route: "fits",
+              shouldCompact: false,
+              estimatedPromptTokens: 18_000,
+              contextTokenBudget: 32_000,
+              promptBudgetBeforeReserve: 28_000,
+              reserveTokens: 4_000,
+              effectiveReserveTokens: 4_000,
+              remainingPromptBudgetTokens: 10_000,
+              overflowTokens: 0,
+              toolResultReducibleChars: 0,
+              messageCount: 4,
+              unwindowedMessageCount: 4,
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(21225);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toMatchObject({
+        source: "pre-prompt-estimate",
+        estimatedPromptTokens: 18_000,
+        contextTokenBudget: 32_000,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(18_000);
+    });
+  });
+
+  it("clears stale estimated context budget status when a runtime refresh has no current estimate", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-context-budget-status";
+      const sessionId = "test-clear-context-budget-status-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 21225,
+          totalTokensFresh: false,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "anthropic",
+            model: "claude-sonnet-4.6",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 18_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 10_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 4,
+            unwindowedMessageCount: 4,
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "minimax",
+            model: "MiniMax-M2.7",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("minimax");
+      expect(sessionStore[sessionKey]?.model).toBe("MiniMax-M2.7");
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    });
+  });
+
   it("does not treat CLI cumulative usage as a fresh context snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
@@ -678,6 +826,68 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists CLI lastCallUsage as the context snapshot (totalTokens)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-cli-last-call-usage";
+      const sessionId = "test-cli-last-call-usage-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        contextTokensOverride: 1_000_000,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              usage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+              lastCallUsage: {
+                input: 6,
+                output: 25,
+                cacheRead: 50_000,
+                cacheWrite: 0,
+              },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
   it("persists compaction tokensAfter when provider usage is unavailable", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -722,6 +932,49 @@ describe("updateSessionStoreAfterAgentRun", () => {
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.totalTokens).toBe(21_225);
       expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
+  it("accepts zero compaction tokensAfter when provider usage is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-zero-compaction-tokens-after";
+      const sessionId = "test-zero-compaction-tokens-after-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result: {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              compactionCount: 1,
+              compactionTokensAfter: 0,
+            },
+          },
+        } as EmbeddedPiRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
     });
   });
 
@@ -947,6 +1200,25 @@ describe("updateSessionStoreAfterAgentRun", () => {
           modelProvider: "anthropic",
           model: "claude-opus-4-6",
           contextTokens: 1_000_000,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 100,
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 640_000,
+            contextTokenBudget: 1_000_000,
+            promptBudgetBeforeReserve: 900_000,
+            reserveTokens: 100_000,
+            effectiveReserveTokens: 100_000,
+            remainingPromptBudgetTokens: 260_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 12,
+            unwindowedMessageCount: 12,
+          },
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
@@ -960,6 +1232,25 @@ describe("updateSessionStoreAfterAgentRun", () => {
             provider: "ollama",
             model: "llama3.2:1b",
             contextTokens: 128_000,
+            contextBudgetStatus: {
+              schemaVersion: 1,
+              source: "pre-prompt-estimate",
+              updatedAt: 200,
+              provider: "ollama",
+              model: "llama3.2:1b",
+              route: "fits",
+              shouldCompact: false,
+              estimatedPromptTokens: 40_000,
+              contextTokenBudget: 128_000,
+              promptBudgetBeforeReserve: 112_000,
+              reserveTokens: 16_000,
+              effectiveReserveTokens: 16_000,
+              remainingPromptBudgetTokens: 72_000,
+              overflowTokens: 0,
+              toolResultReducibleChars: 0,
+              messageCount: 3,
+              unwindowedMessageCount: 3,
+            },
           },
         },
       };
@@ -980,11 +1271,129 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(sessionStore[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
+      expect(sessionStore[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
 
       const persisted = loadSessionStore(storePath);
       expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
       expect(persisted[sessionKey]?.modelProvider).toBe("anthropic");
       expect(persisted[sessionKey]?.contextTokens).toBe(1_000_000);
+      expect(persisted[sessionKey]?.contextBudgetStatus?.provider).toBe("anthropic");
+      expect(persisted[sessionKey]?.contextBudgetStatus?.estimatedPromptTokens).toBe(640_000);
+    });
+  });
+
+  it("preserves user-facing run accounting while allowing session touch metadata", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-preserve-user-facing-run-state";
+      const sessionId = "test-preserve-user-facing-run-state-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          lastInteractionAt: 10,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          contextTokens: 1_000_000,
+          inputTokens: 11,
+          outputTokens: 22,
+          totalTokens: 333,
+          totalTokensFresh: true,
+          cacheRead: 4,
+          cacheWrite: 5,
+          estimatedCostUsd: 0.25,
+          abortedLastRun: false,
+          cliSessionBindings: {
+            "claude-cli": { sessionId: "visible-cli-session" },
+          },
+          compactionCount: 7,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+      const freshVisibleEntry: SessionEntry = {
+        sessionId: "fresh-visible-session-id",
+        updatedAt: 2,
+        sessionStartedAt: 777,
+        lastInteractionAt: 20,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 400_000,
+        inputTokens: 44,
+        outputTokens: 55,
+        totalTokens: 666,
+        totalTokensFresh: true,
+        cacheRead: 7,
+        cacheWrite: 8,
+        estimatedCostUsd: 0.5,
+        abortedLastRun: false,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "new-visible-cli-session" },
+        },
+        compactionCount: 9,
+      };
+      await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          aborted: true,
+          agentMeta: {
+            sessionId,
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            contextTokens: 200_000,
+            usage: {
+              input: 100,
+              output: 50,
+              cacheRead: 10,
+              cacheWrite: 20,
+            },
+            compactionCount: 3,
+            cliSessionBinding: {
+              sessionId: "handoff-cli-session",
+            },
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-sonnet-4-6",
+        result,
+        preserveUserFacingSessionModelState: true,
+      });
+
+      const next = sessionStore[sessionKey];
+      expect(next?.sessionId).toBe("fresh-visible-session-id");
+      expect(next?.sessionStartedAt).toBe(777);
+      expect(next?.modelProvider).toBe("openai");
+      expect(next?.model).toBe("gpt-5.5");
+      expect(next?.contextTokens).toBe(400_000);
+      expect(next?.inputTokens).toBe(44);
+      expect(next?.outputTokens).toBe(55);
+      expect(next?.totalTokens).toBe(666);
+      expect(next?.totalTokensFresh).toBe(true);
+      expect(next?.cacheRead).toBe(7);
+      expect(next?.cacheWrite).toBe(8);
+      expect(next?.estimatedCostUsd).toBe(0.5);
+      expect(next?.abortedLastRun).toBe(false);
+      expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("new-visible-cli-session");
+      expect(next?.compactionCount).toBe(9);
+      expect(next?.lastInteractionAt).toBeGreaterThan(20);
     });
   });
 
@@ -1174,6 +1583,172 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("gpt-5.4");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+});
+
+describe("recordCliCompactionInStore", () => {
+  it("persists native compaction token counts and clears stale CLI usage breakdown", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction";
+      const sessionId = "test-record-cli-compaction-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+          inputTokens: 9_000,
+          outputTokens: 100,
+          cacheRead: 2_900,
+          cacheWrite: 0,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "codex",
+            model: "gpt-5.5",
+            route: "fits",
+            shouldCompact: false,
+            estimatedPromptTokens: 18_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 10_000,
+            overflowTokens: 0,
+            toolResultReducibleChars: 0,
+            messageCount: 4,
+            unwindowedMessageCount: 4,
+          },
+          cliSessionBindings: {
+            codex: {
+              sessionId: "stale-cli-session",
+            },
+          },
+          cliSessionIds: {
+            codex: "stale-cli-session",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        tokensAfter: 0,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(0);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    });
+  });
+
+  it("marks CLI token counts stale when native compaction returns no token count", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-unknown";
+      const sessionId = "test-record-cli-compaction-unknown-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 37_000,
+          totalTokensFresh: true,
+          inputTokens: 30_000,
+          outputTokens: 100,
+          cacheRead: 6_900,
+          cacheWrite: 0,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 123,
+            provider: "codex",
+            model: "gpt-5.5",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 48_000,
+            contextTokenBudget: 32_000,
+            promptBudgetBeforeReserve: 28_000,
+            reserveTokens: 4_000,
+            effectiveReserveTokens: 4_000,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 20_000,
+            toolResultReducibleChars: 0,
+            messageCount: 40,
+            unwindowedMessageCount: 40,
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(37_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextBudgetStatus).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(37_000);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(persisted[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    });
+  });
+
+  it("persists successor session handles from native CLI compaction", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
+      const sessionId = "test-record-cli-compaction-rotate-session";
+      const nextSessionId = "test-record-cli-compaction-rotate-next";
+      const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          sessionFile: path.join(dir, `${sessionId}.jsonl`),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        newSessionId: nextSessionId,
+        newSessionFile: nextSessionFile,
+      });
+
+      expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
+      expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
+      expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
     });
   });
 });

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -45,6 +46,20 @@ export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
   durationMs?: number;
 };
 
+export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
+  type: "model.failover";
+  sessionId?: string;
+  sessionKey?: string;
+  lane?: string;
+  fromProvider?: string;
+  fromModel?: string;
+  toProvider?: string;
+  toModel?: string;
+  reason: string;
+  cascadeDepth?: number;
+  suspended?: boolean;
+};
+
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
   type: "webhook.received";
   channel: string;
@@ -75,6 +90,36 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   channel?: string;
   source: string;
   queueDepth?: number;
+};
+
+export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
+  type: "message.received";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchStartedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.started";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchCompletedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.completed";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+  durationMs: number;
+  outcome: "completed" | "skipped" | "error";
+  reason?: string;
+  error?: string;
 };
 
 export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
@@ -114,6 +159,21 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   errorCategory: string;
 };
 
+export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
+  type: "talk.event";
+  sessionId?: string;
+  turnId?: string;
+  captureId?: string;
+  talkEventType: TalkEventType;
+  mode: TalkMode;
+  transport: TalkTransport;
+  brain: TalkBrain;
+  provider?: string;
+  final?: boolean;
+  durationMs?: number;
+  byteLength?: number;
+};
+
 export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   type: "session.state";
   sessionKey?: string;
@@ -146,6 +206,7 @@ type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  terminalProgressStale?: boolean;
 };
 
 export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {
@@ -161,6 +222,48 @@ export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent 
 export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
   type: "session.stuck";
   classification: "stale_session_state";
+};
+
+export type DiagnosticSessionRecoveryStatus =
+  | "aborted"
+  | "released"
+  | "skipped"
+  | "noop"
+  | "failed";
+
+type DiagnosticSessionRecoveryBaseEvent = DiagnosticBaseEvent & {
+  sessionKey?: string;
+  sessionId?: string;
+  state: DiagnosticSessionState;
+  stateGeneration?: number;
+  ageMs: number;
+  queueDepth?: number;
+  reason?: string;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  allowActiveAbort?: boolean;
+};
+
+export type DiagnosticSessionRecoveryRequestedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.requested";
+};
+
+export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.completed";
+  status: DiagnosticSessionRecoveryStatus;
+  action: string;
+  outcomeReason?: string;
+  released?: number;
+  stale?: boolean;
+};
+
+export type DiagnosticSessionTurnCreatedEvent = DiagnosticBaseEvent & {
+  type: "session.turn.created";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
+  trigger: "user" | "heartbeat";
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -206,6 +309,20 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
+export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
+
+export type DiagnosticPhaseSnapshot = {
+  name: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  cpuUserMs?: number;
+  cpuSystemMs?: number;
+  cpuTotalMs?: number;
+  cpuCoreRatio?: number;
+  details?: DiagnosticPhaseDetails;
+};
+
 export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   type: "diagnostic.liveness.warning";
   reasons: DiagnosticLivenessWarningReason[];
@@ -220,7 +337,17 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  phase?: string;
+  recentPhases?: DiagnosticPhaseSnapshot[];
+  activeWorkLabels?: string[];
+  waitingWorkLabels?: string[];
+  queuedWorkLabels?: string[];
 };
+
+export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
+  DiagnosticPhaseSnapshot & {
+    type: "diagnostic.phase.completed";
+  };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   type: "tool.loop";
@@ -246,11 +373,15 @@ export type DiagnosticToolParamsSummary =
   | { kind: "string"; length: number }
   | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
 
+export type DiagnosticToolSource = "channel" | "core" | "mcp" | "plugin";
+
 type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
   runId?: string;
   sessionKey?: string;
   sessionId?: string;
   toolName: string;
+  toolSource?: DiagnosticToolSource;
+  toolOwner?: string;
   toolCallId?: string;
   paramsSummary?: DiagnosticToolParamsSummary;
 };
@@ -275,6 +406,22 @@ export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEve
   type: "tool.execution.blocked";
   deniedReason: string;
   reason: string;
+};
+
+export type DiagnosticSkillTelemetrySource = "bundled" | "unknown" | "workspace";
+export type DiagnosticSkillActivation = "command" | "read";
+
+export type DiagnosticSkillUsedEvent = DiagnosticBaseEvent & {
+  type: "skill.used";
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  skillName: string;
+  skillSource: DiagnosticSkillTelemetrySource;
+  activation: DiagnosticSkillActivation;
+  toolName?: string;
+  toolCallId?: string;
 };
 
 export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
@@ -315,8 +462,9 @@ export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
 export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   type: "run.completed";
   durationMs: number;
-  outcome: "completed" | "aborted" | "error";
+  outcome: "completed" | "aborted" | "blocked" | "error";
   errorCategory?: string;
+  blockedBy?: string;
 };
 
 export type DiagnosticHarnessRunPhase = "prepare" | "start" | "send" | "resolve" | "cleanup";
@@ -370,6 +518,9 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
+  contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
 };
 
@@ -481,31 +632,51 @@ export type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
   errorCategory?: string;
 };
 
+export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
+  type: "diagnostic.async_queue.dropped";
+  droppedEvents: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  queueLength: number;
+  maxQueueLength: number;
+  drainBatchSize: number;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageReceivedEvent
+  | DiagnosticMessageDispatchStartedEvent
+  | DiagnosticMessageDispatchCompletedEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
+  | DiagnosticSessionRecoveryRequestedEvent
+  | DiagnosticSessionRecoveryCompletedEvent
+  | DiagnosticSessionTurnCreatedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
+  | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
   | DiagnosticToolExecutionBlockedEvent
+  | DiagnosticSkillUsedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
@@ -520,7 +691,9 @@ export type DiagnosticEventPayload =
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
-  | DiagnosticTelemetryExporterEvent;
+  | DiagnosticTelemetryExporterEvent
+  | DiagnosticAsyncQueueDroppedEvent
+  | DiagnosticFailoverEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -550,19 +723,27 @@ type DiagnosticEventsGlobalState = {
   dispatchDepth: number;
   asyncQueue: QueuedDiagnosticEvent[];
   asyncDrainScheduled: boolean;
+  asyncDroppedEvents: number;
+  asyncDroppedTrustedEvents: number;
+  asyncDroppedUntrustedEvents: number;
+  asyncDroppedPriorityEvents: number;
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
   "tool.execution.error",
+  "tool.execution.blocked",
+  "skill.used",
   "exec.process.completed",
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "talk.event",
   "model.call.started",
   "model.call.completed",
   "model.call.error",
@@ -572,6 +753,11 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "harness.run.error",
   "context.assembled",
   "log.record",
+]);
+const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
 ]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
@@ -583,6 +769,10 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     dispatchDepth: 0,
     asyncQueue: [],
     asyncDrainScheduled: false,
+    asyncDroppedEvents: 0,
+    asyncDroppedTrustedEvents: 0,
+    asyncDroppedUntrustedEvents: 0,
+    asyncDroppedPriorityEvents: 0,
   };
 }
 
@@ -606,6 +796,10 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
   const globalRecord = globalThis as Record<PropertyKey, unknown>;
   const existing = globalRecord[DIAGNOSTIC_EVENTS_STATE_KEY];
   if (isDiagnosticEventsState(existing)) {
+    existing.asyncDroppedEvents ??= 0;
+    existing.asyncDroppedTrustedEvents ??= 0;
+    existing.asyncDroppedUntrustedEvents ??= 0;
+    existing.asyncDroppedPriorityEvents ??= 0;
     return existing;
   }
   const state = createDiagnosticEventsState();
@@ -682,6 +876,37 @@ function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): Diagnos
   return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
 }
 
+function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
+  return entry.metadata.trusted && PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(entry.event.type);
+}
+
+function noteAsyncDiagnosticDrop(
+  state: DiagnosticEventsGlobalState,
+  entry: QueuedDiagnosticEvent,
+): void {
+  state.asyncDroppedEvents += 1;
+  if (entry.metadata.trusted) {
+    state.asyncDroppedTrustedEvents += 1;
+  } else {
+    state.asyncDroppedUntrustedEvents += 1;
+  }
+  if (isPriorityAsyncDiagnosticEvent(entry)) {
+    state.asyncDroppedPriorityEvents += 1;
+  }
+}
+
+function makeRoomForPriorityAsyncDiagnosticEvent(
+  state: DiagnosticEventsGlobalState,
+): QueuedDiagnosticEvent | undefined {
+  const nonPriorityIndex = state.asyncQueue.findIndex(
+    (entry) => !isPriorityAsyncDiagnosticEvent(entry),
+  );
+  if (nonPriorityIndex >= 0) {
+    return state.asyncQueue.splice(nonPriorityIndex, 1)[0];
+  }
+  return state.asyncQueue.shift();
+}
+
 function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -709,14 +934,48 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   state.asyncDrainScheduled = true;
   setImmediate(() => {
     state.asyncDrainScheduled = false;
-    const batch = state.asyncQueue.splice(0);
+    const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
       dispatchDiagnosticEvent(state, entry.event, entry.metadata);
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
+      return;
     }
+    dispatchAsyncDiagnosticDropSummary(state);
   });
+}
+
+function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState): void {
+  if (state.asyncDroppedEvents <= 0) {
+    return;
+  }
+  const droppedEvents = state.asyncDroppedEvents;
+  const droppedTrustedEvents = state.asyncDroppedTrustedEvents;
+  const droppedUntrustedEvents = state.asyncDroppedUntrustedEvents;
+  const droppedPriorityEvents = state.asyncDroppedPriorityEvents;
+  state.asyncDroppedEvents = 0;
+  state.asyncDroppedTrustedEvents = 0;
+  state.asyncDroppedUntrustedEvents = 0;
+  state.asyncDroppedPriorityEvents = 0;
+  const event = enrichDiagnosticEvent(state, {
+    type: "diagnostic.async_queue.dropped",
+    droppedEvents,
+    ...(droppedTrustedEvents > 0 ? { droppedTrustedEvents } : {}),
+    ...(droppedUntrustedEvents > 0 ? { droppedUntrustedEvents } : {}),
+    ...(droppedPriorityEvents > 0 ? { droppedPriorityEvents } : {}),
+    queueLength: state.asyncQueue.length,
+    maxQueueLength: MAX_ASYNC_DIAGNOSTIC_EVENTS,
+    drainBatchSize: MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN,
+  });
+  dispatchDiagnosticEvent(state, event, { trusted: false });
+}
+
+export async function waitForDiagnosticEventsDrained(): Promise<void> {
+  const state = getDiagnosticEventsState();
+  while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function enrichDiagnosticEvent(
@@ -748,7 +1007,14 @@ function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: bool
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
-      return;
+      if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+        noteAsyncDiagnosticDrop(state, { event: enriched, metadata });
+        return;
+      }
+      const droppedEntry = makeRoomForPriorityAsyncDiagnosticEvent(state);
+      if (droppedEntry) {
+        noteAsyncDiagnosticDrop(state, droppedEntry);
+      }
     }
     state.asyncQueue.push({ event: enriched, metadata });
     scheduleAsyncDiagnosticDrain(state);
@@ -766,12 +1032,37 @@ export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
 }
 
+export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "ts" | "type">) {
+  emitTrustedDiagnosticEvent({
+    type: "model.failover",
+    ...event,
+  });
+}
+
 export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function hasPendingInternalDiagnosticEvent(
+  predicate: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => boolean,
+): boolean {
+  const state = getDiagnosticEventsState();
+  for (const entry of state.asyncQueue) {
+    let event: DiagnosticEventPayload;
+    try {
+      event = cloneDiagnosticEventForListener(entry.event);
+    } catch {
+      continue;
+    }
+    if (predicate(event, Object.freeze({ ...entry.metadata }))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
@@ -801,4 +1092,8 @@ export function resetDiagnosticEventsForTest(): void {
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;
+  state.asyncDroppedEvents = 0;
+  state.asyncDroppedTrustedEvents = 0;
+  state.asyncDroppedUntrustedEvents = 0;
+  state.asyncDroppedPriorityEvents = 0;
 }

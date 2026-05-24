@@ -37,7 +37,8 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
-    /access is denied/i.test(params.detail) ||
+    params.code === 1 ||
+    /(?:access is denied|acceso denegado)/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
@@ -50,6 +51,11 @@ export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
     return override;
   }
   const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
+  if (/[/\\]|\.\./.test(scriptName)) {
+    throw new Error(
+      `OPENCLAW_TASK_SCRIPT_NAME must be a file name only, not a path: ${scriptName}`,
+    );
+  }
   const stateDir = resolveGatewayStateDir(env);
   return path.join(stateDir, scriptName);
 }
@@ -79,9 +85,19 @@ function sanitizeWindowsFilename(value: string): string {
   return value.replace(/[<>:"/\\|?*]/g, "_").replace(/\p{Cc}/gu, "_");
 }
 
-function resolveStartupEntryPath(env: GatewayServiceEnv): string {
+function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vbs"): string {
   const taskName = resolveTaskName(env);
-  return path.join(resolveWindowsStartupDir(env), `${sanitizeWindowsFilename(taskName)}.cmd`);
+  const entryExtension = extension ?? (shouldUseHiddenWindowsTaskLauncher(env) ? "vbs" : "cmd");
+  return path.join(
+    resolveWindowsStartupDir(env),
+    `${sanitizeWindowsFilename(taskName)}.${entryExtension}`,
+  );
+}
+
+function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
+  const primaryPath = resolveStartupEntryPath(env);
+  const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
+  return Array.from(new Set([primaryPath, legacyCmdPath]));
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
@@ -106,6 +122,19 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
     return `${domain}\\${username}`;
   }
   return username;
+}
+
+function shouldUseHiddenWindowsTaskLauncher(env: GatewayServiceEnv): boolean {
+  const value = normalizeLowercaseStringOrEmpty(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER);
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function resolveTaskLauncherScriptPath(env: GatewayServiceEnv, scriptPath: string): string {
+  if (!shouldUseHiddenWindowsTaskLauncher(env)) {
+    return scriptPath;
+  }
+  const parsed = path.parse(scriptPath);
+  return path.join(parsed.dir, `${parsed.name}.vbs`);
 }
 
 export async function readScheduledTaskCommand(
@@ -226,7 +255,7 @@ const UNKNOWN_STATUS_DETAIL =
 const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
-export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
+function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
   detail?: string;
 } {
@@ -292,6 +321,27 @@ function buildStartupLauncherScript(params: { description?: string; scriptPath: 
   return `${lines.join("\r\n")}\r\n`;
 }
 
+function quoteVbsString(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function quoteVbsRunCommand(scriptPath: string): string {
+  return quoteVbsString(`"${scriptPath}"`);
+}
+
+function buildHiddenLauncherScript(params: { description?: string; scriptPath: string }): string {
+  const lines = [];
+  const trimmedDescription = params.description?.trim();
+  if (trimmedDescription) {
+    assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
+    lines.push(`' ${trimmedDescription}`);
+  }
+  lines.push(
+    `CreateObject("WScript.Shell").Run ${quoteVbsRunCommand(params.scriptPath)}, 0, False`,
+  );
+  return `${lines.join("\r\n")}\r\n`;
+}
+
 async function assertSchtasksAvailable() {
   const res = await execSchtasks(["/Query"]);
   if (res.code === 0) {
@@ -302,12 +352,13 @@ async function assertSchtasksAvailable() {
 }
 
 async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean> {
-  try {
-    await fs.access(resolveStartupEntryPath(env));
-    return true;
-  } catch {
-    return false;
+  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    try {
+      await fs.access(startupEntryPath);
+      return true;
+    } catch {}
   }
+  return false;
 }
 
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
@@ -605,10 +656,12 @@ async function writeScheduledTaskScript({
   description,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
   scriptPath: string;
+  taskLaunchPath: string;
   taskDescription: string;
 }> {
   await assertSchtasksAvailable().catch(() => undefined);
   const scriptPath = resolveTaskScriptPath(env);
+  const taskLaunchPath = resolveTaskLauncherScriptPath(env, scriptPath);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
   const script = buildTaskScript({
@@ -618,7 +671,14 @@ async function writeScheduledTaskScript({
     environment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
-  return { scriptPath, taskDescription };
+  if (taskLaunchPath !== scriptPath) {
+    const launcher = buildHiddenLauncherScript({
+      description: taskDescription,
+      scriptPath,
+    });
+    await fs.writeFile(taskLaunchPath, launcher, "utf8");
+  }
+  return { scriptPath, taskLaunchPath, taskDescription };
 }
 
 export async function stageScheduledTask({
@@ -636,7 +696,7 @@ async function updateExistingScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   taskName: string;
-  quotedScript: string;
+  quotedLaunchPath: string;
   scriptPath: string;
 }): Promise<boolean> {
   if (!(await isRegisteredScheduledTask(params.env))) {
@@ -647,7 +707,7 @@ async function updateExistingScheduledTask(params: {
     "/TN",
     params.taskName,
     "/TR",
-    params.quotedScript,
+    params.quotedLaunchPath,
   ]);
   if (change.code !== 0) {
     return false;
@@ -820,14 +880,15 @@ async function activateScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   scriptPath: string;
+  taskLaunchPath: string;
   description?: string;
 }) {
   const taskDescription = params.description ?? "OpenClaw Gateway";
 
   const taskName = resolveTaskName(params.env);
-  const quotedScript = quoteSchtasksArg(params.scriptPath);
+  const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
 
-  if (await updateExistingScheduledTask({ ...params, taskName, quotedScript })) {
+  if (await updateExistingScheduledTask({ ...params, taskName, quotedLaunchPath })) {
     return;
   }
 
@@ -841,11 +902,12 @@ async function activateScheduledTask(params: {
     "/TN",
     taskName,
     "/TR",
-    quotedScript,
+    quotedLaunchPath,
   ];
   const taskUser = resolveTaskUser(params.env);
+  const taskUserArgs = taskUser ? ["/RU", taskUser, "/NP", "/IT"] : [];
   let create = await execSchtasks(
-    taskUser ? [...baseArgs, "/RU", taskUser, "/NP", "/IT"] : baseArgs,
+    taskUserArgs.length > 0 ? [...baseArgs, ...taskUserArgs] : baseArgs,
   );
   if (create.code !== 0 && taskUser) {
     create = await execSchtasks(baseArgs);
@@ -855,10 +917,15 @@ async function activateScheduledTask(params: {
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = buildStartupLauncherScript({
-        description: taskDescription,
-        scriptPath: params.scriptPath,
-      });
+      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
+        ? buildHiddenLauncherScript({
+            description: taskDescription,
+            scriptPath: params.scriptPath,
+          })
+        : buildStartupLauncherScript({
+            description: taskDescription,
+            scriptPath: params.scriptPath,
+          });
       await fs.writeFile(startupEntryPath, launcher, "utf8");
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
@@ -898,6 +965,7 @@ export async function installScheduledTask(
     env: args.env,
     stdout: args.stdout,
     scriptPath: staged.scriptPath,
+    taskLaunchPath: staged.taskLaunchPath,
     description: staged.taskDescription,
   });
   return { scriptPath: staged.scriptPath };
@@ -914,13 +982,21 @@ export async function uninstallScheduledTask({
     await execSchtasks(["/Delete", "/F", "/TN", taskName]);
   }
 
-  const startupEntryPath = resolveStartupEntryPath(env);
-  try {
-    await fs.unlink(startupEntryPath);
-    stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-  } catch {}
+  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    try {
+      await fs.unlink(startupEntryPath);
+      stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
+    } catch {}
+  }
 
   const scriptPath = resolveTaskScriptPath(env);
+  const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
+  if (launcherPath !== scriptPath) {
+    try {
+      await fs.unlink(launcherPath);
+      stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);
+    } catch {}
+  }
   try {
     await fs.unlink(scriptPath);
     stdout.write(`${formatLine("Removed task script", scriptPath)}\n`);

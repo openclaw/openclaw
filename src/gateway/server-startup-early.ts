@@ -26,6 +26,7 @@ export async function startGatewayPluginDiscovery(params: {
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable: boolean;
   tailscaleMode: GatewayTailscaleMode;
   logDiscovery: {
     info: (msg: string) => void;
@@ -50,6 +51,7 @@ export async function startGatewayPluginDiscovery(params: {
       gatewayTls: params.gatewayTls.enabled
         ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
         : undefined,
+      gatewayDirectReachable: params.gatewayDirectReachable,
       wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
@@ -66,6 +68,7 @@ export async function startGatewayEarlyRuntime(params: {
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable: boolean;
   tailscaleMode: GatewayTailscaleMode;
   log: {
     info: (msg: string) => void;
@@ -102,6 +105,7 @@ export async function startGatewayEarlyRuntime(params: {
   const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
     startGatewayPluginDiscovery(params),
   );
+  let getActiveTaskCount = () => 0;
 
   if (!params.minimalTestGateway) {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
@@ -118,6 +122,8 @@ export async function startGatewayEarlyRuntime(params: {
       cronRuntimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
+    getActiveTaskCount = () =>
+      taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
@@ -175,6 +181,7 @@ export async function startGatewayEarlyRuntime(params: {
 
   return {
     bonjourStop,
+    getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,
   };

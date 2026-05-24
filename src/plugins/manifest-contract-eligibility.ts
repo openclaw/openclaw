@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
   PluginMetadataRegistryView,
@@ -11,7 +10,10 @@ import type {
 
 export function isManifestPluginAvailableForControlPlane(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index">;
-  plugin: Pick<PluginManifestRecord, "id" | "origin" | "enabledByDefault">;
+  plugin: Pick<
+    PluginManifestRecord,
+    "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
+  >;
   config?: OpenClawConfig;
 }): boolean {
   if (params.plugin.origin === "bundled") {
@@ -93,18 +95,12 @@ export function loadManifestMetadataSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataSnapshot {
+  const config = params.config ?? {};
   const env = params.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+  return resolvePluginMetadataSnapshot({
+    config,
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  if (current) {
-    return current;
-  }
-  return loadPluginMetadataSnapshot({
-    config: params.config ?? {},
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
 }

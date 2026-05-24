@@ -1,3 +1,7 @@
+import {
+  reconcileChatRunFromCurrentSessionRow,
+  type ChatRunUiStatus,
+} from "../chat/run-lifecycle.ts";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
@@ -13,7 +17,15 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
-export type SessionsState = {
+type SessionsChatRunState = {
+  sessionKey?: string;
+  chatRunId?: string | null;
+  chatStream?: string | null;
+  chatStreamStartedAt?: number | null;
+  requestUpdate?: () => void;
+};
+
+export type SessionsState = SessionsChatRunState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionsLoading: boolean;
@@ -23,6 +35,7 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsShowArchived: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
@@ -30,11 +43,18 @@ export type SessionsState = {
   sessionsCheckpointErrorByKey: Record<string, string>;
 };
 
-type LoadSessionsOverrides = {
+export type LoadSessionsOverrides = {
+  agentId?: string;
   activeMinutes?: number;
   limit?: number;
+  offset?: number;
+  search?: string;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
+  showArchived?: boolean;
+  configuredAgentsOnly?: boolean;
+  append?: boolean;
+  publishChatRunStatus?: boolean;
 };
 
 type CreateSessionParams = {
@@ -42,6 +62,7 @@ type CreateSessionParams = {
   label?: string;
   model?: string;
   parentSessionKey?: string;
+  emitCommandHooks?: boolean;
 };
 
 type CreateSessionResult = {
@@ -55,6 +76,32 @@ type SessionsLoadControl = {
 };
 
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+
+function hasCurrentChatSession(
+  state: SessionsState,
+): state is SessionsState & { sessionKey: string } {
+  return typeof state.sessionKey === "string" && state.sessionKey.trim() !== "";
+}
+
+function sessionPatchTargetsCurrentChatRun(
+  state: SessionsState & { sessionKey: string },
+  options: { changedSessionKey: string; eventRunId?: string },
+): boolean {
+  if (state.sessionKey !== options.changedSessionKey) {
+    return false;
+  }
+  if (
+    options.eventRunId !== undefined &&
+    state.chatRunId &&
+    state.chatRunId !== options.eventRunId
+  ) {
+    return false;
+  }
+  if (options.eventRunId === undefined && state.chatRunId) {
+    return false;
+  }
+  return true;
+}
 
 const SESSION_EVENT_ROW_FIELDS = [
   "abortedLastRun",
@@ -79,6 +126,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "spawnedBy",
   "startedAt",
   "status",
+  "archived",
   "subject",
   "surface",
   "systemSent",
@@ -118,9 +166,67 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 }
 
 function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
-  return value === "direct" || value === "group" || value === "global" || value === "unknown"
+  return value === "cron" ||
+    value === "direct" ||
+    value === "group" ||
+    value === "global" ||
+    value === "unknown"
     ? value
     : undefined;
+}
+
+export function isArchivedSessionRow(row: GatewaySessionRow): boolean {
+  return row.archived === true;
+}
+
+function filterAvailableSessionRows(
+  rows: GatewaySessionRow[],
+  options: { showArchived: boolean },
+): GatewaySessionRow[] {
+  return rows.filter((row) => row.key && (options.showArchived || !isArchivedSessionRow(row)));
+}
+
+function projectSessionsResultForAvailability(
+  result: SessionsListResult,
+  options: { showArchived: boolean },
+): SessionsListResult {
+  const sessions = filterAvailableSessionRows(result.sessions, options);
+  return {
+    ...result,
+    count: sessions.length,
+    sessions,
+  };
+}
+
+function appendSessionsResult(
+  previous: SessionsListResult,
+  page: SessionsListResult,
+): SessionsListResult {
+  const seen = new Set<string>();
+  const sessions: SessionsListResult["sessions"] = [];
+  for (const row of [...previous.sessions, ...page.sessions]) {
+    if (!row.key || seen.has(row.key)) {
+      continue;
+    }
+    seen.add(row.key);
+    sessions.push(row);
+  }
+  const totalCount = page.totalCount ?? previous.totalCount;
+  const hasMore =
+    page.hasMore ??
+    (typeof totalCount === "number" && Number.isFinite(totalCount)
+      ? sessions.length < totalCount
+      : false);
+  const nextOffset =
+    page.nextOffset !== undefined ? page.nextOffset : hasMore ? sessions.length : null;
+  return {
+    ...page,
+    count: sessions.length,
+    totalCount,
+    hasMore,
+    nextOffset,
+    sessions,
+  };
 }
 
 function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
@@ -236,7 +342,12 @@ async function runCompactionMutation<T>(
 
 export type SessionsChangedApplyResult =
   | { applied: false }
-  | { applied: true; change: "inserted" | "updated" };
+  | {
+      applied: true;
+      change: "deleted" | "inserted" | "updated";
+      clearedChatRun?: boolean;
+      clearedChatRunStatus?: Pick<ChatRunUiStatus, "phase" | "runId" | "sessionKey">;
+    };
 
 export function applySessionsChangedEvent(
   state: SessionsState,
@@ -258,7 +369,24 @@ export function applySessionsChangedEvent(
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
+  if (payload.reason === "delete") {
+    if (existingIndex < 0) {
+      return { applied: false };
+    }
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      count: Math.max(0, state.sessionsResult.count - 1),
+      sessions: previousRows.filter((row) => row.key !== key),
+    };
+    invalidateCheckpointCacheForKey(state, key);
+    return { applied: true, change: "deleted" };
+  }
   const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
+  const hasReliableSource =
+    existingIndex >= 0 || eventSession !== null || typeof source.sessionId === "string";
+  if (!hasReliableSource) {
+    return { applied: false };
+  }
   const previousCheckpointSignature = checkpointSummarySignature(existing);
   const fallbackKind = normalizeSessionKind(source.kind) ?? existing?.kind ?? "unknown";
   const nextRow: GatewaySessionRow = {
@@ -278,8 +406,23 @@ export function applySessionsChangedEvent(
       mutableNext[field] = value;
     }
   }
+  if (!hasOwn(source, "hasActiveRun") && nextRow.status && nextRow.status !== "running") {
+    nextRow.hasActiveRun = false;
+  }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
+  }
+  if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+    if (existingIndex < 0) {
+      return { applied: false };
+    }
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      count: Math.max(0, state.sessionsResult.count - 1),
+      sessions: previousRows.filter((row) => row.key !== key),
+    };
+    invalidateCheckpointCacheForKey(state, key);
+    return { applied: true, change: "deleted" };
   }
 
   const nextRows =
@@ -288,17 +431,49 @@ export function applySessionsChangedEvent(
       : [nextRow, ...previousRows];
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
+  const eventRunId =
+    typeof payload.clientRunId === "string" && payload.clientRunId.trim()
+      ? payload.clientRunId.trim()
+      : typeof payload.runId === "string" && payload.runId.trim()
+        ? payload.runId.trim()
+        : undefined;
   state.sessionsResult = {
     ...state.sessionsResult,
     ts: eventTs == null ? state.sessionsResult.ts : Math.max(state.sessionsResult.ts, eventTs),
     count: existingIndex >= 0 ? state.sessionsResult.count : state.sessionsResult.count + 1,
     sessions,
   };
+  const hasCurrentSession = hasCurrentChatSession(state);
+  const currentChatRunId = state.chatRunId ?? null;
+  const currentChatSessionKey = hasCurrentSession ? state.sessionKey : null;
+  const clearedChatRun =
+    nextRow.hasActiveRun !== true &&
+    hasCurrentSession &&
+    sessionPatchTargetsCurrentChatRun(state, {
+      changedSessionKey: key,
+      eventRunId,
+    }) &&
+    reconcileChatRunFromCurrentSessionRow(state, {
+      publishRunStatus: false,
+    });
 
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
     invalidateCheckpointCacheForKey(state, key);
   }
-  return { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" };
+  return {
+    applied: true,
+    change: existingIndex >= 0 ? "updated" : "inserted",
+    ...(clearedChatRun ? { clearedChatRun: true } : {}),
+    ...(clearedChatRun && currentChatSessionKey != null
+      ? {
+          clearedChatRunStatus: {
+            phase: nextRow.status === "done" ? "done" : "interrupted",
+            runId: currentChatRunId,
+            sessionKey: currentChatSessionKey,
+          },
+        }
+      : {}),
+  };
 }
 
 export async function subscribeSessions(state: SessionsState) {
@@ -362,29 +537,58 @@ async function loadSessionsOnce(
     );
     const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
-    const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
+    const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
+    const activeMinutes = showArchived
+      ? 0
+      : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
+      configuredAgentsOnly,
     };
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }
     if (limit > 0) {
       params.limit = limit;
     }
+    const offset =
+      typeof overrides?.offset === "number" && Number.isFinite(overrides.offset)
+        ? Math.max(0, Math.floor(overrides.offset))
+        : 0;
+    if (offset > 0) {
+      params.offset = offset;
+    }
+    const search = overrides?.search?.trim();
+    if (search) {
+      params.search = search;
+    }
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
-      state.sessionsResult = res;
-      const nextKeys = new Set(res.sessions.map((row) => row.key));
+      const projected = projectSessionsResultForAvailability(res, { showArchived });
+      state.sessionsResult =
+        overrides?.append === true && offset > 0 && state.sessionsResult
+          ? appendSessionsResult(state.sessionsResult, projected)
+          : projected;
+      if (hasCurrentChatSession(state)) {
+        reconcileChatRunFromCurrentSessionRow(state, {
+          publishRunStatus: overrides?.publishChatRunStatus !== false,
+        });
+      }
+      const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
           invalidateCheckpointCacheForKey(state, key);
         }
       }
       let expandedNeedsRefetch = false;
-      for (const row of res.sessions) {
+      for (const row of state.sessionsResult.sessions) {
         const previous = previousRows.get(row.key);
         if (checkpointSummarySignature(previous) !== checkpointSummarySignature(row)) {
           invalidateCheckpointCacheForKey(state, row.key);

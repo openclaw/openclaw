@@ -74,7 +74,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   fast: "zap",
   agents: "monitor",
   subagents: "folder",
-  kill: "x",
   steer: "send",
   tts: "volume2",
 };
@@ -93,7 +92,6 @@ const LOCAL_COMMANDS = new Set([
   "export-session",
   "usage",
   "agents",
-  "kill",
   "steer",
   "redirect",
 ]);
@@ -112,7 +110,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "redirect",
     name: "redirect",
     description: "Abort and restart with a new message",
-    args: "[id] <message>",
+    args: "<message>",
     icon: "refresh",
     category: "agents",
     executeLocal: true,
@@ -131,7 +129,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   tts: "tools",
   agents: "agents",
   subagents: "agents",
-  kill: "agents",
   steer: "agents",
   redirect: "agents",
   session: "session",
@@ -156,7 +153,7 @@ const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "[id] <message>",
+  steer: "<message>",
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -426,16 +423,16 @@ function buildFallbackSlashCommands(): SlashCommandDef[] {
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
-let _refreshSeq = 0;
+let refreshSeq = 0;
 
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
 }): Promise<void> {
-  const seq = ++_refreshSeq;
+  const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client) {
-    if (seq !== _refreshSeq) {
+    if (seq !== refreshSeq) {
       return;
     }
     replaceSlashCommands(buildFallbackSlashCommands());
@@ -447,12 +444,12 @@ export async function refreshSlashCommands(params: {
       includeArgs: true,
       scope: "text",
     });
-    if (seq !== _refreshSeq) {
+    if (seq !== refreshSeq) {
       return;
     }
     replaceSlashCommands(buildSlashCommandsFromEntries(getRemoteCommandEntries(result)));
   } catch {
-    if (seq !== _refreshSeq) {
+    if (seq !== refreshSeq) {
       return;
     }
     replaceSlashCommands(buildFallbackSlashCommands());
@@ -460,7 +457,7 @@ export async function refreshSlashCommands(params: {
 }
 
 export function resetSlashCommandsForTest(): void {
-  _refreshSeq = 0;
+  refreshSeq = 0;
   replaceSlashCommands(buildFallbackSlashCommands());
 }
 

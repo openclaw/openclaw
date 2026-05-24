@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,6 @@ import {
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
@@ -48,6 +48,10 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
+const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
+const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
+const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
@@ -72,7 +76,6 @@ const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
-const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
@@ -118,6 +121,102 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+
+const FULL_SUITE_CONFIG_WEIGHT = new Map([
+  [GATEWAY_VITEST_CONFIG, 180],
+  [GATEWAY_SERVER_VITEST_CONFIG, 180],
+  [GATEWAY_CORE_VITEST_CONFIG, 179],
+  [GATEWAY_CLIENT_VITEST_CONFIG, 178],
+  [GATEWAY_METHODS_VITEST_CONFIG, 177],
+  [COMMANDS_VITEST_CONFIG, 175],
+  [AGENTS_CORE_VITEST_CONFIG, 170],
+  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_SUPPORT_VITEST_CONFIG, 168],
+  [AGENTS_TOOLS_VITEST_CONFIG, 167],
+  [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
+  [EXTENSIONS_VITEST_CONFIG, 168],
+  [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
+  ["test/vitest/vitest.runtime-config.config.ts", 166],
+  [CONTRACTS_CHANNEL_CONFIG_VITEST_CONFIG, 85],
+  [CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG, 60],
+  [CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG, 50],
+  [CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG, 35],
+  [CONTRACTS_PLUGIN_VITEST_CONFIG, 20],
+  ["test/vitest/vitest.tasks.config.ts", 165],
+  [CHANNEL_VITEST_CONFIG, 164],
+  [UNIT_FAST_VITEST_CONFIG, 160],
+  [AUTO_REPLY_REPLY_VITEST_CONFIG, 155],
+  [INFRA_VITEST_CONFIG, 145],
+  ["test/vitest/vitest.secrets.config.ts", 140],
+  [CRON_VITEST_CONFIG, 135],
+  ["test/vitest/vitest.wizard.config.ts", 130],
+  [UNIT_SRC_VITEST_CONFIG, 125],
+  [EXTENSION_MATRIX_VITEST_CONFIG, 100],
+  [EXTENSION_DISCORD_VITEST_CONFIG, 98],
+  [EXTENSION_PROVIDERS_VITEST_CONFIG, 96],
+  [EXTENSION_TELEGRAM_VITEST_CONFIG, 94],
+  [EXTENSION_WHATSAPP_VITEST_CONFIG, 92],
+  [AUTO_REPLY_CORE_VITEST_CONFIG, 90],
+  [CLI_VITEST_CONFIG, 86],
+  [MEDIA_VITEST_CONFIG, 84],
+  [PLUGINS_VITEST_CONFIG, 82],
+  [BUNDLED_VITEST_CONFIG, 80],
+  [EXTENSION_SLACK_VITEST_CONFIG, 78],
+  [COMMANDS_LIGHT_VITEST_CONFIG, 48],
+  [PLUGIN_SDK_VITEST_CONFIG, 46],
+  [AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG, 45],
+  [UNIT_UI_VITEST_CONFIG, 40],
+  [PLUGIN_SDK_LIGHT_VITEST_CONFIG, 38],
+  [DAEMON_VITEST_CONFIG, 36],
+  [BOUNDARY_VITEST_CONFIG, 34],
+  ["test/vitest/vitest.tooling.config.ts", 32],
+  [UNIT_SECURITY_VITEST_CONFIG, 30],
+  [UNIT_SUPPORT_VITEST_CONFIG, 28],
+  [EXTENSION_ZALO_VITEST_CONFIG, 24],
+  [EXTENSION_IRC_VITEST_CONFIG, 20],
+  [EXTENSION_FEISHU_VITEST_CONFIG, 18],
+  [EXTENSION_MATTERMOST_VITEST_CONFIG, 16],
+  [EXTENSION_MESSAGING_VITEST_CONFIG, 14],
+  [EXTENSION_IMESSAGE_VITEST_CONFIG, 13],
+  [EXTENSION_LINE_VITEST_CONFIG, 12],
+  [EXTENSION_SIGNAL_VITEST_CONFIG, 11],
+  [EXTENSION_ACPX_VITEST_CONFIG, 10],
+  [EXTENSION_DIFFS_VITEST_CONFIG, 8],
+  [EXTENSION_MEMORY_VITEST_CONFIG, 6],
+  [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
+]);
+
+function resolveConfigSortWeight(config, shardTimings) {
+  return shardTimings.get(config) ?? (FULL_SUITE_CONFIG_WEIGHT.get(config) ?? 0) * 1000;
+}
+
+function interleaveSlowAndFastSpecs(sortedSpecs) {
+  const ordered = [];
+  let slowIndex = 0;
+  let fastIndex = sortedSpecs.length - 1;
+  while (slowIndex <= fastIndex) {
+    ordered.push(sortedSpecs[slowIndex]);
+    slowIndex += 1;
+    if (slowIndex <= fastIndex) {
+      ordered.push(sortedSpecs[fastIndex]);
+      fastIndex -= 1;
+    }
+  }
+  return ordered;
+}
+
+export function orderFullSuiteSpecsForParallelRun(specs, shardTimings = new Map()) {
+  const sortedSpecs = specs.toSorted((a, b) => {
+    const weightDelta =
+      resolveConfigSortWeight(b.config, shardTimings) -
+      resolveConfigSortWeight(a.config, shardTimings);
+    if (weightDelta !== 0) {
+      return weightDelta;
+    }
+    return a.config.localeCompare(b.config);
+  });
+  return interleaveSlowAndFastSpecs(sortedSpecs);
+}
 const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
@@ -125,7 +224,9 @@ const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
+const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -134,6 +235,10 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  agentCore: AGENTS_CORE_VITEST_CONFIG,
+  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
   autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,
@@ -155,7 +260,6 @@ const VITEST_CONFIG_BY_KIND = {
   extension: EXTENSIONS_VITEST_CONFIG,
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
-  extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
@@ -205,7 +309,9 @@ const VITEST_CONFIG_BY_KIND = {
   tasks: TASKS_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
+  tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
+  uiE2e: UI_E2E_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -238,6 +344,15 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+  [
+    "scripts/mantis/build-telegram-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
+  [
+    "scripts/mantis/build-telegram-desktop-proof-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   [
     "scripts/run-vitest.mjs",
     [
@@ -273,9 +388,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
-  ["scripts/blacksmith-testbox-state.mjs", ["test/scripts/blacksmith-testbox-state.test.ts"]],
-  ["scripts/blacksmith-testbox-runner.mjs", ["test/scripts/blacksmith-testbox-runner.test.ts"]],
-  ["scripts/testbox-sync-sanity.mjs", ["test/scripts/testbox-sync-sanity.test.ts"]],
+  ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
+  ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);
 const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/barnacle-auto-response.test.ts", ["test/scripts/barnacle-auto-response.test.ts"]],
@@ -287,19 +403,22 @@ const TOOLING_TEST_TARGETS = new Map([
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
   [
+    "test/scripts/mantis-publish-pr-evidence.test.ts",
+    ["test/scripts/mantis-publish-pr-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
+  [
     "test/scripts/plugin-prerelease-test-plan.test.ts",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
   ],
   ["test/scripts/test-projects.test.ts", ["test/scripts/test-projects.test.ts"]],
-  [
-    "test/scripts/blacksmith-testbox-runner.test.ts",
-    ["test/scripts/blacksmith-testbox-runner.test.ts"],
-  ],
-  [
-    "test/scripts/blacksmith-testbox-state.test.ts",
-    ["test/scripts/blacksmith-testbox-state.test.ts"],
-  ],
-  ["test/scripts/testbox-sync-sanity.test.ts", ["test/scripts/testbox-sync-sanity.test.ts"]],
   [
     "test/scripts/vitest-local-scheduling.test.ts",
     ["test/scripts/vitest-local-scheduling.test.ts"],
@@ -317,9 +436,40 @@ const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
   "src/agents/system-prompt.test.ts",
   ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
 ];
+const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
+  "directory",
+  "plugin",
+  "surfaces-only",
+  "threading",
+].flatMap((suite) =>
+  "abcdefgh"
+    .split("")
+    .map(
+      (shard) =>
+        `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
+    ),
+);
+const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
+  "src/auto-reply/reply/commands-status.test.ts",
+  "src/auto-reply/status.test.ts",
+  "src/tui/components/chat-log.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
+  [
+    "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    [
+      ...CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+      "src/channels/plugins/contracts/registry.contract.test.ts",
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+    ],
+  ],
+  [
+    "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
+    CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+  ],
+  ["test/helpers/normalize-text.ts", TEST_HELPER_NORMALIZE_TEXT_TARGETS],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -345,6 +495,19 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  [
+    "extensions/discord/src/monitor/message-handler.ts",
+    [
+      "extensions/discord/src/channel-actions.contract.test.ts",
+      "extensions/discord/src/channel.message-adapter.test.ts",
+      "extensions/discord/src/channel.test.ts",
+      "extensions/discord/src/durable-delivery.test.ts",
+      "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
+      "extensions/discord/src/monitor/message-handler.queue.test.ts",
+      "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+      "extensions/discord/src/monitor/provider.test.ts",
+    ],
+  ],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   [
     "src/commitments/model-selection.runtime.ts",
@@ -392,10 +555,10 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/auto-reply/reply/dispatch-acp-command-bypass.test.ts"],
   ],
 ]);
-const GENERATED_CHANGED_TEST_TARGETS = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
+const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
+  /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
+  /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
+];
 const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
@@ -482,6 +645,21 @@ function listRepoFilesRecursive(root, cwd) {
   });
 }
 
+function listGatewayFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src/gateway"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0);
+}
+
 function isGatewayServerFullSuiteTarget(relative) {
   if (
     GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
@@ -502,7 +680,7 @@ function resolveGatewayServerFullSuiteTargets(cwd) {
   if (!fs.existsSync(gatewayDir)) {
     return [];
   }
-  return listRepoFilesRecursive(gatewayDir, cwd)
+  return (listGatewayFilesFromGit(cwd) ?? listRepoFilesRecursive(gatewayDir, cwd))
     .filter(isGatewayServerFullSuiteTarget)
     .toSorted((a, b) => a.localeCompare(b));
 }
@@ -579,6 +757,105 @@ function toScopedIncludePattern(arg, cwd) {
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
 }
 
+const EXPLICIT_TEST_TARGET_ROOTS = ["src", "test", "extensions", "ui", "packages", "apps"];
+let cachedExplicitTestTargetFiles = null;
+let cachedExplicitTestTargetFilesCwd = null;
+
+function listExplicitTestTargetFilesFromGit(cwd) {
+  const result = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...EXPLICIT_TEST_TARGET_ROOTS,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\0")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listExplicitTestTargetFilesForCwd(cwd) {
+  if (cachedExplicitTestTargetFiles && cachedExplicitTestTargetFilesCwd === cwd) {
+    return cachedExplicitTestTargetFiles;
+  }
+
+  cachedExplicitTestTargetFiles =
+    listExplicitTestTargetFilesFromGit(cwd) ??
+    EXPLICIT_TEST_TARGET_ROOTS.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedExplicitTestTargetFilesCwd = cwd;
+  return cachedExplicitTestTargetFiles;
+}
+
+function includePatternMatchesAnyFile(pattern, files) {
+  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+}
+
+export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
+  const { targetArgs } = parseTestProjectsArgs(args, cwd);
+  if (targetArgs.length === 0) {
+    return [];
+  }
+
+  const candidateFiles = listExplicitTestTargetFilesForCwd(cwd);
+  const unmatched = [];
+  for (const targetArg of targetArgs) {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (resolveVitestConfigTargetKind(relative)) {
+      continue;
+    }
+    const kind = classifyTarget(targetArg, cwd);
+    if (shouldUseWholeConfigTarget(kind, targetArg, cwd)) {
+      continue;
+    }
+    if (isGlobTarget(relative)) {
+      if (!includePatternMatchesAnyFile(relative, candidateFiles)) {
+        unmatched.push({
+          target: targetArg,
+          reason: "glob-matched-no-files",
+        });
+      }
+      continue;
+    }
+
+    const absolute = path.resolve(cwd, targetArg);
+    if (!fs.existsSync(absolute)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "path-does-not-exist",
+      });
+      continue;
+    }
+
+    if (isTestFileTarget(relative)) {
+      continue;
+    }
+
+    const includePattern = toScopedIncludePattern(targetArg, cwd);
+    if (!includePatternMatchesAnyFile(includePattern, candidateFiles)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "target-matched-no-test-files",
+        includePattern,
+      });
+    }
+  }
+  return unmatched;
+}
+
 function isSkippedImportGraphDirectory(name) {
   return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
@@ -635,13 +912,154 @@ function resolveImportSpecifier(importer, specifier, fileSet) {
 
 let cachedImportGraph = null;
 let cachedImportGraphCwd = null;
+let cachedImportGraphFiles = null;
+let cachedImportGraphFilesCwd = null;
+
+function isImportableGraphFile(relative) {
+  return IMPORTABLE_FILE_EXTENSIONS.some((ext) => relative.endsWith(ext));
+}
+
+function listImportGraphFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", ...SOURCE_ROOTS_FOR_IMPORT_GRAPH], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listImportGraphFilesForCwd(cwd) {
+  if (cachedImportGraphFiles && cachedImportGraphFilesCwd === cwd) {
+    return cachedImportGraphFiles;
+  }
+
+  cachedImportGraphFiles =
+    listImportGraphFilesFromGit(cwd) ??
+    SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedImportGraphFilesCwd = cwd;
+  return cachedImportGraphFiles;
+}
+
+function stripImportableGraphExtension(relative) {
+  for (const ext of IMPORTABLE_FILE_EXTENSIONS) {
+    if (relative.endsWith(ext)) {
+      return relative.slice(0, -ext.length);
+    }
+  }
+  return relative;
+}
+
+function resolveImportGraphSearchTerm(relative) {
+  const basename = path.posix.basename(stripImportableGraphExtension(relative));
+  if (basename === "index" || basename.length < 3) {
+    return null;
+  }
+  return basename;
+}
+
+function listImportGraphGrepMatches(cwd, term) {
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "--fixed-strings", term, "--", ...SOURCE_ROOTS_FOR_IMPORT_GRAPH],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
+  const term = resolveImportGraphSearchTerm(importedFile);
+  if (!term) {
+    return null;
+  }
+
+  const candidates = listImportGraphGrepMatches(cwd, term);
+  if (!candidates || candidates.length > 800) {
+    return null;
+  }
+
+  const importers = [];
+  for (const file of candidates) {
+    if (file === importedFile || !fileSet.has(file)) {
+      continue;
+    }
+    let source = "";
+    try {
+      source = fs.readFileSync(path.join(cwd, file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
+      if (imported === importedFile) {
+        importers.push(file);
+        break;
+      }
+    }
+  }
+  return importers;
+}
+
+function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
+  const normalized = normalizePathPattern(changedPath);
+  const files = listImportGraphFilesForCwd(cwd);
+  const fileSet = new Set(files);
+  if (!fileSet.has(normalized)) {
+    return [];
+  }
+
+  const testFiles = new Set(
+    files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
+  );
+  const queue = [normalized];
+  const seen = new Set(queue);
+  const targets = [];
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    const importers = findDirectImportersWithGitGrep(cwd, current, fileSet);
+    if (importers === null) {
+      return null;
+    }
+    for (const importer of importers) {
+      if (seen.has(importer)) {
+        continue;
+      }
+      seen.add(importer);
+      if (testFiles.has(importer)) {
+        targets.push(importer);
+      }
+      queue.push(importer);
+    }
+  }
+
+  return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
+}
 
 function getImportGraph(cwd) {
   if (cachedImportGraph && cachedImportGraphCwd === cwd) {
     return cachedImportGraph;
   }
 
-  const files = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) => listImportGraphFiles(cwd, root));
+  const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map();
   const testFiles = new Set(
@@ -673,6 +1091,11 @@ function getImportGraph(cwd) {
 
 function resolveAffectedTestsFromImportGraph(changedPath, cwd) {
   const normalized = normalizePathPattern(changedPath);
+  const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+  if (targetedTargets !== null) {
+    return targetedTargets;
+  }
+
   const { reverseImports, testFiles } = getImportGraph(cwd);
   const queue = [normalized];
   const seen = new Set(queue);
@@ -717,6 +1140,15 @@ function isUnitUiTestTarget(relative) {
     relative === "ui/src/ui/views/usage-render-details.test.ts" ||
     relative === "ui/src/ui/controllers/agents.test.ts" ||
     relative === "ui/src/ui/controllers/chat.test.ts"
+  );
+}
+
+function isControlUiE2eTarget(relative) {
+  return (
+    relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
+    relative === "ui/src/ui/e2e" ||
+    relative.startsWith("ui/src/ui/e2e/") ||
+    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
   );
 }
 
@@ -837,7 +1269,7 @@ function shouldUseBroadChangedTargets(env = process.env) {
 }
 
 function isRoutableChangedTarget(changedPath) {
-  if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
+  if (GENERATED_CHANGED_TEST_TARGET_PATTERNS.some((pattern) => pattern.test(changedPath))) {
     return false;
   }
   if (changedPath.endsWith(".live.test.ts")) {
@@ -950,6 +1382,12 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
+  if (isControlUiE2eTarget(relative)) {
+    return "uiE2e";
+  }
+  if (relative.startsWith("src/tui/tui-pty-")) {
+    return "tuiPty";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
@@ -983,9 +1421,6 @@ function classifyTarget(arg, cwd) {
     }
     if (isDiffsExtensionRoot(extensionRoot)) {
       return "extensionDiffs";
-    }
-    if (isBlueBubblesExtensionRoot(extensionRoot)) {
-      return "extensionBlueBubbles";
     }
     if (isBrowserExtensionRoot(extensionRoot)) {
       return "extensionBrowser";
@@ -1123,6 +1558,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isControlUiE2eTarget(relative)) {
+      return "uiE2e";
+    }
     if (isUnitUiTestTarget(relative)) {
       return "unitUi";
     }
@@ -1158,6 +1596,10 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
     return true;
   }
+  if (kind === "uiE2e") {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    return relative === "ui/src/test-helpers/control-ui-e2e.ts";
+  }
   if (kind !== "ui") {
     return false;
   }
@@ -1174,6 +1616,7 @@ function createVitestArgs(params) {
     ...(params.watchMode ? [] : ["run"]),
     "--config",
     params.config,
+    ...(params.config === UI_E2E_VITEST_CONFIG ? ["--configLoader", "runner"] : []),
     ...params.forwardedArgs,
   ];
 }
@@ -1271,6 +1714,7 @@ export function buildVitestRunPlans(
     "sharedCore",
     "tasks",
     "tui",
+    "tuiPty",
     "mediaUnderstanding",
     "acp",
     "cli",
@@ -1283,6 +1727,7 @@ export function buildVitestRunPlans(
     "agent",
     "plugin",
     "ui",
+    "uiE2e",
     "unitSrc",
     "unitSecurity",
     "unitSupport",
@@ -1292,7 +1737,6 @@ export function buildVitestRunPlans(
     "e2e",
     "extensionAcpx",
     "extensionDiffs",
-    "extensionBlueBubbles",
     "extensionBrowser",
     "extensionDiscord",
     "extensionFeishu",
@@ -1441,7 +1885,8 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env = process.env, hostInfo) {
+export function resolveParallelFullSuiteConcurrency(specCount, env, hostInfo) {
+  env ??= process.env;
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
     return Math.min(override, specCount);

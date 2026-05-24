@@ -15,6 +15,7 @@ export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "npm-registry-plugin",
   "clawhub-registry-plugin",
   "resource-guardrails",
+  "plugin-gateway-rpc",
   "live-ish-availability",
 ]);
 
@@ -32,6 +33,10 @@ const pluginPrereleaseDockerLanes = Object.freeze([
       "gateway-bootstrap",
       "status-diagnostics",
     ],
+  },
+  {
+    lane: "npm-onboard-slack-channel-agent",
+    surfaces: ["package-artifact", "gateway-bootstrap", "status-diagnostics"],
   },
   {
     lane: "doctor-switch",
@@ -64,6 +69,18 @@ const pluginPrereleaseDockerLanes = Object.freeze([
       "npm-registry-plugin",
       "clawhub-registry-plugin",
       "resource-guardrails",
+    ],
+  },
+  {
+    lane: "kitchen-sink-rpc",
+    surfaces: [
+      "external-plugins",
+      "sdk-compatibility",
+      "gateway-bootstrap",
+      "status-diagnostics",
+      "npm-registry-plugin",
+      "resource-guardrails",
+      "plugin-gateway-rpc",
     ],
   },
   {

@@ -1,20 +1,26 @@
+import { existsSync } from "node:fs";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillStatusEntry } from "../agents/skills-status.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import {
+  detectGhConfigDirMismatch,
+  formatGhConfigDirMismatchHint,
+  type GhConfigDiscoveryInput,
+  type GhConfigDiscoveryResult,
+} from "../agents/skills/gh-config-discovery.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  collectUnavailableAgentSkills,
+  disableUnavailableSkillsInConfig,
+} from "./doctor-skills-core.js";
 
-export function collectUnavailableAgentSkills(report: SkillStatusReport): SkillStatusEntry[] {
-  return report.skills.filter(
-    (skill) =>
-      !skill.eligible &&
-      !skill.disabled &&
-      !skill.blockedByAllowlist &&
-      !skill.blockedByAgentFilter,
-  );
-}
+export {
+  collectUnavailableAgentSkills,
+  disableUnavailableSkillsInConfig,
+} from "./doctor-skills-core.js";
 
 function formatMissingSummary(skill: SkillStatusEntry): string {
   const missing: string[] = [];
@@ -43,6 +49,41 @@ function formatInstallHints(skill: SkillStatusEntry): string[] {
   return skill.install.slice(0, 2).map((entry) => `  install option: ${entry.label}`);
 }
 
+function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
+  return {
+    platform: process.platform,
+    env: process.env as GhConfigDiscoveryInput["env"],
+    fileExists: (absolutePath) => existsSync(absolutePath),
+  };
+}
+
+export function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
+  return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
+}
+
+export function describeGhConfigDirHintFromDiscovery(
+  skills: SkillStatusEntry[],
+  discoveryInput: GhConfigDiscoveryInput,
+): string[] {
+  const githubSkill = skills.find((skill) => skill.name === "github");
+  if (!githubSkill) {
+    return [];
+  }
+  if (
+    !githubSkill.eligible ||
+    githubSkill.blockedByAgentFilter ||
+    githubSkill.disabled ||
+    githubSkill.blockedByAllowlist
+  ) {
+    return [];
+  }
+  const result: GhConfigDiscoveryResult = detectGhConfigDirMismatch(discoveryInput);
+  if (result.kind !== "mismatch") {
+    return [];
+  }
+  return formatGhConfigDirMismatchHint(result);
+}
+
 export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): string[] {
   const lines: string[] = [
     "Some skills are allowed for this agent but are not usable in the current runtime environment.",
@@ -58,29 +99,6 @@ export function formatUnavailableSkillDoctorLines(skills: SkillStatusEntry[]): s
   return lines;
 }
 
-export function disableUnavailableSkillsInConfig(
-  config: OpenClawConfig,
-  skills: readonly SkillStatusEntry[],
-): OpenClawConfig {
-  if (skills.length === 0) {
-    return config;
-  }
-  const entries = { ...config.skills?.entries };
-  for (const skill of skills) {
-    entries[skill.skillKey] = {
-      ...entries[skill.skillKey],
-      enabled: false,
-    };
-  }
-  return {
-    ...config,
-    skills: {
-      ...config.skills,
-      entries,
-    },
-  };
-}
-
 export async function maybeRepairSkillReadiness(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -91,6 +109,10 @@ export async function maybeRepairSkillReadiness(params: {
     config: params.cfg,
     agentId,
   });
+  const githubHint = describeGhConfigDirHint(report.skills);
+  if (githubHint.length > 0) {
+    note(githubHint.join("\n"), "GitHub CLI");
+  }
   const unavailable = collectUnavailableAgentSkills(report);
   if (unavailable.length === 0) {
     return params.cfg;

@@ -19,6 +19,8 @@ export type ChannelsStatusSnapshot = {
   channels: Record<string, unknown>;
   channelAccounts: Record<string, ChannelAccountSnapshot[]>;
   channelDefaultAccountId: Record<string, string>;
+  partial?: boolean;
+  warnings?: string[];
 };
 
 export type ChannelUiMetaEntry = {
@@ -288,6 +290,9 @@ export type ConfigSnapshot = {
   hash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
+  sourceConfig?: Record<string, unknown> | null;
+  resolved?: Record<string, unknown> | null;
+  runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: ConfigSnapshotIssue[] | null;
 };
@@ -417,7 +422,7 @@ export type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
   surface?: string;
@@ -441,6 +446,7 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
+  archived?: boolean;
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
@@ -591,6 +597,9 @@ export type CronJobState = {
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;
+  lastFailureNotificationDelivered?: boolean;
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
 };
 

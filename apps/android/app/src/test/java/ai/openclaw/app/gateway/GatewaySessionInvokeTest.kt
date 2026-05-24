@@ -27,6 +27,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
@@ -79,6 +80,102 @@ private data class InvokeScenarioResult(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
+  @Test
+  fun connect_advertisesCompatibleProtocolRange() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          when (method) {
+            "connect" -> {
+              if (!connectParams.isCompleted) {
+                connectParams.complete(frame["params"]!!.jsonObject)
+              }
+              webSocket.send(connectResponseFrame(id))
+              webSocket.close(1000, "done")
+            }
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          GATEWAY_MIN_PROTOCOL_VERSION,
+          params["minProtocol"]?.jsonPrimitive?.content?.toInt(),
+        )
+        assertEquals(
+          GATEWAY_PROTOCOL_VERSION,
+          params["maxProtocol"]?.jsonPrimitive?.content?.toInt(),
+        )
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun eventsAreDispatchedInWebSocketFrameOrder() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val firstEventStarted = CompletableDeferred<Unit>()
+      val releaseFirstEvent = CompletableDeferred<Unit>()
+      val secondEventHandled = CompletableDeferred<Unit>()
+      val events = CopyOnWriteArrayList<String>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          if (method == "connect") {
+            webSocket.send(connectResponseFrame(id))
+            webSocket.send("""{"type":"event","event":"voice.first","payload":{}}""")
+            webSocket.send("""{"type":"event","event":"voice.second","payload":{}}""")
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+          onEvent = { event, _ ->
+            if (event == "voice.first") {
+              firstEventStarted.complete(Unit)
+              runBlocking { releaseFirstEvent.await() }
+            }
+            events += event
+            if (event == "voice.second") {
+              secondEventHandled.complete(Unit)
+            }
+          },
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+        withTimeout(TEST_TIMEOUT_MS) { firstEventStarted.await() }
+
+        assertNull(withTimeoutOrNull(200) { secondEventHandled.await() })
+
+        releaseFirstEvent.complete(Unit)
+        withTimeout(TEST_TIMEOUT_MS) { secondEventHandled.await() }
+        assertEquals(listOf("voice.first", "voice.second"), events.toList())
+      } finally {
+        releaseFirstEvent.complete(Unit)
+        shutdownHarness(harness, server)
+      }
+    }
+
   @Test
   fun connect_usesBootstrapTokenWhenSharedAndDeviceTokensAreAbsent() =
     runBlocking {
@@ -291,7 +388,7 @@ class GatewaySessionInvokeTest {
                 connectResponseFrame(
                   id,
                   authJson =
-                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.read","operator.talk.secrets","operator.write"]}]}""",
+                    """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.pairing","operator.read","operator.talk.secrets","operator.write"]}]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -321,7 +418,7 @@ class GatewaySessionInvokeTest {
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
         assertEquals(
-          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          listOf("operator.approvals", "operator.pairing", "operator.read", "operator.write"),
           operatorEntry?.scopes,
         )
       } finally {
@@ -477,56 +574,6 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun refreshNodeCanvasCapability_sendsObjectParamsAndUpdatesScopedUrl() =
-    runBlocking {
-      val json = testJson()
-      val connected = CompletableDeferred<Unit>()
-      val refreshRequestParams = CompletableDeferred<String?>()
-      val lastDisconnect = AtomicReference("")
-
-      val server =
-        startGatewayServer(json) { webSocket, id, method, frame ->
-          when (method) {
-            "connect" -> {
-              webSocket.send(connectResponseFrame(id, canvasHostUrl = "http://127.0.0.1/__openclaw__/cap/old-cap"))
-            }
-            "node.canvas.capability.refresh" -> {
-              if (!refreshRequestParams.isCompleted) {
-                refreshRequestParams.complete(frame["params"]?.toString())
-              }
-              webSocket.send(
-                """{"type":"res","id":"$id","ok":true,"payload":{"canvasCapability":"new-cap"}}""",
-              )
-              webSocket.close(1000, "done")
-            }
-          }
-        }
-
-      val harness =
-        createNodeHarness(
-          connected = connected,
-          lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
-
-      try {
-        connectNodeSession(harness.session, server.port)
-        awaitConnectedOrThrow(connected, lastDisconnect, server)
-
-        val refreshed = harness.session.refreshNodeCanvasCapability(timeoutMs = TEST_TIMEOUT_MS)
-        val refreshParamsJson = withTimeout(TEST_TIMEOUT_MS) { refreshRequestParams.await() }
-
-        assertEquals(true, refreshed)
-        assertEquals("{}", refreshParamsJson)
-        assertEquals(
-          "http://127.0.0.1:${server.port}/__openclaw__/cap/new-cap",
-          harness.session.currentCanvasHostUrl(),
-        )
-      } finally {
-        shutdownHarness(harness, server)
-      }
-    }
-
-  @Test
   fun sendNodeEventDetailed_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
     runBlocking {
       val json = testJson()
@@ -638,6 +685,7 @@ class GatewaySessionInvokeTest {
   private fun createNodeHarness(
     connected: CompletableDeferred<Unit>,
     lastDisconnect: AtomicReference<String>,
+    onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
     onInvoke: (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
@@ -648,13 +696,13 @@ class GatewaySessionInvokeTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
-        onConnected = { _, _, _ ->
+        onConnected = {
           if (!connected.isCompleted) connected.complete(Unit)
         },
         onDisconnected = { message ->
           lastDisconnect.set(message)
         },
-        onEvent = { _, _ -> },
+        onEvent = onEvent,
         onInvoke = onInvoke,
       )
 
@@ -778,12 +826,17 @@ class GatewaySessionInvokeTest {
 
   private fun connectResponseFrame(
     id: String,
-    canvasHostUrl: String? = null,
+    pluginSurfaceUrls: Map<String, String> = emptyMap(),
     authJson: String? = null,
   ): String {
-    val canvas = canvasHostUrl?.let { "\"canvasHostUrl\":\"$it\"," } ?: ""
+    val surfaces =
+      pluginSurfaceUrls.entries
+        .joinToString(",") { (key, value) -> """"$key":"$value"""" }
+        .takeIf { it.isNotEmpty() }
+        ?.let { """"pluginSurfaceUrls":{$it},""" }
+        ?: ""
     val auth = authJson?.let { "\"auth\":$it," } ?: ""
-    return """{"type":"res","id":"$id","ok":true,"payload":{$canvas$auth"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+    return """{"type":"res","id":"$id","ok":true,"payload":{$surfaces$auth"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
   }
 
   private fun startGatewayServer(

@@ -14,6 +14,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   hasExplicitManifestOwnerTrust,
   isActivatedManifestOwner,
@@ -280,7 +281,7 @@ function evaluateEffectiveChannelPlugin(params: {
     origin: params.plugin.origin,
     config: params.normalizedConfig,
     rootConfig: params.config,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
     activationSource: params.activationSource,
   });
   return activationState.enabled
@@ -474,6 +475,10 @@ function resolveScopedChannelOwnerPluginIds(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
         manifestRecords: records,
+        allowRestrictiveAllowlistBypass: hasExplicitChannelConfig({
+          config: trustConfig,
+          channelId,
+        }),
       });
     }),
   );

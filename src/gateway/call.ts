@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { isLoopbackIpAddress } from "../shared/net/ip.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -19,7 +20,12 @@ import {
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
-import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  GatewayClient,
+  isGatewayConnectAssemblyError,
+  type GatewayClientOptions,
+  type GatewayClientRequestOptions,
+} from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
   type GatewayConnectionDetails,
@@ -41,8 +47,14 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
+
+export type GatewayRequestFunction = <T = Record<string, unknown>>(
+  method: string,
+  params?: unknown,
+  opts?: GatewayClientRequestOptions,
+) => Promise<T>;
 
 type CallGatewayBaseOptions = {
   url?: string;
@@ -54,11 +66,15 @@ type CallGatewayBaseOptions = {
   params?: unknown;
   expectFinal?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
+  onAccepted?: GatewayClientRequestOptions["onAccepted"];
+  onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  approvalRuntimeToken?: string;
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -114,6 +130,55 @@ export class GatewayTransportError extends Error {
       this.timeoutMs = params.timeoutMs;
     }
   }
+}
+
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport_error";
+    kind: GatewayTransportErrorKind;
+    message: string;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  };
+  gateway: {
+    url: string;
+    urlSource: string;
+    bindDetail?: string;
+    remoteFallbackNote?: string;
+  };
+};
+
+function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
+  if (!isGatewayTransportError(value)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport_error",
+      kind: value.kind,
+      message: firstGatewayErrorLine(value.message),
+      ...(value.code !== undefined ? { code: value.code } : {}),
+      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+    },
+    gateway: {
+      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
+      urlSource: value.connectionDetails.urlSource,
+      ...(value.connectionDetails.bindDetail
+        ? { bindDetail: value.connectionDetails.bindDetail }
+        : {}),
+      ...(value.connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+        : {}),
+    },
+  };
 }
 
 export function isGatewayTransportError(value: unknown): value is GatewayTransportError {
@@ -215,7 +280,7 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
@@ -564,6 +629,12 @@ function createGatewayTimeoutTransportError(params: {
   });
 }
 
+function createGatewayRequestAbortError(method: string): Error {
+  const err = new Error(`gateway request aborted for ${method}`);
+  err.name = "AbortError";
+  return err;
+}
+
 function ensureGatewaySupportsRequiredMethods(params: {
   requiredMethods: string[] | undefined;
   methods: string[] | undefined;
@@ -617,26 +688,75 @@ async function executeGatewayRequestWithScopes<T>(params: {
     safeTimerTimeoutMs,
   } = params;
   return await new Promise<T>((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(createGatewayRequestAbortError(opts.method));
+      return;
+    }
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
-    const stop = (err?: Error, value?: T) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
+    let abortHandler: (() => void) | undefined;
+    let client: GatewayClient | undefined;
+    let timer: NodeJS.Timeout | undefined;
+    let primaryRequestStarted = false;
+    const cleanup = () => {
       startAbort.abort();
-      clearTimeout(timer);
-      void stopGatewayClient(client).finally(() => {
+      if (abortHandler) {
+        opts.signal?.removeEventListener("abort", abortHandler);
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+    const stopClientThenSettle = (
+      activeClient: GatewayClient | undefined,
+      err?: Error,
+      value?: T,
+    ) => {
+      const complete = () => {
         if (err) {
           reject(err);
         } else {
           resolve(value as T);
         }
-      });
+      };
+      if (!activeClient) {
+        complete();
+        return;
+      }
+      void stopGatewayClient(activeClient).finally(complete);
     };
+    const stop = (err?: Error, value?: T) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      stopClientThenSettle(client, err, value);
+    };
+    abortHandler = () => {
+      if (settled) {
+        return;
+      }
+      ignoreClose = true;
+      settled = true;
+      cleanup();
+      const err = createGatewayRequestAbortError(opts.method);
+      const activeClient = client;
+      const stopAfterAbortHook = () => stopClientThenSettle(activeClient, err);
+      if (!activeClient || !opts.onSignalAbort || !primaryRequestStarted) {
+        stopAfterAbortHook();
+        return;
+      }
+      const request: GatewayRequestFunction = activeClient.request.bind(activeClient);
+      void Promise.resolve()
+        .then(() => opts.onSignalAbort?.(request))
+        .catch(() => {})
+        .finally(stopAfterAbortHook);
+    };
+    opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    const client = gatewayCallDeps.createGatewayClient({
+    client = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -648,13 +768,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       role: "operator",
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
           ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
         try {
@@ -663,9 +784,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
             methods: hello.features?.methods,
             attemptedMethod: opts.method,
           });
-          const result = await client.request<T>(opts.method, opts.params, {
+          const activeClient = client;
+          if (!activeClient) {
+            throw new Error("gateway client not initialized");
+          }
+          primaryRequestStarted = true;
+          const result = await activeClient.request<T>(opts.method, opts.params, {
             expectFinal: opts.expectFinal,
             timeoutMs: opts.timeoutMs,
+            signal: opts.signal,
+            onAccepted: opts.onAccepted,
           });
           ignoreClose = true;
           stop(undefined, result);
@@ -687,9 +815,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
           }),
         );
       },
+      onConnectError: (err) => {
+        if (settled || !isGatewayConnectAssemblyError(err)) {
+          return;
+        }
+        ignoreClose = true;
+        stop(err);
+      },
     });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
@@ -779,7 +914,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   const scopes = Array.isArray(opts.scopes)
     ? opts.scopes
     : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
       : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
@@ -787,7 +922,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
   return await callGatewayWithScopes(opts, scopes);
 }
 
@@ -819,3 +954,4 @@ export async function callGateway<T = Record<string, unknown>>(
 export function randomIdempotencyKey() {
   return randomUUID();
 }
+export { testing as __testing };

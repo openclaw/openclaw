@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -30,19 +30,25 @@ const IMAGE_EXTENSION_NAMES = [
   "heic",
   "heif",
 ] as const;
-const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSIONS = new Set<string>();
+for (const ext of IMAGE_EXTENSION_NAMES) {
+  IMAGE_EXTENSIONS.add(`.${ext}`);
+}
 const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
 const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
   "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
 const MESSAGE_IMAGE_REGEX_SOURCE =
   "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const WINDOWS_DRIVE_PATH_REGEX_SOURCE =
+  "(?:^|\\s|[\"'`(])([A-Za-z]:[\\\\/][^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
 const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
 const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
 const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const WINDOWS_DRIVE_PATH_PATTERN = new RegExp(WINDOWS_DRIVE_PATH_REGEX_SOURCE, "gi");
 const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 
 /**
@@ -143,6 +149,61 @@ export function mergePromptAttachmentImages(params: {
   return promptImages;
 }
 
+function createRefCountMap(refs: DetectedImageRef[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const ref of refs) {
+    const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function consumeRefCount(counts: Map<string, number>, ref: DetectedImageRef): boolean {
+  const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+  const count = counts.get(key) ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    counts.delete(key);
+  } else {
+    counts.set(key, count - 1);
+  }
+  return true;
+}
+
+function extractLeadingAttachmentPrompt(prompt: string): string {
+  const lines = prompt.split(/\r?\n/);
+  const attachmentLines: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      break;
+    }
+    if (/^\[media attached:\s*\d+\s+files?\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    if (/^\[media attached(?:\s+\d+\/\d+)?:\s*[^\]]+\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    break;
+  }
+  return attachmentLines.join("\n");
+}
+
+function extractLeadingInlineAttachmentRefs(prompt: string, count: number): DetectedImageRef[] {
+  if (count <= 0) {
+    return [];
+  }
+  const attachmentPrompt = extractLeadingAttachmentPrompt(prompt);
+  if (!attachmentPrompt) {
+    return [];
+  }
+  return detectImageReferences(attachmentPrompt).slice(0, count);
+}
+
 function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
   if (count <= 0) {
     return [];
@@ -159,7 +220,12 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     if (!match?.[1]) {
       break;
     }
-    uris.unshift(match[1]);
+    uris.push(match[1]);
+  }
+  for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
+    const uri = uris[left];
+    uris[left] = uris[right];
+    uris[right] = uri;
   }
   return uris;
 }
@@ -168,23 +234,31 @@ export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
   imageOrder?: PromptImageOrderEntry[];
+  existingImageCount?: number;
 }): {
   promptRefs: DetectedImageRef[];
   attachmentRefs: DetectedImageRef[];
 } {
+  const existingImageCount = params.existingImageCount ?? 0;
+  const inlineOrderCount = params.imageOrder?.filter((entry) => entry === "inline").length;
+  const inlineAttachmentRefCount = Math.min(
+    existingImageCount,
+    inlineOrderCount ?? existingImageCount,
+  );
+  const inlineAttachmentRefs = createRefCountMap(
+    extractLeadingInlineAttachmentRefs(params.prompt, inlineAttachmentRefCount),
+  );
   const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
-  if (offloadedCount === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
-
-  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
-  if (attachmentUris.size === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
+  const attachmentUris = new Set(
+    offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
+  );
 
   const promptRefs: DetectedImageRef[] = [];
   const attachmentRefs: DetectedImageRef[] = [];
   for (const ref of params.refs) {
+    if (consumeRefCount(inlineAttachmentRefs, ref)) {
+      continue;
+    }
     if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
       attachmentRefs.push(ref);
       continue;
@@ -257,6 +331,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   MEDIA_ATTACHED_PATTERN.lastIndex = 0;
   MESSAGE_IMAGE_PATTERN.lastIndex = 0;
   FILE_URL_PATTERN.lastIndex = 0;
+  WINDOWS_DRIVE_PATH_PATTERN.lastIndex = 0;
   PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
@@ -315,6 +390,13 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
+    }
+  }
+
+  // Pattern for Windows drive paths.
+  while ((match = WINDOWS_DRIVE_PATH_PATTERN.exec(prompt)) !== null) {
+    if (match[1]) {
+      addPathRef(match[1]);
     }
   }
 
@@ -459,8 +541,13 @@ export async function detectAndLoadPromptImages(params: {
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
+    const sanitizedExistingImages = await sanitizeImagesWithLog(
+      params.existingImages ?? [],
+      "prompt:images",
+      { maxDimensionPx: params.maxDimensionPx },
+    );
     return {
-      images: params.existingImages ?? [],
+      images: sanitizedExistingImages,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -472,6 +559,7 @@ export async function detectAndLoadPromptImages(params: {
     prompt: params.prompt,
     refs: allRefs,
     imageOrder: params.imageOrder,
+    existingImageCount: params.existingImages?.length,
   });
   const promptRefImages: ImageContent[] = [];
   const offloadedImages: Array<ImageContent | null> = [];

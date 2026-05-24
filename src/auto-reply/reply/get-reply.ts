@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import {
+  resolveAutoFallbackPrimaryProbe,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -11,13 +13,16 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -35,16 +40,42 @@ import {
   shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
+import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
+import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
+import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { initSessionState } from "./session.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+  });
+  return {
+    shouldClear: stripped.shouldSkip,
+    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
+  };
+}
+
+function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
+  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
+  return Math.max(
+    0,
+    agentHeartbeat?.ackMaxChars ??
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
+}
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
@@ -131,7 +162,9 @@ function hasLinkCandidate(ctx: MsgContext): boolean {
 async function applyMediaUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   activeModel: { provider: string; model: string };
 }): Promise<boolean> {
   if (!hasInboundMedia(params.ctx)) {
@@ -189,11 +222,21 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
-  const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
-  const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  const finalized = finalizeInboundContext(ctx);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const agentSessionKey = targetSessionKey || finalized.SessionKey;
+  const traceAttributes = {
+    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
+    hasSessionKey: Boolean(agentSessionKey),
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasMedia: hasInboundMedia(finalized),
+  };
+  const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    measureDiagnosticsTimelineSpan(name, run, {
+      phase: "agent-turn",
+      config: cfg,
+      attributes: traceAttributes,
+    });
   const agentId = resolveSessionAgentId({
     sessionKey: agentSessionKey,
     config: cfg,
@@ -235,14 +278,7 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = useFastTestBootstrap
-    ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-    : await ensureAgentWorkspace({
-        dir: workspaceDirRaw,
-        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-        skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-      });
-  const workspaceDir = workspace.dir;
+  const workspaceDirForNativeCommand = workspaceDirRaw;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -258,19 +294,61 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
-  const finalized = finalizeInboundContext(ctx);
+  const nativeSlashCommandFastReply = await traceGetReplyPhase(
+    "reply.native_slash_command_fast_path",
+    () =>
+      maybeResolveNativeSlashCommandFastReply({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        commandAuthorized: finalized.CommandAuthorized,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        provider,
+        model,
+        workspaceDir: workspaceDirForNativeCommand,
+        typing,
+        opts: resolvedOpts,
+        skillFilter: mergedSkillFilter,
+      }),
+  );
+  if (nativeSlashCommandFastReply.handled) {
+    return nativeSlashCommandFastReply.reply;
+  }
 
-  if (!isFastTestEnv) {
-    await applyMediaUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-      agentDir,
-      activeModel: { provider, model },
-    });
-    await applyLinkUnderstandingIfNeeded({
-      ctx: finalized,
-      cfg,
-    });
+  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+    useFastTestBootstrap
+      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+      : await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        }),
+  );
+  const workspaceDir = workspace.dir;
+
+  if (!isFastTestEnv && hasInboundMedia(finalized)) {
+    await traceGetReplyPhase("reply.apply_media_understanding", () =>
+      applyMediaUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        activeModel: { provider, model },
+      }),
+    );
+  }
+  if (!isFastTestEnv && hasLinkCandidate(finalized)) {
+    await traceGetReplyPhase("reply.apply_link_understanding", () =>
+      applyLinkUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+      }),
+    );
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -287,11 +365,13 @@ export async function getReplyFromConfig(
         commandAuthorized,
         workspaceDir,
       })
-    : await initSessionState({
-        ctx: finalized,
-        cfg,
-        commandAuthorized,
-      });
+    : await traceGetReplyPhase("reply.init_session_state", () =>
+        initSessionState({
+          ctx: finalized,
+          cfg,
+          commandAuthorized,
+        }),
+      );
   let {
     sessionCtx,
     sessionEntry,
@@ -310,6 +390,76 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+
+    // If it's a heartbeat, we definitely want to try delivering the lost reply now.
+    // If it's a user message, we deliver the lost reply first, then continue.
+    // For now, let's just return the lost reply if it's a heartbeat.
+    if (opts?.isHeartbeat) {
+      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+        text,
+        resolveHeartbeatAckMaxChars(cfg, agentId),
+      );
+      if (heartbeatPending.shouldClear) {
+        sessionEntry.pendingFinalDelivery = undefined;
+        sessionEntry.pendingFinalDeliveryText = undefined;
+        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+        sessionEntry.pendingFinalDeliveryLastError = undefined;
+        sessionEntry.pendingFinalDeliveryContext = undefined;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDelivery: undefined,
+              pendingFinalDeliveryText: undefined,
+              pendingFinalDeliveryCreatedAt: undefined,
+              pendingFinalDeliveryLastAttemptAt: undefined,
+              pendingFinalDeliveryAttemptCount: undefined,
+              pendingFinalDeliveryLastError: undefined,
+              pendingFinalDeliveryContext: undefined,
+            }),
+          });
+        }
+      } else {
+        const updatedAt = Date.now();
+        const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+        sessionEntry.pendingFinalDeliveryLastError = null;
+        const replayText = sanitizePendingFinalDeliveryText(heartbeatPending.replayText);
+        sessionEntry.pendingFinalDeliveryText = replayText;
+        sessionEntry.updatedAt = updatedAt;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDeliveryText: replayText,
+              pendingFinalDeliveryLastAttemptAt: updatedAt,
+              pendingFinalDeliveryAttemptCount: attemptCount,
+              pendingFinalDeliveryLastError: null,
+              updatedAt,
+            }),
+          });
+        }
+        return { text: replayText };
+      }
+    }
+  }
+
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
@@ -348,6 +498,16 @@ export async function getReplyFromConfig(
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
+  const resolvedChannelModelOverride =
+    channelModelOverride && !hasResolvedHeartbeatModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider,
+          aliasIndex,
+        })
+      : null;
+  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -362,20 +522,43 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+  });
+  if (
+    storedModelOverride?.model &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride
+  ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
+  const canApplyAutoFallbackPrimaryProbe =
+    !hasResolvedHeartbeatModelOverride && !staleHeartbeatAutoFallbackOverride;
+  const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
+    ? resolveAutoFallbackPrimaryProbe({
+        entry: sessionEntry,
+        sessionKey,
+        primaryProvider,
+        primaryModel,
+      })
+    : undefined;
+  const hasEffectiveSessionModelOverride =
+    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasEffectiveSessionModelOverride &&
+    resolvedChannelModelOverride
+  ) {
+    provider = resolvedChannelModelOverride.ref.provider;
+    model = resolvedChannelModelOverride.ref.model;
   }
 
   if (
@@ -396,90 +579,97 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       commandAuthorized,
     });
-    return runPreparedReply({
-      ctx,
-      sessionCtx,
+    return await traceGetReplyPhase("reply.run_prepared_reply", () =>
+      runPreparedReply({
+        ctx,
+        sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        sessionCfg,
+        commandAuthorized,
+        command: fastCommand,
+        commandSource:
+          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+        allowTextCommands: shouldHandleFastReplyTextCommands({
+          cfg,
+          commandSource: finalized.CommandSource,
+        }),
+        directives: clearInlineDirectives(
+          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+        ),
+        defaultActivation: "always",
+        resolvedThinkLevel: undefined,
+        resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
+        resolvedReasoningLevel: "off",
+        resolvedElevatedLevel: "off",
+        execOverrides: undefined,
+        elevatedEnabled: false,
+        elevatedAllowed: false,
+        blockStreamingEnabled: false,
+        blockReplyChunking: undefined,
+        resolvedBlockStreamingBreak: "text_end",
+        modelState: createFastTestModelSelectionState({
+          agentCfg,
+          provider: autoFallbackPrimaryProbe?.provider ?? provider,
+          model: autoFallbackPrimaryProbe?.model ?? model,
+        }),
+        provider: autoFallbackPrimaryProbe?.provider ?? provider,
+        model: autoFallbackPrimaryProbe?.model ?? model,
+        perMessageQueueMode: undefined,
+        perMessageQueueOptions: undefined,
+        typing,
+        opts: resolvedOpts,
+        defaultModel,
+        timeoutMs,
+        isNewSession,
+        resetTriggered,
+        systemSent,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        sessionId,
+        storePath,
+        workspaceDir,
+        abortedLastRun,
+        autoFallbackPrimaryProbe,
+      }),
+    );
+  }
+
+  const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
+    resolveReplyDirectives({
+      ctx: finalized,
       cfg,
       agentId,
       agentDir,
+      workspaceDir,
       agentCfg,
-      sessionCfg,
-      commandAuthorized,
-      command: fastCommand,
-      commandSource: finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-      allowTextCommands: shouldHandleFastReplyTextCommands({
-        cfg,
-        commandSource: finalized.CommandSource,
-      }),
-      directives: clearInlineDirectives(
-        finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-      ),
-      defaultActivation: "always",
-      resolvedThinkLevel: undefined,
-      resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
-      resolvedReasoningLevel: "off",
-      resolvedElevatedLevel: "off",
-      execOverrides: undefined,
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      blockStreamingEnabled: false,
-      blockReplyChunking: undefined,
-      resolvedBlockStreamingBreak: "text_end",
-      modelState: createFastTestModelSelectionState({
-        agentCfg,
-        provider,
-        model,
-      }),
-      provider,
-      model,
-      perMessageQueueMode: undefined,
-      perMessageQueueOptions: undefined,
-      typing,
-      opts: resolvedOpts,
-      defaultProvider,
-      defaultModel,
-      timeoutMs,
-      isNewSession,
-      resetTriggered,
-      systemSent,
+      sessionCtx,
       sessionEntry,
       sessionStore,
       sessionKey,
-      sessionId,
       storePath,
-      workspaceDir,
-      abortedLastRun,
-    });
-  }
-
-  const directiveResult = await resolveReplyDirectives({
-    ctx: finalized,
-    cfg,
-    agentId,
-    agentDir,
-    workspaceDir,
-    agentCfg,
-    sessionCtx,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    groupResolution,
-    isGroup,
-    triggerBodyNormalized,
-    resetTriggered,
-    commandAuthorized,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    provider,
-    model,
-    hasResolvedHeartbeatModelOverride,
-    typing,
-    opts: resolvedOpts,
-    skillFilter: mergedSkillFilter,
-  });
+      sessionScope,
+      groupResolution,
+      isGroup,
+      triggerBodyNormalized,
+      resetTriggered,
+      commandAuthorized,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      aliasIndex,
+      provider,
+      model,
+      hasResolvedHeartbeatModelOverride,
+      typing,
+      opts: resolvedOpts,
+      skillFilter: mergedSkillFilter,
+    }),
+  );
   if (directiveResult.kind === "reply") {
     return directiveResult.reply;
   }
@@ -537,53 +727,111 @@ export async function getReplyFromConfig(
     });
   };
 
-  const inlineActionResult = await handleInlineActions({
-    ctx,
-    sessionCtx,
-    cfg,
-    agentId,
-    agentDir,
-    sessionEntry,
-    previousSessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionScope,
-    workspaceDir,
-    isGroup,
-    opts: resolvedOpts,
-    typing,
-    allowTextCommands,
-    inlineStatusRequested,
-    command,
-    skillCommands,
-    directives,
-    cleanedBody,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
-    defaultActivation: () => defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
-    provider,
-    model,
-    contextTokens,
-    directiveAck,
-    abortedLastRun,
-    skillFilter: mergedSkillFilter,
-  });
+  const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
+    handleInlineActions({
+      ctx,
+      sessionCtx,
+      cfg,
+      agentId,
+      agentDir,
+      sessionEntry,
+      previousSessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionScope,
+      workspaceDir,
+      isGroup,
+      opts: resolvedOpts,
+      typing,
+      allowTextCommands,
+      inlineStatusRequested,
+      command,
+      skillCommands,
+      directives,
+      cleanedBody,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      defaultActivation: () => defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel,
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      provider,
+      model,
+      contextTokens,
+      directiveAck,
+      abortedLastRun,
+      skillFilter: mergedSkillFilter,
+    }),
+  );
   if (inlineActionResult.kind === "reply") {
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  const runAutoFallbackPrimaryProbe = directives.hasModelDirective
+    ? undefined
+    : autoFallbackPrimaryProbe;
+  const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
+  const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
+  let runModelState = modelState;
+  if (runAutoFallbackPrimaryProbe) {
+    runModelState = await createModelSelectionState({
+      cfg,
+      agentId,
+      agentCfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        sessionEntry.parentSessionKey ??
+        sessionCtx.ModelParentSessionKey ??
+        sessionCtx.ParentSessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+      provider: runProvider,
+      model: runModel,
+      hasModelDirective: false,
+      skipStoredModelOverride: true,
+      hasResolvedHeartbeatModelOverride,
+      isHeartbeat: opts?.isHeartbeat === true,
+    });
+    const hasExplicitThinkLevel =
+      resolvedOpts?.thinkingLevelOverride !== undefined ||
+      directives.thinkLevel !== undefined ||
+      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined) ||
+      agentCfg?.thinkingDefault !== undefined;
+    if (!hasExplicitThinkLevel) {
+      resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
+    }
+    const agentEntry = resolveAgentConfig(cfg, agentId);
+    const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
+    const canUseReasoningState =
+      command.isAuthorizedSender ||
+      command.senderIsOwner ||
+      (Array.isArray(ctx.GatewayClientScopes) &&
+        ctx.GatewayClientScopes.includes("operator.admin"));
+    const hasExplicitReasoningLevel =
+      directives.reasoningLevel !== undefined ||
+      (rawSessionReasoningLevel != null && canUseReasoningState) ||
+      (rawSessionReasoningLevel != null && !canUseReasoningState) ||
+      agentEntry?.reasoningDefault != null ||
+      agentCfg?.reasoningDefault != null;
+    if (!hasExplicitReasoningLevel && resolvedThinkLevel === "off") {
+      resolvedReasoningLevel = await runModelState.resolveDefaultReasoningLevel();
+    }
+  }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
@@ -595,21 +843,23 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
-      const hookResult = await hookRunner.runBeforeAgentReply(
-        { cleanedBody },
-        {
-          agentId,
-          sessionKey: agentSessionKey,
-          sessionId,
-          workspaceDir,
-          trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-          ...buildAgentHookContextChannelFields({
+      const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
+        hookRunner.runBeforeAgentReply(
+          { cleanedBody },
+          {
+            agentId,
             sessionKey: agentSessionKey,
-            messageProvider: hookMessageProvider,
-            currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-            messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-          }),
-        },
+            sessionId,
+            workspaceDir,
+            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+            ...buildAgentHookContextChannelFields({
+              sessionKey: agentSessionKey,
+              messageProvider: hookMessageProvider,
+              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+            }),
+          },
+        ),
       );
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
@@ -623,58 +873,62 @@ export async function getReplyFromConfig(
   // semantics in stageSandboxMedia.
   if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-    await stageSandboxMedia({
+    await traceGetReplyPhase("reply.stage_media", () =>
+      stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey,
+        workspaceDir,
+      }),
+    );
+  }
+
+  return await traceGetReplyPhase("reply.run_prepared_reply", () =>
+    runPreparedReply({
       ctx,
       sessionCtx,
       cfg,
+      agentId,
+      agentDir,
+      agentCfg,
+      sessionCfg,
+      commandAuthorized,
+      command,
+      commandSource,
+      allowTextCommands,
+      directives,
+      defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel,
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      execOverrides,
+      elevatedEnabled,
+      elevatedAllowed,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      modelState: runModelState,
+      provider: runProvider,
+      model: runModel,
+      perMessageQueueMode,
+      perMessageQueueOptions,
+      typing,
+      opts: resolvedOpts,
+      defaultModel,
+      timeoutMs,
+      isNewSession,
+      resetTriggered,
+      systemSent,
+      sessionEntry,
+      sessionStore,
       sessionKey,
+      sessionId,
+      storePath,
       workspaceDir,
-    });
-  }
-
-  return runPreparedReply({
-    ctx,
-    sessionCtx,
-    cfg,
-    agentId,
-    agentDir,
-    agentCfg,
-    sessionCfg,
-    commandAuthorized,
-    command,
-    commandSource,
-    allowTextCommands,
-    directives,
-    defaultActivation,
-    resolvedThinkLevel,
-    resolvedVerboseLevel,
-    resolvedReasoningLevel,
-    resolvedElevatedLevel,
-    execOverrides,
-    elevatedEnabled,
-    elevatedAllowed,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    modelState,
-    provider,
-    model,
-    perMessageQueueMode,
-    perMessageQueueOptions,
-    typing,
-    opts: resolvedOpts,
-    defaultProvider,
-    defaultModel,
-    timeoutMs,
-    isNewSession,
-    resetTriggered,
-    systemSent,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    sessionId,
-    storePath,
-    workspaceDir,
-    abortedLastRun,
-  });
+      abortedLastRun,
+      autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+    }),
+  );
 }

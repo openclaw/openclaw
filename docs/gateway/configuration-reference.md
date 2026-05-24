@@ -27,40 +27,43 @@ Dedicated deep references:
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
 - owning channel/plugin pages for channel-specific command surfaces
 
-Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional - OpenClaw uses safe defaults when omitted.
 
 ---
 
 ## Channels
 
-Per-channel config keys moved to a dedicated page — see
-[Configuration — channels](/gateway/config-channels) for `channels.*`,
+Per-channel config keys moved to a dedicated page - see
+[Configuration - channels](/gateway/config-channels) for `channels.*`,
 including Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other
 bundled channels (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 
-Moved to a dedicated page — see
-[Configuration — agents](/gateway/config-agents) for:
+Moved to a dedicated page - see
+[Configuration - agents](/gateway/config-agents) for:
 
 - `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)
 - `talk.*` (Talk mode)
+  - `talk.consultThinkingLevel`: thinking level override for the full OpenClaw agent run behind Control UI Talk realtime consults
+  - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
+  - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
-provider / base-URL setup moved to a dedicated page — see
-[Configuration — tools and custom providers](/gateway/config-tools).
+provider / base-URL setup moved to a dedicated page - see
+[Configuration - tools and custom providers](/gateway/config-tools).
 
 ## Models
 
 Provider definitions, model allowlists, and custom provider setup live in
-[Configuration — tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
+[Configuration - tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
 The `models` root also owns global model-catalog behavior.
 
 ```json5
@@ -74,6 +77,10 @@ The `models` root also owns global model-catalog behavior.
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
 - `models.providers`: custom provider map keyed by provider id.
+- `models.providers.*.localService`: optional on-demand process manager for
+  local model servers. OpenClaw probes the configured health endpoint, starts
+  the absolute `command` when needed, waits for readiness, then sends the model
+  request. See [Local model services](/gateway/local-model-services).
 - `models.pricing.enabled`: controls the background pricing bootstrap that
   starts after sidecars and channels reach the Gateway ready path. When `false`,
   the Gateway skips OpenRouter and LiteLLM pricing-catalog fetches; configured
@@ -102,6 +109,11 @@ target server during config edits.
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        // Optional Codex app-server projection controls.
+        codex: {
+          agents: ["main"],
+          defaultToolsApprovalMode: "approve", // auto | prompt | approve
+        },
       },
     },
   },
@@ -113,6 +125,17 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
+  This block is OpenClaw metadata for Codex app-server threads only; it does not
+  affect ACP sessions, generic Codex harness config, or other runtime adapters.
+  Non-empty `codex.agents` limits the server to the listed OpenClaw agent ids.
+  Empty, blank, or invalid scoped agent lists are rejected by config validation
+  and omitted by the runtime projection path instead of becoming global.
+  `codex.defaultToolsApprovalMode` emits Codex's native
+  `default_tools_approval_mode` for that server. OpenClaw strips the `codex`
+  block before passing native `mcp_servers` config to Codex. Omit the block to
+  keep the server projected for every Codex app-server agent with Codex's
+  default MCP approval behavior.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
@@ -131,10 +154,12 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
     allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
     },
     install: {
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
       "image-lab": {
@@ -150,10 +175,16 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
+- `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
+  resolve into when the link lives outside its configured source root.
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
   specs (`npm` | `pnpm` | `yarn` | `bun`).
+- `install.allowUploadedArchives`: allow trusted `operator.admin` Gateway
+  clients to install private zip archives staged through `skills.upload.*`
+  (default: false). This only enables the uploaded-archive path; normal ClawHub
+  installs do not require it.
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
 - `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 
@@ -166,6 +197,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   plugins: {
     enabled: true,
     allow: ["voice-call"],
+    bundledDiscovery: "allowlist",
     deny: [],
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
@@ -187,14 +219,86 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
+- `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
+  `plugins.allow` also gates bundled provider plugins, including web-search
+  runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
+  configs to preserve existing bundled provider behavior until you opt in.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
-- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
+
+### Codex harness plugin config
+
+The bundled `codex` plugin owns native Codex app-server harness settings under
+`plugins.entries.codex.config`. See
+[Codex harness reference](/plugins/codex-harness-reference) for the full config
+surface and [Codex harness](/plugins/codex-harness) for the runtime model.
+
+`codexPlugins` applies only to sessions that select the native Codex harness.
+It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+conversation bindings, or any non-Codex harness.
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            allow_destructive_actions: true,
+            plugins: {
+              "google-calendar": {
+                enabled: true,
+                marketplaceName: "openai-curated",
+                pluginName: "google-calendar",
+                allow_destructive_actions: false,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- `plugins.entries.codex.config.codexPlugins.enabled`: enables native Codex
+  plugin/app support for the Codex harness. Default: `false`.
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
+  default destructive-action policy for migrated plugin app elicitations.
+  Default: `true`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
+  migrated plugin entry when global `codexPlugins.enabled` is also true.
+  Default: `true` for explicit entries.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
+  stable marketplace identity. V1 only supports `"openai-curated"`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
+  Codex plugin identity from migration, for example `"google-calendar"`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
+  per-plugin destructive-action override. When omitted, the global
+  `allow_destructive_actions` value is used.
+
+`codexPlugins.enabled` is the global enablement directive. Explicit plugin
+entries written by migration are the durable install and repair eligibility set.
+`plugins["*"]` is not supported, there is no `install` switch, and local
+`marketplacePath` values are intentionally not config fields because they are
+host-specific.
+
+`app/list` readiness checks are cached for one hour and refreshed
+asynchronously when stale. Codex thread app config is computed at Codex harness
+session establishment, not on every turn; use `/new`, `/reset`, or a gateway
+restart after changing native plugin config.
+
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
@@ -384,7 +488,7 @@ See [Inferred commitments](/concepts/commitments).
       // dangerouslyDisableDeviceAuth: false,
     },
     remote: {
-      url: "ws://gateway.tailnet:18789",
+      url: "ws://127.0.0.1:18789",
       transport: "ssh", // ssh | direct
       token: "your-token",
       // password: "your-password",
@@ -438,16 +542,15 @@ See [Inferred commitments](/concepts/commitments).
   value, so repeated failures from one localhost origin do not automatically
   lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
-- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
+- `tailscale.preserveFunnel`: when `true` and `tailscale.mode = "serve"`, OpenClaw
+  checks `tailscale funnel status` before re-applying Serve at startup and skips
+  it if an externally configured Funnel route already covers the gateway port.
+  Default `false`.
+- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
-- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
-- `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`: client-side process-environment
-  break-glass override that allows plaintext `ws://` to trusted private-network
-  IPs; default remains loopback-only for plaintext. There is no `openclaw.json`
-  equivalent, and browser private-network config such as
-  `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` does not affect Gateway
-  WebSocket clients.
+- `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
+- `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
 - `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used by official/TestFlight iOS builds after they publish relay-backed registrations to the gateway. This URL must match the relay URL compiled into the iOS build.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
@@ -473,6 +576,7 @@ See [Inferred commitments](/concepts/commitments).
 
 ### OpenAI-compatible endpoints
 
+- Admin HTTP RPC: off by default as the `admin-http-rpc` plugin. Enable the plugin to register `POST /api/v1/admin/rpc`. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 - Chat Completions: disabled by default. Enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Responses API: `gateway.http.endpoints.responses.enabled`.
 - Responses URL-input hardening:
@@ -540,7 +644,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
   - `"hot"`: apply changes in-process without restarting.
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
 - `debounceMs`: debounce window in ms before config changes are applied (non-negative integer).
-- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
 
 ---
 
@@ -646,14 +750,22 @@ Validation and safety notes:
 
 ---
 
-## Canvas host
+## Canvas plugin host
 
 ```json5
 {
-  canvasHost: {
-    root: "~/.openclaw/workspace/canvas",
-    liveReload: true,
-    // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
+  plugins: {
+    entries: {
+      canvas: {
+        config: {
+          host: {
+            root: "~/.openclaw/workspace/canvas",
+            liveReload: true,
+            // enabled: false, // or OPENCLAW_SKIP_CANVAS_HOST=1
+          },
+        },
+      },
+    },
   },
 }
 ```
@@ -687,8 +799,10 @@ Validation and safety notes:
 }
 ```
 
-- `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
-- `full`: include `cliPath` + `sshPort`.
+- `minimal` (default when the bundled `bonjour` plugin is enabled): omit `cliPath` + `sshPort` from TXT records.
+- `full`: include `cliPath` + `sshPort`; LAN multicast advertising still requires the bundled `bonjour` plugin to be enabled.
+- `off`: suppress LAN multicast advertising without changing plugin enablement.
+- The bundled `bonjour` plugin auto-starts on macOS hosts and is opt-in on Linux, Windows, and containerized Gateway deployments.
 - Hostname defaults to the system hostname when it is a valid DNS label, falling back to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
 
 ### Wide-area (DNS-SD)
@@ -913,6 +1027,8 @@ Notes:
     enabled: true,
     flags: ["telegram.*"],
     stuckSessionWarnMs: 30000,
+    stuckSessionAbortMs: 300000,
+    memoryPressureSnapshot: false,
 
     otel: {
       enabled: false,
@@ -952,6 +1068,8 @@ Notes:
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
 - `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
+- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 5 minutes and 3x `stuckSessionWarnMs`.
+- `memoryPressureSnapshot`: captures a redacted pre-OOM stability snapshot when memory pressure reaches `critical` (default: `false`). Set to `true` to add the stability bundle file scan/write while keeping normal memory pressure events.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
@@ -959,7 +1077,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
-- `otel.sampleRate`: trace sampling rate `0`–`1`.
+- `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
@@ -989,7 +1107,7 @@ Notes:
 }
 ```
 
-- `channel`: release channel for npm/git installs — `"stable"`, `"beta"`, or `"dev"`.
+- `channel`: release channel for npm/git installs - `"stable"`, `"beta"`, or `"dev"`.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
@@ -1153,9 +1271,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`–`10`).
-- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1–10 entries).
-- `retryOn`: error types that trigger retries — `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
+- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
+- `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
 Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
 
@@ -1180,7 +1298,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
-- `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
+- `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
 ### `cron.failureDestination`
@@ -1261,10 +1379,10 @@ Split config into multiple files:
 - Array of files: deep-merged in order (later overrides earlier).
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
-- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary. Paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution.
 - OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
 - Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
-- Errors: clear messages for missing files, parse errors, and circular includes.
+- Errors: clear messages for missing files, parse errors, circular includes, invalid path format, and excessive length.
 
 ---
 

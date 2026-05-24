@@ -5,8 +5,7 @@
 
 import crypto from "node:crypto";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { SessionEntry } from "../api.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -40,6 +39,34 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readExplicitToolsAllow(value: unknown): string[] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const allow = value.allow;
+  if (!Array.isArray(allow)) {
+    return undefined;
+  }
+
+  return allow.filter((entry): entry is string => typeof entry === "string");
+}
+
+function resolveVoiceAgentToolsAllow(config: CoreConfig, agentId: string): string[] | undefined {
+  const agents = isRecord(config.agents) ? config.agents : undefined;
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  const agent = list.find((entry) => isRecord(entry) && entry.id === agentId);
+  if (!isRecord(agent)) {
+    return undefined;
+  }
+
+  return readExplicitToolsAllow(isRecord(agent.tools) ? agent.tools : undefined);
+}
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
@@ -212,6 +239,7 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
   });
   const agentId = voiceConfig.agentId ?? "main";
+  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
@@ -222,34 +250,47 @@ export async function generateVoiceResponse(
   await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
   // Load or create session entry
-  const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
-  const existingSessionEntry = sessionStore[resolvedSessionKey] as SessionEntry | undefined;
+  const existingSessionEntry = agentRuntime.session.getSessionEntry({
+    storePath,
+    sessionKey: resolvedSessionKey,
+  });
 
   // Resolve model from config
   const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
   let sessionEntry = existingSessionEntry;
   if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
-    sessionEntry = await agentRuntime.session.updateSessionStore(storePath, (store) => {
-      let entry = store[resolvedSessionKey] as SessionEntry | undefined;
-      if (!entry?.sessionId) {
-        entry = {
-          ...entry,
+    sessionEntry =
+      (await agentRuntime.session.patchSessionEntry({
+        storePath,
+        sessionKey: resolvedSessionKey,
+        replaceEntry: true,
+        fallbackEntry: sessionEntry ?? {
           sessionId: crypto.randomUUID(),
           updatedAt: now,
-        };
-        store[resolvedSessionKey] = entry;
-      }
-      if (voiceConfig.responseModel) {
-        applyModelOverrideToSessionEntry({
-          entry,
-          selection: { provider, model },
-          selectionSource: "auto",
-        });
-      }
-      return entry;
-    });
+        },
+        update: (entry) => {
+          const next = entry.sessionId
+            ? { ...entry }
+            : {
+                ...entry,
+                sessionId: crypto.randomUUID(),
+                updatedAt: now,
+              };
+          if (voiceConfig.responseModel) {
+            applyModelOverrideToSessionEntry({
+              entry: next,
+              selection: { provider, model },
+              selectionSource: "auto",
+            });
+          }
+          return next;
+        },
+      })) ?? undefined;
+  }
+  if (!sessionEntry?.sessionId) {
+    return { text: null, error: "Voice response session could not be initialized" };
   }
   const sessionId = sessionEntry.sessionId;
 
@@ -302,6 +343,7 @@ export async function generateVoiceResponse(
       lane: "voice",
       extraSystemPrompt,
       agentDir,
+      toolsAllow,
     });
 
     const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);

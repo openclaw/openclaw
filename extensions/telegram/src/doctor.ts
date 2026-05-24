@@ -2,12 +2,17 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
+  mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
@@ -18,8 +23,11 @@ import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
+type TelegramMalformedGroupsHit = { path: string; actualType: string };
+type TelegramSelectedQuoteToolProgressHit = { path: string; replyToMode: string };
 type TelegramApiRootBotEndpointHit = {
   path: string;
   pathSegments: string[];
@@ -124,6 +132,53 @@ function collectTelegramAllowFromLists(
   return refs;
 }
 
+function describeConfigValueType(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
+}
+
+export function scanTelegramMalformedGroupsConfig(
+  cfg: OpenClawConfig,
+): TelegramMalformedGroupsHit[] {
+  const hits: TelegramMalformedGroupsHit[] = [];
+  for (const scope of collectTelegramAccountScopes(cfg)) {
+    if (!Object.prototype.hasOwnProperty.call(scope.account, "groups")) {
+      continue;
+    }
+    const groups = scope.account.groups;
+    if (asObjectRecord(groups)) {
+      continue;
+    }
+    hits.push({
+      path: `${scope.prefix}.groups`,
+      actualType: describeConfigValueType(groups),
+    });
+  }
+  return hits;
+}
+
+export function collectTelegramMalformedGroupsWarnings(params: {
+  hits: TelegramMalformedGroupsHit[];
+  doctorFixCommand: string;
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0] ?? {
+    path: "channels.telegram.groups",
+    actualType: "unknown",
+  };
+  return [
+    `- ${sanitizeForLog(sample.path)} has invalid Telegram groups shape (${sanitizeForLog(sample.actualType)}); expected an object map keyed by Telegram group/chat id, not an array, string, or null.`,
+    `- Example shape: channels.telegram.groups."-1001234567890".topics."99" = { agentId: "support" }. Use topics for forum-topic routing, then rerun ${params.doctorFixCommand} for any remaining Telegram config cleanup.`,
+  ];
+}
+
 export function scanTelegramInvalidAllowFromEntries(
   cfg: OpenClawConfig,
 ): TelegramAllowFromInvalidHit[] {
@@ -193,6 +248,58 @@ export function collectTelegramApiRootWarnings(params: {
   return [
     `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
     `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
+  ];
+}
+
+function formatTelegramAccountConfigPath(cfg: OpenClawConfig, accountId: string): string {
+  const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const accounts = asObjectRecord(telegram?.accounts);
+  if (!accounts || Object.keys(accounts).length === 0) {
+    return "channels.telegram";
+  }
+  return accountId === "default" ? "channels.telegram" : `channels.telegram.accounts.${accountId}`;
+}
+
+export function scanTelegramSelectedQuoteToolProgressWarnings(
+  cfg: OpenClawConfig,
+): TelegramSelectedQuoteToolProgressHit[] {
+  if (!asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram)) {
+    return [];
+  }
+  return listTelegramAccountIds(cfg).flatMap((accountId) => {
+    const account = mergeTelegramAccountConfig(cfg, accountId);
+    const replyToMode = account.replyToMode ?? "off";
+    if (replyToMode === "off") {
+      return [];
+    }
+    if (resolveTelegramPreviewStreamMode(account) === "off") {
+      return [];
+    }
+    const blockStreamingEnabled =
+      resolveChannelStreamingBlockEnabled(account) ??
+      cfg.agents?.defaults?.blockStreamingDefault === "on";
+    if (blockStreamingEnabled || !resolveChannelStreamingPreviewToolProgress(account)) {
+      return [];
+    }
+    return [
+      {
+        path: formatTelegramAccountConfigPath(cfg, accountId),
+        replyToMode,
+      },
+    ];
+  });
+}
+
+export function collectTelegramSelectedQuoteToolProgressWarnings(params: {
+  hits: TelegramSelectedQuoteToolProgressHit[];
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const sample = params.hits[0] ?? { path: "channels.telegram", replyToMode: "first" };
+  return [
+    `- ${sanitizeForLog(sample.path)} has replyToMode: "${sanitizeForLog(sample.replyToMode)}" while Telegram preview tool-progress is enabled. Telegram selected quote replies must send the final answer through the native quote-reply path, so those turns skip the short "Working" tool-progress preview. Current-message replies without selected quote text still keep preview streaming.`,
+    '- Set replyToMode: "off" when tool-progress preview matters more than native quote replies, or set streaming.preview.toolProgress: false to keep quote replies and silence this warning.',
   ];
 }
 
@@ -287,7 +394,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
   }
 
   const { getChannelsCommandSecretTargetIds, resolveCommandSecretRefsViaGateway } =
-    await import("openclaw/plugin-sdk/runtime-secret-resolution");
+    await import("openclaw/plugin-sdk/runtime");
 
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: cfg,
@@ -498,6 +605,10 @@ export const telegramDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig: normalizeTelegramCompatibilityConfig,
   collectPreviewWarnings: ({ cfg, doctorFixCommand, env }) => [
     ...collectTelegramMissingEnvTokenWarnings({ cfg, env }),
+    ...collectTelegramMalformedGroupsWarnings({
+      hits: scanTelegramMalformedGroupsConfig(cfg),
+      doctorFixCommand,
+    }),
     ...collectTelegramInvalidAllowFromWarnings({
       hits: scanTelegramInvalidAllowFromEntries(cfg),
       doctorFixCommand,
@@ -505,6 +616,9 @@ export const telegramDoctor: ChannelDoctorAdapter = {
     ...collectTelegramApiRootWarnings({
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
+    }),
+    ...collectTelegramSelectedQuoteToolProgressWarnings({
+      hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),
     }),
   ],
   repairConfig: async ({ cfg }) => await repairTelegramConfig({ cfg }),

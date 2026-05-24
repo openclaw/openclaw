@@ -235,7 +235,13 @@ function isSupportAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
 
-export function redactPathForSupport(file: string, options: SupportRedactionContext): string {
+export function redactPathForSupport(
+  file: string | null | undefined,
+  options: SupportRedactionContext,
+): string {
+  if (file == null || typeof file !== "string") {
+    return "";
+  }
   if (file.startsWith("$")) {
     return file;
   }
@@ -281,8 +287,8 @@ function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactSensitiveTextForSupport(value);
-  redacted = redactCommonCredentialTextForSupport(redacted);
+  let redacted = redactCommonCredentialTextForSupport(value);
+  redacted = redactSensitiveTextForSupport(redacted);
   redacted = redactUrlSecretsForSupport(redacted);
   redacted = redactServiceIdentifiersForSupport(redacted);
   redacted = redactContactIdentifiersForSupport(redacted);

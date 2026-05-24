@@ -1,4 +1,8 @@
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type {
+  PartialReplyPayload,
+  SourceReplyDeliveryMode,
+} from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,8 +10,16 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
-import type { BlockReplyChunking, ToolResultFormat } from "./pi-embedded-subscribe.shared-types.js";
-export type { BlockReplyChunking, ToolResultFormat } from "./pi-embedded-subscribe.shared-types.js";
+import type {
+  BlockReplyChunking,
+  ToolProgressDetailMode,
+  ToolResultFormat,
+} from "./pi-embedded-subscribe.shared-types.js";
+export type {
+  BlockReplyChunking,
+  ToolProgressDetailMode,
+  ToolResultFormat,
+} from "./pi-embedded-subscribe.shared-types.js";
 
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
@@ -18,8 +30,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   reasoningMode?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
+  toolProgressDetail?: ToolProgressDetailMode;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
@@ -29,13 +43,20 @@ export type SubscribeEmbeddedPiSessionParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  onExecutionPhase?: (info: {
+    phase: "tool_execution_started";
+    tool?: string;
+    toolCallId?: string;
+    source?: string;
+  }) => void;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  terminalLifecyclePhase?: "end" | "finishing";
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

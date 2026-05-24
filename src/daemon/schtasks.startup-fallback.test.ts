@@ -69,9 +69,10 @@ const {
   restartScheduledTask,
   resolveTaskScriptPath,
   stopScheduledTask,
+  uninstallScheduledTask,
 } = await import("./schtasks.js");
 
-function resolveStartupEntryPath(env: Record<string, string>) {
+function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   return path.join(
     env.APPDATA,
     "Microsoft",
@@ -79,7 +80,7 @@ function resolveStartupEntryPath(env: Record<string, string>) {
     "Start Menu",
     "Programs",
     "Startup",
-    "OpenClaw Gateway.cmd",
+    `OpenClaw Gateway.${extension}`,
   );
 }
 
@@ -101,15 +102,12 @@ function expectStartupFallbackSpawn() {
   }
   const [executable, args, options] = lastCall;
   expect(executable).not.toBe("cmd.exe");
-  expect(args).toEqual(expect.arrayContaining(["--port", "18789"]));
-  expect(options).toEqual(
-    expect.objectContaining({
-      detached: true,
-      env: expect.objectContaining({ OPENCLAW_GATEWAY_PORT: "18789" }),
-      stdio: "ignore",
-      windowsHide: true,
-    }),
-  );
+  expect(args).toContain("--port");
+  expect(args).toContain("18789");
+  expect(options.detached).toBe(true);
+  expect((options.env as Record<string, string> | undefined)?.OPENCLAW_GATEWAY_PORT).toBe("18789");
+  expect(options.stdio).toBe("ignore");
+  expect(options.windowsHide).toBe(true);
 }
 
 function expectGatewayTermination(pid: number) {
@@ -213,6 +211,51 @@ describe("Windows startup fallback", () => {
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
       expect(printed).toContain("Installed Windows login item");
+    });
+  });
+
+  it("uses a hidden Startup-folder launcher when requested", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 5, stdout: "", stderr: "ERROR: Access is denied." },
+      ]);
+
+      const result = await installGatewayScheduledTask({
+        ...env,
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      });
+
+      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      const startupScript = await fs.readFile(startupEntryPath, "utf8");
+      expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
+      expect(startupScript).toContain("WScript.Shell");
+      expect(startupScript).toContain("gateway.cmd");
+      expect(startupScript).toContain(`Run """${result.scriptPath}""", 0, False`);
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back to a Startup-folder launcher when schtasks create returns Spanish access denied", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 1, stdout: "", stderr: "Error: Acceso denegado." },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("falls back to a Startup-folder launcher when schtasks create returns localized access denied", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([{ code: 1, stdout: "", stderr: "错误: 拒绝访问。" }]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
     });
   });
 
@@ -333,12 +376,11 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "running",
-        pid: 4242,
-        state: "Ready",
-        lastRunResult: "267011",
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("running");
+      expect(runtime.pid).toBe(4242);
+      expect(runtime.state).toBe("Ready");
+      expect(runtime.lastRunResult).toBe("267011");
     });
   });
 
@@ -356,11 +398,10 @@ describe("Windows startup fallback", () => {
         { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "stopped",
-        state: "Ready",
-        lastRunResult: "267011",
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("stopped");
+      expect(runtime.state).toBe("Ready");
+      expect(runtime.lastRunResult).toBe("267011");
     });
   });
 
@@ -370,6 +411,40 @@ describe("Windows startup fallback", () => {
       await writeStartupFallbackEntry(env);
 
       await expect(isScheduledTaskInstalled({ env })).resolves.toBe(true);
+    });
+  });
+
+  it("keeps legacy Startup-folder cmd entries visible after hidden launcher opt-in", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
+
+      await expect(
+        isScheduledTaskInstalled({
+          env: {
+            ...env,
+            OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+          },
+        }),
+      ).resolves.toBe(true);
+    });
+  });
+
+  it("removes legacy Startup-folder cmd entries after hidden launcher opt-in", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const stdout = new PassThrough();
+
+      await uninstallScheduledTask({
+        env: {
+          ...env,
+          OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+        },
+        stdout,
+      });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
 
@@ -384,10 +459,9 @@ describe("Windows startup fallback", () => {
         hints: [],
       });
 
-      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
-        status: "running",
-        pid: 4242,
-      });
+      const runtime = await readScheduledTaskRuntime(env);
+      expect(runtime.status).toBe("running");
+      expect(runtime.pid).toBe(4242);
     });
   });
 

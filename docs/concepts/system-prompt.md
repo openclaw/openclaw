@@ -10,6 +10,20 @@ OpenClaw builds a custom system prompt for every agent run. The prompt is **Open
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
+Prompt assembly has three layers:
+
+- `buildAgentSystemPrompt` renders the prompt from explicit inputs. It should
+  stay a pure renderer and should not read global config directly.
+- `resolveAgentSystemPromptConfig` resolves config-backed prompt knobs such as
+  owner display, TTS hints, model aliases, memory citation mode, and sub-agent
+  delegation mode for a specific agent.
+- Runtime adapters (embedded, CLI, command/export previews, compaction) gather
+  live facts such as tools, sandbox state, channel capabilities, context files,
+  and provider prompt contributions, then call the configured prompt facade.
+
+This keeps exported/debug prompt surfaces aligned with live runs without
+turning every runtime-specific detail into one monolithic builder.
+
 Provider plugins can contribute cache-aware prompt guidance without replacing
 the full OpenClaw-owned prompt. The provider runtime can:
 
@@ -37,18 +51,20 @@ The prompt is intentionally compact and uses fixed sections:
   results, check mutable state live, and verify before finalizing.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
+- **OpenClaw Control**: tells the model to prefer the `gateway` tool for
+  config/restart work and to avoid inventing CLI commands.
 - **OpenClaw Self-Update**: how to inspect config safely with
   `config.schema.lookup`, patch config with `config.patch`, replace the full
   config with `config.apply`, and run `update.run` only on explicit user
-  request. The owner-only `gateway` tool also refuses to rewrite
+  request. The agent-facing `gateway` tool also refuses to rewrite
   `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
   aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
-- **Documentation**: local path to OpenClaw docs (repo or npm package) and when to read them.
+- **Documentation**: local path to OpenClaw docs/source and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Sandbox** (when enabled): indicates sandboxed runtime, sandbox paths, and whether elevated exec is available.
-- **Current Date & Time**: user-local time, timezone, and time format.
-- **Reply Tags**: optional reply tag syntax for supported providers.
+- **Current Date & Time**: time zone only (cache-stable; the live clock comes from `session_status`).
+- **Assistant Output Directives**: compact attachment, voice-note, and reply tag syntax.
 - **Heartbeats**: heartbeat prompt and ack behavior, when heartbeats are enabled for the default agent.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
@@ -77,6 +93,13 @@ The Tooling section also includes runtime guidance for long-running work:
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for
   completion
 
+`agents.defaults.subagents.delegationMode` can strengthen this guidance. The
+default `suggest` mode keeps the baseline nudge. `prefer` adds a dedicated
+**Sub-Agent Delegation** section telling the main agent to act as a responsive
+coordinator and push anything more involved than a direct reply through
+`sessions_spawn`. This is prompt-only; tool policy still controls whether
+`sessions_spawn` is available.
+
 When the experimental `update_plan` tool is enabled, Tooling also tells the
 model to use it only for non-trivial multi-step work, keep exactly one
 `in_progress` step, and avoid repeating the whole plan after each update.
@@ -94,20 +117,20 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
 `promptMode` for each run (not a user-facing config):
 
 - `full` (default): includes all sections above.
-- `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **OpenClaw
-  Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
+- `minimal`: used for sub-agents; omits **Memory Recall**, **OpenClaw
+  Self-Update**, **Model Aliases**, **User Identity**, **Assistant Output Directives**,
   **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**,
-  Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected
-  context stay available.
+  **Skills** when supplied, Workspace, Sandbox, Current Date & Time (when
+  known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 When `promptMode=minimal`, extra injected prompts are labeled **Subagent
 Context** instead of **Group Chat Context**.
 
-For channel auto-reply runs, OpenClaw can omit the generic **Silent Replies**
-section when the direct/group chat context already includes the resolved
-conversation-specific `NO_REPLY` behavior. This avoids repeating token mechanics
-in both the global system prompt and channel context.
+For channel auto-reply runs, OpenClaw omits the generic **Silent Replies**
+section when direct, group, or message-tool-only context owns the visible-reply
+contract. Only old automatic group/channel mode should show `NO_REPLY`; direct
+chats and message-tool-only replies do not receive silent-token guidance.
 
 ## Prompt snapshots
 
@@ -117,8 +140,9 @@ selected app-server thread/turn params plus a reconstructed model-bound prompt
 layer stack for Telegram direct, Discord group, and heartbeat turns. That stack
 includes a pinned Codex `gpt-5.5` model prompt fixture generated from Codex's
 model catalog/cache shape, the Codex happy-path permission developer text,
-OpenClaw developer instructions, user turn input, and references to the dynamic
-tool specs.
+OpenClaw developer instructions, turn-scoped collaboration-mode instructions
+when OpenClaw provides them, user turn input, and references to the dynamic tool
+specs.
 
 Refresh the pinned Codex model prompt fixture with
 `pnpm prompt:snapshots:sync-codex-model`. By default, the script looks for
@@ -131,9 +155,9 @@ or `models.json` file.
 
 These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex
 can add runtime-owned workspace context such as `AGENTS.md`, environment
-context, memories, app/plugin instructions, and future collaboration-mode
-instructions inside the Codex runtime after OpenClaw sends thread and turn
-params.
+context, memories, app/plugin instructions, and built-in Default
+collaboration-mode instructions inside the Codex runtime after OpenClaw sends
+thread and turn params.
 
 Regenerate them with `pnpm prompt:snapshots:gen` and verify drift with
 `pnpm prompt:snapshots:check`. CI runs the drift check in the additional
@@ -142,7 +166,8 @@ PR.
 
 ## Workspace bootstrap injection
 
-Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
+Bootstrap files are resolved from the active workspace, then routed to the
+prompt surface that matches their lifetime:
 
 - `AGENTS.md`
 - `SOUL.md`
@@ -153,19 +178,23 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn unless
-a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
-heartbeats are disabled for the default agent or
-`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise — especially `MEMORY.md`, which can grow over time and lead to
-unexpectedly high context usage and more frequent compaction.
+On the native Codex harness, OpenClaw avoids repeating stable workspace files
+in every user turn. Codex loads `AGENTS.md` through its own project-doc
+discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
+turns get a collaboration-mode note pointing to the file when it exists and is
+non-empty. `MEMORY.md` and active `BOOTSTRAP.md` content keep the normal
+turn-context role for now.
 
-When a session runs on the native Codex harness, Codex loads `AGENTS.md`
-through its own project-doc discovery. OpenClaw still resolves the remaining
-bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
-`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
-`MEMORY.md` keep the same workspace-context role without duplicating
-`AGENTS.md`.
+On non-Codex harnesses, bootstrap files continue to be composed into the
+OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
+normal runs when heartbeats are disabled for the default agent or
+`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
+files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a curated
+long-term summary; detailed daily notes belong in `memory/*.md` where
+`memory_search` and `memory_get` can retrieve them on demand. Oversized
+`MEMORY.md` files increase prompt usage and can be partially injected because of
+the bootstrap file limits below.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
@@ -175,9 +204,16 @@ Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
 (default: 60000). Missing files inject a short missing-file marker. When truncation
-occurs, OpenClaw can inject a warning block in Project Context; control this with
+occurs, OpenClaw can inject a concise system-prompt warning notice; control this with
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
-default: `once`).
+default: `always`). Detailed raw/injected counts stay in diagnostics such as
+`/context`, `/status`, doctor, and logs.
+
+For memory files, truncation is not data loss: the file remains intact on disk,
+but the model only sees the shortened injected copy until it reads or searches
+memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a
+shorter durable summary and move detailed history into `memory/*.md`, or
+intentionally raise the bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).

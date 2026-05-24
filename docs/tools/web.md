@@ -104,7 +104,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Exa](/tools/exa-search)                  | Structured + extracted                                         | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                                                                           |
 | [Firecrawl](/tools/firecrawl)             | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
 | [Gemini](/tools/gemini-search)            | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
-| [Grok](/tools/grok-search)                | AI-synthesized + citations                                     | --                                               | `XAI_API_KEY`                                                                           |
+| [Grok](/tools/grok-search)                | AI-synthesized + citations                                     | --                                               | xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`              |
 | [Kimi](/tools/kimi-search)                | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
 | [MiniMax Search](/tools/minimax-search)   | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search) | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |
@@ -153,6 +153,18 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
 
 If native Codex search is enabled but the current model is not Codex-capable, OpenClaw keeps the normal managed `web_search` behavior.
 
+## Network safety
+
+Managed `web_search` provider calls use OpenClaw's guarded fetch path. For
+trusted provider API hosts, OpenClaw allows Surge, Clash, and sing-box fake-IP
+DNS answers in `198.18.0.0/15` and `fc00::/7` only for that provider hostname.
+Other private, loopback, link-local, and metadata destinations remain blocked.
+
+This automatic allowance does not apply to arbitrary `web_fetch` URLs. For
+`web_fetch`, enable `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
+`tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` explicitly only when your
+trusted proxy owns those synthetic ranges.
+
 ## Setting up web search
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
@@ -166,7 +178,7 @@ API-backed providers first:
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey` (order 10)
 2. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN` / `MINIMAX_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
 3. **Gemini** -- `plugins.entries.google.config.webSearch.apiKey`, `GEMINI_API_KEY`, or `models.providers.google.apiKey` (order 20)
-4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
+4. **Grok** -- xAI OAuth, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
 7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey` (order 60)
@@ -217,6 +229,8 @@ Provider-specific config (API keys, base URLs, modes) lives under
 `models.providers.google.apiKey` and `models.providers.google.baseUrl` as lower-priority
 fallbacks after its dedicated web-search config and `GEMINI_API_KEY`. See the
 provider pages for examples.
+Grok can also reuse an xAI OAuth auth profile from `openclaw models auth login
+--provider xai --method oauth`; API-key config remains the fallback.
 
 `tools.web.search.provider` is validated against the web-search provider ids
 declared by bundled and installed plugin manifests. A typo such as `"brvae"`
@@ -243,10 +257,11 @@ When you choose **Kimi** during `openclaw onboard` or
 - the default Kimi web-search model (defaults to `kimi-k2.6`)
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
-same `XAI_API_KEY` fallback as Grok web search.
+same xAI auth profile as chat, or the `XAI_API_KEY` / plugin web-search
+credential used by Grok web search.
 Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
 When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
-OpenClaw can also offer optional `x_search` setup with the same key.
+OpenClaw can also offer optional `x_search` setup with the same credential.
 This is a separate follow-up step inside the Grok path, not a separate top-level
 web-search provider choice. If you pick another provider, OpenClaw does not
 show the `x_search` prompt.
@@ -355,7 +370,7 @@ tool on the request that serves this tool call.
             cacheTtlMinutes: 15,
           },
           webSearch: {
-            apiKey: "xai-...", // optional if XAI_API_KEY is set
+            apiKey: "xai-...", // optional if an xAI auth profile or XAI_API_KEY is set
             baseUrl: "https://api.x.ai/v1", // optional shared xAI Responses base URL
           },
         },

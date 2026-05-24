@@ -15,10 +15,12 @@ import {
   clearContextEnginesForOwner,
   registerContextEngineForOwner,
 } from "../context-engine/registry.js";
+import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -40,6 +42,7 @@ import {
   registerDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
+import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
@@ -59,6 +62,13 @@ import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { getPluginCompatRecord } from "./compat/registry.js";
+import {
+  getRegisteredEmbeddingProvider,
+  registerEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+} from "./embedding-providers.js";
+import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
   getPluginRunContext,
@@ -66,6 +76,10 @@ import {
   registerPluginSessionSchedulerJob,
   setPluginRunContext,
 } from "./host-hook-runtime.js";
+import {
+  schedulePluginSessionTurn,
+  unschedulePluginSessionTurnsByTag,
+} from "./host-hook-scheduled-turns.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
   isPluginJsonValue,
@@ -73,6 +87,7 @@ import {
   type PluginAgentEventSubscriptionRegistration,
   type PluginControlUiDescriptor,
   type PluginRuntimeLifecycleRegistration,
+  type PluginSessionActionRegistration,
   type PluginSessionSchedulerJobRegistration,
   type PluginSessionExtensionRegistration,
   type PluginToolMetadataRegistration,
@@ -97,34 +112,32 @@ import {
   registerMemoryPromptSectionForPlugin,
   registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
+import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
-  PluginCliBackendRegistration,
-  PluginCliRegistration,
-  PluginCommandRegistration,
-  PluginControlUiDescriptorRegistryRegistration,
-  PluginConversationBindingResolvedHandlerRegistration,
-  PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
-  PluginAgentHarnessRegistration,
-  PluginMemoryEmbeddingProviderRegistration,
-  PluginNodeHostCommandRegistration,
-  PluginProviderRegistration,
   PluginRecord,
-  PluginRegistry,
   PluginRegistryParams,
+  PluginSessionActionRegistryRegistration,
+  PluginTextTransformsRegistration,
+} from "./registry-types.js";
+export type {
   PluginReloadRegistration,
   PluginRuntimeLifecycleRegistryRegistration,
   PluginSecurityAuditCollectorRegistration,
   PluginServiceRegistration,
   PluginSessionExtensionRegistryRegistration,
-  PluginTextTransformsRegistration,
-  PluginToolMetadataRegistryRegistration,
-  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
-import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
+import { getActivePluginRegistry } from "./runtime.js";
+import {
+  withPluginRuntimePluginIdScope,
+  withPluginRuntimePluginScope,
+} from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   findUndeclaredPluginToolNames,
@@ -149,6 +162,7 @@ import type {
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawGatewayDiscoveryService,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -156,6 +170,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  MeetingNotesSourceProviderPlugin,
   MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -177,6 +192,19 @@ import type {
 export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
+
+const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
+
+function formatLegacyDeactivateHookAliasDiagnostic(): string {
+  const removeAfter =
+    LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
+  return (
+    `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
+    `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
+  );
+}
+
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -198,14 +226,10 @@ export type {
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
-  PluginRuntimeLifecycleRegistryRegistration,
+  PluginHostedMediaResolverRegistration,
   PluginRecord,
   PluginRegistry,
   PluginRegistryParams,
-  PluginReloadRegistration,
-  PluginSecurityAuditCollectorRegistration,
-  PluginServiceRegistration,
-  PluginSessionExtensionRegistryRegistration,
   PluginTextTransformsRegistration,
   PluginToolMetadataRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
@@ -224,7 +248,28 @@ export type {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
   allowConversationAccess?: boolean;
+  timeoutMs?: number;
+  timeouts?: Record<string, number>;
 };
+
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveTypedHookTimeoutMs(params: {
+  hookName: PluginHookName;
+  opts?: { timeoutMs?: number };
+  policy?: PluginTypedHookPolicy;
+}): number | undefined {
+  return (
+    normalizeHookTimeoutMs(params.policy?.timeouts?.[params.hookName]) ??
+    normalizeHookTimeoutMs(params.policy?.timeoutMs) ??
+    normalizeHookTimeoutMs(params.opts?.timeoutMs)
+  );
+}
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -250,9 +295,17 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
 }
 
-function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootDir" | "source">) {
+function isOfficialCodexPluginRecord(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
   if (record.id !== "codex") {
     return false;
+  }
+  if (record.origin !== "global") {
+    return false;
+  }
+  if (record.packageName === "@openclaw/codex") {
+    return true;
   }
   const sourcePath = path
     .normalize(record.rootDir ?? record.source)
@@ -262,9 +315,9 @@ function isOfficialNpmCodexPluginRecord(record: Pick<PluginRecord, "id" | "rootD
 }
 
 function canClaimReservedCommandOwnership(
-  record: Pick<PluginRecord, "id" | "origin" | "rootDir" | "source">,
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
 ) {
-  return record.origin === "bundled" || isOfficialNpmCodexPluginRecord(record);
+  return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
@@ -274,6 +327,9 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+type PluginSideEffectGuard = {
+  active: boolean;
+};
 
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
@@ -297,6 +353,20 @@ function resolvePluginRegistrationCapabilities(
   };
 }
 
+function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (opts) => {
+    let responded = false;
+    const respond: RespondFn = (ok, payload, error, meta) => {
+      responded = true;
+      opts.respond(ok, payload, error, meta);
+    };
+    const result = (await handler({ ...opts, respond })) as unknown;
+    if (!responded && result !== undefined) {
+      respond(true, result);
+    }
+  };
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethodNames = Array.from(
@@ -307,12 +377,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ).toSorted();
   registry.coreGatewayMethodNames = coreGatewayMethodNames;
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
+  const getHostCronService = () => registryParams.hostServices?.cron;
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
+  const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
   };
+  const {
+    registerModelCatalogProvider,
+    registerSynthesizedTextModelCatalogProvider,
+    registerSynthesizedMediaModelCatalogProvider,
+  } = createModelCatalogRegistrationHandlers({
+    registry,
+    pushDiagnostic,
+  });
 
   const throwRegistrationError = (message: string): never => {
     throw new Error(message);
@@ -323,6 +403,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       throw new Error(message);
     }
     return value;
+  };
+
+  const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
+    const guard = { active: true };
+    const guards = pluginSideEffectGuards.get(pluginId) ?? new Set<PluginSideEffectGuard>();
+    guards.add(guard);
+    pluginSideEffectGuards.set(pluginId, guards);
+    return guard;
+  };
+
+  const deactivatePluginSideEffectGuards = (pluginId: string): void => {
+    const guards = pluginSideEffectGuards.get(pluginId);
+    if (!guards) {
+      return;
+    }
+    for (const guard of guards) {
+      guard.active = false;
+    }
+    pluginSideEffectGuards.delete(pluginId);
   };
 
   const registerCodexAppServerExtensionFactory = (
@@ -638,7 +737,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.gatewayHandlers[trimmed] = handler;
+    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
       pushDiagnostic({
@@ -648,12 +748,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
       });
     }
-    const effectiveScope = normalizedScope.scope;
-    if (effectiveScope) {
-      registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = effectiveScope;
-    }
-    record.gatewayMethods.push(trimmed);
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: record.id,
+        name: trimmed,
+        handler: wrappedHandler,
+        scope: normalizedScope.scope,
+      }),
+    );
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -661,6 +763,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const source = normalizeOptionalString(entry.source) || "unknown-source";
     return `${plugin} (${source})`;
   };
+
+  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+    (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
@@ -729,11 +834,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         path: normalizedPath,
         handler: params.handler,
+        ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
         auth: params.auth,
         match,
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(canDispatchGatewayMethodsFromHttpRoute(record)
+          ? { gatewayMethodDispatchAllowed: true }
+          : {}),
+        ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
       return;
@@ -743,12 +853,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       path: normalizedPath,
       handler: params.handler,
+      ...(params.handleUpgrade ? { handleUpgrade: params.handleUpgrade } : {}),
       auth: params.auth,
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
+      ...(canDispatchGatewayMethodsFromHttpRoute(record)
+        ? { gatewayMethodDispatchAllowed: true }
+        : {}),
+      ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
+    });
+  };
+
+  const registerHostedMediaResolver = (
+    record: PluginRecord,
+    resolver: OpenClawPluginHostedMediaResolver,
+  ) => {
+    if (typeof resolver !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "hosted media resolver registration missing resolver",
+      });
+      return;
+    }
+    (registry.hostedMediaResolvers ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      resolver,
+      source: record.source,
+      rootDir: record.rootDir,
     });
   };
 
@@ -871,6 +1008,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    registerSynthesizedTextModelCatalogProvider({
+      record,
+      provider: normalizedProvider,
+    });
   };
 
   const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
@@ -990,13 +1131,73 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerEmbeddingProviderForPlugin = (
+    record: PluginRecord,
+    adapter: EmbeddingProviderAdapter,
+  ) => {
+    const id = adapter.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "embedding provider registration missing id",
+      });
+      return;
+    }
+    if (!(record.contracts?.embeddingProviders ?? []).includes(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.embeddingProviders for adapter: ${id}`,
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.embeddingProviders.find((entry) => entry.provider.id === id)
+        : getRegisteredEmbeddingProvider(id);
+    if (existing) {
+      const ownerPluginId =
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
+      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `embedding provider already registered: ${id}${ownerDetail}`,
+      });
+      return;
+    }
+    if (registryParams.activateGlobalSideEffects !== false) {
+      registerEmbeddingProvider(adapter, {
+        ownerPluginId: record.id,
+      });
+    }
+    registry.embeddingProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: adapter,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    if (!record.embeddingProviderIds.includes(id)) {
+      record.embeddingProviderIds.push(id);
+    }
+  };
+
   const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
     kindLabel: string;
     registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
-  }) => {
+  }): boolean => {
     const id = params.provider.id.trim();
     const { record, kindLabel } = params;
     const missingLabel = `${kindLabel} registration missing id`;
@@ -1008,7 +1209,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: missingLabel,
       });
-      return;
+      return false;
     }
     const existing = params.registrations.find((entry) => entry.provider.id === id);
     if (existing) {
@@ -1018,7 +1219,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `${duplicateLabel} (${existing.pluginId})`,
       });
-      return;
+      return false;
     }
     if (!params.ownedIds.includes(id)) {
       params.ownedIds.push(id);
@@ -1030,6 +1231,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+    return true;
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1081,43 +1283,77 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMeetingNotesSourceProvider = (
+    record: PluginRecord,
+    provider: MeetingNotesSourceProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "meeting notes source provider",
+      registrations: registry.meetingNotesSourceProviders,
+      ownedIds: record.meetingNotesSourceProviderIds,
+    });
+  };
+
   const registerImageGenerationProvider = (
     record: PluginRecord,
     provider: ImageGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "image-generation provider",
       registrations: registry.imageGenerationProviders,
       ownedIds: record.imageGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "image_generation",
+        provider,
+      });
+    }
   };
 
   const registerVideoGenerationProvider = (
     record: PluginRecord,
     provider: VideoGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "video-generation provider",
       registrations: registry.videoGenerationProviders,
       ownedIds: record.videoGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "video_generation",
+        provider,
+      });
+    }
   };
 
   const registerMusicGenerationProvider = (
     record: PluginRecord,
     provider: MusicGenerationProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "music-generation provider",
       registrations: registry.musicGenerationProviders,
       ownedIds: record.musicGenerationProviderIds,
     });
+    if (registered) {
+      registerSynthesizedMediaModelCatalogProvider({
+        record,
+        kind: "music_generation",
+        provider,
+      });
+    }
   };
 
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
@@ -1153,7 +1389,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: { commands?: string[]; descriptors?: OpenClawPluginCliCommandDescriptor[] },
+    opts?: {
+      parentPath?: string[];
+      commands?: string[];
+      descriptors?: OpenClawPluginCliCommandDescriptor[];
+    },
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -1167,6 +1407,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       return normalized;
     };
+    const parentPath = (opts?.parentPath ?? []).map((segment) =>
+      normalizeCommandRoot(segment, "command"),
+    );
+    if (parentPath.some((segment) => segment === null)) {
+      return;
+    }
+    const normalizedParentPath = parentPath as string[];
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
@@ -1197,11 +1444,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const serializeCommandPath = (command: string) => [...normalizedParentPath, command].join(" ");
+    const commandPaths = commands.map(serializeCommandPath);
+    const commandPathSet = new Set(commandPaths);
     const existing = registry.cliRegistrars.find((entry) =>
-      entry.commands.some((command) => commands.includes(command)),
+      entry.commands
+        .map((command) => [...(entry.parentPath ?? []), command].join(" "))
+        .some((commandPath) => commandPathSet.has(commandPath)),
     );
     if (existing) {
-      const overlap = commands.find((command) => existing.commands.includes(command));
+      const existingCommandPaths = new Set(
+        existing.commands.map((command) => [...(existing.parentPath ?? []), command].join(" ")),
+      );
+      const overlap = commandPaths.find((commandPath) => existingCommandPaths.has(commandPath));
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -1210,11 +1465,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.cliCommands.push(...commands);
+    record.cliCommands.push(...commandPaths);
     registry.cliRegistrars.push({
       pluginId: record.id,
       pluginName: record.name,
       register: registrar,
+      parentPath: normalizedParentPath,
       commands,
       descriptors,
       source: record.source,
@@ -1398,6 +1654,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       service,
       source: record.source,
       origin: record.origin,
+      trustedOfficialInstall: record.trustedOfficialInstall,
       rootDir: record.rootDir,
     });
   };
@@ -1558,6 +1815,54 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return normalized as string[];
   };
 
+  const validateSessionActionSchema = (
+    record: PluginRecord,
+    id: string,
+    schema: unknown,
+  ): schema is JsonSchemaValue => {
+    if (schema === undefined) {
+      return true;
+    }
+    if (!isPluginJsonValue(schema)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be JSON-compatible: ${id}`,
+      });
+      return false;
+    }
+    if (
+      typeof schema !== "boolean" &&
+      (!schema || typeof schema !== "object" || Array.isArray(schema))
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema must be a JSON schema object or boolean: ${id}`,
+      });
+      return false;
+    }
+    try {
+      validateJsonSchemaValue({
+        schema,
+        cacheKey: `plugin-session-action-registration:${record.id}:${id}`,
+        value: undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action schema is not valid JSON Schema: ${id}: ${message}`,
+      });
+      return false;
+    }
+    return true;
+  };
+
   const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
     "session",
     "tool",
@@ -1572,6 +1877,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const namespace = normalizeHostHookString(extension.namespace);
     const description = normalizeHostHookString(extension.description);
     const project = extension.project;
+    let normalizedSessionEntrySlotKey: string | undefined;
     let invalidMessage: string | undefined;
     if (!namespace || !description) {
       invalidMessage = "session extension registration requires namespace and description";
@@ -1581,6 +1887,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       invalidMessage = "session extension projector must be synchronous";
     } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
+    } else if (extension.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+      if (!slotKey.ok) {
+        invalidMessage = slotKey.error;
+      } else {
+        normalizedSessionEntrySlotKey = slotKey.key;
+      }
     }
     if (invalidMessage) {
       pushDiagnostic({
@@ -1603,6 +1916,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (normalizedSessionEntrySlotKey) {
+      const existingSlot = (registry.sessionExtensions ?? []).find((entry) => {
+        const existingSlotKey = entry.extension.sessionEntrySlotKey;
+        if (existingSlotKey === undefined) {
+          return false;
+        }
+        const normalizedExistingSlotKey = normalizeSessionEntrySlotKey(existingSlotKey);
+        return (
+          normalizedExistingSlotKey.ok &&
+          normalizedExistingSlotKey.key === normalizedSessionEntrySlotKey
+        );
+      });
+      if (existingSlot) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `sessionEntrySlotKey already registered: ${normalizedSessionEntrySlotKey}`,
+        });
+        return;
+      }
+    }
     (registry.sessionExtensions ??= []).push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1610,6 +1945,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...extension,
         namespace,
         description,
+        ...(normalizedSessionEntrySlotKey
+          ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
+          : {}),
       },
       source: record.source,
       rootDir: record.rootDir,
@@ -1961,6 +2299,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const handle = registerPluginSessionSchedulerJob({
       pluginId: record.id,
       pluginName: record.name,
+      ownerRegistry: registry,
       job: { ...job, id: jobId, sessionKey, kind },
     });
     if (!handle) {
@@ -1987,6 +2326,67 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return handle;
   };
 
+  const registerSessionAction = (record: PluginRecord, action: PluginSessionActionRegistration) => {
+    const id = normalizeHostHookString(action.id);
+    const description = normalizeOptionalHostHookString(action.description);
+    const requiredScopes = normalizeHostHookStringList(action.requiredScopes);
+    if (
+      !id ||
+      description === "" ||
+      requiredScopes === null ||
+      typeof action.handler !== "function"
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session action registration requires id, handler, and valid optional fields",
+      });
+      return;
+    }
+    if (requiredScopes !== undefined) {
+      const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
+      if (unknownScope !== undefined) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `session action requiredScopes contains unknown operator scope: ${unknownScope}`,
+        });
+        return;
+      }
+    }
+    if (!validateSessionActionSchema(record, id, action.schema)) {
+      return;
+    }
+    const existing = (registry.sessionActions ?? []).find(
+      (entry) => entry.pluginId === record.id && entry.action.id === id,
+    );
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session action already registered: ${id}`,
+      });
+      return;
+    }
+    (registry.sessionActions ??= []).push({
+      pluginId: record.id,
+      pluginName: record.name,
+      action: {
+        ...action,
+        id,
+        ...(description !== undefined ? { description } : {}),
+        ...(requiredScopes !== undefined
+          ? { requiredScopes: requiredScopes as OperatorScope[] }
+          : {}),
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    } satisfies PluginSessionActionRegistryRegistration);
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
@@ -2003,14 +2403,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const effectiveHookName = hookName === "deactivate" ? "gateway_stop" : hookName;
+    if (hookName === "deactivate") {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: formatLegacyDeactivateHookAliasDiagnostic(),
+      });
+    }
     let effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
-      if (hookName !== "before_agent_start") {
+    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
+      if (effectiveHookName !== "before_agent_start") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
         });
         return;
       }
@@ -2018,13 +2427,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
       effectiveHandler = constrainLegacyPromptInjectionHook(
         handler as PluginHookHandlerMap["before_agent_start"],
       ) as PluginHookHandlerMap[K];
     }
-    if (isConversationHookName(hookName)) {
+    if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;
       if (record.origin !== "bundled" && explicitConversationAccess !== true) {
         pushDiagnostic({
@@ -2032,7 +2441,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           pluginId: record.id,
           source: record.source,
           message:
-            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         });
         return;
@@ -2042,18 +2451,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
         });
         return;
       }
     }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
-      hookName,
+      hookName: effectiveHookName,
       handler: effectiveHandler,
       priority: opts?.priority,
-      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
@@ -2089,6 +2499,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
+        const runWithPluginScope = <T>(run: () => T): T => {
+          const record =
+            pluginRuntimeRecordById.get(pluginId) ??
+            registry.plugins.find((entry) => entry.id === pluginId);
+          return record?.source
+            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            : withPluginRuntimePluginScope({ pluginId }, run);
+        };
         if (prop === "state") {
           const baseState = Reflect.get(target, prop, receiver);
           return {
@@ -2097,14 +2515,31 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               const record =
                 pluginRuntimeRecordById.get(pluginId) ??
                 registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled") {
+              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
                 throw new Error(
-                  "openKeyedStore is only available for bundled plugins in this release.",
+                  "openKeyedStore is only available for trusted plugins in this release.",
                 );
               }
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
+        }
+        if (prop === "config") {
+          const config: PluginRuntime["config"] = Reflect.get(target, prop, receiver);
+          return {
+            ...config,
+            current: () => runWithPluginScope(() => config.current()),
+            mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
+            replaceConfigFile: (params) =>
+              runWithPluginScope(() => config.replaceConfigFile(params)),
+          } satisfies PluginRuntime["config"];
+        }
+        if (prop === "llm") {
+          const llm = Reflect.get(target, prop, receiver);
+          return {
+            complete: (params) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
+          } satisfies PluginRuntime["llm"];
         }
         if (prop !== "subagent") {
           return Reflect.get(target, prop, receiver);
@@ -2139,6 +2574,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     pluginRuntimeRecordById.set(record.id, record);
+    const sideEffectGuard = createPluginSideEffectGuard(record.id);
+    const isLoadedRecordInRegistry = () =>
+      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+    const isLoadedRecordInActiveRegistry = () =>
+      getActivePluginRegistry() === registry && isLoadedRecordInRegistry();
+    const isActivatingLoadedRecord = () =>
+      registryParams.activateGlobalSideEffects !== false &&
+      record.enabled &&
+      record.status === "loaded" &&
+      !registry.plugins.some((plugin) => plugin.id === record.id);
+    const shouldCommitWorkflowSideEffect = () =>
+      sideEffectGuard.active &&
+      !isPluginRegistryRetired(registry) &&
+      (isActivatingLoadedRecord() ||
+        (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -2159,7 +2609,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config, params.pluginConfig),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerHostedMediaResolver: (resolver) =>
+                registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerModelCatalogProvider: (provider) =>
+                registerModelCatalogProvider(record, provider),
+              registerEmbeddingProvider: (provider) =>
+                registerEmbeddingProviderForPlugin(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
@@ -2181,6 +2637,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
+              registerMeetingNotesSourceProvider: (provider) =>
+                registerMeetingNotesSourceProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
@@ -2348,15 +2806,94 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
-              setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
+              emitAgentEvent: (event) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { emitted: false, reason: "global side effects disabled" };
+                }
+                if (!shouldCommitWorkflowSideEffect()) {
+                  return { emitted: false, reason: "plugin is not loaded" };
+                }
+                return emitPluginAgentEvent({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  event,
+                });
+              },
+              setRunContext: (patch) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? setPluginRunContext({ pluginId: record.id, patch })
+                  : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) =>
+              clearRunContext: (params) => {
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return;
+                }
                 clearPluginRunContext({
                   pluginId: record.id,
                   runId: params.runId,
                   namespace: params.namespace,
-                }),
+                });
+              },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              registerSessionAction: (action) => registerSessionAction(record, action),
+              sendSessionAttachment: async (attachment) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { ok: false, error: "global side effects disabled" };
+                }
+                try {
+                  if (!isLoadedRecordInActiveRegistry()) {
+                    return { ok: false, error: "plugin is not loaded" };
+                  }
+                  const runtimeConfig =
+                    (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                    params.config;
+                  return await sendPluginSessionAttachment({
+                    ...attachment,
+                    config: runtimeConfig,
+                    origin: record.origin,
+                  });
+                } catch (error) {
+                  return {
+                    ok: false,
+                    error: `attachment delivery setup failed: ${formatErrorMessage(error)}`,
+                  };
+                }
+              },
+              scheduleSessionTurn: async (schedule) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return undefined;
+                }
+                await Promise.resolve();
+                return schedulePluginSessionTurn({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  schedule,
+                  cron: getHostCronService(),
+                  shouldCommit: isLoadedRecordInActiveRegistry,
+                  ownerRegistry: registry,
+                });
+              },
+              unscheduleSessionTurnsByTag: async (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { removed: 0, failed: 0 };
+                }
+                await Promise.resolve();
+                if (!isLoadedRecordInActiveRegistry()) {
+                  return { removed: 0, failed: 0 };
+                }
+                return unschedulePluginSessionTurnsByTag({
+                  pluginId: record.id,
+                  origin: record.origin,
+                  cron: getHostCronService(),
+                  request,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");
@@ -2518,6 +3055,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    deactivatePluginSideEffectGuards(pluginId);
     if (registryParams.activateGlobalSideEffects === false) {
       return;
     }
@@ -2553,14 +3091,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     pushDiagnostic,
     registerTool,
     registerChannel,
+    registerHostedMediaResolver,
     registerProvider,
+    registerModelCatalogProvider,
     registerAgentHarness,
     registerCliBackend,
     registerTextTransforms,
+    registerEmbeddingProvider: registerEmbeddingProviderForPlugin,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
+    registerMeetingNotesSourceProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,
@@ -2580,6 +3122,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,
+    registerSessionAction,
     registerHook,
     registerTypedHook,
   };

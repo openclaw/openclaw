@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { TextContent } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -9,7 +9,7 @@ import { resolveAgentContextLimits } from "../agent-scope.js";
 import {
   acquireSessionWriteLock,
   type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -777,7 +777,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   try {
     sessionLock = await acquireSessionWriteLock({
       sessionFile,
-      timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+      ...resolveSessionWriteLockOptions(params.config),
     });
     const state = await readTranscriptFileState(sessionFile);
     return await truncateOversizedToolResultsInTranscriptState({

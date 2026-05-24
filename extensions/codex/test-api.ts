@@ -7,7 +7,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
 } from "./src/app-server/config.js";
 import type { CodexPluginConfig } from "./src/app-server/config.js";
-import { applyCodexDynamicToolProfile } from "./src/app-server/dynamic-tool-profile.js";
+import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
 import {
@@ -30,6 +30,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   return resolveCodexAppServerRuntimeOptions({
     pluginConfig,
     env: {},
+    requirementsToml: null,
   });
 }
 
@@ -41,8 +42,16 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  developerInstructionAdditions?: string;
+  turnScopedDeveloperInstructions?: string;
+  heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
-  const developerInstructions = buildDeveloperInstructions(params.attempt);
+  const developerInstructions = joinPresentSections(
+    buildDeveloperInstructions(params.attempt, {
+      dynamicTools: params.dynamicTools,
+    }),
+    params.developerInstructionAdditions,
+  );
   return {
     developerInstructions,
     threadStartParams: buildThreadStartParams(params.attempt, {
@@ -63,17 +72,26 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };
 }
 
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
+}
+
 export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   tools: AnyAgentTool[];
-  pluginConfig?: Pick<CodexPluginConfig, "codexDynamicToolsProfile" | "codexDynamicToolsExclude">;
+  pluginConfig?: Pick<CodexPluginConfig, "codexDynamicToolsLoading" | "codexDynamicToolsExclude">;
+  directToolNames?: Iterable<string>;
 }): CodexDynamicToolSpec[] {
-  const profiledTools = applyCodexDynamicToolProfile(params.tools, params.pluginConfig ?? {});
+  const filteredTools = filterCodexDynamicTools(params.tools, params.pluginConfig ?? {});
   return createCodexDynamicToolBridge({
-    tools: profiledTools,
+    tools: filteredTools,
     signal: new AbortController().signal,
+    loading: params.pluginConfig?.codexDynamicToolsLoading ?? "searchable",
+    directToolNames: params.directToolNames,
   }).specs;
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
@@ -22,10 +23,12 @@ export type BundledPluginContractSnapshot = {
   cliBackendIds: string[];
   providerIds: string[];
   providerAuthEnvVars: Record<string, string[]>;
+  embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  meetingNotesSourceProviderIds: string[];
   documentExtractorIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
@@ -59,14 +62,10 @@ export type BundledCapabilityManifest = Pick<
 >;
 
 function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const raw = tryReadJsonSync(filePath);
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
@@ -131,6 +130,9 @@ export function buildBundledPluginContractSnapshot(
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
     providerAuthEnvVars: normalizeStringListRecord(manifest.providerAuthEnvVars),
+    embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
+      value.trim(),
+    ),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) => value.trim()),
     realtimeTranscriptionProviderIds: uniqueStrings(
       manifest.contracts?.realtimeTranscriptionProviders,
@@ -141,6 +143,10 @@ export function buildBundledPluginContractSnapshot(
     ),
     mediaUnderstandingProviderIds: uniqueStrings(
       manifest.contracts?.mediaUnderstandingProviders,
+      (value) => value.trim(),
+    ),
+    meetingNotesSourceProviderIds: uniqueStrings(
+      manifest.contracts?.meetingNotesSourceProviders,
       (value) => value.trim(),
     ),
     documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
@@ -180,10 +186,12 @@ export function hasBundledPluginContractSnapshotCapabilities(
   return (
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
+    entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||
     entry.realtimeVoiceProviderIds.length > 0 ||
     entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.meetingNotesSourceProviderIds.length > 0 ||
     entry.documentExtractorIds.length > 0 ||
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||

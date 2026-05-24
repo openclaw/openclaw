@@ -2,9 +2,13 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
-import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
+import {
+  discoverLmstudioModels,
+  ensureLmstudioModelLoaded,
+  fetchLmstudioModels,
+} from "./models.fetch.js";
 import {
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
@@ -21,6 +25,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 describe("lmstudio-models", () => {
@@ -69,8 +78,10 @@ describe("lmstudio-models", () => {
     contextLength: number,
   ) => {
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    const loadInit = loadCall?.[1] as RequestInit;
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
@@ -159,12 +170,12 @@ describe("lmstudio-models", () => {
     ).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
         off: "none",
         none: "none",
         adaptive: "xhigh",
         max: "xhigh",
-      }),
+      },
     });
 
     expect(
@@ -179,10 +190,10 @@ describe("lmstudio-models", () => {
     ).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["low", "medium", "high"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
         adaptive: "high",
         max: "high",
-      }),
+      },
     });
 
     expect(
@@ -198,7 +209,7 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL) => ({
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => ({
         models: [
@@ -241,14 +252,16 @@ describe("lmstudio-models", () => {
       fetchImpl: asFetch(fetchMock),
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:1234/api/v1/models",
-      expect.objectContaining({
-        headers: {
-          Authorization: "Bearer lm-token",
-        },
-      }),
+    const modelsRequest = fetchMock.mock.calls.find(
+      ([url]) => url === "http://localhost:1234/api/v1/models",
     );
+    const modelsRequestOptions = modelsRequest?.[1] as
+      | { headers?: Record<string, string>; signal?: unknown }
+      | undefined;
+    expect(modelsRequestOptions?.headers).toEqual({
+      Authorization: "Bearer lm-token",
+    });
+    expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
     expect(models).toHaveLength(2);
     expect(models[0]).toEqual({
@@ -261,12 +274,12 @@ describe("lmstudio-models", () => {
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-        reasoningEffortMap: expect.objectContaining({
+        reasoningEffortMap: {
           off: "none",
           none: "none",
           adaptive: "xhigh",
           max: "xhigh",
-        }),
+        },
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -283,6 +296,42 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
     });
+  });
+
+  it("reports malformed model list JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    }));
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result.reachable).toBe(false);
+    expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+  });
+
+  it("reports wrong-shaped model list payloads with owned errors", async () => {
+    for (const payload of [[], { models: {} }, { models: [null] }]) {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      }));
+
+      const result = await fetchLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        fetchImpl: asFetch(fetchMock),
+      });
+
+      expect(result.reachable).toBe(false);
+      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+    }
   });
 
   it("skips model load when already loaded", async () => {
@@ -318,6 +367,36 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadContextLength(fetchMock, 8192);
+  });
+
+  it("reports malformed model load JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return {
+          ok: true,
+          json: async () => {
+            throw new SyntaxError("bad json");
+          },
+        };
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+      }),
+    ).rejects.toThrow("LM Studio model load returned malformed JSON");
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {
@@ -356,8 +435,13 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    expect(loadCall?.[1]).toMatchObject({
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
+    const { signal, ...stableLoadInit } = loadInit;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(stableLoadInit).toEqual({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -369,7 +453,6 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall![1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

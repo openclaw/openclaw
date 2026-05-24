@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -19,12 +19,12 @@ import {
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("@mariozechner/pi-coding-agent")>
+  | Promise<typeof import("@earendil-works/pi-coding-agent")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("@mariozechner/pi-coding-agent");
+  sessionManagerModulePromise ??= import("@earendil-works/pi-coding-agent");
   return await sessionManagerModulePromise;
 }
 
@@ -67,7 +67,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 
 const sessionHookMocks = vi.hoisted(() => ({
   hasInternalHookListeners: vi.fn(() => true),
-  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
+  triggerInternalHook: vi.fn(async (_eventValue: unknown) => {}),
 }));
 
 const beforeResetHookMocks = vi.hoisted(() => ({
@@ -120,6 +120,16 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
     "../../auto-reply/reply/queue.js",
+  );
+  return {
+    ...actual,
+    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+  };
+});
+
+vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
+  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
+    "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
@@ -233,8 +243,8 @@ vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
 export function setupGatewaySessionsTestHarness() {
   installGatewayTestHooks({ scope: "suite" });
 
-  let harness: GatewayServerHarness;
-  let sharedSessionStoreDir: string;
+  let harness: GatewayServerHarness | undefined;
+  let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
@@ -243,8 +253,10 @@ export function setupGatewaySessionsTestHarness() {
   });
 
   afterAll(async () => {
-    await harness.close();
-    await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    await harness?.close();
+    if (sharedSessionStoreDir) {
+      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {
@@ -283,11 +295,25 @@ export function setupGatewaySessionsTestHarness() {
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
   });
 
+  const requireHarness = () => {
+    if (!harness) {
+      throw new Error("Gateway sessions test harness was not started");
+    }
+    return harness;
+  };
+
+  const requireSharedSessionStoreDir = () => {
+    if (!sharedSessionStoreDir) {
+      throw new Error("Gateway sessions shared session store dir was not created");
+    }
+    return sharedSessionStoreDir;
+  };
+
   const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
-    await harness.openClient(opts);
+    await requireHarness().openClient(opts);
 
   async function createSessionStoreDir() {
-    const dir = path.join(sharedSessionStoreDir, `case-${sessionStoreCaseSeq++}`);
+    const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
@@ -307,7 +333,7 @@ export function setupGatewaySessionsTestHarness() {
 
   return {
     createSessionStoreDir,
-    getHarness: () => harness,
+    getHarness: requireHarness,
     openClient,
     seedActiveMainSession,
   };
@@ -405,7 +431,9 @@ export function expectActiveRunCleanup(
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
   )[0]?.[0];
-  expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  for (const key of expectedQueueKeys) {
+    expect(clearedKeys).toContain(key);
+  }
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }

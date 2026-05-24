@@ -19,6 +19,161 @@ function migrateLegacyConfigForTest(raw: unknown): {
     : { config: next as OpenClawConfig, changes };
 }
 
+function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
+  const unmatchedFragments = fragments.filter((fragment) =>
+    changes.every((change) => !change.includes(fragment)),
+  );
+  expect(unmatchedFragments).toStrictEqual([]);
+}
+
+describe("legacy silent reply config migrate", () => {
+  it("removes silent reply rewrite and direct-chat silent reply config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "allow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+            group: false,
+          },
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.silentReply).toEqual({
+      group: "allow",
+      internal: "allow",
+    });
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram?.silentReply).toEqual({ group: "allow" });
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReply.direct",
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReply.direct",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+
+  it("removes malformed silent reply rewrite keys by presence", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          silentReplyRewrite: true,
+        },
+      },
+      surfaces: {
+        telegram: {
+          silentReplyRewrite: false,
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
+    expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      "Removed agents.defaults.silentReplyRewrite",
+      "Removed surfaces.telegram.silentReplyRewrite",
+    ]);
+  });
+});
+
+describe("legacy agent model timeout migrate", () => {
+  it("removes ignored timeoutMs from agent and subagent model selection config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+            timeoutMs: 30_000,
+          },
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 10_000,
+            },
+          },
+          imageGenerationModel: {
+            primary: "openrouter/openai/gpt-5.4-image-2",
+            timeoutMs: 180_000,
+          },
+          pdfModel: {
+            primary: "openai/gpt-5.5",
+            timeoutMs: 45_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 20_000,
+            },
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.4-mini",
+                timeoutMs: 5_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const root = res.config as Record<string, unknown> | null;
+    const agents = root?.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const defaultSubagents = defaults.subagents as Record<string, unknown>;
+    const list = agents.list as Array<Record<string, unknown>>;
+    const firstAgent = list[0];
+    const firstSubagents = firstAgent.subagents as Record<string, unknown>;
+
+    expect(defaults.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(defaultSubagents.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(defaults.pdfModel).toEqual({
+      primary: "openai/gpt-5.5",
+      timeoutMs: 45_000,
+    });
+    expect(firstAgent.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(firstSubagents.model).toEqual({
+      primary: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+    ]);
+  });
+});
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -37,7 +192,7 @@ describe("legacy session maintenance migrate", () => {
       pruneAfter: "30d",
       maxEntries: 500,
     });
-    expect(res.changes).toContain("Removed deprecated session.maintenance.rotateBytes.");
+    expect(res.changes).toStrictEqual(["Removed deprecated session.maintenance.rotateBytes."]);
   });
 });
 
@@ -53,9 +208,78 @@ describe("legacy session parent fork migrate", () => {
     expect(res.config?.session).toEqual({
       store: "sessions.json",
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
-    );
+    ]);
+  });
+});
+
+describe("legacy diagnostics memory pressure snapshot migrate", () => {
+  it("renames the boolean toggle", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: false,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("preserves the renamed toggle when both keys are present", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: false,
+        memoryPressureSnapshot: true,
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
+    ]);
+  });
+
+  it("moves nested enabled to the renamed boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        enabled: true,
+        memoryPressureBundle: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      enabled: true,
+      memoryPressureSnapshot: false,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
+  });
+
+  it("moves empty object form to the renamed default boolean", () => {
+    const res = migrateLegacyConfigForTest({
+      diagnostics: {
+        memoryPressureBundle: {},
+      },
+    });
+
+    expect(res.config?.diagnostics).toEqual({
+      memoryPressureSnapshot: true,
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
+    ]);
   });
 });
 
@@ -77,9 +301,9 @@ describe("legacy thread binding spawn migrate", () => {
       enabled: true,
       spawnSessions: true,
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved channels.discord.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.threadBindings.spawnSessions (true).",
-    );
+    ]);
   });
 
   it("collapses conflicting split spawn flags conservatively", () => {
@@ -103,8 +327,40 @@ describe("legacy thread binding spawn migrate", () => {
     ).toEqual({
       spawnSessions: false,
     });
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Collapsed conflicting channels.discord.accounts.work.threadBindings.spawnSubagentSessions/spawnAcpSessions → channels.discord.accounts.work.threadBindings.spawnSessions (false).",
+    ]);
+  });
+});
+
+describe("legacy message queue mode migrate", () => {
+  it("moves retired queue steering modes to followup mode", () => {
+    const res = migrateLegacyConfigForTest({
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+            slack: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.messages?.queue).toEqual({
+      mode: "steer",
+      byChannel: {
+        discord: "followup",
+        telegram: "collect",
+        slack: "steer",
+      },
+    });
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.mode "queue" → "steer"; use "steer" for default active-run steering.',
+    );
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.byChannel.discord "steer-backlog" → "followup"; use "steer" for default active-run steering.',
     );
   });
 });
@@ -120,7 +376,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -140,7 +396,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -153,7 +409,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Removed audio.transcription (invalid or empty command).");
+    expect(res.changes).toStrictEqual(["Removed audio.transcription (invalid or empty command)."]);
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio).toBeUndefined();
   });
@@ -168,7 +424,7 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
+    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
     expect(res.config?.audio).toBeUndefined();
     expect(res.config?.tools?.media?.audio?.models).toEqual([
       {
@@ -182,7 +438,54 @@ describe("legacy migrate audio transcription", () => {
 });
 
 describe("legacy migrate mention routing", () => {
-  it("does not rewrite removed routing.groupChat.requireMention migrations", () => {
+  it("moves legacy routing group chat settings into current channel and message config", () => {
+    const res = migrateLegacyConfigForTest({
+      routing: {
+        allowFrom: ["+15550001111"],
+        groupChat: {
+          requireMention: false,
+          historyLimit: 12,
+          mentionPatterns: ["@openclaw"],
+        },
+      },
+      channels: {
+        whatsapp: {},
+        telegram: {
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+        imessage: {},
+      },
+    });
+
+    const migratedConfig = res.config as Record<string, unknown> | null;
+    expect(migratedConfig?.routing).toBeUndefined();
+    expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15550001111"]);
+    expect(res.config?.channels?.whatsapp?.groups).toEqual({
+      "*": { requireMention: false },
+    });
+    expect(res.config?.channels?.telegram?.groups).toEqual({
+      "*": { requireMention: true },
+    });
+    expect(res.config?.channels?.imessage?.groups).toEqual({
+      "*": { requireMention: false },
+    });
+    expect(res.config?.messages?.groupChat).toEqual({
+      historyLimit: 12,
+      mentionPatterns: ["@openclaw"],
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
+      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
+      'Removed routing.groupChat.requireMention (channels.telegram.groups."*" already set).',
+      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
+      "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
+      "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
+    ]);
+  });
+
+  it("removes legacy routing requireMention when no compatible channel exists", () => {
     const res = migrateLegacyConfigForTest({
       routing: {
         groupChat: {
@@ -191,11 +494,14 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
+    const migratedConfig = res.config as Record<string, unknown> | null;
+    expect(migratedConfig?.routing).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Removed routing.groupChat.requireMention (no configured WhatsApp, Telegram, or iMessage channel found).",
+    ]);
   });
 
-  it("does not rewrite removed channels.telegram.requireMention migrations", () => {
+  it("moves channels.telegram.requireMention into the wildcard group default", () => {
     const res = migrateLegacyConfigForTest({
       channels: {
         telegram: {
@@ -204,8 +510,41 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.config?.channels?.telegram).toEqual({
+      groups: {
+        "*": { requireMention: false },
+      },
+    });
+    expect(res.changes).toStrictEqual([
+      'Moved channels.telegram.requireMention → channels.telegram.groups."*".requireMention.',
+    ]);
+  });
+});
+
+describe("legacy bundled provider discovery migrate", () => {
+  it("sets compat mode for existing restrictive plugin allowlists", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
+    expect(res.changes).toStrictEqual([
+      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
+    ]);
+  });
+
+  it("does not override explicit bundled discovery mode", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "allowlist",
+      },
+    });
+
     expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 });
 
@@ -222,15 +561,15 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
-    );
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
+    ]);
     expect(res.config?.agents?.defaults).toEqual({
       model: { primary: "openai/gpt-5.4" },
     });
   });
 
-  it("moves legacy embeddedHarness runtime policy into agentRuntime", () => {
+  it("removes ignored agent-wide runtime policy", () => {
     const res = migrateLegacyConfigForTest({
       agents: {
         defaults: {
@@ -252,21 +591,92 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved agents.defaults.embeddedHarness → agents.defaults.agentRuntime.",
-        "Moved agents.list.0.embeddedHarness → agents.list.0.agentRuntime.",
-      ]),
-    );
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toStrictEqual({});
+    expect(res.config?.agents?.list?.[0]).toEqual({
+      id: "reviewer",
+    });
+  });
+
+  it("moves recoverable whole-agent Claude CLI runtime policy before removing stale pins", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+      "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+    ]);
     expect(res.config?.agents?.defaults).toEqual({
-      agentRuntime: {
-        id: "claude-cli",
+      model: {
+        primary: "anthropic/claude-opus-4-7",
+        fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+      },
+      models: {
+        "anthropic/claude-opus-4-7": {
+          alias: "Opus",
+          agentRuntime: { id: "claude-cli" },
+        },
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
       },
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
-      id: "reviewer",
-      agentRuntime: {
-        id: "codex",
+      id: "paige",
+      model: "anthropic/claude-sonnet-4-6",
+      models: {
+        "anthropic/claude-sonnet-4-6": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    });
+  });
+
+  it("does not overwrite explicit model runtime when removing stale whole-agent policy", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: "anthropic/claude-opus-4-7",
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+    ]);
+    expect(res.config?.agents?.defaults).toEqual({
+      model: "anthropic/claude-opus-4-7",
+      models: {
+        "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
       },
     });
   });
@@ -282,9 +692,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved agents.defaults.sandbox.perSession → agents.defaults.sandbox.scope (session).",
-    );
+    ]);
     expect(res.config?.agents?.defaults?.sandbox).toEqual({
       scope: "session",
     });
@@ -304,9 +714,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
-    );
+    ]);
     expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
       scope: "shared",
     });
@@ -324,9 +734,9 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Removed agents.defaults.sandbox.perSession (agents.defaults.sandbox.scope already set).",
-    );
+    ]);
     expect(res.config?.agents?.defaults?.sandbox).toEqual({
       scope: "agent",
     });
@@ -345,7 +755,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 });
@@ -367,10 +777,10 @@ describe("legacy migrate MCP server type aliases", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       'Moved mcp.servers.silo.type "http" → transport "streamable-http".',
-    );
-    expect(res.changes).toContain('Moved mcp.servers.legacySse.type "sse" → transport "sse".');
+      'Moved mcp.servers.legacySse.type "sse" → transport "sse".',
+    ]);
     expect(res.config?.mcp?.servers?.silo).toEqual({
       url: "https://example.com/mcp",
       transport: "streamable-http",
@@ -394,7 +804,9 @@ describe("legacy migrate MCP server type aliases", () => {
       },
     });
 
-    expect(res.changes).toContain('Removed mcp.servers.mixed.type (transport "sse" already set).');
+    expect(res.changes).toStrictEqual([
+      'Removed mcp.servers.mixed.type (transport "sse" already set).',
+    ]);
     expect(res.config?.mcp?.servers?.mixed).toEqual({
       url: "https://example.com/mcp",
       transport: "sse",
@@ -443,9 +855,12 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved heartbeat → agents.defaults.heartbeat.");
+    expect(res.changes).toStrictEqual([
+      "Moved heartbeat → agents.defaults.heartbeat.",
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+    ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
       every: "30m",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
@@ -460,7 +875,9 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved heartbeat visibility → channels.defaults.heartbeat.");
+    expect(res.changes).toStrictEqual([
+      "Moved heartbeat visibility → channels.defaults.heartbeat.",
+    ]);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({
       showOk: true,
       showAlerts: false,
@@ -485,13 +902,14 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
-    );
+      'Upgraded config.agents.defaults.heartbeat.model from "anthropic/claude-3-5-haiku-20241022" to "anthropic/claude-sonnet-4-6".',
+    ]);
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -512,9 +930,9 @@ describe("legacy migrate heartbeat config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
-    );
+    ]);
     expect(res.config?.channels?.defaults?.heartbeat).toEqual({
       showOk: false,
       showAlerts: true,
@@ -543,7 +961,7 @@ describe("legacy migrate heartbeat config", () => {
     expect(res.config?.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
       target: "telegram",
-      model: "anthropic/claude-3-5-haiku-20241022",
+      model: "anthropic/claude-sonnet-4-6",
     });
     expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
@@ -569,9 +987,11 @@ describe("legacy migrate heartbeat config", () => {
       heartbeat: {},
     });
 
-    expect(res.changes).toContain("Removed empty top-level heartbeat.");
-    expect(res.config).not.toBeNull();
-    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+    expect(res.changes).toStrictEqual(["Removed empty top-level heartbeat."]);
+    if (res.config === null) {
+      throw new Error("Expected migrated config");
+    }
+    expect((res.config as { heartbeat?: unknown }).heartbeat).toBeUndefined();
   });
 });
 
@@ -587,8 +1007,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
-    expect(res.changes.some((c) => c.includes("bind=lan"))).toBe(true);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+    ]);
   });
 
   it("seeds allowedOrigins using configured port", () => {
@@ -613,8 +1034,11 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
         auth: { mode: "token", token: "tok" },
       },
     });
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://192.168.1.100:18789");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toContain("http://localhost:18789");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+      "http://192.168.1.100:18789",
+    ]);
   });
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
@@ -628,7 +1052,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not migrate when dangerouslyAllowHostHeaderOriginFallback is set — returns null", () => {
@@ -640,7 +1064,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("seeds allowedOrigins when existing entries are blank strings", () => {
@@ -655,7 +1079,9 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
-    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+    ]);
   });
 
   it("does not migrate loopback bind — returns null", () => {
@@ -666,7 +1092,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       },
     });
     expect(res.config).toBeNull();
-    expect(res.changes).toHaveLength(0);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("preserves existing controlUi fields when seeding allowedOrigins", () => {
@@ -681,6 +1107,305 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
       "http://localhost:18789",
       "http://127.0.0.1:18789",
+    ]);
+  });
+
+  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "0.0.0.0",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("lan");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+      'Normalized gateway.bind "0.0.0.0" → "lan".',
+    ]);
+  });
+
+  it("does not seed allowedOrigins for loopback host aliases", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "localhost",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("loopback");
+    expect(res.config?.gateway?.controlUi).toBeUndefined();
+    expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
+  });
+});
+
+describe("legacy model compat migrate", () => {
+  it("upgrades retired model refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          workspace: "/tmp/claude-3-sonnet",
+          imageModel: "anthropic/claude-haiku-4-5",
+          imageGenerationModel: {
+            primary: "github-copilot/claude-sonnet-4",
+            fallbacks: ["github-copilot/grok-code-fast-1"],
+          },
+          musicGenerationModel: "vercel-ai-gateway/anthropic/claude-opus-4-5",
+          pdfModel: "anthropic/claude-3-5-sonnet",
+          videoGenerationModel: "anthropic/claude-opus-4-10",
+          model: {
+            primary: "anthropic/claude-opus-4-5@anthropic:work",
+            fallbacks: [
+              "anthropic/claude-sonnet-4-20250514",
+              "github-copilot/claude-sonnet-4",
+              "github-copilot/grok-code-fast-1@github:work",
+              "venice/claude-opus-4-5",
+              "vercel-ai-gateway/anthropic/claude-opus-4-5",
+              "anthropic/claude-opus-5-0",
+              "anthropic/claude-sonnet-4-7",
+              "anthropic/claude-opus-4-10",
+              "kilocode/anthropic/claude-sonnet-4",
+              "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+              "openai/gpt-5.5",
+              "openai/gpt-4o",
+              "openai/gpt-4.1-mini",
+              "openai/gpt-5.1-codex-mini",
+              "openai/gpt-5.2-codex",
+              "openai-codex/gpt-5.2",
+              "openai-codex/gpt-5.1-codex-mini",
+              "github-copilot/gpt-4.1",
+              "github-copilot/gpt-5.2",
+              "github-copilot/gpt-5.2-codex",
+              "groq/llama3-70b-8192",
+              "groq/gemma2-9b-it",
+              "groq/moonshotai/kimi-k2-instruct-0905",
+              "xai/grok-code-fast-1",
+              "xai/grok-4-fast-reasoning",
+              "openai/gpt-4o-transcribe",
+              "openai/gpt-4o-mini-tts",
+            ],
+          },
+          models: {
+            "anthropic/claude-haiku-4-5": { alias: "haiku" },
+            "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+            "github-copilot/claude-opus-4.5": { alias: "copilot-opus" },
+            "openai/gpt-5.2-pro": { alias: "old-pro" },
+            "github-copilot/gpt-5-mini": { alias: "old-mini" },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "anthropic/claude-3-5-sonnet",
+              dataPath: "/tmp/claude-opus-4-5",
+            },
+            subagent: {
+              allowedModels: ["anthropic/claude-haiku-4-5", "*"],
+            },
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          telegram: {
+            "*": "anthropic/claude-opus-4-5",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "github-copilot/claude-sonnet-4.6",
+      fallbacks: ["github-copilot/gpt-5.4-mini"],
+    });
+    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+      "vercel-ai-gateway/anthropic/claude-opus-4-6",
+    );
+    expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7@anthropic:work",
+      fallbacks: [
+        "anthropic/claude-sonnet-4-6",
+        "github-copilot/claude-sonnet-4.6",
+        "github-copilot/gpt-5.4-mini@github:work",
+        "venice/claude-opus-4-6",
+        "vercel-ai-gateway/anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-5-0",
+        "anthropic/claude-sonnet-4-7",
+        "anthropic/claude-opus-4-10",
+        "kilocode/anthropic/claude-sonnet-4",
+        "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "openai/gpt-5.5",
+        "openai/gpt-5.5",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.4-mini",
+        "openai/gpt-5.3-codex",
+        "openai-codex/gpt-5.5",
+        "openai-codex/gpt-5.4-mini",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.5",
+        "github-copilot/gpt-5.3-codex",
+        "groq/llama-3.3-70b-versatile",
+        "groq/llama-3.1-8b-instant",
+        "groq/openai/gpt-oss-120b",
+        "xai/grok-build-0.1",
+        "xai/grok-4.3",
+        "openai/gpt-4o-transcribe",
+        "openai/gpt-4o-mini-tts",
+      ],
+    });
+    expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
+      "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
+      "openai/gpt-5.5-pro": { alias: "old-pro" },
+      "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
+    });
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { summaryModel?: string } })
+        ?.config?.summaryModel,
+    ).toBe("anthropic/claude-sonnet-4-6");
+    expect(
+      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { dataPath?: string } })
+        ?.config?.dataPath,
+    ).toBe("/tmp/claude-opus-4-5");
+    expect(
+      (
+        res.config?.plugins?.entries?.["lossless-claw"] as {
+          subagent?: { allowedModels?: string[] };
+        }
+      )?.subagent?.allowedModels,
+    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
+    expectMigrationChangesToIncludeFragments(res.changes, [
+      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
+      'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
+      'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.pdfModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.agents.defaults.model.primary from "anthropic/claude-opus-4-5@anthropic:work" to "anthropic/claude-opus-4-7@anthropic:work"',
+      'config.agents.defaults.model.fallbacks.2 from "github-copilot/grok-code-fast-1@github:work" to "github-copilot/gpt-5.4-mini@github:work"',
+      'config.agents.defaults.model.fallbacks.3 from "venice/claude-opus-4-5" to "venice/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.4 from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
+      'config.agents.defaults.model.fallbacks.11 from "openai/gpt-4o" to "openai/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.12 from "openai/gpt-4.1-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.13 from "openai/gpt-5.1-codex-mini" to "openai/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.14 from "openai/gpt-5.2-codex" to "openai/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.15 from "openai-codex/gpt-5.2" to "openai-codex/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.16 from "openai-codex/gpt-5.1-codex-mini" to "openai-codex/gpt-5.4-mini"',
+      'config.agents.defaults.model.fallbacks.17 from "github-copilot/gpt-4.1" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.18 from "github-copilot/gpt-5.2" to "github-copilot/gpt-5.5"',
+      'config.agents.defaults.model.fallbacks.19 from "github-copilot/gpt-5.2-codex" to "github-copilot/gpt-5.3-codex"',
+      'config.agents.defaults.model.fallbacks.20 from "groq/llama3-70b-8192" to "groq/llama-3.3-70b-versatile"',
+      'config.agents.defaults.model.fallbacks.21 from "groq/gemma2-9b-it" to "groq/llama-3.1-8b-instant"',
+      'config.agents.defaults.model.fallbacks.22 from "groq/moonshotai/kimi-k2-instruct-0905" to "groq/openai/gpt-oss-120b"',
+      'config.agents.defaults.model.fallbacks.23 from "xai/grok-code-fast-1" to "xai/grok-build-0.1"',
+      'config.agents.defaults.model.fallbacks.24 from "xai/grok-4-fast-reasoning" to "xai/grok-4.3"',
+      'config.agents.defaults.models key from "github-copilot/claude-opus-4.5" to "github-copilot/claude-opus-4.7"',
+      'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
+      'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
+      'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
+      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
+      'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
+    ]);
+  });
+
+  it("removes unrecognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen-legacy",
+                name: "Qwen Legacy",
+                compat: {
+                  thinkingFormat: "bailian-legacy",
+                  supportsTools: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      supportsTools: true,
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.0.compat.thinkingFormat (unrecognized value "bailian-legacy"; runtime default applies).',
+    ]);
+  });
+
+  it("preserves recognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen3",
+                name: "Qwen3",
+                compat: {
+                  thinkingFormat: "qwen",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("selectively removes invalid thinkingFormat values across providers", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "valid",
+                name: "Valid",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+              {
+                id: "legacy",
+                name: "Legacy",
+                compat: { thinkingFormat: "old-bailian" },
+              },
+            ],
+          },
+          openrouter: {
+            models: [
+              {
+                id: "legacy-router",
+                name: "Legacy Router",
+                compat: { thinkingFormat: "openrouter-v0" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      thinkingFormat: "qwen-chat-template",
+    });
+    expect(res.config?.models?.providers?.bailian?.models?.[1]?.compat).toEqual({});
+    expect(res.config?.models?.providers?.openrouter?.models?.[0]?.compat).toEqual({});
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.1.compat.thinkingFormat (unrecognized value "old-bailian"; runtime default applies).',
+      'Removed models.providers.openrouter.models.0.compat.thinkingFormat (unrecognized value "openrouter-v0"; runtime default applies).',
     ]);
   });
 });

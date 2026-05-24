@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
@@ -13,6 +13,16 @@ export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const parseRequiredNumber = (value: string, label: string): number | undefined => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
+      defaultRuntime.exit(1);
+      return undefined;
+    }
+    return parsed;
+  };
+
   const runElementAction = async (params: {
     cmd: Command;
     body: Record<string, unknown>;
@@ -85,8 +95,11 @@ export function registerBrowserElementCommands(
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) => Number(v))
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
-      const x = Number(xRaw);
-      const y = Number(yRaw);
+      const x = parseRequiredNumber(xRaw, "x");
+      const y = parseRequiredNumber(yRaw, "y");
+      if (x === undefined || y === undefined) {
+        return;
+      }
       await runElementAction({
         cmd,
         body: {

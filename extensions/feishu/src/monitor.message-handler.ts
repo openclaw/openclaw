@@ -181,7 +181,13 @@ export function createFeishuMessageReceiveHandler({
   });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
-  const enqueue = createSequentialQueue();
+  const enqueue = createSequentialQueue({
+    onTaskTimeout: (key, timeoutMs) => {
+      log(
+        `feishu[${accountId}]: per-chat task exceeded ${timeoutMs}ms cap (key=${key}); evicting from queue so later same-key messages can proceed (#70133)`,
+      );
+    },
+  });
 
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
     const sequentialKey = resolveSequentialKey({
@@ -256,7 +262,7 @@ export function createFeishuMessageReceiveHandler({
         return false;
       }
       const text = resolveDebounceText(event);
-      return Boolean(text) && !core.channel.text.hasControlCommand(text, cfg);
+      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

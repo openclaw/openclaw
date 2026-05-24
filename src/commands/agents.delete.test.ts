@@ -15,6 +15,10 @@ const processMocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }));
 
+const fsSafeMocks = vi.hoisted(() => ({
+  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
+}));
+
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   isGatewayTransportError: vi.fn(),
@@ -31,11 +35,15 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayTransportError: gatewayMocks.isGatewayTransportError,
 }));
 
+vi.mock("../infra/fs-safe.js", () => ({
+  movePathToTrash: fsSafeMocks.movePathToTrash,
+}));
+
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
-import { agentsDeleteCommand } from "./agents.js";
+import { agentsDeleteCommand } from "./agents.commands.delete.js";
 
 const runtime = createTestRuntime();
 
@@ -84,6 +92,7 @@ describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
+    fsSafeMocks.movePathToTrash.mockClear();
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
     gatewayMocks.callGateway.mockRejectedValue(
@@ -127,20 +136,17 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "agents.delete",
-          params: { agentId: "ops", deleteFiles: true },
-          requiredMethods: ["agents.delete"],
-        }),
-      );
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+      const gatewayCall = gatewayMocks.callGateway.mock.calls[0]?.[0];
+      expect(gatewayCall?.method).toBe("agents.delete");
+      expect(gatewayCall?.params).toEqual({ agentId: "ops", deleteFiles: true });
+      expect(gatewayCall?.requiredMethods).toEqual(["agents.delete"]);
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
       expectSessionStore(storePath, sessions);
-      expect(readJsonLogs()[0]).toMatchObject({
-        agentId: "ops",
-        removedBindings: 0,
-        transport: "gateway",
-      });
+      const output = readJsonLogs()[0];
+      expect(output?.agentId).toBe("ops");
+      expect(output?.removedBindings).toBe(0);
+      expect(output?.transport).toBe("gateway");
     });
   });
 
@@ -168,13 +174,13 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: {
-            agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
-          },
-        }),
-      );
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
+        [{ nextConfig: OpenClawConfig }]
+      >;
+      expect(replaceConfigFileCalls[0]?.[0].nextConfig).toEqual({
+        agents: { list: [{ id: "main", workspace: path.join(stateDir, "workspace-main") }] },
+      });
       expectSessionStore(storePath, {
         "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
@@ -276,21 +282,17 @@ describe("agents delete command", () => {
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       // Workspace should still exist — it was shared
-      const stat = await fs.stat(sharedWorkspace).catch(() => null);
-      expect(stat).not.toBeNull();
+      const retainedWorkspaceStats = await fs.stat(sharedWorkspace);
+      expect(retainedWorkspaceStats.isDirectory()).toBe(true);
 
       // The JSON output should report why the workspace was retained.
       const jsonOutput = readJsonLogs();
       expect(jsonOutput).toHaveLength(1);
-      expect(jsonOutput[0]).toMatchObject({
-        workspaceRetained: true,
-        workspaceRetainedReason: "shared",
-        workspaceSharedWith: ["main"],
-      });
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
-      );
+      expect(jsonOutput[0]?.workspaceRetained).toBe(true);
+      expect(jsonOutput[0]?.workspaceRetainedReason).toBe("shared");
+      expect(jsonOutput[0]?.workspaceSharedWith).toEqual(["main"]);
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(sharedWorkspace);
     });
   });
 
@@ -321,14 +323,11 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(readJsonLogs()[0]).toMatchObject({
-        workspaceRetained: true,
-        workspaceSharedWith: ["main"],
-      });
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", childWorkspace],
-        { timeoutMs: 5000 },
-      );
+      const output = readJsonLogs()[0];
+      expect(output?.workspaceRetained).toBe(true);
+      expect(output?.workspaceSharedWith).toEqual(["main"]);
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(childWorkspace);
     });
   });
 
@@ -359,14 +358,11 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(readJsonLogs()[0]).toMatchObject({
-        workspaceRetained: true,
-        workspaceSharedWith: ["main"],
-      });
-      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-        ["trash", sharedWorkspace],
-        { timeoutMs: 5000 },
-      );
+      const output = readJsonLogs()[0];
+      expect(output?.workspaceRetained).toBe(true);
+      expect(output?.workspaceSharedWith).toEqual(["main"]);
+      const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(([targetPath]) => targetPath);
+      expect(trashedPaths).not.toContain(sharedWorkspace);
     });
   });
 
@@ -400,14 +396,13 @@ describe("agents delete command", () => {
 
         await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-        expect(readJsonLogs()[0]).toMatchObject({
-          workspaceRetained: true,
-          workspaceSharedWith: ["main"],
-        });
-        expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalledWith(
-          ["trash", aliasWorkspace],
-          { timeoutMs: 5000 },
+        const output = readJsonLogs()[0];
+        expect(output?.workspaceRetained).toBe(true);
+        expect(output?.workspaceSharedWith).toEqual(["main"]);
+        const trashedPaths = fsSafeMocks.movePathToTrash.mock.calls.map(
+          ([targetPath]) => targetPath,
         );
+        expect(trashedPaths).not.toContain(aliasWorkspace);
       });
     },
   );
@@ -440,10 +435,10 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      // trash command should have been called for the workspace
-      expect(processMocks.runCommandWithTimeout).toHaveBeenCalledWith(["trash", opsWorkspace], {
-        timeoutMs: 5000,
+      expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(opsWorkspace, {
+        allowedRoots: [path.dirname(opsWorkspace)],
       });
+      expect(processMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,6 +1,11 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  type EventSessionRoutingPolicy,
+  resolveEventSessionKeyForPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -10,9 +15,9 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
-import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -339,19 +344,30 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const eventRouting = session.eventRouting ?? {
+    mainKey: session.mainKey,
+    sessionScope: session.sessionScope,
+  };
   enqueueSystemEvent(summary, {
-    sessionKey,
+    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     deliveryContext: session.notifyDeliveryContext,
-    trusted: false,
   });
-  requestHeartbeat(
-    scopedHeartbeatWakeOptions(sessionKey, {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      coalesceMs: 0,
-    }),
-  );
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptionsForPolicy(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        eventRouting,
+      ),
+    );
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -416,26 +432,48 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
+  opts: {
+    sessionKey?: string;
+    contextKey?: string;
+    deliveryContext?: DeliveryContext;
+    /** `session.mainKey` from the runtime config; pass-through of `undefined`
+     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
+    mainKey?: string;
+    /** `session.scope` from the runtime config; needed so global-scope
+     *  agents route cron-run events to the "global" queue. */
+    sessionScope?: "per-sender" | "global";
+    eventRouting?: EventSessionRoutingPolicy;
+  },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
+  const eventRouting = opts.eventRouting ?? {
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
+  };
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
-    trusted: false,
   });
-  requestHeartbeat(
-    scopedHeartbeatWakeOptions(sessionKey, {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      coalesceMs: 0,
-    }),
-  );
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptionsForPolicy(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        eventRouting,
+      ),
+    );
+  }
 }
 
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";
@@ -551,6 +589,41 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+/**
+ * Apply PATH prepends inside the shell command.
+ * This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
+ * prepend their own entries to PATH during shell startup.
+ */
+function wrapPosixCommandWithPathPrepend(
+  command: string,
+  env: Record<string, string>,
+  pathPrepend?: string[],
+): string {
+  if (process.platform === "win32") {
+    return command;
+  }
+
+  if (!pathPrepend || pathPrepend.length === 0) {
+    return command;
+  }
+
+  // Strip prepended entries from the base env.PATH to avoid duplicate segments.
+  // The wrapper will re-apply them after shell startup.
+  const pathKey = findPathKey(env);
+  const currentPath = env[pathKey];
+  if (currentPath) {
+    const newPath = removePathPrepend(currentPath, pathPrepend);
+    if (newPath !== undefined) {
+      env[pathKey] = newPath;
+    }
+  }
+
+  // Pass the prepend string safely via a temporary environment variable.
+  env.OPENCLAW_PREPEND_PATH = pathPrepend.join(path.delimiter);
+
+  return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -558,6 +631,7 @@ export async function runExecProcess(opts: {
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   usePty: boolean;
@@ -568,6 +642,17 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; snapshotted onto the
+   *  ProcessSession so background-exit notifications can remap cron-run
+   *  keys without an ambient config load. Long-running background exits use
+   *  this start-time value even if config changes while the process runs. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; snapshotted alongside
+   *  `mainKey` so the cron-run remap can route global-scope agents to
+   *  the "global" queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -587,6 +672,9 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
+    eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
@@ -724,11 +812,19 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+
+    // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
+    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(
+      execCommand,
+      shellRuntimeEnv,
+      opts.pathPrepend,
+    );
+
+    const childArgv = [shell, ...shellArgs, commandWithPathPrepend];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: execCommand,
+        ptyCommand: commandWithPathPrepend,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,

@@ -4,8 +4,9 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
+import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
-import { isInterpreterLikeAllowlistPattern } from "../infra/exec-inline-eval.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
@@ -26,10 +27,11 @@ import { collectGatewayConfigFindings as collectGatewayConfigFindingsBase } from
 import type {
   SecurityAuditFinding,
   SecurityAuditReport,
-  SecurityAuditSeverity,
   SecurityAuditSummary,
+  SecurityAuditSuppressedFinding,
 } from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
 import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
@@ -188,6 +190,71 @@ function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary
     }
   }
   return { critical, warn, info };
+}
+
+function normalizeSuppressionText(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function findingMatchesSuppression(
+  finding: SecurityAuditFinding,
+  suppression: SecurityAuditSuppression,
+): boolean {
+  const checkId = suppression.checkId.trim();
+  if (!checkId || finding.checkId !== checkId) {
+    return false;
+  }
+  const titleNeedle = normalizeSuppressionText(suppression.titleIncludes);
+  if (titleNeedle && !finding.title.toLowerCase().includes(titleNeedle)) {
+    return false;
+  }
+  const detailNeedle = normalizeSuppressionText(suppression.detailIncludes);
+  if (detailNeedle && !finding.detail.toLowerCase().includes(detailNeedle)) {
+    return false;
+  }
+  return true;
+}
+
+function buildSecurityAuditSuppressionsActiveFinding(params: {
+  configuredCount: number;
+  suppressedCount: number;
+}): SecurityAuditFinding {
+  return {
+    checkId: "security.audit.suppressions.active",
+    severity: "info",
+    title: "Security audit suppressions configured",
+    detail:
+      `security.audit.suppressions has ${params.configuredCount} configured suppression(s); ` +
+      `${params.suppressedCount} finding(s) moved to suppressedFindings.`,
+    remediation:
+      "Review suppressedFindings and remove suppressions when the accepted risk no longer applies.",
+  };
+}
+
+export function applySecurityAuditSuppressions(
+  findings: SecurityAuditFinding[],
+  suppressions: SecurityAuditSuppression[] | undefined,
+): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
+  if (!Array.isArray(suppressions) || suppressions.length === 0) {
+    return { findings, suppressedFindings: [] };
+  }
+  const active: SecurityAuditFinding[] = [];
+  const suppressedFindings: SecurityAuditSuppressedFinding[] = [];
+  for (const finding of findings) {
+    const suppression = suppressions.find((candidate) =>
+      findingMatchesSuppression(finding, candidate),
+    );
+    if (!suppression) {
+      active.push(finding);
+      continue;
+    }
+    const reason = suppression.reason?.trim();
+    suppressedFindings.push({
+      ...finding,
+      suppression: reason ? { reason } : {},
+    });
+  }
+  return { findings: active, suppressedFindings };
 }
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
@@ -578,6 +645,20 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
         `Exec-enabled scopes:\n${execEnabledScopes.map((entry) => `- ${entry.id}: security=${entry.security}, host=${entry.host}`).join("\n")}`,
       remediation:
         "Tighten dmPolicy/groupPolicy to pairing or allowlist, or disable exec for agents reachable from shared/public channels.",
+    });
+  }
+
+  const execFilesystemPolicyHits = collectExecFilesystemPolicyDriftHits(cfg);
+  if (execFilesystemPolicyHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.fs_tools_disabled_but_exec_enabled",
+      severity: "warn",
+      title: "Filesystem tool policy does not make exec read-only",
+      detail:
+        `Found scopes where write/edit/apply_patch are unavailable but exec remains available:\n${execFilesystemPolicyHits.map((hit) => `- ${hit.scopeLabel}: runtime=[${hit.runtimeTools.join(", ")}], disabledFs=[${hit.disabledFilesystemTools.join(", ")}], exec.host=${hit.execHost}, sandbox=${hit.sandboxMode}, workspaceAccess=${hit.sandboxWorkspaceAccess}`).join("\n")}\n` +
+        "The exec tool is a shell and can still write files wherever the selected host or sandbox filesystem permits it.",
+      remediation:
+        'For read-only agents, deny exec and process too. If shell access is intentional, constrain the filesystem boundary with sandbox mode "all" and workspaceAccess "ro" or "none".',
     });
   }
 
@@ -1015,6 +1096,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
+        timeoutMs: context.deepTimeoutMs,
       })),
     );
     findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
@@ -1083,6 +1165,27 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const deep = deepProbeResult?.deep;
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 
-  const summary = countBySeverity(findings);
-  return { ts: Date.now(), summary, findings, deep };
+  const configuredSuppressions = cfg.security?.audit?.suppressions;
+  const filtered = applySecurityAuditSuppressions(findings, configuredSuppressions);
+  const configuredSuppressionCount = configuredSuppressions?.length ?? 0;
+  const activeFindings =
+    configuredSuppressionCount > 0
+      ? [
+          ...filtered.findings,
+          buildSecurityAuditSuppressionsActiveFinding({
+            configuredCount: configuredSuppressionCount,
+            suppressedCount: filtered.suppressedFindings.length,
+          }),
+        ]
+      : filtered.findings;
+  const summary = countBySeverity(activeFindings);
+  return {
+    ts: Date.now(),
+    summary,
+    findings: activeFindings,
+    ...(filtered.suppressedFindings.length > 0
+      ? { suppressedFindings: filtered.suppressedFindings }
+      : {}),
+    deep,
+  };
 }

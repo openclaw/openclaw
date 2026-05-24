@@ -102,6 +102,8 @@ export type PluginInspectReport = {
   policy: {
     allowPromptInjection?: boolean;
     allowConversationAccess?: boolean;
+    hookTimeoutMs?: number;
+    hookTimeouts?: Record<string, number>;
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
@@ -190,12 +192,14 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
+    embeddingProviderIds: [...(manifest?.contracts?.embeddingProviders ?? [])],
     speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
     realtimeTranscriptionProviderIds: [
       ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),
     ],
     realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
     mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
+    meetingNotesSourceProviderIds: [...(manifest?.contracts?.meetingNotesSourceProviders ?? [])],
     imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
     videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
     musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],
@@ -204,7 +208,6 @@ function buildPluginRecordFromInstalledIndex(
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
     memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -445,6 +448,11 @@ export function buildPluginInspectReport(params: {
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
+  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
+    .filter(
+      (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
+    )
+    .map((descriptor) => descriptor.name);
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -506,7 +514,7 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
-    gatewayMethods: [...plugin.gatewayMethods],
+    gatewayMethods,
     mcpServers,
     lspServers,
     httpRouteCount: plugin.httpRoutes,
@@ -515,6 +523,8 @@ export function buildPluginInspectReport(params: {
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
       allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
+      hookTimeoutMs: policyEntry?.hooks?.timeoutMs,
+      hookTimeouts: policyEntry?.hooks?.timeouts ? { ...policyEntry.hooks.timeouts } : undefined,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,

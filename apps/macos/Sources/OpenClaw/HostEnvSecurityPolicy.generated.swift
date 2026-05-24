@@ -192,8 +192,6 @@ enum HostEnvSecurityPolicy {
         "VIRTUAL_ENV",
         "VISUAL",
         "WGETRC",
-        "XDG_CONFIG_DIRS",
-        "XDG_CONFIG_HOME",
         "YARN_RC_FILENAME"
     ]
 
@@ -425,6 +423,7 @@ enum HostEnvSecurityPolicy {
         "SSL_CERT_DIR",
         "SSL_CERT_FILE",
         "SUDO_EDITOR",
+        "SYSTEMROOT",
         "TF_CLI_CONFIG_FILE",
         "TF_PLUGIN_CACHE_DIR",
         "UV_DEFAULT_INDEX",
@@ -435,8 +434,14 @@ enum HostEnvSecurityPolicy {
         "VIRTUAL_ENV",
         "VISUAL",
         "WGETRC",
+        "WINDIR",
+        "XDG_CACHE_HOME",
         "XDG_CONFIG_DIRS",
         "XDG_CONFIG_HOME",
+        "XDG_DATA_DIRS",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+        "XDG_STATE_HOME",
         "YARN_RC_FILENAME",
         "ZDOTDIR"
     ]

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -19,8 +19,12 @@ const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
+const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 6144;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -93,6 +97,52 @@ export function pruneStaleRootChunkFiles(params = {}) {
   }
 }
 
+export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const spawnSyncImpl = params.spawnSync ?? spawnSync;
+  let result;
+  try {
+    result = spawnSyncImpl(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", GENERATED_SOURCE_DECLARATION_PATHSPEC],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+  } catch {
+    return 0;
+  }
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const rawPath of result.stdout.split(/\r?\n/u)) {
+    const relativePath = rawPath.trim().replaceAll("\\", "/");
+    if (!relativePath.startsWith("extensions/") || !relativePath.endsWith(".d.ts")) {
+      continue;
+    }
+    const declarationPath = path.join(cwd, relativePath);
+    const sourceBase = declarationPath.slice(0, -".d.ts".length);
+    const hasMatchingSource = SOURCE_DECLARATION_SOURCE_EXTENSIONS.some((extension) =>
+      fsImpl.existsSync(`${sourceBase}${extension}`),
+    );
+    if (!hasMatchingSource) {
+      continue;
+    }
+    try {
+      fsImpl.rmSync(declarationPath, { force: true });
+      removed += 1;
+    } catch {
+      // Best-effort cleanup; tsdown will still report any remaining stale files.
+    }
+  }
+  return removed;
+}
+
 export function pruneSourceCheckoutBundledPluginNodeModules(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const logger = params.logger ?? console;
@@ -151,6 +201,53 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
+function normalizeTsdownNodeOptions(nodeOptions) {
+  const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
+  const normalized = [];
+  let foundMaxOldSpaceSize = false;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
+    if (inlineMatch) {
+      foundMaxOldSpaceSize = true;
+      const value = Math.max(Number(inlineMatch[1]), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB);
+      normalized.push(`--max-old-space-size=${value}`);
+      continue;
+    }
+
+    if (part === "--max-old-space-size") {
+      foundMaxOldSpaceSize = true;
+      const next = parts[index + 1];
+      const parsed = next === undefined ? Number.NaN : Number(next);
+      const value = Number.isFinite(parsed)
+        ? Math.max(Math.trunc(parsed), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB)
+        : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+      normalized.push(`--max-old-space-size=${value}`);
+      if (next !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+
+    normalized.push(part);
+  }
+
+  if (!foundMaxOldSpaceSize) {
+    normalized.push(DEFAULT_TSDOWN_NODE_OPTIONS);
+  }
+
+  return normalized.join(" ");
+}
+
+function resolveTsdownEnv(env) {
+  const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  return {
+    ...env,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions),
+  };
+}
+
 export function createTsdownOutputScanner(params = {}) {
   const maxCaptureBytes = params.maxCaptureBytes ?? DEFAULT_CAPTURE_BYTES;
   let captured = "";
@@ -194,18 +291,29 @@ export function createTsdownOutputScanner(params = {}) {
 }
 
 export function resolveTsdownBuildInvocation(params = {}) {
-  const env = params.env ?? process.env;
+  const env = resolveTsdownEnv(params.env ?? process.env);
+  const tsdownArgs = [
+    "--config-loader",
+    "unrun",
+    "--logLevel",
+    logLevel,
+    "--no-clean",
+    ...extraArgs,
+  ];
+  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
+    return {
+      command: params.nodeExecPath ?? process.execPath,
+      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env,
+      },
+    };
+  }
   const runner = resolvePnpmRunner({
-    pnpmArgs: [
-      "exec",
-      "tsdown",
-      "--config-loader",
-      "unrun",
-      "--logLevel",
-      logLevel,
-      "--no-clean",
-      ...extraArgs,
-    ],
+    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
     comSpec: params.comSpec ?? env.ComSpec,
@@ -326,6 +434,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
+  pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
   const invocation = resolveTsdownBuildInvocation();

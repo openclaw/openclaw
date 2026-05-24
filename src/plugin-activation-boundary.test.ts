@@ -39,6 +39,7 @@ const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
             google: {
               aliases: {
                 "gemini-3.1-pro": "gemini-3.1-pro-preview",
+                "gemini-3-pro-preview": "gemini-3.1-pro-preview",
               },
             },
             xai: {
@@ -80,6 +81,11 @@ const facadeMockHelpers = vi.hoisted(() => {
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
 }));
 
 vi.mock("./secrets/channel-env-vars.js", () => ({
@@ -104,7 +110,7 @@ vi.mock("./plugin-sdk/facade-loader.js", () => ({
 
 vi.mock("./plugin-sdk/facade-runtime.js", () => ({
   ...facadeMockHelpers,
-  __testing: {},
+  testing: {},
   canLoadActivatedBundledPluginPublicSurface: () => true,
   listImportedBundledPluginFacadeIds: () => [],
   loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
@@ -129,8 +135,33 @@ describe("plugin activation boundary", () => {
       }),
     ).toBe(true);
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    const staticNormalize = { allowPluginNormalization: false };
+    const staticNormalize = {
+      allowPluginNormalization: false,
+      manifestPlugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              google: {
+                aliases: {
+                  "gemini-3.1-pro": "gemini-3.1-pro-preview",
+                  "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+                },
+              },
+              xai: {
+                aliases: {
+                  "grok-4-fast-reasoning": "grok-4-fast",
+                },
+              },
+            },
+          },
+        },
+      ],
+    };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
       provider: "google",
       model: "gemini-3.1-pro-preview",
     });
