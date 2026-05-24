@@ -303,6 +303,88 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
+  it("does not mutate session state when the maintenance ReplyOperation is aborted (no late write after abandonment)", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    // Simulate the maintenance ReplyOperation getting aborted while the
+    // embedded flush run is in flight (e.g. by the next turn's pre-compaction
+    // barrier wait-cap + post-abort grace). The embedded run still returns —
+    // an `end` compaction event and a rotated sessionId — modeling the case
+    // where the embedded runner ignored its AbortSignal or completed
+    // concurrently with the abort.
+    const replyOperationAbortController = new AbortController();
+    const replyOperation = {
+      abortSignal: replyOperationAbortController.signal,
+      setPhase: vi.fn(),
+      updateSessionId: vi.fn(),
+    } as never;
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
+      }) => {
+        // Trigger the abort partway through the embedded run, then continue
+        // as if the runner ignored the signal and returned a normal result.
+        replyOperationAbortController.abort();
+        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        return {
+          payloads: [],
+          meta: { agentMeta: { sessionId: "session-rotated-after-abort" } },
+        };
+      },
+    );
+
+    const followupRun = createTestFollowupRun();
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    // Invariant: aborted maintenance flush returns early without persisting
+    // any session-state writes. The next turn's preflight compaction is the
+    // sole writer.
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+    expect(replyOperation.updateSessionId).not.toHaveBeenCalled();
+    expect(followupRun.run.sessionId).toBe("session");
+    expect(entry?.sessionId).toBe("session");
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      main: SessionEntry;
+    };
+    expect(persisted.main.sessionId).toBe("session");
+    expect(persisted.main.compactionCount).toBe(1);
+    expect(persisted.main.memoryFlushCompactionCount).toBeUndefined();
+    expect(persisted.main.memoryFlushAt).toBeUndefined();
+  });
+
   it("reports memory-flush error payloads for visible delivery", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

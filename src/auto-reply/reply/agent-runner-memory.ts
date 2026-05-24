@@ -1459,6 +1459,21 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
+    // Invariant: an aborted maintenance flush must NOT mutate session state.
+    // If the maintenance ReplyOperation was aborted (e.g. by the next turn's
+    // pre-compaction barrier wait-cap + post-abort grace, after which the
+    // pending-flush registry entry is abandoned) but the embedded run still
+    // returned (e.g. it ignored or completed concurrently with its
+    // AbortSignal), do not persist compactionCount / sessionId rebinds /
+    // memoryFlushAt / memoryFlushCompactionCount: those would race the next
+    // turn's preflight compaction. Returning early here keeps abandoned
+    // flushes write-quiet against the live session store.
+    if (params.replyOperation.abortSignal.aborted) {
+      logVerbose(
+        `post-reply memory flush aborted for sessionKey=${params.sessionKey}; skipping session-state writes so an abandoned flush does not race the next compaction`,
+      );
+      return activeSessionEntry;
+    }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
