@@ -482,6 +482,29 @@ describe("shell env fallback", () => {
     expectSanitizedStartupEnv(receivedEnv);
   });
 
+  it("skips shell env fallback probing on win32", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const logger = { warn: vi.fn() };
+    const exec = vi.fn(() => {
+      throw new Error("spawnSync /bin/sh ENOENT");
+    });
+
+    const result = loadShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      logger,
+      platform: "win32",
+    });
+
+    expect(result).toEqual({ ok: true, applied: [] });
+    expect(exec).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
   it("returns null without invoking shell on win32", () => {
     const exec = vi.fn(() => Buffer.from("PATH=/usr/local/bin:/usr/bin\0HOME=/tmp\0"));
 
