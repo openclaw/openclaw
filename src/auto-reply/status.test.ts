@@ -1774,6 +1774,34 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Reason: session override");
   });
 
+  it("keeps explicit user pins even when stale fallback provenance remains", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "stale-fallback-user-pin",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("Reason: session override");
+    expect(normalized).toContain("Clear with: /model default");
+  });
+
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},
