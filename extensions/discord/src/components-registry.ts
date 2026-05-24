@@ -176,6 +176,25 @@ function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: nu
   return { ...entry, createdAt, expiresAt };
 }
 
+function pruneUndefinedRegistryValues<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry) => entry !== undefined)
+      .map((entry) => pruneUndefinedRegistryValues(entry)) as T;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined) {
+      continue;
+    }
+    result[key] = pruneUndefinedRegistryValues(entry);
+  }
+  return result as T;
+}
+
 function registerEntries<
   T extends { id: string; messageId?: string; createdAt?: number; expiresAt?: number },
 >(
@@ -237,8 +256,9 @@ function registerPersistentRegistryEntries<T extends { id: string }>(params: {
     return;
   }
   for (const entry of params.entries) {
+    const persistedEntry = pruneUndefinedRegistryValues(entry);
     void store
-      .register(entry.id, { version: 1, entry }, { ttlMs: params.ttlMs })
+      .register(entry.id, { version: 1, entry: persistedEntry }, { ttlMs: params.ttlMs })
       .catch(disablePersistentComponentRegistry);
   }
 }

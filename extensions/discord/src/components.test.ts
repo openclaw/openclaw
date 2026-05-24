@@ -468,6 +468,79 @@ describe("discord component registry", () => {
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
   });
 
+  it("omits undefined component fields before persisting registry state", async () => {
+    const componentRegister = vi.fn().mockResolvedValue(undefined);
+    const modalRegister = vi.fn().mockResolvedValue(undefined);
+    const componentStore = {
+      register: componentRegister,
+      lookup: vi.fn(),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    };
+    const modalStore = {
+      register: modalRegister,
+      lookup: vi.fn(),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    };
+    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
+      opts.namespace === "discord.components" ? componentStore : modalStore,
+    );
+    const { setDiscordRuntime } = await import("./runtime.js");
+    setDiscordRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Approve", callbackData: "approve" }],
+        },
+      ],
+      modal: {
+        title: "Details",
+        fields: [{ type: "text", label: "Reason" }],
+      },
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const built = buildDiscordComponentMessage({ spec });
+    registerDiscordComponentEntries({
+      entries: built.entries,
+      modals: built.modals,
+      ttlMs: 1000,
+    });
+
+    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(2));
+    expect(modalRegister).toHaveBeenCalledTimes(1);
+
+    const componentPayloads = componentRegister.mock.calls.map(
+      (call) => call[1] as { entry: Record<string, unknown> },
+    );
+    const ordinaryButton = componentPayloads.find((payload) => payload.entry.kind === "button");
+    const modalTrigger = componentPayloads.find(
+      (payload) => payload.entry.kind === "modal-trigger",
+    );
+    expect(ordinaryButton?.entry.callbackData).toBe("approve");
+    expect(ordinaryButton?.entry).not.toHaveProperty("modalId");
+    expect(ordinaryButton?.entry).not.toHaveProperty("sessionKey");
+    expect(modalTrigger?.entry.modalId).toEqual(expect.any(String));
+
+    const modalPayload = modalRegister.mock.calls[0]?.[1] as
+      | { entry: { fields?: Array<Record<string, unknown>> } }
+      | undefined;
+    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("description");
+    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("placeholder");
+  });
+
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {
     const componentDelete = vi.fn().mockResolvedValue(true);
     const componentStore = {
