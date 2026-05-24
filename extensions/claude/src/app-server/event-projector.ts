@@ -21,11 +21,48 @@
  */
 
 import {
-  emitAgentEvent,
+  emitAgentEvent as emitGlobalAgentEvent,
   embeddedAgentLog,
   runAgentHarnessAfterToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+
+/**
+ * Emit an agent event to BOTH the global agent-event bus (with
+ * sessionKey attached, so channel renderers can scope by session) AND
+ * the per-attempt `params.onAgentEvent` callback (which the
+ * attempt-execution layer threads through to channel/progress
+ * subscribers — e.g. Discord's "streaming.mode = progress" renderer).
+ *
+ * Mirrors codex's wrapper at extensions/codex/src/app-server/event-projector.ts.
+ * Before this helper the bridge only emitted to the global bus and
+ * channel renderers using the per-attempt callback (Discord progress
+ * mode included) never saw tool/item events for claude turns.
+ */
+function emitProjectedAgentEvent(
+  params: EmbeddedRunAttemptParams,
+  event: { stream: string; data: Record<string, unknown> },
+): void {
+  try {
+    emitGlobalAgentEvent({
+      runId: params.runId,
+      stream: event.stream,
+      data: event.data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("claude-bridge: global emitAgentEvent threw", { error });
+  }
+  try {
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("claude-bridge: per-attempt onAgentEvent rejected", { error });
+    });
+  } catch (error) {
+    // Downstream consumers must not corrupt the canonical projection.
+    embeddedAgentLog.debug("claude-bridge: per-attempt onAgentEvent threw", { error });
+  }
+}
 import { readTurn, readTurnCompletedNotification } from "./protocol-validators.js";
 import type { JsonValue, RpcNotification, Turn } from "./types.js";
 
@@ -245,15 +282,10 @@ export class ClaudeAppServerEventProjector {
     // Forward token-level deltas to OpenClaw's agent-event bus so downstream
     // consumers (Discord/Slack/etc.) can stream-update their messages
     // instead of waiting for turn/completed.
-    try {
-      emitAgentEvent({
-        runId: this.params.runId,
-        stream: "assistant",
-        data: { text: this.textParts.join(""), delta: p.delta },
-      });
-    } catch (err) {
-      embeddedAgentLog.debug("claude-bridge: emitAgentEvent threw", { error: err });
-    }
+    emitProjectedAgentEvent(this.params, {
+      stream: "assistant",
+      data: { text: this.textParts.join(""), delta: p.delta },
+    });
   }
 
   private handleReasoningDelta(p: Record<string, unknown>): void {
@@ -351,11 +383,7 @@ export function emitToolEvent(
       data.result = item.result as Record<string, unknown>;
     }
   }
-  try {
-    emitAgentEvent({ runId: params.runId, stream: "tool", data });
-  } catch (err) {
-    embeddedAgentLog.debug("claude-bridge: emit tool event threw", { error: err });
-  }
+  emitProjectedAgentEvent(params, { stream: "tool", data });
 }
 
 export function emitItemEvent(
@@ -380,11 +408,7 @@ export function emitItemEvent(
   if (status) {
     data.status = status;
   }
-  try {
-    emitAgentEvent({ runId: params.runId, stream: "item", data });
-  } catch (err) {
-    embeddedAgentLog.debug("claude-bridge: emit item event threw", { error: err });
-  }
+  emitProjectedAgentEvent(params, { stream: "item", data });
 }
 
 export function emitReasoningDeltaEvent(
@@ -392,13 +416,8 @@ export function emitReasoningDeltaEvent(
   delta: string,
   accumulated: string,
 ): void {
-  try {
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "reasoning",
-      data: { delta, text: accumulated },
-    });
-  } catch (err) {
-    embeddedAgentLog.debug("claude-bridge: emit reasoning event threw", { error: err });
-  }
+  emitProjectedAgentEvent(params, {
+    stream: "reasoning",
+    data: { delta, text: accumulated },
+  });
 }
