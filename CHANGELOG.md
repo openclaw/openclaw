@@ -103,6 +103,7 @@ Docs: https://docs.openclaw.ai
 - Models: prune retired Groq, GitHub Copilot, OpenAI, xAI, and old Claude catalog entries, with doctor migration to upgrade existing configs to current provider refs.
 - Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.
 - Channels: honor `/verbose on` for tool/progress summaries across direct chats, groups, channels, and forum topics while preserving quiet default behavior. (#85488) Thanks @kurplunkin.
+- Update: keep the detached gateway restart handoff best-effort when the restart script process cannot be spawned. (#83892) Thanks @davinci282828.
 - Telegram: persist the prompt-context message cache through plugin state and record bot-authored replies after sends and draft streaming so later turns can include prior assistant replies without relying on the JSON sidecar. (#85231) Thanks @keshavbotagent.
 - Agents/subagents: keep Codex persona and user workspace files turn-scoped so native Codex subagents inherit only shared tool guidance by default. (#85811) Thanks @lastguru-net.
 - CLI/skills: show an all-ready note with next-step commands when skill setup has no missing dependencies to install. (#85032) Thanks @aniruddhaadak80.
