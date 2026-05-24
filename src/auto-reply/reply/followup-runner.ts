@@ -49,7 +49,8 @@ import {
   refreshQueuedFollowupSession,
   type FollowupRun,
 } from "./queue.js";
-import { createReplyOperation } from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -398,7 +399,7 @@ export function createFollowupRunner(params: {
       .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
-    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+    let replyOperation: ReplyOperation | undefined;
 
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -482,12 +483,17 @@ export function createFollowupRunner(params: {
           await Promise.all(pendingProgressDeliveries);
         }
       };
-      replyOperation = createReplyOperation({
+      const admission = await admitReplyTurn({
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
+        kind: "queued_followup",
         resetTriggered: false,
         upstreamAbortSignal: queued.abortSignal,
       });
+      if (admission.status === "skipped") {
+        return;
+      }
+      replyOperation = admission.operation;
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({

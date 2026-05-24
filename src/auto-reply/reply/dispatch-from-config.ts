@@ -132,12 +132,8 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  ReplyRunAlreadyActiveError,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -919,61 +915,38 @@ export async function dispatchReplyFromConfig(
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
-  const tryBeginDispatchReplyOperation = (): ReplyOperation | undefined => {
+  const ensureDispatchReplyOperation = async (): Promise<DispatchReplyOperationAcquisition> => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
-      return dispatchReplyOperation;
+      return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
-      return dispatchReplyOperation;
+      return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
     }
     if (!dispatchOperationSessionKey) {
-      return undefined;
+      return { status: "ready" };
     }
     const operationSessionId =
       dispatchAbortOperation?.sessionId ??
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
-    try {
-      dispatchReplyOperation = createReplyOperation({
-        sessionKey: dispatchOperationSessionKey,
-        sessionId: operationSessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: params.replyOptions?.abortSignal,
-      });
-      dispatchAbortOperation = dispatchReplyOperation;
-    } catch (error) {
-      if (error instanceof ReplyRunAlreadyActiveError) {
-        dispatchAbortOperation = replyRunRegistry.get(dispatchOperationSessionKey);
-        logVerbose(
-          `dispatch-from-config: reply operation already active for ${dispatchOperationSessionKey}; using active operation abort signal without ownership`,
-        );
-        return undefined;
-      }
-      throw error;
+    const admission = await admitReplyTurn({
+      sessionKey: dispatchOperationSessionKey,
+      sessionId: operationSessionId,
+      kind: resolveReplyTurnKind(params.replyOptions),
+      resetTriggered: false,
+      upstreamAbortSignal: params.replyOptions?.abortSignal,
+    });
+    if (admission.status === "skipped") {
+      dispatchAbortOperation = admission.activeOperation;
+      logVerbose(
+        `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
+      );
+      return { status: "busy" };
     }
-    return dispatchReplyOperation;
-  };
-  const ensureDispatchReplyOperation = async (): Promise<DispatchReplyOperationAcquisition> => {
-    while (true) {
-      const operation = tryBeginDispatchReplyOperation();
-      if (operation || !dispatchOperationSessionKey) {
-        return { status: "ready" };
-      }
-      if (!dispatchAbortOperation) {
-        return { status: "busy" };
-      }
-      if (params.replyOptions?.isHeartbeat === true) {
-        return { status: "busy" };
-      }
-      if (
-        !(await replyRunRegistry.waitForIdle(dispatchOperationSessionKey, Infinity, {
-          signal: params.replyOptions?.abortSignal,
-        }))
-      ) {
-        return { status: "busy" };
-      }
-    }
+    dispatchReplyOperation = admission.operation;
+    dispatchAbortOperation = admission.operation;
+    return { status: "ready" };
   };
   const getReplyOptions = () =>
     dispatchReplyOperation
