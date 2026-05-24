@@ -392,6 +392,34 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session rows expose the session creation timestamp", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "test",
+      source: "test",
+      provider: {
+        id: "test-provider",
+        label: "Test Provider",
+        auth: [],
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "test-provider/test-model" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:dashboard:session-1",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 200,
+        sessionStartedAt: 100,
+      },
+    });
+
+    expect(row.sessionStartedAt).toBe(100);
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],

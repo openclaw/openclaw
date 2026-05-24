@@ -23,8 +23,42 @@ export type SessionKeyInfo = {
   fallbackName: string;
 };
 
+export type SessionDisplayNameOptions = {
+  now?: Date;
+};
+
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatTwoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function isDashboardSessionKey(key: string): boolean {
+  return key.startsWith("dashboard:") || key.includes(":dashboard:");
+}
+
+function resolveFiniteTimestamp(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function formatDashboardSessionTimestamp(timestamp: number, now: Date): string | undefined {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return undefined;
+  }
+
+  const time = `${formatTwoDigits(date.getHours())}:${formatTwoDigits(date.getMinutes())}`;
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (sameDay) {
+    return time;
+  }
+  return `${formatTwoDigits(date.getMonth() + 1)}-${formatTwoDigits(date.getDate())} ${time}`;
 }
 
 /**
@@ -80,6 +114,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
 export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
+  options: SessionDisplayNameOptions = {},
 ): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
@@ -98,6 +133,16 @@ export function resolveSessionDisplayName(
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
+  }
+  if (isDashboardSessionKey(key)) {
+    const timestamp =
+      resolveFiniteTimestamp(row?.sessionStartedAt) ?? resolveFiniteTimestamp(row?.updatedAt);
+    const fallback = timestamp
+      ? formatDashboardSessionTimestamp(timestamp, options.now ?? new Date())
+      : undefined;
+    if (fallback) {
+      return fallback;
+    }
   }
   return fallbackName;
 }

@@ -463,6 +463,42 @@ describe("resolveSessionDisplayName", () => {
       ),
     ).toBe("Tyler");
   });
+
+  it("uses the creation time for unlabeled same-day dashboard sessions", () => {
+    const key = "agent:ops:dashboard:chat-1";
+    const createdAt = new Date(2026, 4, 24, 14, 12).getTime();
+    const now = new Date(2026, 4, 24, 22, 0);
+
+    expect(resolveSessionDisplayName(key, row({ key, sessionStartedAt: createdAt }), { now })).toBe(
+      "14:12",
+    );
+  });
+
+  it("includes the date for unlabeled dashboard sessions from another day", () => {
+    const key = "agent:ops:dashboard:chat-2";
+    const createdAt = new Date(2026, 4, 23, 9, 5).getTime();
+    const now = new Date(2026, 4, 24, 22, 0);
+
+    expect(resolveSessionDisplayName(key, row({ key, sessionStartedAt: createdAt }), { now })).toBe(
+      "05-23 09:05",
+    );
+  });
+
+  it("preserves explicit labels for dashboard sessions", () => {
+    const key = "agent:ops:dashboard:chat-3";
+    const createdAt = new Date(2026, 4, 24, 14, 12).getTime();
+    const now = new Date(2026, 4, 24, 22, 0);
+
+    expect(
+      resolveSessionDisplayName(
+        key,
+        row({ key, label: "Bug triage", sessionStartedAt: createdAt }),
+        {
+          now,
+        },
+      ),
+    ).toBe("Bug triage");
+  });
 });
 
 describe("resolveDashboardHeaderContext", () => {
