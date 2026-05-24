@@ -48,6 +48,7 @@ import {
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
 import {
+  resolveExistingOutputFilePathOrRespond,
   resolveOutputDirectoryPathOrRespond,
   resolveWritableOutputPathOrRespond,
 } from "./output-paths.js";
@@ -132,6 +133,18 @@ function screencastKey(profileName: string, targetId: string): string {
 
 function defaultScreencastFileName(): string {
   return `browser-screencast-${crypto.randomUUID()}.webm`;
+}
+
+async function resolveHeapSnapshotReadPathOrRespond(
+  res: Parameters<typeof resolveExistingOutputFilePathOrRespond>[0]["res"],
+  requestedPath: string,
+): Promise<string | null> {
+  return resolveExistingOutputFilePathOrRespond({
+    res,
+    rootDir: DEFAULT_TRACE_DIR,
+    requestedPath,
+    scopeLabel: "heap snapshot file",
+  });
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -581,13 +594,17 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const heapSnapshotPath = await resolveHeapSnapshotReadPathOrRespond(res, filePath);
+          if (!heapSnapshotPath) {
+            return;
+          }
           const result = await getChromeMcpHeapSnapshotSummary({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
-            filePath,
+            filePath: heapSnapshotPath,
             timeoutMs: toNumber(body.timeoutMs),
           });
-          res.json({ ok: true, path: filePath, ...result });
+          res.json({ ok: true, path: heapSnapshotPath, ...result });
         },
       });
     }),
@@ -611,15 +628,19 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const heapSnapshotPath = await resolveHeapSnapshotReadPathOrRespond(res, filePath);
+          if (!heapSnapshotPath) {
+            return;
+          }
           const result = await getChromeMcpHeapSnapshotDetails({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
-            filePath,
+            filePath: heapSnapshotPath,
             pageIdx: toNumber(body.pageIdx),
             pageSize: toNumber(body.pageSize),
             timeoutMs: toNumber(body.timeoutMs),
           });
-          res.json({ ok: true, path: filePath, ...result });
+          res.json({ ok: true, path: heapSnapshotPath, ...result });
         },
       });
     }),
@@ -647,16 +668,20 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const heapSnapshotPath = await resolveHeapSnapshotReadPathOrRespond(res, filePath);
+          if (!heapSnapshotPath) {
+            return;
+          }
           const result = await getChromeMcpHeapSnapshotClassNodes({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
-            filePath,
+            filePath: heapSnapshotPath,
             id,
             pageIdx: toNumber(body.pageIdx),
             pageSize: toNumber(body.pageSize),
             timeoutMs: toNumber(body.timeoutMs),
           });
-          res.json({ ok: true, path: filePath, id, ...result });
+          res.json({ ok: true, path: heapSnapshotPath, id, ...result });
         },
       });
     }),
@@ -684,16 +709,20 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const heapSnapshotPath = await resolveHeapSnapshotReadPathOrRespond(res, filePath);
+          if (!heapSnapshotPath) {
+            return;
+          }
           const result = await getChromeMcpHeapSnapshotRetainers({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
-            filePath,
+            filePath: heapSnapshotPath,
             nodeId,
             pageIdx: toNumber(body.pageIdx),
             pageSize: toNumber(body.pageSize),
             timeoutMs: toNumber(body.timeoutMs),
           });
-          res.json({ ok: true, path: filePath, nodeId, ...result });
+          res.json({ ok: true, path: heapSnapshotPath, nodeId, ...result });
         },
       });
     }),
@@ -799,6 +828,21 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const requestedPath = toStringOrEmpty(body.path) || toStringOrEmpty(body.filePath);
+          let filePath: string | undefined;
+          if (requestedPath) {
+            const resolvedPath = await resolveWritableOutputPathOrRespond({
+              res,
+              rootDir: DEFAULT_TRACE_DIR,
+              requestedPath,
+              scopeLabel: "screencast directory",
+              ensureRootDir: true,
+            });
+            if (!resolvedPath) {
+              return;
+            }
+            filePath = resolvedPath;
+          }
           const output = await stopChromeMcpScreencast({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
@@ -806,10 +850,7 @@ export function registerBrowserAgentDebugRoutes(
             timeoutMs: toNumber(body.timeoutMs),
           });
           const key = screencastKey(profileCtx.profile.name, tab.targetId);
-          const filePath =
-            toStringOrEmpty(body.path) ||
-            toStringOrEmpty(body.filePath) ||
-            activeScreencasts.get(key);
+          filePath ??= activeScreencasts.get(key);
           activeScreencasts.delete(key);
           const artifact = await inspectScreencastArtifact(filePath);
           const url = await resolveTabUrl(tab.url);
@@ -1187,13 +1228,43 @@ export function registerBrowserAgentDebugRoutes(
           if (!requireChromeMcpProfile(res, profileCtx)) {
             return;
           }
+          const requestedRequestFilePath = toStringOrEmpty(req.query.requestFilePath);
+          const requestedResponseFilePath = toStringOrEmpty(req.query.responseFilePath);
+          let requestFilePath: string | undefined;
+          let responseFilePath: string | undefined;
+          if (requestedRequestFilePath) {
+            const resolvedRequestFilePath = await resolveWritableOutputPathOrRespond({
+              res,
+              rootDir: DEFAULT_TRACE_DIR,
+              requestedPath: requestedRequestFilePath,
+              scopeLabel: "request detail request body path",
+              ensureRootDir: true,
+            });
+            if (!resolvedRequestFilePath) {
+              return;
+            }
+            requestFilePath = resolvedRequestFilePath;
+          }
+          if (requestedResponseFilePath) {
+            const resolvedResponseFilePath = await resolveWritableOutputPathOrRespond({
+              res,
+              rootDir: DEFAULT_TRACE_DIR,
+              requestedPath: requestedResponseFilePath,
+              scopeLabel: "request detail response body path",
+              ensureRootDir: true,
+            });
+            if (!resolvedResponseFilePath) {
+              return;
+            }
+            responseFilePath = resolvedResponseFilePath;
+          }
           const request = await getChromeMcpNetworkRequest({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
             reqid,
-            requestFilePath: toStringOrEmpty(req.query.requestFilePath) || undefined,
-            responseFilePath: toStringOrEmpty(req.query.responseFilePath) || undefined,
+            requestFilePath,
+            responseFilePath,
           });
           const url = await resolveTabUrl(tab.url);
           res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), reqid, request });

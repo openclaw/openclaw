@@ -1011,57 +1011,62 @@ describe("existing-session browser routes", () => {
   });
 
   it("routes existing-session heap snapshot debug routes through Chrome MCP", async () => {
+    const heapFile = `openclaw-test-heap-${Date.now()}.heapsnapshot`;
+    const heapPath = path.join(DEFAULT_TRACE_DIR, heapFile);
     const takeHandler = getDebugPostHandler("/heap-snapshot/take");
     const takeResponse = createBrowserRouteResponse();
-    await takeHandler?.(
-      { params: {}, query: {}, body: { path: "heap.heapsnapshot" } },
-      takeResponse.res,
-    );
+    try {
+      await takeHandler?.({ params: {}, query: {}, body: { path: heapFile } }, takeResponse.res);
 
-    expect(takeResponse.statusCode).toBe(200);
-    expect(chromeMcpMocks.takeChromeMcpHeapSnapshot).toHaveBeenCalledWith({
-      profileName: "chrome-live",
-      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
-      targetId: "7",
-      filePath: expect.stringMatching(/heap\.heapsnapshot$/),
-      timeoutMs: undefined,
-    });
+      expect(takeResponse.statusCode).toBe(200);
+      expect(chromeMcpMocks.takeChromeMcpHeapSnapshot).toHaveBeenCalledWith({
+        profileName: "chrome-live",
+        profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+        targetId: "7",
+        filePath: heapPath,
+        timeoutMs: undefined,
+      });
 
-    const summaryHandler = getDebugPostHandler("/heap-snapshot/summary");
-    await summaryHandler?.(
-      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot" } },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.getChromeMcpHeapSnapshotSummary).toHaveBeenCalledWith({
-      profileName: "chrome-live",
-      profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
-      filePath: "/tmp/heap.heapsnapshot",
-      timeoutMs: undefined,
-    });
+      await fs.writeFile(heapPath, "{}");
 
-    await getDebugPostHandler("/heap-snapshot/details")?.(
-      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", pageIdx: 1, pageSize: 25 } },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.getChromeMcpHeapSnapshotDetails).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", pageIdx: 1, pageSize: 25 }),
-    );
+      const summaryHandler = getDebugPostHandler("/heap-snapshot/summary");
+      await summaryHandler?.(
+        { params: {}, query: {}, body: { path: heapFile } },
+        createBrowserRouteResponse().res,
+      );
+      expect(chromeMcpMocks.getChromeMcpHeapSnapshotSummary).toHaveBeenCalledWith({
+        profileName: "chrome-live",
+        profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
+        filePath: heapPath,
+        timeoutMs: undefined,
+      });
 
-    await getDebugPostHandler("/heap-snapshot/class-nodes")?.(
-      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", id: 42 } },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.getChromeMcpHeapSnapshotClassNodes).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", id: 42 }),
-    );
+      await getDebugPostHandler("/heap-snapshot/details")?.(
+        { params: {}, query: {}, body: { path: heapFile, pageIdx: 1, pageSize: 25 } },
+        createBrowserRouteResponse().res,
+      );
+      expect(chromeMcpMocks.getChromeMcpHeapSnapshotDetails).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: heapPath, pageIdx: 1, pageSize: 25 }),
+      );
 
-    await getDebugPostHandler("/heap-snapshot/retainers")?.(
-      { params: {}, query: {}, body: { path: "/tmp/heap.heapsnapshot", nodeId: 99 } },
-      createBrowserRouteResponse().res,
-    );
-    expect(chromeMcpMocks.getChromeMcpHeapSnapshotRetainers).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: "/tmp/heap.heapsnapshot", nodeId: 99 }),
-    );
+      await getDebugPostHandler("/heap-snapshot/class-nodes")?.(
+        { params: {}, query: {}, body: { path: heapFile, id: 42 } },
+        createBrowserRouteResponse().res,
+      );
+      expect(chromeMcpMocks.getChromeMcpHeapSnapshotClassNodes).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: heapPath, id: 42 }),
+      );
+
+      await getDebugPostHandler("/heap-snapshot/retainers")?.(
+        { params: {}, query: {}, body: { path: heapFile, nodeId: 99 } },
+        createBrowserRouteResponse().res,
+      );
+      expect(chromeMcpMocks.getChromeMcpHeapSnapshotRetainers).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: heapPath, nodeId: 99 }),
+      );
+    } finally {
+      await fs.rm(heapPath, { force: true });
+    }
   });
 
   it("routes existing-session lighthouse and screencast debug routes through Chrome MCP", async () => {
@@ -1145,6 +1150,54 @@ describe("existing-session browser routes", () => {
       "screencast directory",
     );
     expect(chromeMcpMocks.startChromeMcpScreencast).not.toHaveBeenCalled();
+
+    const heapResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/heap-snapshot/summary")?.(
+      {
+        params: {},
+        query: {},
+        body: { path: path.resolve(os.tmpdir(), "openclaw-outside-heap.heapsnapshot") },
+      },
+      heapResponse.res,
+    );
+    expect(heapResponse.statusCode).toBe(400);
+    expect(String(requireRecord(heapResponse.body, "heap error").error)).toContain(
+      "heap snapshot file",
+    );
+    expect(chromeMcpMocks.getChromeMcpHeapSnapshotSummary).not.toHaveBeenCalled();
+
+    const requestDetailResponse = createBrowserRouteResponse();
+    await getDebugGetHandler("/requests/request")?.(
+      {
+        params: {},
+        query: {
+          reqid: "13",
+          requestFilePath: path.resolve(os.tmpdir(), "openclaw-outside-request.txt"),
+        },
+        body: {},
+      },
+      requestDetailResponse.res,
+    );
+    expect(requestDetailResponse.statusCode).toBe(400);
+    expect(
+      String(requireRecord(requestDetailResponse.body, "request detail error").error),
+    ).toContain("request detail request body path");
+    expect(chromeMcpMocks.getChromeMcpNetworkRequest).not.toHaveBeenCalled();
+
+    const screencastStopResponse = createBrowserRouteResponse();
+    await getDebugPostHandler("/screencast/stop")?.(
+      {
+        params: {},
+        query: {},
+        body: { path: path.resolve(os.tmpdir(), "openclaw-outside-stop.webm") },
+      },
+      screencastStopResponse.res,
+    );
+    expect(screencastStopResponse.statusCode).toBe(400);
+    expect(
+      String(requireRecord(screencastStopResponse.body, "screencast stop error").error),
+    ).toContain("screencast directory");
+    expect(chromeMcpMocks.stopChromeMcpScreencast).not.toHaveBeenCalled();
   });
 
   it("routes existing-session extension debug routes through Chrome MCP", async () => {
@@ -1259,8 +1312,10 @@ describe("existing-session browser routes", () => {
       msgid: 12,
     });
 
+    const requestFile = `openclaw-request-${Date.now()}.txt`;
+    const requestPath = path.join(DEFAULT_TRACE_DIR, requestFile);
     await getDebugGetHandler("/requests/request")?.(
-      { params: {}, query: { reqid: "13", requestFilePath: "/tmp/request.txt" }, body: {} },
+      { params: {}, query: { reqid: "13", requestFilePath: requestFile }, body: {} },
       createBrowserRouteResponse().res,
     );
     expect(chromeMcpMocks.getChromeMcpNetworkRequest).toHaveBeenCalledWith({
@@ -1268,9 +1323,10 @@ describe("existing-session browser routes", () => {
       profile: expect.objectContaining({ name: "chrome-live", driver: "existing-session" }),
       targetId: "7",
       reqid: 13,
-      requestFilePath: "/tmp/request.txt",
+      requestFilePath: requestPath,
       responseFilePath: undefined,
     });
+    await fs.rm(requestPath, { force: true });
   });
 
   it("routes existing-session media color-scheme through Chrome MCP emulate", async () => {

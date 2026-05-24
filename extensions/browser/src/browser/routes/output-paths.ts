@@ -36,6 +36,22 @@ export async function resolveWritableOutputPathOrRespond(params: {
   return pathResult.path;
 }
 
+export async function resolveExistingOutputFilePathOrRespond(params: {
+  res: BrowserResponse;
+  rootDir: string;
+  requestedPath: string;
+  scopeLabel: string;
+}): Promise<string | null> {
+  const pathResult = await pathScope(params.rootDir, { label: params.scopeLabel }).files([
+    params.requestedPath,
+  ]);
+  if (!pathResult.ok) {
+    params.res.status(400).json({ error: pathResult.error });
+    return null;
+  }
+  return pathResult.paths[0] ?? null;
+}
+
 export async function resolveOutputDirectoryPathOrRespond(params: {
   res: BrowserResponse;
   rootDir: string;
