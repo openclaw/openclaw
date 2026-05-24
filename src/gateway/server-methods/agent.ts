@@ -103,6 +103,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import {
   type ChatAbortControllerEntry,
@@ -641,6 +642,27 @@ function dispatchAgentRunFromGateway(params: {
           ? { providerStarted: timeoutAttribution.providerStarted }
           : {}),
         result,
+        agentMeta: result?.meta?.agentMeta
+          ? {
+              usage: result.meta.agentMeta.usage
+                ? {
+                    inputTokens: result.meta.agentMeta.usage.input ?? 0,
+                    outputTokens: result.meta.agentMeta.usage.output ?? 0,
+                    cachedInputTokens: result.meta.agentMeta.usage.cacheRead ?? 0,
+                  }
+                : undefined,
+              costUsd: estimateUsageCost({
+                usage: result.meta.agentMeta.usage,
+                cost: resolveModelCostConfig({
+                  provider: result.meta.agentMeta.provider,
+                  model: result.meta.agentMeta.model,
+                  config: params.context.getRuntimeConfig(),
+                }),
+              }),
+              provider: result.meta.agentMeta.provider,
+              model: result.meta.agentMeta.model,
+            }
+          : undefined,
       };
       setGatewayDedupeEntries({
         dedupe: params.context.dedupe,
@@ -2114,6 +2136,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       ignoreAgentTerminalSnapshot: hasActiveChatRun,
     });
     if (cachedGatewaySnapshot) {
+      const dedupeEntry = context.dedupe.get(`agent:${runId}`);
+      const dedupeMeta =
+        dedupeEntry?.ok && dedupeEntry?.payload
+          ? (dedupeEntry.payload as Record<string, unknown>).agentMeta
+          : undefined;
+      const resolvedMeta = cachedGatewaySnapshot.agentMeta ?? dedupeMeta;
       respond(true, {
         runId,
         status: cachedGatewaySnapshot.status,
@@ -2125,6 +2153,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         yielded: cachedGatewaySnapshot.yielded,
         timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
         providerStarted: cachedGatewaySnapshot.providerStarted,
+        ...(resolvedMeta ? { meta: { agentMeta: resolvedMeta } } : {}),
       });
       return;
     }
@@ -2176,6 +2205,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const dedupeEntry = context.dedupe.get(`agent:${runId}`);
+    const dedupeMeta =
+      dedupeEntry?.ok && dedupeEntry?.payload
+        ? (dedupeEntry.payload as Record<string, unknown>).agentMeta
+        : undefined;
+    const resolvedMeta = snapshot.agentMeta ?? dedupeMeta;
     respond(true, {
       runId,
       status: snapshot.status,
@@ -2187,6 +2222,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       yielded: snapshot.yielded,
       timeoutPhase: snapshot.timeoutPhase,
       providerStarted: snapshot.providerStarted,
+      ...(resolvedMeta ? { meta: { agentMeta: resolvedMeta } } : {}),
     });
   },
 };

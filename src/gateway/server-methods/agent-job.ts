@@ -41,6 +41,16 @@ type AgentRunSnapshot = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  agentMeta?: {
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+    };
+    costUsd?: number;
+    provider?: string;
+    model?: string;
+  };
   ts: number;
 };
 

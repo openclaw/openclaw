@@ -19,6 +19,16 @@ export type AgentWaitTerminalSnapshot = {
   yielded?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  agentMeta?: {
+    usage?: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cachedInputTokens?: number;
+    };
+    costUsd?: number;
+    provider?: string;
+    model?: string;
+  };
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -100,6 +110,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         timeoutPhase?: unknown;
         providerStarted?: unknown;
         result?: unknown;
+        agentMeta?: unknown;
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
@@ -109,6 +120,29 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
 
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
+  const rawAgentMeta = asRecord(payload?.agentMeta);
+  const agentMeta: AgentWaitTerminalSnapshot["agentMeta"] = rawAgentMeta
+    ? {
+        usage: (() => {
+          const u = asRecord(rawAgentMeta.usage);
+          if (!u) return undefined;
+          const inputTokens = asFiniteNumber(u.inputTokens);
+          const outputTokens = asFiniteNumber(u.outputTokens);
+          const cachedInputTokens = asFiniteNumber(u.cachedInputTokens);
+          if (
+            inputTokens === undefined &&
+            outputTokens === undefined &&
+            cachedInputTokens === undefined
+          ) {
+            return undefined;
+          }
+          return { inputTokens, outputTokens, cachedInputTokens };
+        })(),
+        costUsd: asFiniteNumber(rawAgentMeta.costUsd),
+        provider: asString(rawAgentMeta.provider),
+        model: asString(rawAgentMeta.model),
+      }
+    : undefined;
   const resultMeta = asRecord(asRecord(payload?.result)?.meta);
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
@@ -150,6 +184,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       ...(yielded ? { yielded } : {}),
       ...(timeoutPhase ? { timeoutPhase } : {}),
       ...(providerStarted !== undefined ? { providerStarted } : {}),
+      ...(agentMeta ? { agentMeta } : {}),
     };
   }
   if (status === "error" || !entry.ok) {
@@ -163,6 +198,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       ...(yielded ? { yielded } : {}),
       ...(timeoutPhase ? { timeoutPhase } : {}),
       ...(providerStarted !== undefined ? { providerStarted } : {}),
+      ...(agentMeta ? { agentMeta } : {}),
     };
   }
   return null;
