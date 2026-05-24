@@ -625,10 +625,19 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
   const patrolIntervalMs = runtime.config.robot?.patrol_interval_ms ?? 5 * 60 * 1000;
   if (patrolIntervalMs > 0) {
     const patrolTimer = setInterval(async () => {
+      let pendingRuns = 0;
+      try {
+        const runs = await runtime.playbookEngine.listRuns({ limit: 100 });
+        pendingRuns = runs.filter((r) => r.status === "running").length;
+      } catch {
+        // non-critical: patrol publishes even if run stats are unavailable
+      }
       await runtime.kernel
         .publish(CW_EVENTS.ROBOT_PATROL, "runtime", {
           robot_id: runtime.robot.name,
           ts: new Date().toISOString(),
+          pending_runs: pendingRuns,
+          playbook_count: runtime.playbookEngine.list().length,
         })
         .catch((err) => {
           runtime.logger?.(
