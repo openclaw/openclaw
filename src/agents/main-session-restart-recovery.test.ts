@@ -578,16 +578,16 @@ describe("main-session-restart-recovery", () => {
   it("sends a visible notice before failing an unresumable chat-bound main session", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
-      "agent:main:telegram:group:12345": {
+      "agent:main:demo-channel:room-1": {
         sessionId: "main-session",
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
         deliveryContext: {
-          channel: "telegram",
-          to: "group:12345",
+          channel: "demo-channel",
+          to: "room-1",
           accountId: "default",
-          threadId: "topic-1",
+          threadId: "thread-1",
         },
       },
     });
@@ -605,15 +605,15 @@ describe("main-session-restart-recovery", () => {
       | undefined;
     expect(gatewayCall?.method).toBe("message.action");
     expect(gatewayCall?.params).toMatchObject({
-      channel: "telegram",
+      channel: "demo-channel",
       action: "send",
       accountId: "default",
-      sessionKey: "agent:main:telegram:group:12345",
+      sessionKey: "agent:main:demo-channel:room-1",
       sessionId: "main-session",
     });
     expect(gatewayCall?.params?.params).toMatchObject({
-      to: "group:12345",
-      threadId: "topic-1",
+      to: "room-1",
+      threadId: "thread-1",
       bestEffort: true,
     });
     expect(String((gatewayCall?.params?.params as Record<string, unknown>)?.message)).toContain(
@@ -621,7 +621,7 @@ describe("main-session-restart-recovery", () => {
     );
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:telegram:group:12345"]?.status).toBe("failed");
-    expect(store["agent:main:telegram:group:12345"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
+    expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
 });
