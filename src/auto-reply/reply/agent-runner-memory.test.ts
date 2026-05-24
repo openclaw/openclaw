@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import {
@@ -157,6 +158,28 @@ describe("runMemoryFlushIfNeeded", () => {
   let rootDir = "";
 
   beforeEach(async () => {
+    // Register claude-cli as a runtime CLI backend bound to anthropic so that
+    // resolveCliRuntimeExecutionProvider can map provider="anthropic" +
+    // runtime="claude-cli" to a CLI execution provider. Without this, the
+    // dynamic backend registry (post bb46b79d3c) is empty in tests and the
+    // CLI-runtime gates can't fire.
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-unit-"));
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -228,6 +251,7 @@ describe("runMemoryFlushIfNeeded", () => {
   afterEach(async () => {
     setAgentRunnerMemoryTestDeps();
     clearMemoryPluginState();
+    cliBackendsTesting.resetDepsForTest();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
@@ -913,6 +937,49 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("skips memory flush when the canonical provider is routed through a CLI runtime", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+        models: {
+          providers: {
+            anthropic: {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -1314,6 +1381,66 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
     expect(compactCall.contextTokenBudget).toBe(258_000);
   });
+
+  it("skips preflight compaction when the canonical provider is routed through a CLI runtime", async () => {
+    const sessionFile = path.join(rootDir, "cli-runtime-preflight.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+        models: {
+          providers: {
+            anthropic: {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     const successorFile = path.join(rootDir, "session-rotated.jsonl");
