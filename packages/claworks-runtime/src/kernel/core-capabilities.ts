@@ -928,12 +928,21 @@ function makePerceiveClassifyDescriptor(runtime: ClaworksRuntime): CapabilityDes
   };
 }
 
-/** 意图分类结果 60 秒 TTL 缓存，避免同一分钟内对相同文本重复调用 LLM。 */
-const _intentCache = new Map<string, { result: Record<string, unknown>; expiresAt: number }>();
-const INTENT_CACHE_TTL_MS = 60_000;
-const INTENT_CACHE_MAX = 200;
-
 function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  // 意图分类结果 60 秒 TTL 缓存，避免同一分钟内对相同文本重复调用 LLM。
+  // 闭包内定义，确保每个 runtime 实例拥有独立缓存，不会跨实例污染（如测试中）。
+  const intentCache = new Map<string, { result: Record<string, unknown>; expiresAt: number }>();
+  const INTENT_CACHE_TTL_MS = 60_000;
+  const INTENT_CACHE_MAX = 200;
+
+  function cacheIntentResult(key: string, result: Record<string, unknown>): void {
+    if (intentCache.size >= INTENT_CACHE_MAX) {
+      const firstKey = intentCache.keys().next().value;
+      if (firstKey !== undefined) intentCache.delete(firstKey);
+    }
+    intentCache.set(key, { result, expiresAt: Date.now() + INTENT_CACHE_TTL_MS });
+  }
+
   return {
     id: "perceive.intent",
     verb: "acquire",
@@ -954,7 +963,7 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
 
       // 同一分钟内相同文本前缀命中缓存，直接返回（跳过 LLM 调用）
       const cacheKey = `${text.slice(0, 60)}\x00${Math.floor(Date.now() / INTENT_CACHE_TTL_MS)}`;
-      const cached = _intentCache.get(cacheKey);
+      const cached = intentCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
         return cached.result;
       }
@@ -1059,7 +1068,7 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
                 extracted: (data.extracted as Record<string, string>) ?? {},
                 suggested_capability: intent,
               };
-              _cacheIntentResult(cacheKey, hit);
+              cacheIntentResult(cacheKey, hit);
               // 将成功识别的意图写入 CBR 案例库，供后续 few-shot 检索
               runtime.cbrStore?.add(text, intent, { confidence: hit.confidence });
               return hit;
@@ -1087,18 +1096,10 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
         ...result,
         suggested_capability: String(result.suggested_capability ?? result.intent ?? ""),
       };
-      _cacheIntentResult(cacheKey, finalResult);
+      cacheIntentResult(cacheKey, finalResult);
       return finalResult;
     },
   };
-}
-
-function _cacheIntentResult(key: string, result: Record<string, unknown>): void {
-  if (_intentCache.size >= INTENT_CACHE_MAX) {
-    const firstKey = _intentCache.keys().next().value;
-    if (firstKey !== undefined) _intentCache.delete(firstKey);
-  }
-  _intentCache.set(key, { result, expiresAt: Date.now() + INTENT_CACHE_TTL_MS });
 }
 
 // ── perceive.needs_clarification ────────────────────────────────────────────
