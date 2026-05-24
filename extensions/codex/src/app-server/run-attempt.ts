@@ -195,6 +195,7 @@ import {
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 import {
+  attachCodexMirrorIdentity,
   buildCodexUserPromptMessage,
   mirrorCodexAppServerTranscript,
 } from "./transcript-mirror.js";
@@ -3062,6 +3063,13 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  void mirrorAcceptedPromptBestEffort({
+    params,
+    agentId: sessionAgentId,
+    sessionKey: contextSessionKey,
+    threadId: thread.threadId,
+    turnId: activeTurnId,
+  });
   turnAttemptIdleWatchArmed = true;
   turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start", { attemptProgress: true });
@@ -5574,6 +5582,35 @@ function getCodexContextFileDisplayBasename(filePath: string): string {
 
 function getCodexContextFileBasename(filePath: string): string {
   return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
+}
+
+async function mirrorAcceptedPromptBestEffort(params: {
+  params: EmbeddedRunAttemptParams;
+  agentId?: string;
+  sessionKey?: string;
+  threadId: string;
+  turnId: string;
+}): Promise<void> {
+  if (params.params.suppressNextUserMessagePersistence) {
+    return;
+  }
+  try {
+    await mirrorCodexAppServerTranscript({
+      sessionFile: params.params.sessionFile,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      messages: [
+        attachCodexMirrorIdentity(
+          buildCodexUserPromptMessage(params.params),
+          `${params.turnId}:prompt`,
+        ),
+      ],
+      idempotencyScope: `codex-app-server:${params.threadId}`,
+      config: params.params.config,
+    });
+  } catch (error) {
+    embeddedAgentLog.warn("failed to mirror accepted codex app-server prompt", { error });
+  }
 }
 
 async function mirrorTranscriptBestEffort(params: {

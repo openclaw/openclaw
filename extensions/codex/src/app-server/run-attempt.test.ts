@@ -344,6 +344,13 @@ function openSocket(url: string): Promise<WebSocket> {
   });
 }
 
+function parseJsonLines<T>(raw: string): T[] {
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as T);
+}
+
 function createAppServerHarness(
   requestImpl: (
     method: string,
@@ -2736,6 +2743,109 @@ describe("runCodexAppServerAttempt", () => {
     expect(message?.schemaChars).toBeGreaterThan(0);
     expect(webSearch?.schemaChars).toBe(0);
     expect(report?.tools.schemaChars).toBe(message?.schemaChars);
+  });
+
+  it("mirrors the accepted prompt before Codex turn completion using the context session key", async () => {
+    const harness = createStartedThreadHarness();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+    params.prompt = "show this inbound message immediately";
+    params.sessionKey = "agent:webchat:session-1";
+    params.sandboxSessionKey = "agent:sandbox:session-1";
+
+    const beforeMessageWriteEvents: Array<{ sessionKey?: string; role?: string }> = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          pluginId: "capture-before-message-write",
+          handler: (...args: unknown[]) => {
+            const event = args[0] as { message: { role?: string } };
+            const ctx = args[1] as { sessionKey?: string };
+            beforeMessageWriteEvents.push({
+              sessionKey: ctx.sessionKey,
+              role: event.message.role,
+            });
+            return { message: event.message };
+          },
+        },
+      ]),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start", 120_000);
+
+    type TranscriptRecord = {
+      type?: string;
+      message?: { role?: string; content?: unknown; idempotencyKey?: string };
+    };
+    let earlyMessages: TranscriptRecord[] = [];
+    try {
+      await vi.waitFor(
+        async () => {
+          earlyMessages = parseJsonLines<TranscriptRecord>(
+            await fs.readFile(sessionFile, "utf8"),
+          ).filter((record) => record.type === "message");
+          expect(earlyMessages).toHaveLength(1);
+        },
+        { interval: 1, timeout: 1_000 },
+      );
+
+      expect(earlyMessages[0]?.message?.role).toBe("user");
+      expect(earlyMessages[0]?.message?.content).toBe("show this inbound message immediately");
+      expect(earlyMessages[0]?.message?.idempotencyKey).toBe(
+        "codex-app-server:thread-1:turn-1:prompt",
+      );
+      expect(beforeMessageWriteEvents).toContainEqual({
+        sessionKey: "agent:webchat:session-1",
+        role: "user",
+      });
+      expect(beforeMessageWriteEvents).not.toContainEqual({
+        sessionKey: "agent:sandbox:session-1",
+        role: "user",
+      });
+    } finally {
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+
+    const finalMessages = parseJsonLines<{
+      type?: string;
+      message?: { role?: string; idempotencyKey?: string };
+    }>(await fs.readFile(sessionFile, "utf8")).filter((record) => record.type === "message");
+    expect(finalMessages.filter((record) => record.message?.role === "user")).toHaveLength(1);
+  });
+
+  it("does not mirror the accepted prompt early when user persistence is suppressed", async () => {
+    const harness = createStartedThreadHarness();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace"));
+    params.prompt = "this prompt was already persisted by the channel";
+    params.suppressNextUserMessagePersistence = true;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start", 120_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    type TranscriptRecord = {
+      type?: string;
+      message?: { role?: string; content?: unknown; idempotencyKey?: string };
+    };
+
+    let finalMessages: TranscriptRecord[] = [];
+    try {
+      finalMessages = parseJsonLines<TranscriptRecord>(
+        await fs.readFile(sessionFile, "utf8"),
+      ).filter((record) => record.type === "message");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    expect(finalMessages.filter((record) => record.message?.role === "user")).toHaveLength(0);
   });
 
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
