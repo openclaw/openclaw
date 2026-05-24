@@ -231,12 +231,16 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("declares dist/control-ui as the cached output for ui:build", () => {
+  it("does not cache ui:build because Vite reads package.json, git HEAD, and env metadata", () => {
+    // ui/vite.config.ts derives the Control UI build ID from package.json,
+    // git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a file-input
+    // signature cannot exactly invalidate generated assets. Leaving this
+    // step uncached avoids restoring stale service-worker/app cache
+    // metadata after `tsdown` clears `dist`.
     const step = getBuildAllStep("ui:build");
     expect(step.kind).toBe("pnpm");
     expect(step.pnpmArgs).toEqual(["ui:build"]);
-    expect(step.cache?.outputs).toEqual(["dist/control-ui"]);
-    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["ui"]));
+    expect(step.cache).toBeUndefined();
   });
 
   it("does not cache plugin-sdk entry shims over compiled JS", () => {
