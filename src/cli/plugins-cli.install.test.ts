@@ -1154,7 +1154,9 @@ describe("plugins cli install", () => {
     );
 
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("npm install failed");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
@@ -1182,7 +1184,8 @@ describe("plugins cli install", () => {
       "one of this plugin's npm dependencies is fetched from a git URL",
     );
     expect(runtimeErrors.at(-1)).toContain("winget install --id Git.Git -e");
-    expect(runtimeErrors.at(-1)).toContain("Also not a valid hook pack");
+    expect(installHooksFromNpmSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {

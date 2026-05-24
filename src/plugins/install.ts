@@ -13,6 +13,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   type ManagedNpmRootPeerDependencySnapshot,
+  quarantineManagedNpmRootForRebuild,
   readManagedNpmRootInstalledDependency,
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
@@ -20,6 +21,7 @@ import {
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
   restoreManagedNpmRootPeerDependencySnapshot,
+  shouldRebuildManagedNpmRootAfterInstallFailure,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
@@ -146,6 +148,8 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
+
+type ManagedNpmInstallCommandResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -472,6 +476,86 @@ async function rollbackManagedNpmPluginInstall(params: {
   }
 }
 
+function formatNpmCommandFailureOutput(
+  result: Pick<ManagedNpmInstallCommandResult, "stdout" | "stderr">,
+): string {
+  return result.stderr.trim() || result.stdout.trim();
+}
+
+function formatManagedNpmRootRecoveryArtifacts(artifactNames: string[]): string {
+  return artifactNames.length > 0 ? artifactNames.join(", ") : "no existing artifacts";
+}
+
+async function rebuildManagedNpmRootAfterCorruptInstallFailure(params: {
+  npmRoot: string;
+  npmInstallArgs: string[];
+  npmInstallOptions: {
+    cwd: string;
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+  };
+  logger: PluginInstallLogger;
+  failure: ManagedNpmInstallCommandResult;
+}): Promise<
+  | {
+      ok: true;
+      quarantineDir: string;
+      movedArtifactNames: string[];
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+> {
+  const originalError = formatNpmCommandFailureOutput(params.failure);
+  let quarantine: Awaited<ReturnType<typeof quarantineManagedNpmRootForRebuild>>;
+  try {
+    quarantine = await quarantineManagedNpmRootForRebuild({ npmRoot: params.npmRoot });
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        "npm install failed with a managed npm root corruption signature, " +
+        `but OpenClaw could not quarantine ${params.npmRoot} for rebuild: ${String(error)}. ` +
+        `Original npm error: ${originalError}`,
+    };
+  }
+
+  params.logger.warn?.(
+    `npm reported a managed npm root corruption signature; quarantined ${formatManagedNpmRootRecoveryArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir} and rebuilding once before retrying.`,
+  );
+
+  let rebuild: ManagedNpmInstallCommandResult;
+  try {
+    rebuild = await runCommandWithTimeout(params.npmInstallArgs, params.npmInstallOptions);
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        "managed npm root recovery failed after quarantining " +
+        `${formatManagedNpmRootRecoveryArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir}: ` +
+        `npm rebuild threw: ${String(error)}. ` +
+        `Original npm error: ${originalError}`,
+    };
+  }
+  if (rebuild.code !== 0) {
+    return {
+      ok: false,
+      error:
+        "managed npm root recovery failed after quarantining " +
+        `${formatManagedNpmRootRecoveryArtifacts(quarantine.movedArtifactNames)} at ${quarantine.quarantineDir}: ` +
+        `npm rebuild failed: ${formatNpmCommandFailureOutput(rebuild)}. ` +
+        `Original npm error: ${originalError}`,
+    };
+  }
+
+  return {
+    ok: true,
+    quarantineDir: quarantine.quarantineDir,
+    movedArtifactNames: quarantine.movedArtifactNames,
+  };
+}
+
 function resolveInstalledNpmResolutionMismatch(params: {
   packageName: string;
   expected: NpmSpecResolution;
@@ -706,6 +790,7 @@ async function installPluginFromManagedNpmRoot(
   };
   let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   let omitUnsupportedManagedOverrides = false;
+  let managedNpmRootRecovery: { quarantineDir: string } | null = null;
   if (install.code !== 0 && isNpmAliasOverrideComparatorError(install)) {
     logger.warn?.(
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
@@ -726,6 +811,20 @@ async function installPluginFromManagedNpmRoot(
     }
     install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
   }
+  if (install.code !== 0 && shouldRebuildManagedNpmRootAfterInstallFailure(install)) {
+    const recovery = await rebuildManagedNpmRootAfterCorruptInstallFailure({
+      npmRoot,
+      npmInstallArgs,
+      npmInstallOptions,
+      logger,
+      failure: install,
+    });
+    if (!recovery.ok) {
+      return await rollbackFailedManagedNpmInstall(recovery.error);
+    }
+    managedNpmRootRecovery = { quarantineDir: recovery.quarantineDir };
+    install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+  }
   if (install.code !== 0) {
     await rollbackManagedNpmPluginInstall({
       npmRoot,
@@ -737,7 +836,9 @@ async function installPluginFromManagedNpmRoot(
     });
     return {
       ok: false,
-      error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+      error: managedNpmRootRecovery
+        ? `npm install failed after managed npm root recovery (quarantine: ${managedNpmRootRecovery.quarantineDir}): ${formatNpmCommandFailureOutput(install)}`
+        : `npm install failed: ${formatNpmCommandFailureOutput(install)}`,
     };
   }
   let settledManagedPeerDependencies = false;

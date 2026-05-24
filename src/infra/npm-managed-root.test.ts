@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
 import {
+  quarantineManagedNpmRootForRebuild,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
@@ -77,6 +78,66 @@ function requireCommandOptions(
 }
 
 describe("managed npm root", () => {
+  it("quarantines rebuild artifacts without moving managed root metadata", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.mkdir(path.join(npmRoot, "node_modules", "@openclaw", "codex"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(npmRoot, "_openclaw-pack-archives"), { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify({
+        private: true,
+        dependencies: { "@openclaw/codex": "2026.5.20" },
+      })}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "node_modules", "@openclaw", "codex", "keep.txt"),
+      "plugin",
+    );
+    await fs.writeFile(path.join(npmRoot, "package-lock.json"), "lock");
+    await fs.writeFile(path.join(npmRoot, "npm-shrinkwrap.json"), "shrinkwrap");
+    await fs.writeFile(path.join(npmRoot, "_openclaw-pack-archives", "fixture.tgz"), "pack");
+
+    const result = await quarantineManagedNpmRootForRebuild({ npmRoot });
+
+    expect(result.movedArtifactNames).toEqual([
+      "node_modules",
+      "package-lock.json",
+      "npm-shrinkwrap.json",
+    ]);
+    await expectPathMissing(path.join(npmRoot, "node_modules"));
+    await expectPathMissing(path.join(npmRoot, "package-lock.json"));
+    await expectPathMissing(path.join(npmRoot, "npm-shrinkwrap.json"));
+    await expect(
+      fs.readFile(
+        path.join(result.quarantineDir, "node_modules", "@openclaw", "codex", "keep.txt"),
+        "utf8",
+      ),
+    ).resolves.toBe("plugin");
+    await expect(
+      fs.readFile(path.join(result.quarantineDir, "package-lock.json"), "utf8"),
+    ).resolves.toBe("lock");
+    await expect(
+      fs.readFile(path.join(result.quarantineDir, "npm-shrinkwrap.json"), "utf8"),
+    ).resolves.toBe("shrinkwrap");
+    await expect(fs.readFile(path.join(npmRoot, "package.json"), "utf8")).resolves.toContain(
+      "@openclaw/codex",
+    );
+    await expect(
+      fs.readFile(path.join(npmRoot, "_openclaw-pack-archives", "fixture.tgz"), "utf8"),
+    ).resolves.toBe("pack");
+  });
+
+  it("treats missing rebuild artifacts as an idempotent quarantine", async () => {
+    const npmRoot = await makeTempRoot();
+
+    const result = await quarantineManagedNpmRootForRebuild({ npmRoot });
+
+    expect(result.movedArtifactNames).toEqual([]);
+    expect((await fs.lstat(result.quarantineDir)).isDirectory()).toBe(true);
+  });
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

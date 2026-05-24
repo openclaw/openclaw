@@ -50,9 +50,11 @@ import {
 import {
   createHookPackInstallLogger,
   createPluginInstallLogger,
+  formatPluginInstallPrimaryError,
   formatPluginInstallWithHookFallbackError,
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
+  shouldSkipHookPackFallbackAfterPluginInstallError,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
@@ -346,6 +348,10 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
         });
         return { ok: true };
       }
+    }
+    if (shouldSkipHookPackFallbackAfterPluginInstallError(result.error)) {
+      (params.runtime ?? defaultRuntime).error(formatPluginInstallPrimaryError(result.error));
+      return { ok: false };
     }
     const hookFallback = await tryInstallHookPackFromNpmSpec({
       snapshot: params.snapshot,

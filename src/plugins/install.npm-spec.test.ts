@@ -37,6 +37,17 @@ function successfulSpawn(stdout = "") {
   };
 }
 
+function failedSpawn(stderr: string) {
+  return {
+    code: 1,
+    stdout: "",
+    stderr,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
+}
+
 function npmViewArgv(spec: string): string[] {
   return ["npm", "view", spec, "name", "version", "dist.integrity", "dist.shasum", "--json"];
 }
@@ -1181,6 +1192,212 @@ describe("installPluginFromNpmSpec", () => {
     await expect(
       fs.promises.access(path.join(npmRoot, "node_modules", "openclaw")),
     ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("quarantines and rebuilds corrupt managed npm roots before retrying npm install", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    fs.mkdirSync(path.join(npmRoot, "node_modules", "existing-plugin"), { recursive: true });
+    fs.writeFileSync(path.join(npmRoot, "node_modules", "existing-plugin", "stale.txt"), "stale");
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "existing-plugin": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const stalePackageLock = `${JSON.stringify(
+      {
+        lockfileVersion: 3,
+        marker: "stale lock",
+        packages: {
+          "": {
+            dependencies: {
+              "existing-plugin": "1.0.0",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    fs.writeFileSync(path.join(npmRoot, "package-lock.json"), stalePackageLock, "utf8");
+    fs.writeFileSync(path.join(npmRoot, "npm-shrinkwrap.json"), "stale shrinkwrap", "utf8");
+
+    mockNpmViewAndInstallMany([
+      {
+        packageName: "existing-plugin",
+        version: "1.0.0",
+        pluginId: "existing-plugin",
+        npmRoot,
+        expectedDependencySpec: "1.0.0",
+      },
+      {
+        spec: "@openclaw/voice-call@0.0.1",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.1",
+        pluginId: "voice-call",
+        npmRoot,
+        expectedDependencySpec: "0.0.1",
+      },
+    ]);
+    const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
+    let installAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv)) {
+          installAttempts += 1;
+          if (installAttempts === 1) {
+            return failedSpawn(
+              [
+                "npm error code ERR_INVALID_ARG_TYPE",
+                'npm error The "from" argument must be of type string. Received undefined',
+              ].join("\n"),
+            );
+          }
+        }
+        return await baseImplementation?.(argv, options);
+      },
+    );
+    const warnings: string[] = [];
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("voice-call");
+    expect(installAttempts).toBe(3);
+    expect(warnings.some((warning) => warning.includes("managed npm root corruption"))).toBe(true);
+    const quarantineRoot = path.join(npmRoot, "_openclaw-quarantined-npm-roots");
+    const quarantineEntries = fs.readdirSync(quarantineRoot);
+    expect(quarantineEntries).toHaveLength(1);
+    const quarantineDir = path.join(quarantineRoot, quarantineEntries[0] ?? "");
+    expect(
+      fs.readFileSync(
+        path.join(quarantineDir, "node_modules", "existing-plugin", "stale.txt"),
+        "utf8",
+      ),
+    ).toBe("stale");
+    expect(fs.readFileSync(path.join(quarantineDir, "package-lock.json"), "utf8")).toBe(
+      stalePackageLock,
+    );
+    expect(fs.readFileSync(path.join(quarantineDir, "npm-shrinkwrap.json"), "utf8")).toBe(
+      "stale shrinkwrap",
+    );
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "@openclaw", "voice-call"))).toBe(true);
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "existing-plugin"))).toBe(true);
+  });
+
+  it("fails closed when npm install still fails after managed npm root recovery", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    fs.mkdirSync(path.join(npmRoot, "node_modules", "existing-plugin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "existing-plugin": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          marker: "stale lock",
+          packages: {
+            "": {
+              dependencies: {
+                "existing-plugin": "1.0.0",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    mockNpmViewAndInstallMany([
+      {
+        packageName: "existing-plugin",
+        version: "1.0.0",
+        pluginId: "existing-plugin",
+        npmRoot,
+        expectedDependencySpec: "1.0.0",
+      },
+      {
+        spec: "@openclaw/voice-call@0.0.1",
+        packageName: "@openclaw/voice-call",
+        version: "0.0.1",
+        pluginId: "voice-call",
+        npmRoot,
+        expectedDependencySpec: "0.0.1",
+      },
+    ]);
+    const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
+    let installAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv)) {
+          installAttempts += 1;
+          if (installAttempts === 1) {
+            return failedSpawn(
+              [
+                "npm error code ERR_INVALID_ARG_TYPE",
+                'npm error The "from" argument must be of type string. Received undefined',
+              ].join("\n"),
+            );
+          }
+          if (installAttempts === 3) {
+            return failedSpawn("registry unavailable after rebuild");
+          }
+        }
+        return await baseImplementation?.(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("npm install failed after managed npm root recovery");
+    expect(result.error).toContain("registry unavailable after rebuild");
+    expect(installAttempts).toBeGreaterThanOrEqual(3);
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies?.["@openclaw/voice-call"]).toBeUndefined();
+    expect(fs.existsSync(path.join(npmRoot, "node_modules", "@openclaw", "voice-call"))).toBe(
+      false,
+    );
   });
 
   it("retries without npm alias overrides when npm rejects alias comparators", async () => {

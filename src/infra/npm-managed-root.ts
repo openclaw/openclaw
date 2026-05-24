@@ -41,6 +41,11 @@ export type ManagedNpmRootInstalledDependency = {
   resolved?: string;
 };
 
+export type ManagedNpmRootQuarantineResult = {
+  quarantineDir: string;
+  movedArtifactNames: string[];
+};
+
 type ManagedNpmRootLockfile = {
   packages?: Record<string, unknown>;
   dependencies?: Record<string, unknown>;
@@ -54,6 +59,13 @@ type ManagedNpmRootLogger = {
 type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
+
+const MANAGED_NPM_ROOT_REBUILD_ARTIFACT_NAMES = [
+  "node_modules",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+] as const;
+const MANAGED_NPM_ROOT_QUARANTINE_DIR = "_openclaw-quarantined-npm-roots";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -537,6 +549,42 @@ function isHostPeerResolutionFailure(
 ): boolean {
   const output = `${result.stdout}\n${result.stderr}`;
   return /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(output);
+}
+
+export function shouldRebuildManagedNpmRootAfterInstallFailure(result: {
+  stdout: string;
+  stderr: string;
+}): boolean {
+  const output = `${result.stderr}\n${result.stdout}`;
+  return (
+    output.includes("ERR_INVALID_ARG_TYPE") &&
+    output.includes('"from" argument') &&
+    output.includes("Received undefined")
+  );
+}
+
+export async function quarantineManagedNpmRootForRebuild(params: {
+  npmRoot: string;
+}): Promise<ManagedNpmRootQuarantineResult> {
+  await fs.mkdir(params.npmRoot, { recursive: true });
+  const quarantineParent = path.join(params.npmRoot, MANAGED_NPM_ROOT_QUARANTINE_DIR);
+  await fs.mkdir(quarantineParent, { recursive: true });
+  const quarantineDir = await fs.mkdtemp(path.join(quarantineParent, "corrupt-"));
+  const movedArtifactNames: string[] = [];
+  for (const artifactName of MANAGED_NPM_ROOT_REBUILD_ARTIFACT_NAMES) {
+    const source = path.join(params.npmRoot, artifactName);
+    const destination = path.join(quarantineDir, artifactName);
+    try {
+      await fs.rename(source, destination);
+      movedArtifactNames.push(artifactName);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return { quarantineDir, movedArtifactNames };
 }
 
 function createManagedNpmPeerPlanArgs(params?: {

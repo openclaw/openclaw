@@ -178,6 +178,9 @@ export function formatPluginInstallWithHookFallbackError(
 ): string {
   const formattedPluginError = formatPluginInstallAttemptError(pluginError);
   const formattedHookError = formatPluginInstallAttemptError(hookError);
+  if (shouldSkipHookPackFallbackAfterPluginInstallError(pluginError)) {
+    return formattedPluginError;
+  }
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
     return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
@@ -188,6 +191,18 @@ export function formatPluginInstallWithHookFallbackError(
     return formattedPluginError;
   }
   return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+}
+
+export function formatPluginInstallPrimaryError(pluginError: string): string {
+  return formatPluginInstallAttemptError(pluginError);
+}
+
+export function shouldSkipHookPackFallbackAfterPluginInstallError(pluginError: string): boolean {
+  return (
+    pluginError.startsWith("npm install failed") ||
+    pluginError.startsWith("npm peer dependency planning failed") ||
+    pluginError.startsWith("Failed to stage npm pack archive in managed npm root")
+  );
 }
 
 const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
