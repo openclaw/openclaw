@@ -50,8 +50,89 @@ async function useTempStateDir(): Promise<string> {
   return stateDir;
 }
 
+type MemoryPluginStateEntry<T> = { key: string; value: T; createdAt: number; expiresAt?: number };
+
+function createMemoryPluginStateStore<T>(
+  maxEntries: number,
+  defaultTtlMs: number | undefined,
+  entries: Map<string, MemoryPluginStateEntry<unknown>>,
+) {
+  type Entry = { key: string; value: T; createdAt: number; expiresAt?: number };
+  const typedEntries = entries as Map<string, Entry>;
+  const readEntry = (key: string): Entry | undefined => {
+    const entry = typedEntries.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+      typedEntries.delete(key);
+      return undefined;
+    }
+    return entry;
+  };
+  const writeEntry = (key: string, value: T, opts?: { ttlMs?: number }): void => {
+    const createdAt = Date.now();
+    const entry: Entry = { key, value, createdAt };
+    const ttlMs = opts?.ttlMs ?? defaultTtlMs;
+    if (ttlMs !== undefined) {
+      entry.expiresAt = createdAt + ttlMs;
+    }
+    typedEntries.set(key, entry);
+    while (typedEntries.size > maxEntries) {
+      const oldestKey = typedEntries.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      typedEntries.delete(oldestKey);
+    }
+  };
+  return {
+    async register(key: string, value: T, opts?: { ttlMs?: number }) {
+      writeEntry(key, value, opts);
+    },
+    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
+      if (readEntry(key)) {
+        return false;
+      }
+      writeEntry(key, value, opts);
+      return true;
+    },
+    async lookup(key: string) {
+      return readEntry(key)?.value;
+    },
+    async consume(key: string) {
+      const value = readEntry(key)?.value;
+      typedEntries.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return typedEntries.delete(key);
+    },
+    async entries() {
+      return [...typedEntries.keys()]
+        .map((key) => readEntry(key))
+        .filter((entry): entry is Entry => Boolean(entry));
+    },
+    async clear() {
+      typedEntries.clear();
+    },
+  };
+}
+
 function installTelegramRuntime() {
-  const runtime = createPluginRuntimeMock();
+  const keyedStores = new Map<string, Map<string, MemoryPluginStateEntry<unknown>>>();
+  const runtime = createPluginRuntimeMock({
+    state: {
+      openKeyedStore: ((options) => {
+        let entries = keyedStores.get(options.namespace);
+        if (!entries) {
+          entries = new Map();
+          keyedStores.set(options.namespace, entries);
+        }
+        return createMemoryPluginStateStore(options.maxEntries, options.defaultTtlMs, entries);
+      }) as TelegramRuntime["state"]["openKeyedStore"],
+    },
+  });
   const telegramRuntime = {
     ...runtime,
     channel: {
