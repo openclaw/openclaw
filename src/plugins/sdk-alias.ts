@@ -56,6 +56,7 @@ function listPluginSdkSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string
     .filter((key) => key.startsWith("./plugin-sdk/"))
     .map((key) => key.slice("./plugin-sdk/".length))
     .filter((subpath) => isSafePluginSdkSubpathSegment(subpath))
+    .filter((subpath) => subpath !== CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH)
     .toSorted();
 }
 

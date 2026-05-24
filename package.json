@@ -1363,6 +1363,10 @@
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
+    "./plugin-sdk/codex-native-task-runtime": {
+      "types": "./dist/plugin-sdk/codex-native-task-runtime.d.ts",
+      "default": "./dist/plugin-sdk/codex-native-task-runtime.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },

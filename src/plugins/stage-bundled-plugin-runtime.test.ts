@@ -193,6 +193,8 @@ describe("stageBundledPluginRuntime", () => {
           exports: {
             "./plugin-sdk": "./dist/plugin-sdk/index.js",
             "./plugin-sdk/channel-entry-contract": "./dist/plugin-sdk/channel-entry-contract.js",
+            "./plugin-sdk/codex-native-task-runtime":
+              "./dist/plugin-sdk/codex-native-task-runtime.js",
           },
         },
         null,
@@ -200,6 +202,8 @@ describe("stageBundledPluginRuntime", () => {
       ),
       "dist/plugin-sdk/index.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js": "export const contract = true;\n",
+      "dist/plugin-sdk/codex-native-task-runtime.js":
+        "export const codexNativeTaskRuntime = true;\n",
       "dist/plugin-sdk/source-only.js": "export const sourceOnly = true;\n",
       "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
       [bundledDistPluginFile("ollama", "index.js")]: "export default {}\n",
@@ -214,9 +218,13 @@ describe("stageBundledPluginRuntime", () => {
     expect(packageJson.exports).toEqual({
       "./plugin-sdk": "./plugin-sdk/index.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
+      "./plugin-sdk/codex-native-task-runtime": "./plugin-sdk/codex-native-task-runtime.js",
     });
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "index.js"))).toBe(true);
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "channel-entry-contract.js"))).toBe(
+      true,
+    );
+    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "codex-native-task-runtime.js"))).toBe(
       true,
     );
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "source-only.js"))).toBe(false);

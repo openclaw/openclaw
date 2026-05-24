@@ -11,8 +11,9 @@ The plugin SDK is exposed as a set of narrow public subpaths under
 purpose. The generated compiler entrypoint inventory lives in
 `scripts/lib/plugin-sdk-entrypoints.json`; package exports are the public subset
 after subtracting repo-local test/internal subpaths listed in
-`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Maintainers can audit
-the public export count with `pnpm plugin-sdk:surface` and active reserved
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`, plus a tiny
+compatibility exception for stale official bundled-plugin installs. Maintainers
+can audit the public export count with `pnpm plugin-sdk:surface` and active reserved
 helper subpaths with `pnpm plugins:boundary-report:summary`; unused reserved
 helper exports fail the CI report instead of staying in the public SDK as
 dormant compatibility debt.

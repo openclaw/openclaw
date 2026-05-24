@@ -10,6 +10,7 @@ const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
+const compatibilityOnlyExcludedPluginSdkSubpaths = new Set(["codex-native-task-runtime"]);
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
 );
@@ -17,10 +18,9 @@ const isDistRootAlias = __filename.includes(
 // source root alias with dist compat/runtime shims can split singleton deps
 // (for example matrix-js-sdk) across two module graphs.
 const shouldPreferSourceGraph =
-  !isDistRootAlias &&
-  (process.env.NODE_ENV !== "production" ||
-    Boolean(process.env.VITEST) ||
-    process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
+  Boolean(process.env.VITEST) ||
+  process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1" ||
+  (!isDistRootAlias && process.env.NODE_ENV !== "production");
 
 function emptyPluginConfigSchema() {
   function error(message) {
@@ -120,6 +120,7 @@ function listPluginSdkExportedSubpaths() {
       .filter((key) => key.startsWith("./plugin-sdk/"))
       .map((key) => key.slice("./plugin-sdk/".length))
       .filter((subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath))
+      .filter((subpath) => !compatibilityOnlyExcludedPluginSdkSubpaths.has(subpath))
       .toSorted();
   } catch {
     subpaths = [];
