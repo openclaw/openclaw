@@ -269,6 +269,74 @@ describe("gateway hot reload model state", () => {
     expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     expect(hoisted.warmCurrentProviderAuthState).toHaveBeenCalledWith(nextConfig);
   });
+
+  it("skips provider auth rewarm during hot reload when provider auth prewarm is disabled", async () => {
+    const reloadPlugins = vi.fn(async (): Promise<GatewayPluginReloadResult> => {
+      hoisted.reloadEvents.push("reload-plugins");
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+      };
+    });
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    const nextConfig = {
+      gateway: { providerAuthPrewarm: { enabled: false } },
+      plugins: { enabled: true },
+    } as OpenClawConfig;
+    await applyHotReload(
+      {
+        changedPaths: ["plugins.enabled"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["plugins.enabled"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: true,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    const firstResetIndex = hoisted.reloadEvents.indexOf("reset-model-catalog");
+    expect(firstResetIndex).toBeGreaterThanOrEqual(0);
+    expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
+      "reset-model-catalog",
+      "clear-provider-auth",
+      "reload-plugins",
+      "reset-model-catalog",
+      "clear-provider-auth",
+    ]);
+    expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+  });
 });
 
 describe("gateway restart deferral preflight", () => {

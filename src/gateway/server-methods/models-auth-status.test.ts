@@ -631,6 +631,23 @@ describe("models.authLogout", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
   });
 
+  it("skips provider auth rewarm after logout when provider auth prewarm is disabled", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { providerAuthPrewarm: { enabled: false } },
+    });
+    mocks.listProfilesForProvider.mockReturnValue(["openrouter:default"]);
+
+    const opts = createLogoutOptions({ provider: "OpenRouter" });
+    await logoutHandler(opts);
+
+    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
+    expect(mocks.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+    const [ok, payload] = firstRespondCall(opts) ?? [];
+    expect(ok).toBe(true);
+    expect((payload as ModelAuthLogoutResult).removedProfiles).toEqual(["openrouter:default"]);
+  });
+
   it("aborts active runs for the removed provider only", async () => {
     const opts = createLogoutOptions({ provider: "openrouter" });
     const openrouterRun = createActiveRun("openrouter");

@@ -21,6 +21,10 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import {
+  resolveProviderAuthPrewarmOptions,
+  type ProviderAuthPrewarmOptions,
+} from "./provider-auth-prewarm-config.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
@@ -889,11 +893,7 @@ export async function startGatewayPostAttachRuntime(
     startupTrace?: GatewayStartupTrace;
     deferSidecars?: boolean;
     logReadyOnSidecars?: boolean;
-    providerAuthPrewarm?: {
-      enabled?: boolean;
-      delayMs?: number;
-      getConfig?: () => OpenClawConfig;
-    };
+    providerAuthPrewarm?: ProviderAuthPrewarmOptions;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -1034,12 +1034,16 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        const providerAuthPrewarm = resolveProviderAuthPrewarmOptions({
+          cfg: params.cfgAtStart,
+          providerAuthPrewarm: params.providerAuthPrewarm,
+        });
+        if (providerAuthPrewarm.enabled) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
-              getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
+              getConfig: providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
               log: params.log,
-              delayMs: params.providerAuthPrewarm?.delayMs,
+              delayMs: providerAuthPrewarm.delayMs,
             }),
           );
         }
@@ -1135,6 +1139,7 @@ export const testing = {
   hasRestartSentinelFileFast,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
+  resolveProviderAuthPrewarmOptions,
   scheduleProviderAuthStatePrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };

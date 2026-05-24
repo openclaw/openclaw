@@ -835,6 +835,86 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("skips provider auth prewarm when the gateway config disables it", async () => {
+    vi.useFakeTimers();
+    const onGatewayLifetimeSidecars = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    try {
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams({
+          cfgAtStart: {
+            gateway: { providerAuthPrewarm: { enabled: false } },
+          } as never,
+        }),
+        log,
+        deferSidecars: true,
+        providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
+        onGatewayLifetimeSidecars,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(0);
+      expect(hoisted.setAuthProfileFailureHook).not.toHaveBeenCalled();
+      expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips provider auth prewarm when OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM is set", async () => {
+    await withEnvAsync({ OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM: "1" }, async () => {
+      vi.useFakeTimers();
+      const onGatewayLifetimeSidecars = vi.fn();
+      const log = { info: vi.fn(), warn: vi.fn() };
+
+      try {
+        await startGatewayPostAttachRuntime({
+          ...createPostAttachParams(),
+          log,
+          deferSidecars: true,
+          providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
+          onGatewayLifetimeSidecars,
+        });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(0);
+        expect(hoisted.setAuthProfileFailureHook).not.toHaveBeenCalled();
+        expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("uses gateway provider auth prewarm delay when no internal delay override is set", async () => {
+    vi.useFakeTimers();
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    try {
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams({
+          cfgAtStart: {
+            gateway: { providerAuthPrewarm: { delayMs: 2_500 } },
+          } as never,
+        }),
+        log,
+        deferSidecars: true,
+        providerAuthPrewarm: { enabled: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_499);
+      expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => {
+        expect(hoisted.warmCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {
     vi.useFakeTimers();
     const onPostReadySidecars = vi.fn();

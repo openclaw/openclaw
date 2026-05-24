@@ -119,6 +119,12 @@ export const FIELD_HELP: Record<string, string> = {
     'Remote connection transport: "direct" uses configured URL connectivity, while "ssh" tunnels through SSH. Use SSH when you need encrypted tunnel semantics without exposing remote ports.',
   "gateway.reload":
     "Live config-reload policy for how edits are applied and when full restarts are triggered. Keep hybrid behavior for safest operational updates unless debugging reload internals.",
+  "gateway.providerAuthPrewarm":
+    "Provider auth-state prewarm behavior after gateway startup. Disable or delay this on resource-constrained hosts when channel readiness is more important than warming model-auth status caches.",
+  "gateway.providerAuthPrewarm.enabled":
+    "Enables provider auth-state prewarm after gateway sidecars are ready. OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM=1 disables it regardless of config.",
+  "gateway.providerAuthPrewarm.delayMs":
+    "Milliseconds to wait after gateway sidecars are ready before starting provider auth-state prewarm. Increase this to let Discord or other channel gateways settle first.",
   "gateway.tls":
     "TLS certificate and key settings for terminating HTTPS directly in the gateway process. Use explicit certificates in production and avoid plaintext exposure on untrusted networks.",
   "gateway.tls.enabled":

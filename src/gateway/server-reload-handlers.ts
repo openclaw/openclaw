@@ -38,6 +38,7 @@ import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
+import { shouldWarmProviderAuthState } from "./provider-auth-prewarm-config.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
@@ -500,9 +501,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
-      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
-    });
+    if (shouldWarmProviderAuthState({ cfg: nextConfig })) {
+      void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+        params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+      });
+    }
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);

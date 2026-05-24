@@ -30,6 +30,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { shouldWarmProviderAuthState } from "../provider-auth-prewarm-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -391,9 +392,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
       clearCurrentProviderAuthState();
-      void warmCurrentProviderAuthState(context.getRuntimeConfig()).catch((err) => {
-        log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
-      });
+      if (shouldWarmProviderAuthState({ cfg })) {
+        void warmCurrentProviderAuthState(cfg).catch((err) => {
+          log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
+        });
+      }
       const { runIds: abortedRunIds } = abortChatRunsForProvider(
         createAuthLogoutAbortOps(context),
         {

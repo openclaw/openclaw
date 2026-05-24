@@ -818,6 +818,34 @@ describe("gateway.tools config", () => {
   });
 });
 
+describe("gateway.providerAuthPrewarm config", () => {
+  it("accepts provider auth prewarm operator controls", () => {
+    const res = validateConfigObject({
+      gateway: {
+        providerAuthPrewarm: {
+          enabled: false,
+          delayMs: 30_000,
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid provider auth prewarm delays", () => {
+    const res = validateConfigObject({
+      gateway: {
+        providerAuthPrewarm: {
+          delayMs: -1,
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.providerAuthPrewarm.delayMs");
+    }
+  });
+});
+
 describe("gateway.channelHealthCheckMinutes", () => {
   it("accepts preauth handshake timeout tuning", () => {
     const res = validateConfigObject({

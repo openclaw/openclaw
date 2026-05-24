@@ -259,6 +259,21 @@ export type GatewayReloadConfig = {
   deferralTimeoutMs?: number;
 };
 
+export type GatewayProviderAuthPrewarmConfig = {
+  /**
+   * Enables provider auth-state prewarm after gateway startup. Set false on
+   * resource-constrained hosts when startup channel readiness is more important
+   * than warming model-auth status caches. Default: true.
+   */
+  enabled?: boolean;
+  /**
+   * Delay before provider auth-state prewarm starts after gateway sidecars are
+   * ready. Increase this to let channel gateways settle before auth discovery.
+   * Default: 1000.
+   */
+  delayMs?: number;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -471,6 +486,7 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  providerAuthPrewarm?: GatewayProviderAuthPrewarmConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   push?: GatewayPushConfig;
