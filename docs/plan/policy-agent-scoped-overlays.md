@@ -3,15 +3,16 @@ summary: "Per-agent Policy plugin overlays layered on top of global policy rules
 read_when:
   - You are designing per-agent policy requirements
   - You need to distinguish tool posture policy from workspace policy
-  - You are configuring stricter policy for one named agent such as Sebby
+  - You are configuring stricter policy for one named agent
 title: "Agent-scoped policy overlays"
 ---
 
 # Agent-scoped policy overlays
 
-OpenClaw policy supports global requirements and stricter requirements for explicit runtime agent ids. The Sebby setup exposed this gap: Sebby needs a tighter workspace
-and tool posture than other agents, but deployment-wide rules should not force
-every agent to use the same posture.
+OpenClaw policy supports global requirements and stricter requirements for
+explicit runtime agent ids. Some deployments need one agent to use a tighter
+workspace and tool posture than other agents, but deployment-wide rules should
+not force every agent to use the same posture.
 
 This page describes the agent-scoped overlay model. The field reference remains
 [`openclaw policy`](/cli/policy).
@@ -48,8 +49,8 @@ identity.
   },
   "scopes": {
     "agents": {
-      "sebby-lockdown": {
-        "agentIds": ["sebastian-prod"],
+      "release-agent-lockdown": {
+        "agentIds": ["release-agent"],
         "agents": {
           "workspace": {
             "allowedAccess": ["none", "ro"],
@@ -99,8 +100,8 @@ that was violated:
 
 ```text
 oc://policy.jsonc/tools/denyTools
-oc://policy.jsonc/scopes/agents/sebby-lockdown/tools/denyTools
-oc://policy.jsonc/scopes/agents/sebby-lockdown/agents/workspace/allowedAccess
+oc://policy.jsonc/scopes/agents/release-agent-lockdown/tools/denyTools
+oc://policy.jsonc/scopes/agents/release-agent-lockdown/agents/workspace/allowedAccess
 ```
 
 That keeps broad tool posture, named-agent tool posture, and workspace posture
@@ -117,13 +118,13 @@ one extra entry can widen an agent beyond its reviewed role.
 The overlay model separates where policy is authored from where OpenClaw config
 is observed:
 
-| Policy scope                                   | Observed config                                      | Applies to                        | Example result                                                               |
-| ---------------------------------------------- | ---------------------------------------------------- | --------------------------------- | ---------------------------------------------------------------------------- |
-| Top-level `tools.*`                            | Global `tools.*` and inherited agent tool posture    | All agents using matching posture | Deny `gateway` exec host for every agent unless the global policy allows it. |
-| Top-level `tools.*`                            | `agents.list[].tools.*` overrides                    | Any agent with an override        | Flag one agent that overrides `tools.exec.host` to an unapproved value.      |
-| `scopes.agents.<scopeName>.tools.*`            | Matching `agents.list[]` entry and inherited posture | Only that named agent             | Let other agents use `node` exec host while Sebby must use only `sandbox`.   |
-| `agents.workspace`                             | Defaults and every listed agent workspace posture    | Defaults and all listed agents    | Require every agent workspace access to be `none` or `ro`.                   |
-| `scopes.agents.<scopeName>.agents.workspace.*` | Matching `agents.list[]` workspace posture           | Only that named agent             | Require Sebby to be read-only without requiring the same for `main`.         |
+| Policy scope                                   | Observed config                                      | Applies to                        | Example result                                                                |
+| ---------------------------------------------- | ---------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
+| Top-level `tools.*`                            | Global `tools.*` and inherited agent tool posture    | All agents using matching posture | Deny `gateway` exec host for every agent unless the global policy allows it.  |
+| Top-level `tools.*`                            | `agents.list[].tools.*` overrides                    | Any agent with an override        | Flag one agent that overrides `tools.exec.host` to an unapproved value.       |
+| `scopes.agents.<scopeName>.tools.*`            | Matching `agents.list[]` entry and inherited posture | Only that named agent             | Let most agents use `node` exec host while one agent must use only `sandbox`. |
+| `agents.workspace`                             | Defaults and every listed agent workspace posture    | Defaults and all listed agents    | Require every agent workspace access to be `none` or `ro`.                    |
+| `scopes.agents.<scopeName>.agents.workspace.*` | Matching `agents.list[]` workspace posture           | Only that named agent             | Require one agent to be read-only without requiring the same for `main`.      |
 
 Per-agent overlays are additive. A named-agent rule can be stricter than the
 top-level rule, but it cannot make a global violation acceptable. For allow-list
@@ -131,9 +132,9 @@ rules, the effective allowed set is the intersection of the global rule and the
 named-agent overlay when both are present.
 
 For example, if top-level `tools.exec.allowHosts` permits `["sandbox", "node"]`
-and `scopes.agents.sebby-lockdown.tools.exec.allowHosts` permits only `["sandbox"]`,
-Sebby fails when its effective exec host is `node`; another agent can still pass
-with `node`.
+and `scopes.agents.release-agent-lockdown.tools.exec.allowHosts` permits only
+`["sandbox"]`, `release-agent` fails when its effective exec host is `node`;
+another agent can still pass with `node`.
 
 ## Tool posture versus workspace posture
 
@@ -147,14 +148,14 @@ policy namespace. If one agent needs stricter tool restrictions to make its
 workspace posture meaningful, put those restrictions in the same agent overlay
 under `scopes.agents.<scopeName>.tools`.
 
-For Sebby, the intended split is:
+For a restricted release agent, the intended split is:
 
 ```jsonc
 {
   "scopes": {
     "agents": {
-      "sebby-lockdown": {
-        "agentIds": ["sebastian-prod"],
+      "release-agent-lockdown": {
+        "agentIds": ["release-agent"],
         "agents": {
           "workspace": { "allowedAccess": ["none", "ro"] },
         },
