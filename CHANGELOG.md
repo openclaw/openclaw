@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 - Channels/iMessage: advance the startup catchup cursor from live-handled rows after a completed catchup pass, including rows received while catchup is still running, so restarts do not replay them. (#85475) Thanks @TurboTheTurtle.
 - Tests: mount the shared Windows command helper into bare Docker E2E harness containers so published upgrade-survivor config walks can start on Linux.
+- Tests: keep the plugin binding command escape Docker smoke focused on its intended Vitest cases and skip source-only install lifecycle scripts.
 - Tests: let the generic plugin install E2E assertions use a configurable temp root and Windows home-relative install paths.
 - Tests: keep kitchen-sink plugin assertion fixtures on a configurable temp root so native Windows runs no longer skip full-surface diagnostic coverage.
 - Tests: fail Gateway startup benchmarks when a child startup never produces ready probes or process metrics instead of reporting all `n/a` samples as passing.
