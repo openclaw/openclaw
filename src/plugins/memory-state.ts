@@ -109,6 +109,12 @@ export type MemoryPluginRuntime = {
   }): MemoryRuntimeBackendConfig;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
+  // Optional idle-TTL sweep for cached MemoryIndexManager instances. Used by
+  // long-running gateway daemons to release chokidar FSWatchers that the
+  // CLI-exit path (closeAllMemorySearchManagers) does not cover.
+  closeIdleMemorySearchManagers?(opts: {
+    idleMs: number;
+  }): Promise<{ evicted: number; remaining: number }>;
 };
 
 export type MemoryPluginPublicArtifactContentType = "markdown" | "json" | "text";

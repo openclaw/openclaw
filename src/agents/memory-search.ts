@@ -68,6 +68,8 @@ export type ResolvedMemorySearchConfig = {
     watchDebounceMs: number;
     intervalMinutes: number;
     embeddingBatchTimeoutSeconds: number | undefined;
+    idleEvictMs: number;
+    idleEvictScanMs: number;
     sessions: {
       deltaBytes: number;
       deltaMessages: number;
@@ -103,6 +105,14 @@ export type ResolvedMemorySearchSyncConfig = ResolvedMemorySearchConfig["sync"];
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
+// Default idle-TTL for cached MemoryIndexManager instances in long-running
+// gateways. Conservative enough to comfortably outlive typical bursts of
+// memory_search calls within a session, short enough to release chokidar
+// FSWatcher handles before they accumulate.
+const DEFAULT_IDLE_EVICT_MS = 15 * 60_000;
+// Default sweep interval for idle-eviction. The sweep is cheap (it just
+// walks lastAccessAt) so we can afford to run it every few minutes.
+const DEFAULT_IDLE_EVICT_SCAN_MS = 5 * 60_000;
 const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
@@ -405,6 +415,12 @@ function resolveSyncConfig(
     intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
     embeddingBatchTimeoutSeconds:
       overrides?.sync?.embeddingBatchTimeoutSeconds ?? defaults?.sync?.embeddingBatchTimeoutSeconds,
+    idleEvictMs:
+      overrides?.sync?.idleEvictMs ?? defaults?.sync?.idleEvictMs ?? DEFAULT_IDLE_EVICT_MS,
+    idleEvictScanMs:
+      overrides?.sync?.idleEvictScanMs ??
+      defaults?.sync?.idleEvictScanMs ??
+      DEFAULT_IDLE_EVICT_SCAN_MS,
     sessions: {
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??

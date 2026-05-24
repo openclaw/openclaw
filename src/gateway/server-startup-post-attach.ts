@@ -29,6 +29,8 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
+const MEMORY_INDEX_IDLE_EVICT_DEFAULT_MS = 15 * 60_000;
+const MEMORY_INDEX_IDLE_EVICT_SCAN_DEFAULT_MS = 5 * 60_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
 type Awaitable<T> = T | Promise<T>;
@@ -163,6 +165,77 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
     });
   });
   handle.unref?.();
+}
+
+type ResolvedMemoryIndexIdleEvictPolicy =
+  | { mode: "off" }
+  | { mode: "on"; idleMs: number; scanMs: number };
+
+function resolveMemoryIndexIdleEvictPolicy(
+  cfg: OpenClawConfig,
+): ResolvedMemoryIndexIdleEvictPolicy {
+  const sync = cfg.agents?.defaults?.memorySearch?.sync;
+  const idleMs = sync?.idleEvictMs ?? MEMORY_INDEX_IDLE_EVICT_DEFAULT_MS;
+  const scanMs = sync?.idleEvictScanMs ?? MEMORY_INDEX_IDLE_EVICT_SCAN_DEFAULT_MS;
+  if (idleMs <= 0 || scanMs <= 0) {
+    return { mode: "off" };
+  }
+  return { mode: "on", idleMs, scanMs };
+}
+
+// Periodic idle-TTL sweep over the process-wide MemoryIndexManager cache.
+// Long-running gateways accumulate cached managers (and their chokidar
+// FSWatchers) over time; this sweep closes managers that have not served a
+// request for `idleMs`. Returning a sidecar handle lets the gateway shut
+// the timer down cleanly.
+function scheduleMemoryIndexIdleEvict(params: {
+  cfg: OpenClawConfig;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+}): GatewayPostReadySidecarHandle | null {
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const policy = resolveMemoryIndexIdleEvictPolicy(params.cfg);
+  if (policy.mode === "off") {
+    return null;
+  }
+  const runSweep = async () => {
+    if (stopped) {
+      return;
+    }
+    try {
+      const { getMemoryRuntime } = await import("../plugins/memory-state.js");
+      const runtime = getMemoryRuntime();
+      if (!runtime?.closeIdleMemorySearchManagers) {
+        return;
+      }
+      const result = await runtime.closeIdleMemorySearchManagers({
+        idleMs: policy.idleMs,
+      });
+      if (result.evicted > 0) {
+        params.log.info(
+          `memory index manager idle eviction: evicted ${result.evicted} (remaining ${result.remaining})`,
+        );
+      }
+    } catch (err) {
+      params.log.warn(`memory index manager idle eviction failed: ${String(err)}`);
+    }
+  };
+  timer = setInterval(() => {
+    void runSweep();
+  }, policy.scanMs);
+  timer.unref?.();
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    },
+  };
 }
 
 function scheduleProviderAuthStatePrewarm(params: {
@@ -981,6 +1054,13 @@ export async function startGatewayPostAttachRuntime(
             }),
           );
         }
+        const memoryIdleEvictSidecar = scheduleMemoryIndexIdleEvict({
+          cfg: params.cfgAtStart,
+          log: params.log,
+        });
+        if (memoryIdleEvictSidecar) {
+          gatewayLifetimeSidecars.push(memoryIdleEvictSidecar);
+        }
         params.onPostReadySidecars?.(postReadySidecars);
         params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
         params.onSidecarsReady?.();
@@ -1062,6 +1142,8 @@ export const testing = {
   hasRestartSentinelFileFast,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
+  resolveMemoryIndexIdleEvictPolicy,
+  scheduleMemoryIndexIdleEvict,
   scheduleProviderAuthStatePrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
