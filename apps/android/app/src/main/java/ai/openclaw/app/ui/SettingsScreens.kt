@@ -867,7 +867,7 @@ internal fun SettingsDetailFrame(
   onBack: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
+  ClawScaffold(contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 20.dp)) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -880,7 +880,9 @@ internal fun SettingsDetailFrame(
         Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
       item {
-        content()
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          content()
+        }
       }
       item {
         Spacer(modifier = Modifier.height(12.dp))

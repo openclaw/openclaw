@@ -105,7 +105,7 @@ internal fun ClawPrimaryButton(
     onClick = onClick,
     enabled = enabled,
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     colors =
       ButtonDefaults.buttonColors(
         containerColor = ClawTheme.colors.primary,
@@ -136,7 +136,7 @@ internal fun ClawSecondaryButton(
     onClick = onClick,
     enabled = enabled,
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
@@ -399,8 +399,8 @@ internal fun ClawSegmentedControl(
   Row(
     modifier =
       modifier
-        .clip(RoundedCornerShape(ClawTheme.radii.pill))
-        .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.pill))
+        .clip(RoundedCornerShape(ClawTheme.radii.control))
+        .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(2.dp),
     horizontalArrangement = Arrangement.spacedBy(2.dp),
   ) {
@@ -410,7 +410,7 @@ internal fun ClawSegmentedControl(
         modifier =
           Modifier
             .weight(1f)
-            .clip(RoundedCornerShape(ClawTheme.radii.pill))
+            .clip(RoundedCornerShape(ClawTheme.radii.control))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
             .clickable { onSelect(option) }
             .padding(horizontal = 9.dp, vertical = 7.dp),
