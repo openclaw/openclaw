@@ -342,6 +342,14 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         original_text: String(input.text ?? input.message ?? ""),
         failed_at: run.completedAt.toISOString(),
       }).catch(() => {});
+      // EvolveEngine 订阅此事件做失败案例分析
+      publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_FAILED, "playbook-engine", {
+        playbook_id: playbookId,
+        run_id: runId,
+        error: run.error,
+        steps: run.steps.length,
+        duration_ms: Date.now() - _pbStartMs,
+      }).catch(() => {});
     }
 
     if (run.status === "completed") {
@@ -351,6 +359,24 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         playbook_id: playbookId,
         status: "completed",
       });
+      // EvolveEngine 和 verify() 需要此事件；同时将机器人回复写入对话历史
+      publishEvent?.(CW_EVENTS.PLAYBOOK_RUN_COMPLETED, "playbook-engine", {
+        playbook_id: playbookId,
+        run_id: runId,
+        steps: run.steps.length,
+        duration_ms: Date.now() - _pbStartMs,
+      }).catch(() => {});
+      // 将 Playbook 产生的回复文本记录为 assistant 轮次，保持对话历史完整
+      const sessionId = String(input.session_id ?? input.sessionId ?? "").trim();
+      if (sessionId && deps.contextEngine) {
+        const replyText = extractResponseText(ctx.variables);
+        if (replyText) {
+          deps.contextEngine.append(sessionId, "assistant", replyText, {
+            playbook_id: playbookId,
+            run_id: runId,
+          });
+        }
+      }
     }
 
     runs.set(runId, run);
@@ -691,6 +717,19 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 function summarizeRunOutput(variables: Record<string, unknown>): Record<string, unknown> {
   const { steps: _steps, payload, ...rest } = variables;
   return { ...rest, payload };
+}
+
+/**
+ * 从 Playbook 最终变量中提取机器人回复文本，用于写入对话历史。
+ * 按约定优先级查找：reply > response > answer > message > output > result
+ */
+function extractResponseText(variables: Record<string, unknown>): string | null {
+  const candidates = ["reply", "response", "answer", "message", "output", "result"];
+  for (const key of candidates) {
+    const val = variables[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  return null;
 }
 
 function parseStepsPersistence(raw: string): StepsPersistence {
