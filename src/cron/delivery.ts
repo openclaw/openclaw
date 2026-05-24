@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -6,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
+import { parseAgentSessionKey, parseThreadSessionSuffix } from "../routing/session-key.js";
 import {
   resolveFailureDestination,
   type CronFailureDeliveryPlan,
@@ -30,6 +32,7 @@ export {
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+const ROUTED_PEER_SESSION_KINDS = new Set(["direct", "dm", "group", "channel"]);
 
 export type CronAnnounceTarget = {
   channel?: string;
@@ -39,6 +42,48 @@ export type CronAnnounceTarget = {
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+
+function buildCronAnnounceMirrorIdempotencyKey(params: {
+  jobId: string;
+  target: SuccessfulDeliveryTarget;
+  message: string;
+}): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        params.target.channel,
+        params.target.accountId ?? "",
+        params.target.to,
+        params.target.threadId ?? "",
+        params.message,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 24);
+  return `cron-announce-mirror:v1:${params.jobId}:${digest}`;
+}
+
+function isRoutedPeerSessionKey(sessionKey: string): boolean {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const parsed = parseAgentSessionKey(baseSessionKey ?? sessionKey);
+  if (!parsed) {
+    return false;
+  }
+
+  const parts = parsed.rest.split(":").filter(Boolean);
+  const peerKind = parts.length >= 2 ? parts[parts.length - 2] : undefined;
+  return typeof peerKind === "string" && ROUTED_PEER_SESSION_KINDS.has(peerKind);
+}
+
+function resolveCronAnnounceMirrorSessionKey(sessionKey: string | undefined): string | undefined {
+  const trimmed = sessionKey?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // Routed peer sessions can be active embedded conversations. Mirror only
+  // into custom/main session keys here so cron delivery does not race locks.
+  return isRoutedPeerSessionKey(trimmed) ? undefined : trimmed;
+}
 
 async function resolveCronAnnounceDelivery(params: {
   cfg: OpenClawConfig;
@@ -51,6 +96,7 @@ async function resolveCronAnnounceDelivery(params: {
       resolvedTarget: SuccessfulDeliveryTarget;
       session: ReturnType<typeof buildOutboundSessionContext>;
       identity: ReturnType<typeof resolveAgentOutboundIdentity>;
+      mirrorSessionKey?: string;
     }
   | { ok: false; error: Error }
 > {
@@ -74,12 +120,14 @@ async function resolveCronAnnounceDelivery(params: {
       sessionKey: params.target.sessionKey,
     }),
   });
+  const mirrorSessionKey = resolveCronAnnounceMirrorSessionKey(params.target.sessionKey);
 
   return {
     ok: true,
     resolvedTarget,
     session,
     identity,
+    ...(mirrorSessionKey ? { mirrorSessionKey } : {}),
   };
 }
 
@@ -90,7 +138,10 @@ async function deliverCronAnnouncePayload(params: {
     resolvedTarget: SuccessfulDeliveryTarget;
     session: ReturnType<typeof buildOutboundSessionContext>;
     identity: ReturnType<typeof resolveAgentOutboundIdentity>;
+    mirrorSessionKey?: string;
   };
+  agentId: string;
+  jobId: string;
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
@@ -106,6 +157,18 @@ async function deliverCronAnnouncePayload(params: {
     bestEffort: false,
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
+    mirror: params.delivery.mirrorSessionKey
+      ? {
+          sessionKey: params.delivery.mirrorSessionKey,
+          agentId: params.agentId,
+          text: params.message,
+          idempotencyKey: buildCronAnnounceMirrorIdempotencyKey({
+            jobId: params.jobId,
+            target: params.delivery.resolvedTarget,
+            message: params.message,
+          }),
+        }
+      : undefined,
   });
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
@@ -129,6 +192,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
     deps: params.deps,
     cfg: params.cfg,
     delivery,
+    agentId: params.agentId,
+    jobId: params.jobId,
     message: params.message,
     abortSignal: params.abortSignal,
   });
@@ -162,6 +227,8 @@ export async function sendFailureNotificationAnnounce(
       deps,
       cfg,
       delivery,
+      agentId,
+      jobId,
       message,
       abortSignal: abortController.signal,
     });
