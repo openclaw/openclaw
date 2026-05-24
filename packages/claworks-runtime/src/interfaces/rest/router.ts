@@ -30,6 +30,43 @@ import { buildA2aAgentCard } from "../a2a/agent-card.js";
 import { resolveAuthContext, checkRbac } from "./auth.js";
 import { badRequest, notFound, parsePath, readJsonBody, sendJson } from "./http-utils.js";
 
+function extractReplyText(output: Record<string, unknown> | undefined | null): string | null {
+  if (!output) return null;
+  if (typeof output.text === "string") return output.text;
+  if (typeof output.reply === "string") return output.reply;
+  if (typeof output.message === "string") return output.message;
+  return null;
+}
+
+function extractEventSessionAndText(
+  body: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): { sessionId: string | null; text: string | null } {
+  const sessionRaw = payload.session_id ?? payload.sessionId ?? body.session_id ?? body.sessionId;
+  const textRaw =
+    payload.text ?? payload.message ?? payload.content ?? body.text ?? body.message ?? body.content;
+  const sessionId = typeof sessionRaw === "string" && sessionRaw.trim() ? sessionRaw.trim() : null;
+  const text = typeof textRaw === "string" && textRaw.trim() ? textRaw.trim() : null;
+  return { sessionId, text };
+}
+
+async function recordAssistantTurnIfCompleted(
+  runtime: ClaworksRuntime,
+  sessionId: string,
+  runId: string,
+  playbookId?: string,
+): Promise<void> {
+  const run = await runtime.playbookEngine.getRun(runId);
+  if (!run || run.status !== "completed" || !run.output) return;
+  const replyText = extractReplyText(run.output);
+  if (!replyText) return;
+  runtime.contextEngine?.append(sessionId, "assistant", replyText, {
+    playbookId,
+    runId,
+    channel: "rest",
+  });
+}
+
 // Per-handler 速率限制器（每 REST handler 实例独立，防进程内 DoS）
 const _apiRateLimiter = createRateLimiter(API_RATE_LIMITER_CONFIG);
 
@@ -395,14 +432,7 @@ export function createClaworksRestHandler(
         // 如果请求携带 session_id，且 Playbook 同步完成并有回复文本，写入对话上下文引擎
         const sessionId = typeof body.input?.session_id === "string" ? body.input.session_id : null;
         if (sessionId && run.status === "completed" && run.output) {
-          const replyText =
-            typeof run.output.text === "string"
-              ? run.output.text
-              : typeof run.output.reply === "string"
-                ? run.output.reply
-                : typeof run.output.message === "string"
-                  ? run.output.message
-                  : null;
+          const replyText = extractReplyText(run.output);
           if (replyText) {
             runtime.contextEngine?.append(sessionId, "assistant", replyText, {
               playbookId: parts[2],
@@ -632,11 +662,19 @@ export function createClaworksRestHandler(
           badRequest(res, "type is required");
           return true;
         }
+        const payload = body.payload ?? {};
+        const { sessionId: eventSessionId, text: eventText } = extractEventSessionAndText(
+          body as Record<string, unknown>,
+          payload,
+        );
+        if (eventSessionId && eventText) {
+          runtime.contextEngine?.append(eventSessionId, "user", eventText, { channel: "rest" });
+        }
         const publishResult = await applyIngressPublish(runtime, {
           source: "rest",
           eventType: body.type,
           subjectId: auth.subjectId,
-          payload: body.payload ?? {},
+          payload,
           correlationId: body.correlation_id,
           idempotencyKey: body.idempotency_key,
           subjectType: auth.subjectType,
@@ -655,6 +693,14 @@ export function createClaworksRestHandler(
           return true;
         }
         if (publishResult.action === "intent_routed") {
+          if (eventSessionId) {
+            await recordAssistantTurnIfCompleted(
+              runtime,
+              eventSessionId,
+              publishResult.runId,
+              publishResult.playbookId,
+            );
+          }
           sendJson(res, 202, {
             action: "intent_routed",
             playbook_id: publishResult.playbookId,
