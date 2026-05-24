@@ -21,10 +21,10 @@ struct StatusPill: View {
 
         var color: Color {
             switch self {
-            case .connected: .green
-            case .connecting: .yellow
-            case .error: .red
-            case .disconnected: .gray
+            case .connected: OpenClawBrand.ok
+            case .connecting: OpenClawBrand.warn
+            case .error: OpenClawBrand.accentHot
+            case .disconnected: OpenClawBrand.graphiteSoft
             }
         }
     }
@@ -51,6 +51,11 @@ struct StatusPill: View {
                     Circle()
                         .fill(self.gateway.color)
                         .frame(width: self.compact ? 8 : 9, height: self.compact ? 8 : 9)
+                        .overlay {
+                            Circle()
+                                .stroke(.white.opacity(0.28), lineWidth: 0.6)
+                        }
+                        .shadow(color: self.gateway.color.opacity(0.38), radius: 6)
                         .scaleEffect(
                             self.gateway == .connecting && !self.reduceMotion
                                 ? (self.pulse ? 1.15 : 0.85)

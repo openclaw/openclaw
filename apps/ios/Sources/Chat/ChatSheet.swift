@@ -13,7 +13,10 @@ struct ChatSheet: View {
         self._viewModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: sessionKey,
-                transport: transport))
+                transport: transport,
+                diagnosticsLog: { message in
+                    GatewayDiagnostics.log(message)
+                }))
         self.userAccent = userAccent
         self.agentName = agentName
     }
@@ -23,7 +26,9 @@ struct ChatSheet: View {
             OpenClawChatView(
                 viewModel: self.viewModel,
                 showsSessionSwitcher: true,
-                userAccent: self.userAccent)
+                userAccent: self.userAccent,
+                assistantName: self.agentName,
+                assistantAvatarTint: self.userAccent)
                 .navigationTitle(self.chatTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -37,6 +42,7 @@ struct ChatSheet: View {
                     }
                 }
         }
+        .openClawSheetChrome()
     }
 
     private var chatTitle: String {

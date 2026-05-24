@@ -113,6 +113,7 @@ struct RootCanvas: View {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
         }
+        .tint(OpenClawBrand.accent)
         .gatewayTrustPromptAlert()
         .deepLinkAgentPromptAlert()
         .execApprovalPromptDialog()
@@ -134,6 +135,7 @@ struct RootCanvas: View {
                 GatewayQuickSetupSheet()
                     .environment(self.appModel)
                     .environment(self.gatewayController)
+                    .openClawSheetChrome()
             }
         }
         .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -264,40 +266,38 @@ struct RootCanvas: View {
         case .connected:
             return HomeCanvasPayload(
                 gatewayState: "connected",
-                eyebrow: "Connected to \(gatewayLabel)",
-                title: "Your agents are ready",
+                eyebrow: "\(gatewayLabel) online",
+                title: "Command center",
                 subtitle:
-                "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+                "Use Chat for code work, Talk for realtime voice, and gateway tools for approved device actions.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
                 activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
-                activeAgentCaption: "Selected on this phone",
+                activeAgentCaption: "Routes chat and talk",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(6)),
-                footer: "The overview refreshes on reconnect and when the app returns to foreground.")
+                footer: "OpenClaw only runs phone-side capabilities while the app is connected and permitted.")
         case .connecting:
             return HomeCanvasPayload(
                 gatewayState: "connecting",
-                eyebrow: "Reconnecting",
-                title: "OpenClaw is syncing back up",
+                eyebrow: "Gateway handshake",
+                title: "Reconnecting",
                 subtitle:
-                "The gateway session is coming back online. "
-                    + "Agent shortcuts should settle automatically in a moment.",
+                "Restoring the local node session, agent list, voice config, and device capability state.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: self.appModel.activeAgentName,
                 activeAgentBadge: "OC",
-                activeAgentCaption: "Gateway session in progress",
+                activeAgentCaption: "Session in progress",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(4)),
-                footer: "If the gateway is reachable, reconnect should complete without intervention.")
+                footer: "If the gateway is reachable, the local node should recover without re-pairing.")
         case .error, .disconnected:
             return HomeCanvasPayload(
                 gatewayState: self.gatewayStatus == .error ? "error" : "offline",
-                eyebrow: "Welcome to OpenClaw",
-                title: "Your phone stays quiet until it is needed",
+                eyebrow: self.gatewayStatus == .error ? "Gateway needs attention" : "OpenClaw iOS",
+                title: "Pair a gateway",
                 subtitle:
-                "Pair this device to your gateway to wake it only for real work, "
-                    + "keep a live agent overview handy, and avoid battery-draining background loops.",
+                "Connect this phone as a local node for chat, realtime voice, share intake, and approved device tools.",
                 gatewayLabel: gatewayLabel,
                 activeAgentName: "Main",
                 activeAgentBadge: "OC",
@@ -305,8 +305,7 @@ struct RootCanvas: View {
                 agentCount: agents.count,
                 agents: Array(agents.prefix(4)),
                 footer:
-                "When connected, the gateway can wake the phone with a silent push "
-                    + "instead of holding an always-on session.")
+                "Use Settings to scan a pairing QR code or paste a setup code from your OpenClaw gateway.")
         }
     }
 
@@ -331,7 +330,7 @@ struct RootCanvas: View {
                 id: agent.id,
                 name: self.homeCanvasName(for: agent),
                 badge: self.homeCanvasBadge(for: agent),
-                caption: isActive ? "Active on this phone" : (isDefault ? "Default agent" : "Ready"),
+                caption: isActive ? "Routed on this phone" : (isDefault ? "Gateway default" : "Available"),
                 isActive: isActive)
         }
 

@@ -18,7 +18,8 @@ struct HomeToolbar: View {
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
-                .fill(.white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
+                .fill(
+                    OpenClawBrand.accent.opacity(self.contrast == .increased ? 0.70 : (self.brighten ? 0.28 : 0.20)))
                 .frame(height: self.contrast == .increased ? 1.0 : 0.6)
                 .allowsHitTesting(false)
 
@@ -62,10 +63,12 @@ struct HomeToolbar: View {
         }
         .frame(maxWidth: .infinity)
         .background(.ultraThinMaterial)
+        .background(OpenClawBrand.toolbarChrome)
         .overlay(alignment: .top) {
             LinearGradient(
                 colors: [
-                    .white.opacity(self.brighten ? 0.10 : 0.06),
+                    OpenClawBrand.accent.opacity(self.brighten ? 0.16 : 0.12),
+                    .white.opacity(self.brighten ? 0.08 : 0.04),
                     .clear,
                 ],
                 startPoint: .top,
@@ -504,11 +507,19 @@ private struct HomeToolbarStatusButton: View {
             .padding(.vertical, 8)
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                    .fill(OpenClawBrand.glassFill(brighten: self.brighten))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(OpenClawBrand.accent.opacity(0.08))
+                            .blendMode(.overlay)
+                    }
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                .white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.22 : 0.16)),
+                                OpenClawBrand.glassStroke(
+                                    brighten: self.brighten,
+                                    increasedContrast: self.contrast == .increased,
+                                    active: self.gateway == .connected),
                                 lineWidth: self.contrast == .increased ? 1.0 : 0.6)
                     }
             }
@@ -572,7 +583,7 @@ private struct HomeToolbarActionButton: View {
                 .frame(width: 40, height: 40)
                 .background {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                        .fill(OpenClawBrand.glassFill(brighten: self.brighten))
                         .overlay {
                             if let tint {
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -591,10 +602,11 @@ private struct HomeToolbarActionButton: View {
                         .overlay {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .strokeBorder(
-                                    (self.tint ?? .white).opacity(
-                                        self.isActive
-                                            ? 0.34
-                                            : (self.contrast == .increased ? 0.4 : (self.brighten ? 0.22 : 0.16))),
+                                    self.isActive
+                                        ? (self.tint ?? OpenClawBrand.accent).opacity(0.48)
+                                        : OpenClawBrand.glassStroke(
+                                            brighten: self.brighten,
+                                            increasedContrast: self.contrast == .increased),
                                     lineWidth: self.contrast == .increased ? 1.0 : (self.isActive ? 0.8 : 0.6))
                         }
                 }

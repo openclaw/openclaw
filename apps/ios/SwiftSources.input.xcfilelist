@@ -8,6 +8,16 @@ Sources/Device/DeviceInfoHelper.swift
 Sources/Device/DeviceStatusService.swift
 Sources/Device/NetworkStatusService.swift
 Sources/Device/NodeDisplayName.swift
+Sources/Design/OpenClawBrand.swift
+Sources/Design/AgentProDreamingDestination.swift
+Sources/Design/AgentProNodesDestination.swift
+Sources/Design/AgentProTab.swift
+Sources/Design/ChatProTab.swift
+Sources/Design/CommandCenterTab.swift
+Sources/Design/OpenClawProComponents.swift
+Sources/Design/OpenClawProScreens.swift
+Sources/Design/SettingsProTab.swift
+Sources/Design/WorkspaceProTab.swift
 Sources/EventKit/EventKitAuthorization.swift
 Sources/Gateway/DeepLinkAgentPromptAlert.swift
 Sources/Gateway/ExecApprovalPromptDialog.swift
@@ -73,6 +83,7 @@ Sources/Status/StatusGlassCard.swift
 Sources/Status/StatusPill.swift
 Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkDefaults.swift
+Sources/Voice/RealtimeTalkRelaySession.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkPermissionPromptView.swift

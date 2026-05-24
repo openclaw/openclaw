@@ -1,6 +1,7 @@
 import Testing
 @testable import OpenClaw
 
+@MainActor
 @Suite struct RootCanvasPresentationTests {
     @Test func quickSetupDoesNotPresentWhenGatewayAlreadyConfigured() {
         let shouldPresent = RootCanvas.shouldPresentQuickSetup(

@@ -16,8 +16,26 @@ private struct StatusGlassCardModifier: ViewModifier {
                     .fill(.ultraThinMaterial)
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(OpenClawBrand.glassFill(brighten: self.brighten))
+                    }
+                    .overlay(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        OpenClawBrand.accent.opacity(self.brighten ? 0.10 : 0.16),
+                                        .clear,
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing))
+                            .blendMode(.overlay)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                .white.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
+                                OpenClawBrand.glassStroke(
+                                    brighten: self.brighten,
+                                    increasedContrast: self.contrast == .increased),
                                 lineWidth: self.contrast == .increased ? 1.0 : 0.5)
                     }
                     .shadow(color: .black.opacity(0.25), radius: 12, y: 6)

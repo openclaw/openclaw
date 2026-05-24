@@ -18,10 +18,15 @@ public struct OpenClawChatView: View {
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
     private let showsSessionSwitcher: Bool
+    private let drawsBackground: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
     private let userAccent: Color?
     private let showsAssistantTrace: Bool
+    private let assistantName: String?
+    private let assistantAvatarText: String?
+    private let assistantAvatarTint: Color?
+    private let talkControl: OpenClawChatTalkControl?
 
     private enum Layout {
         #if os(macOS)
@@ -47,23 +52,33 @@ public struct OpenClawChatView: View {
 
     public init(
         viewModel: OpenClawChatViewModel,
+        drawsBackground: Bool = true,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
         markdownVariant: ChatMarkdownVariant = .standard,
         userAccent: Color? = nil,
-        showsAssistantTrace: Bool = false)
+        showsAssistantTrace: Bool = false,
+        assistantName: String? = nil,
+        assistantAvatarText: String? = nil,
+        assistantAvatarTint: Color? = nil,
+        talkControl: OpenClawChatTalkControl? = nil)
     {
         self._viewModel = State(initialValue: viewModel)
+        self.drawsBackground = drawsBackground
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
         self.markdownVariant = markdownVariant
         self.userAccent = userAccent
         self.showsAssistantTrace = showsAssistantTrace
+        self.assistantName = assistantName
+        self.assistantAvatarText = assistantAvatarText
+        self.assistantAvatarTint = assistantAvatarTint
+        self.talkControl = talkControl
     }
 
     public var body: some View {
         ZStack {
-            if self.style == .standard {
+            if self.drawsBackground, self.style == .standard {
                 OpenClawChatTheme.background
                     .ignoresSafeArea()
             }
@@ -74,7 +89,11 @@ public struct OpenClawChatView: View {
                 OpenClawChatComposer(
                     viewModel: self.viewModel,
                     style: self.style,
-                    showsSessionSwitcher: self.showsSessionSwitcher)
+                    showsSessionSwitcher: self.showsSessionSwitcher,
+                    assistantName: self.assistantName,
+                    assistantAvatarText: self.assistantAvatarText,
+                    assistantAvatarTint: self.assistantAvatarTint,
+                    talkControl: self.talkControl)
                     .padding(.horizontal, Layout.composerPaddingHorizontal)
             }
             .padding(.vertical, Layout.outerPaddingVertical)
@@ -193,18 +212,22 @@ public struct OpenClawChatView: View {
                 style: self.style,
                 markdownVariant: self.markdownVariant,
                 userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace)
+                showsAssistantTrace: self.showsAssistantTrace,
+                assistantName: self.assistantName,
+                assistantAvatarText: self.assistantAvatarText,
+                assistantAvatarTint: self.assistantAvatarTint)
                 .frame(
                     maxWidth: .infinity,
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         }
 
         if self.viewModel.pendingRunCount > 0 {
-            HStack {
-                ChatTypingIndicatorBubble(style: self.style)
-                    .equatable()
-                Spacer(minLength: 0)
-            }
+            ChatTypingIndicatorBubble(
+                style: self.style,
+                assistantName: self.assistantName,
+                assistantAvatarText: self.assistantAvatarText,
+                assistantAvatarTint: self.assistantAvatarTint)
+                .equatable()
         }
 
         if !self.viewModel.pendingToolCalls.isEmpty {
@@ -219,7 +242,10 @@ public struct OpenClawChatView: View {
             ChatStreamingAssistantBubble(
                 text: text,
                 markdownVariant: self.markdownVariant,
-                showsAssistantTrace: self.showsAssistantTrace)
+                showsAssistantTrace: self.showsAssistantTrace,
+                assistantName: self.assistantName,
+                assistantAvatarText: self.assistantAvatarText,
+                assistantAvatarTint: self.assistantAvatarTint)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -506,25 +532,25 @@ private struct ChatNoticeCard: View {
     let action: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(self.tint.opacity(0.16))
-                Image(systemName: self.systemImage)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(self.tint)
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: self.systemImage)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(self.tint)
+                .frame(width: 42, height: 42)
+                .background(self.tint.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(self.title)
+                    .font(.headline)
+
+                Text(self.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
             }
-            .frame(width: 52, height: 52)
 
-            Text(self.title)
-                .font(.headline)
-
-            Text(self.message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(4)
-                .frame(maxWidth: 360)
+            Spacer(minLength: 8)
 
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
@@ -532,14 +558,14 @@ private struct ChatNoticeCard: View {
                     .controlSize(.small)
             }
         }
-        .padding(18)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(OpenClawChatTheme.subtleCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)))
-        .shadow(color: .black.opacity(0.14), radius: 18, y: 8)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)))
+        .shadow(color: .black.opacity(0.12), radius: 14, y: 7)
     }
 }
 

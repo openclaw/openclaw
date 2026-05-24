@@ -15,6 +15,29 @@ extension NSAppearance {
 #endif
 
 enum OpenClawChatTheme {
+    #if !os(macOS)
+    private enum IOSPalette {
+        static let lightCanvasTop = UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
+        static let lightCanvasMiddle = UIColor(red: 250 / 255.0, green: 251 / 255.0, blue: 252 / 255.0, alpha: 1)
+        static let lightCanvasBottom = UIColor.white
+        static let lightAccent = UIColor(red: 220 / 255.0, green: 38 / 255.0, blue: 38 / 255.0, alpha: 1)
+        static let lightAccentHot = UIColor(red: 239 / 255.0, green: 68 / 255.0, blue: 68 / 255.0, alpha: 1)
+        static let darkCanvasTop = UIColor(red: 4 / 255.0, green: 8 / 255.0, blue: 8 / 255.0, alpha: 1)
+        static let darkCanvasMiddle = UIColor(red: 16 / 255.0, green: 19 / 255.0, blue: 20 / 255.0, alpha: 1)
+        static let darkAccent = UIColor(red: 198 / 255.0, green: 49 / 255.0, blue: 42 / 255.0, alpha: 1)
+        static let darkAccentHot = UIColor(red: 239 / 255.0, green: 62 / 255.0, blue: 82 / 255.0, alpha: 1)
+    }
+
+    private static func adaptiveColor(
+        light: UIColor,
+        dark: UIColor) -> Color
+    {
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? dark : light
+        })
+    }
+    #endif
+
     #if os(macOS)
     static func resolvedAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
         // NSColor semantic colors don't reliably resolve for arbitrary NSAppearance in SwiftPM.
@@ -80,7 +103,33 @@ enum OpenClawChatTheme {
             Color.black.opacity(0.08)
         }
         #else
-        Color(uiColor: .systemBackground)
+        ZStack {
+            LinearGradient(
+                colors: [
+                    self.adaptiveColor(
+                        light: IOSPalette.lightCanvasTop,
+                        dark: IOSPalette.darkCanvasTop),
+                    self.adaptiveColor(
+                        light: IOSPalette.lightCanvasMiddle,
+                        dark: IOSPalette.darkCanvasMiddle),
+                    self.adaptiveColor(
+                        light: IOSPalette.lightCanvasBottom,
+                        dark: .systemBackground),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+            RadialGradient(
+                colors: [
+                    self.adaptiveColor(
+                        light: IOSPalette.lightAccentHot,
+                        dark: IOSPalette.darkAccentHot)
+                        .opacity(0.08),
+                    .clear,
+                ],
+                center: .topTrailing,
+                startRadius: 24,
+                endRadius: 360)
+        }
         #endif
     }
 
@@ -96,12 +145,18 @@ enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(Color(uiColor: .secondarySystemBackground).opacity(0.9))
+        AnyShapeStyle(Color(uiColor: .tertiarySystemBackground))
         #endif
     }
 
     static var userBubble: Color {
+        #if os(macOS)
         Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        #else
+        self.adaptiveColor(
+            light: IOSPalette.lightAccent,
+            dark: IOSPalette.darkAccent)
+        #endif
     }
 
     static var assistantBubble: Color {
@@ -144,7 +199,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(Color(uiColor: .systemBackground))
+        AnyShapeStyle(.regularMaterial)
         #endif
     }
 
@@ -157,7 +212,11 @@ enum OpenClawChatTheme {
     }
 
     static var composerBorder: Color {
+        #if os(macOS)
         Color.white.opacity(0.12)
+        #else
+        self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14))
+        #endif
     }
 
     static var divider: Color {

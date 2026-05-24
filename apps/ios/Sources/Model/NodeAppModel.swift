@@ -111,6 +111,10 @@ final class NodeAppModel {
     var gatewayStatusText: String = "Offline"
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
+    var isOperatorGatewayConnected: Bool {
+        self.operatorConnected
+    }
+
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
@@ -127,6 +131,7 @@ final class NodeAppModel {
 
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
+    private var focusedChatSessionKey: String?
     var selectedAgentId: String?
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
@@ -1840,9 +1845,25 @@ extension NodeAppModel {
     }
 
     var chatSessionKey: String {
+        if let focused = self.focusedChatSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !focused.isEmpty
+        {
+            return focused
+        }
         // Keep chat aligned with the gateway's resolved main session key.
         // A hardcoded "ios" base creates synthetic placeholder sessions in the chat UI.
-        self.mainSessionKey
+        return self.mainSessionKey
+    }
+
+    func openChat(sessionKey: String?) {
+        self.focusChatSession(sessionKey)
+        self.openChatRequestID &+= 1
+    }
+
+    func focusChatSession(_ sessionKey: String?) {
+        let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.focusedChatSessionKey = trimmed.isEmpty ? nil : trimmed
+        self.talkMode.updateMainSessionKey(self.chatSessionKey)
     }
 
     var activeAgentName: String {
