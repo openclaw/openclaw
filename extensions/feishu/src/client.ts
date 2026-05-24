@@ -259,4 +259,7 @@ export function setFeishuClientRuntimeForTest(overrides?: {
   feishuClientSdk = overrides?.sdk
     ? { ...defaultFeishuClientSdk, ...overrides.sdk }
     : defaultFeishuClientSdk;
+  // Evict clients built with the previous SDK so a later createFeishuClient
+  // does not return a stale client constructed by the old runtime.
+  clearClientCache();
 }

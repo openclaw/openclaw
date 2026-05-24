@@ -387,6 +387,40 @@ describe("createFeishuClient HTTP timeout", () => {
   });
 });
 
+describe("createFeishuClient cache invalidation on SDK swap (83911)", () => {
+  it("rebuilds the client after setFeishuClientRuntimeForTest replaces the SDK", () => {
+    const creds = {
+      appId: "app_swap",
+      appSecret: "secret_swap", // pragma: allowlist secret
+      accountId: "sdk-swap-test",
+    };
+    const first = createFeishuClient(creds);
+    expect(clientCtorMock.mock.calls.length).toBe(1);
+
+    // Swapping the SDK runtime mid-suite must evict clients built with the
+    // previous SDK; otherwise a later create with identical creds returns the
+    // stale cached client constructed by the old runtime.
+    setFeishuClientRuntimeForTest({
+      sdk: {
+        AppType: { SelfBuild: "self" } as never,
+        Domain: {
+          Feishu: "https://open.feishu.cn",
+          Lark: "https://open.larksuite.com",
+        } as never,
+        LoggerLevel: { info: "info" } as never,
+        Client: clientCtorMock as never,
+        WSClient: wsClientCtorMock as never,
+        EventDispatcher: vi.fn() as never,
+        defaultHttpInstance: mockBaseHttpInstance as never,
+      },
+    });
+
+    const second = createFeishuClient(creds);
+    expect(clientCtorMock.mock.calls.length).toBe(2);
+    expect(second).not.toBe(first);
+  });
+});
+
 describe("createFeishuWSClient proxy handling", () => {
   it("passes heartbeat wsConfig defaults to Lark.WSClient", async () => {
     await createFeishuWSClient(baseAccount);
