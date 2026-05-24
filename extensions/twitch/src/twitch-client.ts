@@ -54,6 +54,9 @@ export class TwitchClientManager {
           this.logger.error(
             `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
           );
+          // Re-throw so getClient rejects and does not cache a client backed
+          // by an auth provider with no bound user (would fail later on send).
+          throw err;
         });
 
       authProvider.onRefresh((userId, token) => {
