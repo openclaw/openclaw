@@ -489,6 +489,32 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(codeEl?.textContent).toContain("for row in ws.iter_rows");
     });
 
+    it("renders user message markdown without copy-button chrome (#85926)", () => {
+      // When rendering user messages, code blocks must not include copy buttons
+      // so that multiline shell/heredoc commands are byte-faithful after submit.
+      const markdown = [
+        "```bash",
+        "python3 - <<'PY'",
+        "import openpyxl",
+        "",
+        'path = "/home/test/file.xlsx"',
+        "wb = openpyxl.load_workbook(path)",
+        "PY",
+        "```",
+      ].join("\n");
+      const html = toSanitizedMarkdownHtml(markdown, "user");
+      const fragment = htmlFragment(html);
+
+      // User messages must NOT have a copy button
+      const copyBtn = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+      expect(copyBtn).toBeNull();
+
+      // But the code block itself must still be rendered and preserved
+      const codeEl = fragment.querySelector("pre code");
+      expect(codeEl?.textContent).toContain("python3 - <<'PY'");
+      expect(codeEl?.textContent).toContain('path = "/home/test/file.xlsx"');
+    });
+
     it("collapses JSON code blocks", () => {
       const html = toSanitizedMarkdownHtml('```json\n{"key": "value"}\n```');
       const fragment = htmlFragment(html);

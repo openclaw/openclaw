@@ -520,6 +520,8 @@ md.renderer.rules.image = (tokens, idx) => {
   return `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
 };
 
+let _noCopyButtons = false;
+
 // Override fenced code blocks with copy button + JSON collapse
 md.renderer.rules.fence = (tokens, idx) => {
   const token = tokens[idx];
@@ -532,7 +534,9 @@ md.renderer.rules.fence = (tokens, idx) => {
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const copyBtn = _noCopyButtons
+    ? ""
+    : `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();
@@ -559,7 +563,9 @@ md.renderer.rules.code_block = (tokens, idx) => {
   const classAttr = codeClassAttribute("", highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
   const attrSafe = escapeHtml(text);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const copyBtn = _noCopyButtons
+    ? ""
+    : `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
 
   const trimmed = text.trim();
@@ -576,13 +582,20 @@ md.renderer.rules.code_block = (tokens, idx) => {
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
-export function toSanitizedMarkdownHtml(markdown: string): string {
+export function toSanitizedMarkdownHtml(
+  markdown: string,
+  role?: "user" | "assistant" | "tool",
+): string {
   const input = stripUnsupportedCitationControlMarkers(markdown).trim();
   if (!input) {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${input}`;
+  // For user messages, render without injected copy-button chrome so that
+  // code blocks (fenced or indented) preserve their original text exactly.
+  // Assistant/tool messages keep the copy-button UI for usability.
+  const noCopy = role === "user";
+  const cacheKey = `${i18n.getLocale()}\0${noCopy}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -605,13 +618,14 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     return sanitized;
   }
   let rendered: string;
+  // Set the no-copy flag around the render call so the fence/code_block
+  // renderer rules skip copy-button injection for user messages.
+  const prev = _noCopyButtons;
+  _noCopyButtons = noCopy;
   try {
     rendered = md.render(`${truncated.text}${suffix}`);
-  } catch (err) {
-    // Fall back to escaped plain text when md.render() throws (#36213).
-    console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    const escaped = escapeHtml(`${truncated.text}${suffix}`);
-    rendered = `<pre class="code-block">${escaped}</pre>`;
+  } finally {
+    _noCopyButtons = prev;
   }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
