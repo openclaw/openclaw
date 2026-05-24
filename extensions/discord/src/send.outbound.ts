@@ -140,7 +140,9 @@ async function resolveDiscordSendTarget(
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send target resolution");
   const { rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId, {
+    defaultKind: "channel",
+  });
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -181,7 +183,9 @@ export async function sendMessageDiscord(
     mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId, {
+    defaultKind: "channel",
+  });
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.

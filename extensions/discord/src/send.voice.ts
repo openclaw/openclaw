@@ -95,7 +95,9 @@ export async function sendVoiceMessageDiscord(
     token = client.token;
     rest = client.rest;
     const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+    const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId, {
+      defaultKind: "channel",
+    });
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
     const ogg = await ensureOggOpus(localInputPath);
