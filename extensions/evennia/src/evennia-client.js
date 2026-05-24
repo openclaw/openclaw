@@ -64,6 +64,8 @@ export class EvenniaClient {
       this.ws.addEventListener("error", (ev) => { clearTimeout(timer); reject(new Error("Evennia websocket error")); }, { once: true });
     });
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data)));
+    await this.command(`connect "${this.account.username}" "${password.replaceAll('"', '\\"')}"`);
+    await new Promise((resolve) => setTimeout(resolve, 750));
   }
   close() { try { this.ws?.close(); } catch {} }
   isClosed() { return !this.ws || this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED; }

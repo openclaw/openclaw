@@ -128,10 +128,12 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     ctx.log?.warn?.("evennia channelRuntime unavailable; inbound ignored");
     return;
   }
+  if (!account.respondToAmbientMentions) return;
+
   const lower = event.text.toLowerCase();
   const direct = event.kind === "tell" || event.kind === "whisper";
   const mentioned = lower.includes(account.triggerName.toLowerCase());
-  if (!direct && account.respondToAmbientMentions && !mentioned) return;
+  if (!direct && !mentioned) return;
 
   const messageId = event.id || `evennia-${Date.now()}`;
   const routeSessionKey = rt.routing.buildAgentSessionKey({
@@ -307,13 +309,15 @@ evenniaPlugin.gateway = {
       const closeOnAbort = () => client.close();
       ctx.abortSignal.addEventListener("abort", closeOnAbort, { once: true });
 
-      client.onEvent((event) =>
-        dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
-          ctx.log?.error?.(
-            `evennia inbound failed: ${err?.stack || err?.message || err}`,
+      if (ctx.account.respondToAmbientMentions) {
+        client.onEvent((event) =>
+          dispatchEvenniaEvent(ctx, ctx.account, event).catch((err) =>
+            ctx.log?.error?.(
+              `evennia inbound failed: ${err?.stack || err?.message || err}`,
+            ),
           ),
-        ),
-      );
+        );
+      }
 
       try {
         await client.connect();
