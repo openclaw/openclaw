@@ -4143,6 +4143,117 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
         }
       },
     },
+    {
+      // observe.set_variable: 在 Playbook 中以能力调用形式设置一个变量
+      // 配合 store_result_as 使用；返回值即为要写入的变量内容
+      id: "observe.set_variable",
+      verb: "execute",
+      description: "设置 Playbook 上下文变量（配合 store_result_as 使用）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["name", "value"],
+        properties: {
+          name: { type: "string", description: "变量名" },
+          value: { description: "变量值（任意类型）" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const name = String(params.name ?? "");
+        const value = params.value;
+        // 返回 { [name]: value } 以便 store_result_as 或直接引用
+        return { [name]: value, value, _var_name: name };
+      },
+    },
+    {
+      // hitl.request: 非暂停式 HITL 触发——发布 hitl.requested 事件并返回 token
+      // 适合在 action step 中发起审批通知；若需等待响应请改用 kind: hitl 步骤
+      id: "hitl.request",
+      verb: "execute",
+      description: "发起 HITL 审批请求（发布事件，不暂停 Playbook）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          prompt: { type: "string" },
+          context: { description: "审批上下文（任意对象）" },
+          timeout_hours: { type: "number" },
+        },
+      },
+      handler: async (ctx, params) => {
+        const token = `hitl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        await runtime.kernel.publish("hitl.requested", "hitl.request", {
+          token,
+          prompt: String(params.prompt ?? ""),
+          context: params.context,
+          timeout_hours: params.timeout_hours ?? 24,
+          run_id: ctx.runId,
+          playbook_id: ctx.playbookId,
+        });
+        return { token, status: "pending", prompt: params.prompt };
+      },
+    },
+    {
+      id: "incident.create",
+      verb: "execute",
+      description: "创建安全事故/事件记录（ObjectStore Incident 对象）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["title"],
+        properties: {
+          title: { type: "string" },
+          description: { type: "string" },
+          severity: { type: "string" },
+          location: { type: "string" },
+          reporter_id: { type: "string" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const id = `incident-${Date.now()}`;
+        await runtime.objectStore.create("Incident", {
+          id,
+          title: String(params.title ?? ""),
+          description: String(params.description ?? ""),
+          severity: String(params.severity ?? "medium"),
+          location: String(params.location ?? ""),
+          reporter_id: String(params.reporter_id ?? ""),
+          status: "open",
+          created_at: new Date().toISOString(),
+        });
+        await runtime.kernel.publish("incident.created", "incident.create", {
+          incident_id: id,
+          title: params.title,
+          severity: params.severity,
+        });
+        return { incident_id: id, status: "created" };
+      },
+    },
+    {
+      id: "maintenance.list",
+      verb: "acquire",
+      description: "查询维护工单列表（可按状态/设备过滤）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          status: { type: "string", description: "工单状态过滤（如 pending/overdue）" },
+          equipment_id: { type: "string" },
+          limit: { type: "number" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const filter: Record<string, unknown> = {};
+        if (params.status) filter.status = String(params.status);
+        if (params.equipment_id) filter.equipment_id = String(params.equipment_id);
+        const items = await runtime.objectStore.query("MaintenanceOrder", {
+          filter,
+          limit: typeof params.limit === "number" ? params.limit : 20,
+        });
+        return { items, count: items.length };
+      },
+    },
   ];
 }
 
