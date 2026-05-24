@@ -375,6 +375,135 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
+
+  it("increments successfulCronAdds when exec runs openclaw cron add and output confirms creation", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-1",
+        args: { command: "openclaw cron add --name reminder --schedule '0 9 * * *'" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-1",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: "Created cron job: reminder (next run: tomorrow 09:00)",
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("does not increment successfulCronAdds for a bypass attempt (substring match without anchor)", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-bypass",
+        // This would match an unanchored /\bcron\s+add\b/ regex but must NOT match.
+        args: { command: 'echo "openclaw cron add fake"' },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-bypass",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: "openclaw cron add fake\nCreated",
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("does not increment successfulCronAdds when openclaw cron add output lacks creation receipt", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-no-receipt",
+        args: { command: "openclaw cron add --name reminder --schedule '0 9 * * *'" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-no-receipt",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: "Error: cron quota exceeded",
+            exitCode: 1,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("does not increment successfulCronAdds for a cron add command without the openclaw prefix", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-no-prefix",
+        args: { command: "cron add --name reminder" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-no-prefix",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated: "Created cron job: reminder",
+            exitCode: 0,
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
 });
 
 describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {

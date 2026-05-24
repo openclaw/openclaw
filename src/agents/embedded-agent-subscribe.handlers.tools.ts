@@ -1290,6 +1290,22 @@ export async function handleToolExecutionEnd(
   // Track committed reminders only when cron.add completed successfully.
   if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
     ctx.state.successfulCronAdds += 1;
+  } else if (!isToolError && isExecToolName(toolName)) {
+    // Also count successful `openclaw cron add` invocations via exec/bash tools.
+    // The native cron tool branch above handles structured cron calls; this branch
+    // handles the equivalent shell command. Anchored prefix rejects substrings like
+    // `echo "openclaw cron add ..."`. Receipt check avoids counting failed runs.
+    const command = typeof startArgs.command === "string" ? startArgs.command : "";
+    if (/^\s*openclaw\s+cron\s+add\b/i.test(command)) {
+      const execDetails = readExecToolDetails(sanitizedResult);
+      const output =
+        (execDetails && "aggregated" in execDetails
+          ? (execDetails.aggregated ?? "")
+          : extractToolResultText(sanitizedResult)) ?? "";
+      if (/\b(?:created|scheduled)\b/i.test(output)) {
+        ctx.state.successfulCronAdds += 1;
+      }
+    }
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const details =
