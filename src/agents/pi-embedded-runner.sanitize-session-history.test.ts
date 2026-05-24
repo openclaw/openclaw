@@ -141,6 +141,7 @@ describe("sanitizeSessionHistory", () => {
     modelApi?: string;
     modelId?: string;
     policy?: TranscriptPolicy;
+    preserveLatestAssistantThinking?: boolean;
   }) =>
     sanitizeSessionHistory({
       messages: params.messages,
@@ -150,6 +151,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
       policy: params.policy,
+      preserveLatestAssistantThinking: params.preserveLatestAssistantThinking,
     });
 
   const getAssistantMessage = (messages: AgentMessage[]) => {
@@ -1489,7 +1491,14 @@ describe("sanitizeSessionHistory", () => {
       makeAssistantMessage([
         { type: "thinking", thinking: "missing signature" },
         { type: "thinking", thinking: "blank signature", thinkingSignature: "   " },
-        { type: "thinking", thinking: "signed", thinkingSignature: "sig_latest" },
+        { type: "thinking", thinking: "signed", thinkingSignature: "sig_old" },
+        { type: "text", text: "old visible answer" },
+      ]),
+      makeUserMessage("second"),
+      makeAssistantMessage([
+        { type: "thinking", thinking: "latest missing signature" },
+        { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
+        { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
         { type: "text", text: "latest visible answer" },
       ]),
     ]);
@@ -1502,10 +1511,57 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
-      { type: "thinking", thinking: "signed", thinkingSignature: "sig_latest" },
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig_old" },
+      { type: "text", text: "old visible answer" },
+    ]);
+    expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "thinking", thinking: "latest missing signature" },
+      { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
+      { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
       { type: "text", text: "latest visible answer" },
     ]);
   });
+
+  it.each([
+    {
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      label: "anthropic",
+    },
+    {
+      provider: "amazon-bedrock",
+      modelApi: "bedrock-converse-stream",
+      label: "bedrock",
+    },
+  ])(
+    "strips invalid latest thinking signatures for $label when replay appends another turn",
+    async ({ provider, modelApi }) => {
+      setNonGoogleModelApi();
+
+      const messages = castAgentMessages([
+        makeUserMessage("first"),
+        makeAssistantMessage([
+          { type: "thinking", thinking: "latest missing signature" },
+          { type: "thinking", thinking: "latest blank signature", thinkingSignature: "   " },
+          { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
+          { type: "text", text: "latest visible answer" },
+        ]),
+      ]);
+
+      const result = await sanitizeAnthropicHistory({
+        provider,
+        modelApi,
+        messages,
+        modelId: "claude-sonnet-4-6",
+        preserveLatestAssistantThinking: false,
+      });
+
+      expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        { type: "thinking", thinking: "latest signed", thinkingSignature: "sig_latest" },
+        { type: "text", text: "latest visible answer" },
+      ]);
+    },
+  );
 
   it.each([
     {
@@ -1526,6 +1582,10 @@ describe("sanitizeSessionHistory", () => {
       const messages = castAgentMessages([
         makeUserMessage("first"),
         makeAssistantMessage([{ type: "thinking", thinking: "blank", thinkingSignature: "" }]),
+        makeUserMessage("second"),
+        makeAssistantMessage([
+          { type: "thinking", thinking: "latest blank", thinkingSignature: "" },
+        ]),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -1537,6 +1597,9 @@ describe("sanitizeSessionHistory", () => {
 
       expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
         { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+      ]);
+      expect((result[3] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+        { type: "thinking", thinking: "latest blank", thinkingSignature: "" },
       ]);
     },
   );

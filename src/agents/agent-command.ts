@@ -531,6 +531,7 @@ async function agentCommandInternal(
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -1398,6 +1399,7 @@ async function agentCommandInternal(
           sessionStore &&
           sessionKey &&
           !suppressVisibleSessionEffects &&
+          !preserveUserFacingSessionModelState &&
           entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
         ) {
           const nextSessionEntry = { ...sessionEntry };
@@ -1569,7 +1571,9 @@ async function agentCommandInternal(
             opts.bootstrapContextRunKind !== "cron" &&
             opts.bootstrapContextRunKind !== "heartbeat" &&
             !opts.internalEvents?.length,
-          preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
+          preserveRuntimeModel:
+            opts.bootstrapContextRunKind === "heartbeat" || preserveUserFacingSessionModelState,
+          preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }

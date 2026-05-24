@@ -103,6 +103,7 @@ import {
 } from "../commands-registry.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
@@ -235,7 +236,10 @@ async function maybeApplyTtsToReplyPayload(
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
-  return maybeApplyTtsToPayload(params);
+  const ttsPayload = await maybeApplyTtsToPayload(params);
+  return ttsPayload === params.payload
+    ? ttsPayload
+    : copyReplyPayloadMetadata(params.payload, ttsPayload);
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
