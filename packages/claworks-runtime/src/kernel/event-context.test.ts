@@ -17,6 +17,12 @@ describe("buildEventContext", () => {
     expect(packet.sentiment).toBeUndefined();
   });
 
+  it("maps robot_id alone into meta without patrol counters", () => {
+    const packet = buildEventContext({ robot_id: "robot-99" }, "robot.patrol");
+
+    expect(packet.meta).toEqual({ robot_id: "robot-99" });
+  });
+
   it("maps patrol snapshot fields into meta and event_ts for robot.patrol", () => {
     const ts = 1_700_000_000_000;
     const packet = buildEventContext(
@@ -29,7 +35,7 @@ describe("buildEventContext", () => {
       "robot.patrol",
     );
 
-    expect(packet.meta).toEqual({ pending_runs: 3, playbook_count: 10 });
+    expect(packet.meta).toEqual({ pending_runs: 3, playbook_count: 10, robot_id: "robot-42" });
     expect(packet.event_ts).toBe(ts);
     expect(packet.sentiment).toBeUndefined();
   });
@@ -48,5 +54,22 @@ describe("buildEventContext → buildLlmContext integration", () => {
     expect(result.enriched_prompt).toContain("系统状态: 运行中 Playbook 8 个, 共 12 个 Playbook");
     expect(result.enriched_prompt).toContain("summarize patrol findings");
     expect(result.effective_context_level).toBe("rich");
+  });
+
+  it("includes robot_id in rich mode system status summary", async () => {
+    const packet = buildEventContext(
+      { pending_runs: 2, playbook_count: 5, robot_id: "robot-42" },
+      "robot.patrol",
+    );
+
+    const result = await buildLlmContext({
+      prompt: "summarize patrol findings",
+      context_level: "rich",
+      event_context: packet,
+    });
+
+    expect(result.enriched_prompt).toContain(
+      "系统状态: 机器人 robot-42, 运行中 Playbook 2 个, 共 5 个 Playbook",
+    );
   });
 });

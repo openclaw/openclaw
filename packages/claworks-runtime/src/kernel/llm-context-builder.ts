@@ -85,11 +85,14 @@ function buildEntitySummary(packet: ContextPacket): string | null {
 function buildMetaStatusSummary(meta: Record<string, unknown>): string | null {
   const pendingRuns = meta.pending_runs;
   const playbookCount = meta.playbook_count;
+  const robotId = meta.robot_id;
   const hasPending = typeof pendingRuns === "number";
   const hasPlaybooks = typeof playbookCount === "number";
-  if (!hasPending && !hasPlaybooks) return null;
+  const hasRobot = typeof robotId === "string" && robotId;
+  if (!hasPending && !hasPlaybooks && !hasRobot) return null;
 
   const parts: string[] = [];
+  if (hasRobot) parts.push(`机器人 ${robotId}`);
   if (hasPending) parts.push(`运行中 Playbook ${pendingRuns} 个`);
   if (hasPlaybooks) parts.push(`共 ${playbookCount} 个 Playbook`);
   return `系统状态: ${parts.join(", ")}`;

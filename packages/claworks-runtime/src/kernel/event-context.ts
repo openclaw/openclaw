@@ -176,6 +176,7 @@ export function buildEventContext(
   const pendingRuns = typeof payload.pending_runs === "number" ? payload.pending_runs : undefined;
   const playbookCount =
     typeof payload.playbook_count === "number" ? payload.playbook_count : undefined;
+  const robotId = typeof payload.robot_id === "string" ? payload.robot_id : undefined;
 
   let sentiment = inferSentiment(payload, text);
   if (sentiment === "normal" && pendingRuns !== undefined && pendingRuns > 5) {
@@ -202,11 +203,10 @@ export function buildEventContext(
   if (event_ts) ctx.event_ts = event_ts;
   if (entities.length) ctx.entities = entities;
   if (keywords.length) ctx.keywords = keywords;
-  if (pendingRuns !== undefined || playbookCount !== undefined) {
-    ctx.meta = {
-      pending_runs: pendingRuns,
-      playbook_count: playbookCount,
-    };
-  }
+  const meta: Record<string, unknown> = {};
+  if (pendingRuns !== undefined) meta.pending_runs = pendingRuns;
+  if (playbookCount !== undefined) meta.playbook_count = playbookCount;
+  if (robotId) meta.robot_id = robotId;
+  if (Object.keys(meta).length) ctx.meta = meta;
   return ctx;
 }
