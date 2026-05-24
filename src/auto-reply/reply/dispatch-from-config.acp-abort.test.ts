@@ -702,7 +702,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("waits for an already-active source operation before starting pre-dispatch hooks", async () => {
+  it("does not block pre-dispatch hooks behind active source operations", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "before_dispatch",
     );
@@ -739,18 +739,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyResolver: vi.fn(),
     });
 
-    await expect(
-      raceWithTimeoutResult(
-        beforeDispatchStartedPromise.then(() => "started" as const),
-        100,
-        "pending" as const,
-      ),
-    ).resolves.toBe("pending");
-    expect(replyRunRegistry.abort("agent:already-active")).toBe(true);
-
     await expect(beforeDispatchStartedPromise.then(() => "started" as const)).resolves.toBe(
       "started",
     );
+    expect(replyRunRegistry.abort("agent:already-active")).toBe(true);
     type DispatchOutcome =
       | { status: "settled"; result: Awaited<typeof dispatchPromise> }
       | { status: "pending" };

@@ -26,6 +26,7 @@ export async function admitReplyTurn(params: {
   resetTriggered: boolean;
   upstreamAbortSignal?: AbortSignal;
   waitTimeoutMs?: number;
+  waitForActive?: boolean;
 }): Promise<ReplyTurnAdmission> {
   let sessionId = params.sessionId;
   while (true) {
@@ -48,6 +49,9 @@ export async function admitReplyTurn(params: {
       }
       const activeOperation = replyRunRegistry.get(params.sessionKey);
       if (params.kind === "heartbeat" || params.kind === "control_abort") {
+        return { status: "skipped", reason: "active-run", activeOperation };
+      }
+      if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
       const ended = await replyRunRegistry.waitForIdle(

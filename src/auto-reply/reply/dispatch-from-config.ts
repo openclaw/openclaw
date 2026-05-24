@@ -930,14 +930,19 @@ export async function dispatchReplyFromConfig(
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
+    const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const admission = await admitReplyTurn({
       sessionKey: dispatchOperationSessionKey,
       sessionId: operationSessionId,
-      kind: resolveReplyTurnKind(params.replyOptions),
+      kind: replyTurnKind,
       resetTriggered: false,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
+      waitForActive: false,
     });
     if (admission.status === "skipped") {
+      if (replyTurnKind === "visible" && admission.reason === "active-run") {
+        return { status: "ready" };
+      }
       dispatchAbortOperation = admission.activeOperation;
       logVerbose(
         `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,

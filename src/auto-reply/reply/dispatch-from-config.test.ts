@@ -954,7 +954,7 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("waits for the active reply operation before running a Telegram topic user turn", async () => {
+  it("lets queue-aware resolvers see active Telegram topic turns", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
     const activeOperation = createReplyOperation({
@@ -968,7 +968,7 @@ describe("dispatchReplyFromConfig", () => {
       const internalOpts = opts as GetReplyOptions & {
         replyOperation?: { sessionId?: string };
       };
-      expect(internalOpts.replyOperation?.sessionId).toBe("heartbeat-session");
+      expect(internalOpts.replyOperation).toBeUndefined();
       return { text: "visible after active run" } satisfies ReplyPayload;
     });
     const waitForIdleSpy = vi.spyOn(replyRunRegistry, "waitForIdle");
@@ -991,25 +991,17 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    await vi.waitFor(() => {
-      expect(waitForIdleSpy).toHaveBeenCalledWith(
-        sessionKey,
-        Infinity,
-        expect.objectContaining({ signal: undefined }),
-      );
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-
-    activeOperation.complete();
     const result = await dispatchPromise;
+    activeOperation.complete();
     waitForIdleSpy.mockRestore();
 
     expect(result.queuedFinal).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(waitForIdleSpy).not.toHaveBeenCalled();
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible after active run");
   });
 
-  it("continues waiting when another queued Telegram topic user turn wins the reply operation", async () => {
+  it("does not serialize custom resolvers before queue policy runs", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
     const activeOperation = createReplyOperation({
@@ -1064,30 +1056,13 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver: secondReplyResolver,
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(firstReplyResolver).not.toHaveBeenCalled();
-    expect(secondReplyResolver).not.toHaveBeenCalled();
-
-    activeOperation.complete();
-    await vi.waitFor(() => {
-      expect(firstReplyResolver.mock.calls.length + secondReplyResolver.mock.calls.length).toBe(1);
-    });
-
-    const firstStarted = firstReplyResolver.mock.calls.length === 1;
-    if (firstStarted) {
-      releaseFirstResolver();
-    } else {
-      releaseSecondResolver();
-    }
     await vi.waitFor(() => {
       expect(firstReplyResolver.mock.calls.length + secondReplyResolver.mock.calls.length).toBe(2);
     });
-    if (firstStarted) {
-      releaseSecondResolver();
-    } else {
-      releaseFirstResolver();
-    }
+
+    releaseFirstResolver();
+    releaseSecondResolver();
+    activeOperation.complete();
 
     await expect(Promise.all([firstDispatch, secondDispatch])).resolves.toEqual([
       expect.objectContaining({ queuedFinal: true }),
@@ -1097,7 +1072,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(secondDispatcher)?.text).toBe("second visible reply");
   });
 
-  it("stops waiting for an active reply operation when the caller aborts", async () => {
+  it("skips pre-dispatch admission when the caller already aborted", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
     const activeOperation = createReplyOperation({
@@ -1110,7 +1085,9 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
-    const dispatchPromise = dispatchReplyFromConfig({
+    abortController.abort();
+
+    const result = await dispatchReplyFromConfig({
       ctx: buildTestCtx({
         Provider: "telegram",
         Surface: "telegram",
@@ -1130,11 +1107,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    abortController.abort();
-
-    await expect(dispatchPromise).resolves.toMatchObject({
+    expect(result).toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
