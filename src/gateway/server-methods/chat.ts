@@ -2480,14 +2480,30 @@ export const chatHandlers: GatewayRequestHandlers = {
       } catch (err) {
         activeRunAbort.cleanup();
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
+        const error = errorShape(
+          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          String(err),
         );
+        // Persist the terminal error under chat:<runId> so a duplicate sender
+        // that already received status:"in_flight" (and any later retry with
+        // the same idempotencyKey) sees the cached failure instead of starting
+        // a fresh run. Matches the outer-catch dedupe write below.
+        const errorPayload = {
+          runId: clientRunId,
+          status: "error" as const,
+          summary: String(err),
+        };
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: errorPayload,
+            error,
+          },
+        });
+        respond(false, undefined, error);
         return;
       }
     }

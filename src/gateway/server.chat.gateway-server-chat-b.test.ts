@@ -504,6 +504,138 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send attachment-prep failure caches the error so a duplicate that already saw in_flight does not retry into a fresh run", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const catalogDeferred =
+        createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+      const firstRespond = vi.fn() as Mock<RespondFn>;
+      const duplicateRespond = vi.fn() as Mock<RespondFn>;
+      const retryRespond = vi.fn() as Mock<RespondFn>;
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => catalogDeferred.promise),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+
+      const runId = "idem-prep-failure";
+      const sendParams = {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            // Invalid base64 content forces parseMessageWithAttachments to
+            // throw inside attachment prep, after the abort controller has
+            // been registered.
+            content: "!!!not-valid-base64$$$",
+          },
+        ],
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (respond: Mock<RespondFn>, id: string) =>
+        chatHandlers["chat.send"]({
+          req: { type: "req", id, method: "chat.send", params: sendParams },
+          params: sendParams,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: respond as never,
+          context,
+        });
+
+      const first = Promise.resolve(callSend(firstRespond, "first"));
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      await callSend(duplicateRespond, "duplicate");
+      expect(duplicateRespond).toHaveBeenCalledTimes(1);
+      expect(duplicateRespond).toHaveBeenCalledWith(
+        true,
+        { runId, status: "in_flight" },
+        undefined,
+        { cached: true, runId },
+      );
+
+      catalogDeferred.resolve([
+        {
+          id: "vision-model",
+          name: "Vision Model",
+          provider: "test-provider",
+          input: ["text", "image"],
+        },
+      ]);
+      await first;
+
+      expect(firstRespond).toHaveBeenCalledTimes(1);
+      const [firstOk, firstPayload, firstError] = firstRespond.mock.calls[0] ?? [];
+      expect(firstOk).toBe(false);
+      expect(firstPayload).toBeUndefined();
+      expect(firstError).toMatchObject({ code: "INVALID_REQUEST" });
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+      // The terminal error is cached under chat:<runId> so a duplicate that
+      // already received in_flight (and any later retry with the same
+      // idempotencyKey) gets the cached failure rather than a fresh run.
+      const cachedError = context.dedupe.get(`chat:${runId}`);
+      expect(cachedError).toMatchObject({
+        ok: false,
+        payload: { runId, status: "error" },
+        error: { code: "INVALID_REQUEST" },
+      });
+
+      await callSend(retryRespond, "retry");
+      expect(retryRespond).toHaveBeenCalledTimes(1);
+      expect(retryRespond).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({ runId, status: "error" }),
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+        { cached: true },
+      );
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+    } finally {
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {
