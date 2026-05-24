@@ -6,23 +6,23 @@ export type MiniMaxRegion = "cn" | "global";
 
 const MINIMAX_OAUTH_CONFIG = {
   cn: {
-    baseUrl: "https://api.minimaxi.com",
+    baseUrl: "https://account.minimaxi.com",
     clientId: "78257093-7e40-4613-99e0-527b14b39113",
   },
   global: {
-    baseUrl: "https://api.minimax.io",
+    baseUrl: "https://account.minimax.io",
     clientId: "78257093-7e40-4613-99e0-527b14b39113",
   },
 } as const;
 
-const MINIMAX_OAUTH_SCOPE = "group_id profile model.completion";
-const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
+const MINIMAX_OAUTH_SCOPE = "openid profile coding_plan";
+const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
   return {
-    codeEndpoint: `${config.baseUrl}/oauth/code`,
-    tokenEndpoint: `${config.baseUrl}/oauth/token`,
+    codeEndpoint: `${config.baseUrl}/oauth2/device/code`,
+    tokenEndpoint: `${config.baseUrl}/oauth2/token`,
     clientId: config.clientId,
     baseUrl: config.baseUrl,
   };
@@ -71,7 +71,6 @@ async function requestOAuthCode(params: {
       "x-request-id": randomUUID(),
     },
     body: toFormUrlEncoded({
-      response_type: "code",
       client_id: endpoints.clientId,
       scope: MINIMAX_OAUTH_SCOPE,
       code_challenge: params.challenge,
@@ -230,4 +229,44 @@ export async function loginMiniMaxPortalOAuth(params: {
   }
 
   throw new Error("MiniMax OAuth timed out before authorization completed.");
+}
+
+export async function refreshMiniMaxPortalOAuth(params: {
+  refreshToken: string;
+  region: MiniMaxRegion;
+}): Promise<MiniMaxOAuthToken> {
+  ensureGlobalUndiciEnvProxyDispatcher();
+  const endpoints = getOAuthEndpoints(params.region);
+  const response = await fetch(endpoints.tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: toFormUrlEncoded({
+      grant_type: "refresh_token",
+      client_id: endpoints.clientId,
+      refresh_token: params.refreshToken,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`MiniMax OAuth refresh failed: ${text || response.statusText}`);
+  }
+  const payload = (await response.json()) as {
+    status?: string;
+    access_token?: string | null;
+    refresh_token?: string | null;
+    expired_in?: number | null;
+    resource_url?: string;
+  };
+  if (payload.status !== "success" || !payload.access_token || !payload.expired_in) {
+    throw new Error("MiniMax OAuth refresh returned incomplete or unsuccessful payload.");
+  }
+  return {
+    access: payload.access_token,
+    refresh: payload.refresh_token ?? params.refreshToken,
+    expires: payload.expired_in,
+    resourceUrl: payload.resource_url,
+  };
 }

@@ -10,6 +10,7 @@ import {
   MINIMAX_OAUTH_MARKER,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -150,6 +151,9 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
+        // Persist enterpriseUrl on the credential so the refresh callback
+        // can derive which region's OAuth backend to hit (global vs CN).
+        credentialExtra: { enterpriseUrl: baseUrl },
         configPatch: {
           models: {
             providers: {
@@ -187,6 +191,37 @@ function createOAuthHandler(region: MiniMaxRegion) {
       );
       throw err;
     }
+  };
+}
+
+/**
+ * Refresh a stored MiniMax OAuth credential. Region is derived from the
+ * persisted enterpriseUrl (set during login) — `*.minimaxi.com` ⇒ CN,
+ * everything else ⇒ global.
+ */
+async function refreshMiniMaxPortalOAuthCredential(
+  cred: OAuthCredential,
+): Promise<OAuthCredential> {
+  if (!cred.refresh) {
+    throw new Error("MiniMax OAuth credential has no refresh_token; please re-login.");
+  }
+  const region: MiniMaxRegion =
+    typeof cred.enterpriseUrl === "string" && cred.enterpriseUrl.includes("minimaxi.com")
+      ? "cn"
+      : "global";
+  const { refreshMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+  const refreshed = await refreshMiniMaxPortalOAuth({
+    refreshToken: cred.refresh,
+    region,
+  });
+  return {
+    ...cred,
+    type: "oauth",
+    provider: PORTAL_PROVIDER_ID,
+    access: refreshed.access,
+    refresh: refreshed.refresh,
+    expires: refreshed.expires,
+    enterpriseUrl: refreshed.resourceUrl ?? cred.enterpriseUrl,
   };
 }
 
@@ -279,6 +314,7 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
       run: async (ctx) => resolvePortalCatalog(ctx),
     },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
+    refreshOAuth: async (cred) => await refreshMiniMaxPortalOAuthCredential(cred),
     ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
   });
