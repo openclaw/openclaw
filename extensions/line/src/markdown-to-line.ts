@@ -252,8 +252,13 @@ export interface CodeBlock {
 export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
 
-  // Truncate very long code to fit LINE's limits
-  const displayCode = block.code.length > 2000 ? block.code.slice(0, 2000) + "\n..." : block.code;
+  /** Maximum code characters before truncation */
+  const MAX_CODE_LEN = 2000;
+  const needsTruncation = block.code.length > MAX_CODE_LEN;
+  const displayCode = needsTruncation
+    ? block.code.slice(0, MAX_CODE_LEN) +
+      `\n… [${block.code.length - MAX_CODE_LEN} chars truncated]`
+    : block.code;
 
   return {
     type: "bubble",
@@ -269,6 +274,13 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
           color: "#666666",
         } as FlexText,
         {
+          type: "text",
+          text: block.language || "code",
+          size: "xs",
+          color: "#888888",
+          margin: "sm",
+        } as FlexText,
+        {
           type: "box",
           layout: "vertical",
           contents: [
@@ -277,13 +289,14 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
               text: displayCode,
               size: "xs",
               color: "#333333",
-              wrap: true,
             } as FlexText,
           ],
           backgroundColor: "#F5F5F5",
           paddingAll: "md",
           cornerRadius: "md",
           margin: "sm",
+          maxHeight: "240px",
+          overflow: "scroll",
         } as FlexBox,
       ],
       paddingAll: "lg",
