@@ -271,7 +271,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not send early typing for guild messages", async () => {
+  it("sends an accepted guild message typing cue before queued processing starts", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
     preflightDiscordMessageMock.mockResolvedValue(
@@ -290,7 +290,13 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
 
-    expect(earlyTypingMocks.sendTyping).not.toHaveBeenCalled();
+    expect(earlyTypingMocks.sendTyping).toHaveBeenCalledWith({
+      rest: { kind: "discord-rest" },
+      channelId: "guild-channel",
+    });
+    expect(earlyTypingMocks.sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
+      processDiscordMessageMock.mock.invocationCallOrder[0],
+    );
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 

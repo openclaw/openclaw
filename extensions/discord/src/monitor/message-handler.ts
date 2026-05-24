@@ -68,10 +68,7 @@ function shouldSendAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext)
   if (ctx.abortSignal?.aborted) {
     return false;
   }
-  if (!ctx.isDirectMessage || ctx.isGuildMessage || ctx.isGroupDm) {
-    return false;
-  }
-  if (!ctx.messageText.trim()) {
+  if (!ctx.messageText?.trim()) {
     return false;
   }
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
