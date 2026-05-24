@@ -154,4 +154,33 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
 
     await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
   });
+
+  it("does not reuse a prior provider session assistant when the current candidate times out", async () => {
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You exceeded your current OpenAI quota.",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-stale-session-assistant-timeout",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("LLM request timed out.");
+    await expect(promise).rejects.not.toThrow("OpenAI quota");
+    expect(getLastFormattedAssistant()).toBeUndefined();
+  });
 });
