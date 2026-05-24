@@ -5042,5 +5042,133 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         };
       },
     },
+
+    // ── object.upsert / object.batch_upsert — ObjectStore 写入 ──────────────
+    {
+      id: "object.upsert",
+      verb: "write",
+      description: "创建或更新 ObjectStore 中的单个业务对象",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["type", "id"],
+        properties: {
+          type: { type: "string", description: "对象类型（如 EquipmentReading）" },
+          id: { type: "string", description: "对象 ID（幂等键）" },
+          fields: { type: "object", description: "字段值 map" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const type = String(params.type ?? "");
+        const id = String(params.id ?? "");
+        const fields = (params.fields as Record<string, unknown>) ?? {};
+        await runtime.objectStore.upsert(type, id, fields);
+        await runtime.kernel.publish("object.upserted", "object.upsert", { type, id });
+        return { status: "ok", type, id };
+      },
+    },
+    {
+      id: "object.batch_upsert",
+      verb: "write",
+      description: "批量创建或更新 ObjectStore 中的业务对象",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["type", "records"],
+        properties: {
+          type: { type: "string", description: "对象类型" },
+          records: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { id: { type: "string" }, fields: { type: "object" } },
+            },
+          },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const type = String(params.type ?? "");
+        const records =
+          (params.records as Array<{ id: string; fields: Record<string, unknown> }>) ?? [];
+        let upserted = 0;
+        for (const rec of records) {
+          if (rec.id) {
+            await runtime.objectStore.upsert(type, rec.id, rec.fields ?? {});
+            upserted++;
+          }
+        }
+        await runtime.kernel.publish("object.batch_upserted", "object.batch_upsert", {
+          type,
+          count: upserted,
+        });
+        return { status: "ok", type, upserted };
+      },
+    },
+
+    // ── kb.add — 知识库写入（语义化别名） ────────────────────────────────────
+    {
+      id: "kb.add",
+      verb: "acquire",
+      description: "向知识库添加一段文本内容（kb.ingest 的简化别名）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: { type: "string", description: "文本内容" },
+          source: { type: "string", description: "来源标识（便于溯源）" },
+          namespace: { type: "string", description: "命名空间（可选，用于隔离检索）" },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const content = String(params.content ?? "");
+        const source = String(params.source ?? "kb.add");
+        const namespace = params.namespace ? String(params.namespace) : undefined;
+        await runtime.kb.ingest(content, { source, namespace });
+        return { status: "ok", length: content.length };
+      },
+    },
+
+    // ── learn.record_interaction — 记录完整交互为学习数据 ───────────────────
+    {
+      id: "learn.record_interaction",
+      verb: "acquire",
+      description: "将用户输入 + 机器人响应记录为学习交互数据（供进化分析使用）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["input", "response"],
+        properties: {
+          input: { type: "string", description: "用户输入文本" },
+          response: { type: "string", description: "机器人响应文本" },
+          intent: { type: "string", description: "识别出的意图（可选）" },
+          outcome: {
+            type: "string",
+            enum: ["success", "failure", "unclear"],
+            description: "交互结果（默认 success）",
+          },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const input = String(params.input ?? "");
+        const response = String(params.response ?? "");
+        const intent = params.intent ? String(params.intent) : undefined;
+        const outcome = String(params.outcome ?? "success");
+        // 写入 CBR 案例库供 few-shot 检索
+        if (intent) {
+          runtime.cbrStore?.add(input, intent, { outcome });
+        }
+        // 写入 KB 供长期知识积累
+        const entry = `[interaction:${outcome}] Input: ${input}\nResponse: ${response}`;
+        await runtime.kb.ingest(entry, { source: "learn.record_interaction" });
+        // 发布进化观察事件
+        await runtime.kernel.publish("learn.interaction_recorded", "learn.record_interaction", {
+          input: input.slice(0, 200),
+          intent,
+          outcome,
+        });
+        return { status: "ok", outcome };
+      },
+    },
   ];
 }
