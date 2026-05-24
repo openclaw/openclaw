@@ -48,13 +48,15 @@ IM / Webhook / Schedule / API
 ```bash
 pnpm install
 pnpm dev                                     # 启动开发模式
-pnpm openclaw doctor                         # 诊断配置
-pnpm test packages/claworks-runtime          # 运行测试（333 个）
+claworks init --profile enterprise           # 10 分钟零门槛初始化（industrial / daily-report）；init 后会自动加载对应 Pack 组合
+claworks doctor --fix                        # 诊断并自动修复配置、Pack、LLM
+pnpm openclaw doctor                         # OpenClaw 侧诊断
+pnpm test packages/claworks-runtime          # 运行测试
 ```
 
 ## 测试
 
-333 个单元测试，79 个测试文件，全部通过。覆盖 EventKernel、PlaybookEngine、StepExecutor、CapabilityRegistry、ObjectStore、KnowledgeBase、A2A、RuleEngine、ScaffoldEngine、进化流水线等核心模块。
+354 个单元测试，82 个测试文件，全部通过。覆盖 EventKernel、PlaybookEngine、StepExecutor、CapabilityRegistry、ObjectStore、KnowledgeBase、A2A、RuleEngine、ScaffoldEngine、进化流水线、init CLI、LOG_LEVEL 可观测性等核心模块。
 
 ---
 
@@ -66,10 +68,10 @@ pnpm test packages/claworks-runtime          # 运行测试（333 个）
 | 交流       | 4/5  | comms.send / notify.dispatch 多渠道通知，HITL 人机协同步骤完备                      |
 | 记忆       | 4/5  | ObjectStore + KB + CBR + memory_read/write 步骤，用户画像持久化                     |
 | 学习       | 4/5  | 进化流水线（evolve.\*）、CBR 摄取、weak_model_regression 自测闭环                   |
-| 执行       | 5/5  | 215 能力 + 12+ 步骤类型 + Pack ActionRegistry 热扩展，333 测试全绿                  |
+| 执行       | 5/5  | 215 能力 + 12+ 步骤类型 + Pack ActionRegistry 热扩展，354 测试全绿                  |
 | 自主       | 4/5  | AutonomyEngine 心跳/空闲/缺口检测，ScaffoldEngine 弱模型照单执行                    |
 | 安全       | 4/5  | RBAC、HITL 门禁、production_mode fail-closed、审计日志                              |
-| 可观测性   | 3/5  | 事件总线 + audit + health notify，分布式 trace 仍待加强                             |
+| 可观测性   | 4/5  | LOG_LEVEL 分级日志 + claworks_playbook_runs_total 指标，分布式 trace 仍待加强       |
 | 弱模型补偿 | 5/5  | RuleEngine + Scaffold + StructuredOutput 投票 + CBR few-shot 四层补偿               |
 | 生态扩展   | 4/5  | Pack 热加载 + scriptLibrary + OpenClaw skill bridge 双轨 skill 池                   |
 

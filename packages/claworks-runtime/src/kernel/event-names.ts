@@ -88,6 +88,9 @@ export const CW_EVENTS = {
   // ── Pack ─────────────────────────────────────────────────────────────
   PACK_INSTALLED: "pack.installed",
   PACK_LOADED: "pack.loaded",
+  PACK_LOAD_PROFILE_REQUESTED: "pack.load_profile_requested",
+  PACK_PROFILE_LOADED: "pack.profile_loaded",
+  PACK_PROFILE_LOAD_FAILED: "pack.profile_load_failed",
 
   // ── Comms / 通讯 ─────────────────────────────────────────────────────
   COMMS_BROADCAST_SENT: "comms.broadcast_sent",

@@ -52,6 +52,7 @@ import { applyIngressPublish } from "./ingress-publish.js";
 import { createRuntimeLogger } from "./logger.js";
 import { createModelRouter } from "./model-router.js";
 import { appendObservationEvent, markRuntimeStarted } from "./observability.js";
+import { applyPackProfile, parseProfilePackIds } from "./pack-profile.js";
 import {
   applyPackContributions,
   loadPersistedInstalled,
@@ -622,6 +623,27 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     role: runtime.robot.role,
     packCount: runtime.loadedPacks.length,
     playbookCount: runtime.playbookEngine.list().length,
+  });
+
+  runtime.kernel.bus.subscribe(CW_EVENTS.PACK_LOAD_PROFILE_REQUESTED, async (event) => {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const profile = String(payload.profile ?? "enterprise");
+    try {
+      await applyPackProfile(runtime, {
+        profile,
+        packIds: parseProfilePackIds(payload),
+        source: event.source,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      runtime.logger?.(`[claworks:packs] profile load failed (${profile}): ${message}`);
+      await runtime.kernel
+        .publish(CW_EVENTS.PACK_PROFILE_LOAD_FAILED, event.source, {
+          profile,
+          error: message,
+        })
+        .catch(() => {});
+    }
   });
 
   // 启动自主巡逻定时器（机器人主动感知业务状态的核心机制）

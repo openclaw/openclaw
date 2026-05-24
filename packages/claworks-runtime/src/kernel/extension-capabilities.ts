@@ -53,6 +53,7 @@
 
 import { resolveA2aTarget } from "../claworks/a2a-peers.js";
 import { discoverHarnessSkillsFromConfig } from "../claworks/harness-sync.js";
+import { applyPackProfile } from "../claworks/pack-profile.js";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { buildA2aAgentCard } from "../interfaces/a2a/agent-card.js";
 import { A2aClient } from "../interfaces/a2a/client.js";
@@ -1194,6 +1195,42 @@ export function makePackCapabilities(runtime: ClaworksRuntime): CapabilityDescri
           runtime.playbookEngine as unknown as { reloadPacks?: () => Promise<{ packs: unknown[] }> }
         ).reloadPacks?.()) ?? { packs: [] };
         return { status: "ok", reloaded_count: Array.isArray(packs) ? packs.length : 0 };
+      },
+    },
+
+    {
+      id: "pack.load_profile",
+      verb: "control",
+      description:
+        "按行业 Profile 原子切换已安装的 Pack 组合（industrial / enterprise / daily-report）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        required: ["profile"],
+        properties: {
+          profile: { type: "string" },
+          packs: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选：显式 Pack ID 列表，覆盖 profile 默认组合",
+          },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const profile = String(params.profile ?? "enterprise");
+        const explicitPacks = Array.isArray(params.packs)
+          ? params.packs.map(String).filter(Boolean)
+          : undefined;
+        try {
+          const result = await applyPackProfile(runtime, {
+            profile,
+            packIds: explicitPacks,
+            source: "pack.load_profile",
+          });
+          return { status: "ok", ...result };
+        } catch (err) {
+          return { status: "error", reason: err instanceof Error ? err.message : String(err) };
+        }
       },
     },
   ];
@@ -5580,7 +5617,9 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
         const input = String(params.input ?? "");
         const response = String(params.response ?? "");
         const intent = params.intent ? String(params.intent) : undefined;
-        const outcome = String(params.outcome ?? "success");
+        const outcomeRaw = String(params.outcome ?? "success");
+        const outcome =
+          outcomeRaw === "failed" || outcomeRaw === "partial" ? outcomeRaw : ("success" as const);
         // 写入 CBR 案例库供 few-shot 检索
         if (intent) {
           runtime.cbrStore?.add(input, intent, { outcome });
