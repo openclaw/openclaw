@@ -604,7 +604,11 @@ private fun PermissionSetupScreen(
 ) {
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-      LazyColumn(contentPadding = PaddingValues(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
         item {
           PermissionTopBar(onBack = onBack)
         }
