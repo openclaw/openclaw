@@ -118,7 +118,7 @@ describe("Signal approval reactions", () => {
     });
   });
 
-  it("falls back to timestamp-only bindings when the inbound conversation id differs", async () => {
+  it("does not match timestamp-only bindings when the inbound conversation id differs", async () => {
     registerSignalApprovalReactionTarget({
       accountId: "default",
       conversationKey: "username:kevin",
@@ -137,6 +137,29 @@ describe("Signal approval reactions", () => {
         messageId: "1700000000001",
         reactionKey: "👍",
         targetAuthor: "+15550009999",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("normalizes UUID target-author casing before matching", async () => {
+    registerSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000001",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once"],
+      targetAuthorKeys: ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890"],
+      route: approvalRoute,
+      routeAllowed: true,
+    });
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000000001",
+        reactionKey: "👍",
+        targetAuthorUuid: "abcdef12-3456-7890-abcd-ef1234567890",
       }),
     ).resolves.toEqual({
       approvalId: "exec-1",

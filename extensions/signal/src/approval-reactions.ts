@@ -30,7 +30,6 @@ const SIGNAL_APPROVAL_REACTION_ORDER = [
 const PERSISTENT_NAMESPACE = "signal.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
-const GLOBAL_CONVERSATION_KEY = "*";
 
 export type SignalApprovalReactionBinding = {
   decision: ExecApprovalReplyDecision;
@@ -148,11 +147,11 @@ function normalizeSignalApprovalTargetAuthorKey(value: string): string | null {
   const withoutSignalPrefix = normalized.replace(/^signal:/i, "").trim();
   const lower = normalizeLowercaseStringOrEmpty(withoutSignalPrefix);
   if (lower.startsWith("uuid:")) {
-    const uuid = withoutSignalPrefix.slice("uuid:".length).trim();
+    const uuid = withoutSignalPrefix.slice("uuid:".length).trim().toLowerCase();
     return uuid ? `uuid:${uuid}` : null;
   }
   if (looksLikeUuid(withoutSignalPrefix)) {
-    return `uuid:${withoutSignalPrefix}`;
+    return `uuid:${withoutSignalPrefix.toLowerCase()}`;
   }
   return normalizeE164(withoutSignalPrefix);
 }
@@ -163,7 +162,12 @@ export function resolveSignalApprovalTargetAuthorKeys(params: {
 }): string[] {
   const targetAuthorUuid = normalizeOptionalString(params.targetAuthorUuid);
   const keys = [
-    targetAuthorUuid ? `uuid:${targetAuthorUuid.replace(/^uuid:/i, "").trim()}` : null,
+    targetAuthorUuid
+      ? `uuid:${targetAuthorUuid
+          .replace(/^uuid:/i, "")
+          .trim()
+          .toLowerCase()}`
+      : null,
     params.targetAuthor ? normalizeSignalApprovalTargetAuthorKey(params.targetAuthor) : null,
   ].filter((key): key is string => Boolean(key));
   return Array.from(new Set(keys));
@@ -372,7 +376,11 @@ export function registerSignalApprovalReactionTarget(params: {
   const key = buildReactionTargetKey(params);
   const approvalId = params.approvalId.trim();
   const targetAuthorKeys = Array.from(
-    new Set(params.targetAuthorKeys.map((entry) => entry.trim()).filter(Boolean)),
+    new Set(
+      params.targetAuthorKeys
+        .map((entry) => normalizeSignalApprovalTargetAuthorKey(entry))
+        .filter((entry): entry is string => Boolean(entry)),
+    ),
   );
   const allowedDecisions = listSignalApprovalReactionBindings(params.allowedDecisions).map(
     (binding) => binding.decision,
@@ -401,18 +409,6 @@ export function registerSignalApprovalReactionTarget(params: {
   };
   signalApprovalReactionTargets.set(key, target);
   rememberPersistentApprovalReactionTarget({ key, target, ttlMs: params.ttlMs });
-  const globalKey = buildReactionTargetKey({
-    ...params,
-    conversationKey: GLOBAL_CONVERSATION_KEY,
-  });
-  if (globalKey && globalKey !== key) {
-    signalApprovalReactionTargets.set(globalKey, target);
-    rememberPersistentApprovalReactionTarget({
-      key: globalKey,
-      target,
-      ttlMs: params.ttlMs,
-    });
-  }
   return target;
 }
 
@@ -427,14 +423,6 @@ export function unregisterSignalApprovalReactionTarget(params: {
   }
   signalApprovalReactionTargets.delete(key);
   forgetPersistentApprovalReactionTarget(key);
-  const globalKey = buildReactionTargetKey({
-    ...params,
-    conversationKey: GLOBAL_CONVERSATION_KEY,
-  });
-  if (globalKey && globalKey !== key) {
-    signalApprovalReactionTargets.delete(globalKey);
-    forgetPersistentApprovalReactionTarget(globalKey);
-  }
 }
 
 function resolveTarget(params: {
@@ -498,26 +486,7 @@ export async function resolveSignalApprovalReactionTargetWithPersistence(params:
   if (persisted) {
     return persisted;
   }
-  const globalKey = buildReactionTargetKey({
-    ...params,
-    conversationKey: GLOBAL_CONVERSATION_KEY,
-  });
-  if (!globalKey || globalKey === key) {
-    return null;
-  }
-  const globalInMemory = resolveTarget({
-    target: signalApprovalReactionTargets.get(globalKey),
-    reactionKey: params.reactionKey,
-    targetAuthorKeys,
-  });
-  if (globalInMemory) {
-    return globalInMemory;
-  }
-  return resolveTarget({
-    target: await lookupPersistentApprovalReactionTarget(globalKey),
-    reactionKey: params.reactionKey,
-    targetAuthorKeys,
-  });
+  return null;
 }
 
 export async function maybeResolveSignalApprovalReaction(params: {
