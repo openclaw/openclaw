@@ -509,6 +509,41 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[2]).toEqual({ kind: "final", text: "What now?" });
   });
 
+  it("keeps final-only text across tool-use done boundaries until terminal done", async () => {
+    const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Step 1: inspect inputs. ",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_weather",
+      status: "in_progress",
+      title: "Fetch weather",
+      text: "Fetch weather (in_progress)",
+    });
+    await projector.onEvent({ type: "done", stopReason: "toolUse" });
+
+    expect(deliveries).toStrictEqual([]);
+
+    await projector.onEvent({
+      type: "text_delta",
+      text: "Step 2: summarize result.",
+      tag: "agent_message_chunk",
+    });
+    await projector.onEvent({ type: "done", stopReason: "end_turn" });
+
+    expect(deliveries).toHaveLength(2);
+    expectToolCallSummary(deliveries[0]);
+    expect(deliveries[1]).toEqual({
+      kind: "final",
+      text: "Step 1: inspect inputs. Step 2: summarize result.",
+    });
+  });
+
   it("flushes buffered status/tool output on error in deliveryMode=final_only", async () => {
     const { deliveries, projector } = createFinalOnlyStatusToolHarness();
 

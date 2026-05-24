@@ -63,6 +63,11 @@ function normalizeToolStatus(status: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
+function isToolUseStopReason(stopReason: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(stopReason)?.replace(/[^a-z0-9]/g, "");
+  return normalized === "tooluse" || normalized === "toolcall" || normalized === "toolcalls";
+}
+
 function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
   if (mode === "space") {
     return " ";
@@ -512,7 +517,17 @@ export function createAcpReplyProjector(params: {
       return;
     }
 
-    if (event.type === "done" || event.type === "error") {
+    if (event.type === "done") {
+      if (settings.deliveryMode === "final_only" && isToolUseStopReason(event.stopReason)) {
+        clearLiveIdleTimer();
+        return;
+      }
+      await flush(true);
+      resetTurnState();
+      return;
+    }
+
+    if (event.type === "error") {
       await flush(true);
       resetTurnState();
     }
