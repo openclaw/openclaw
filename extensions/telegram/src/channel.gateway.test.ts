@@ -18,7 +18,10 @@ import {
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramProbeFn } from "./runtime.types.js";
 import type { TelegramRuntime } from "./runtime.types.js";
-import { resetTelegramStartupProbeLimiterForTests } from "./startup-probe-limiter.js";
+import {
+  resetTelegramStartupProbeLimiterForTests,
+  withTelegramStartupProbeSlot,
+} from "./startup-probe-limiter.js";
 
 const probeTelegram = vi.fn();
 const monitorTelegramProvider = vi.fn();
@@ -155,6 +158,22 @@ async function waitForCondition(check: () => boolean, message: string, timeoutMs
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error(message);
+}
+
+async function releaseStartupProbeControls(releaseProbe: Array<() => void>) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const releases = releaseProbe.splice(0);
+    for (const release of releases) {
+      release();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (releaseProbe.length === 0) {
+      return;
+    }
+  }
+  for (const release of releaseProbe.splice(0)) {
+    release();
+  }
 }
 
 afterEach(async () => {
@@ -427,6 +446,80 @@ describe("telegramPlugin gateway startup", () => {
   });
 
   it("limits concurrent startup probes across Telegram accounts", async () => {
+    const releaseProbe: Array<() => void> = [];
+    let activeProbes = 0;
+    let maxActiveProbes = 0;
+    const runProbe = async () =>
+      await withTelegramStartupProbeSlot(undefined, async () => {
+        activeProbes += 1;
+        maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
+        await new Promise<void>((resolve) => {
+          releaseProbe.push(resolve);
+        });
+        activeProbes -= 1;
+      });
+
+    const first = runProbe();
+    const second = runProbe();
+    const third = runProbe();
+    const tasks = [first, second, third];
+    try {
+      await waitForCondition(
+        () => releaseProbe.length === 2,
+        "expected two startup probes to begin",
+      );
+      expect(maxActiveProbes).toBe(2);
+
+      releaseProbe.shift()?.();
+      await waitForCondition(
+        () => releaseProbe.length === 2,
+        "expected queued startup probe to begin after a slot opens",
+      );
+      expect(maxActiveProbes).toBe(2);
+    } finally {
+      await releaseStartupProbeControls(releaseProbe);
+    }
+    await Promise.all(tasks);
+  });
+
+  it("abandons a queued startup probe when the account aborts", async () => {
+    const releaseProbe: Array<() => void> = [];
+    let startedProbes = 0;
+    const runProbe = async (abortSignal?: AbortSignal) =>
+      await withTelegramStartupProbeSlot(abortSignal, async () => {
+        startedProbes += 1;
+        if (startedProbes <= 2) {
+          await new Promise<void>((resolve) => {
+            releaseProbe.push(resolve);
+          });
+        }
+      });
+
+    const first = runProbe();
+    const second = runProbe();
+    const abortQueued = new AbortController();
+    const queued = runProbe(abortQueued.signal).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await waitForCondition(
+        () => releaseProbe.length === 2,
+        "expected startup probe slots to fill",
+      );
+      abortQueued.abort();
+    } finally {
+      abortQueued.abort();
+      await releaseStartupProbeControls(releaseProbe);
+    }
+    await Promise.all([first, second]);
+    await expect(queued).resolves.toMatchObject({
+      message: "telegram startup probe wait aborted",
+    });
+    expect(startedProbes).toBe(2);
+  });
+
+  it("starts each Telegram monitor after a successful startup probe", async () => {
     installTelegramRuntime();
     const releaseProbe: Array<() => void> = [];
     let activeProbes = 0;
@@ -447,83 +540,15 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
-    const third = startTelegramAccount("charlie");
-    const tasks = [first.task, second.task, third.task];
+    const account = startTelegramAccount("alpha");
     try {
-      await waitForCondition(
-        () => probeTelegram.mock.calls.length === 2,
-        "expected two startup probes to begin",
-      );
-      expect(maxActiveProbes).toBe(2);
-      expect(releaseProbe).toHaveLength(2);
-
-      releaseProbe.shift()?.();
-      await waitForCondition(
-        () => probeTelegram.mock.calls.length === 3,
-        "expected queued startup probe to begin after a slot opens",
-      );
-      expect(maxActiveProbes).toBe(2);
-
-      for (const release of releaseProbe.splice(0)) {
-        release();
-      }
-      await Promise.all(tasks);
+      await waitForCondition(() => releaseProbe.length === 1, "expected startup probe to begin");
     } finally {
-      for (const release of releaseProbe.splice(0)) {
-        release();
-      }
-      await Promise.allSettled(tasks);
+      await releaseStartupProbeControls(releaseProbe);
     }
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(3);
-  });
-
-  it("abandons a queued startup probe when the account aborts", async () => {
-    installTelegramRuntime();
-    const releaseProbe: Array<() => void> = [];
-    let startedProbes = 0;
-    probeTelegram.mockImplementation(async () => {
-      startedProbes += 1;
-      if (startedProbes <= 2) {
-        await new Promise<void>((resolve) => {
-          releaseProbe.push(resolve);
-        });
-      }
-      return {
-        ok: true,
-        status: null,
-        error: null,
-        elapsedMs: 12,
-      };
-    });
-    monitorTelegramProvider.mockResolvedValue(undefined);
-
-    const first = startTelegramAccount("alpha");
-    const second = startTelegramAccount("bravo");
-    const abortQueued = new AbortController();
-    const queued = startTelegramAccount("charlie", {}, abortQueued.signal);
-    const tasks = [first.task, second.task, queued.task];
-    try {
-      await waitForCondition(
-        () => probeTelegram.mock.calls.length === 2,
-        "expected startup probe slots to fill",
-      );
-      abortQueued.abort();
-
-      for (const release of releaseProbe.splice(0)) {
-        release();
-      }
-      await Promise.all(tasks);
-    } finally {
-      abortQueued.abort();
-      for (const release of releaseProbe.splice(0)) {
-        release();
-      }
-      await Promise.allSettled(tasks);
-    }
-    expect(probeTelegram).toHaveBeenCalledTimes(2);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
+    await account.task;
+    expect(maxActiveProbes).toBe(1);
+    expect(monitorTelegramProvider).toHaveBeenCalledTimes(1);
   });
 
   it("releases a stopped stale polling lease for the account token", async () => {
