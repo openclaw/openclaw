@@ -1054,6 +1054,8 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
                 suggested_capability: intent,
               };
               _cacheIntentResult(cacheKey, hit);
+              // 将成功识别的意图写入 CBR 案例库，供后续 few-shot 检索
+              runtime.cbrStore?.add(text, intent, { confidence: hit.confidence });
               return hit;
             }
           } catch {
@@ -1530,6 +1532,14 @@ function makeLearnFromFeedbackDescriptor(runtime: ClaworksRuntime): CapabilityDe
 
       await runtime.kb.ingest(entry, { source: "learn.from_feedback" });
       const id = "ingested";
+
+      // 将纠正案例写入 CBR 案例库，直接改善未来 few-shot 意图识别
+      if (intent && (type === "positive" || type === "correction")) {
+        const solution = correction || intent;
+        runtime.cbrStore?.add(content, solution, {
+          confidence: type === "correction" ? 0.95 : 0.85,
+        });
+      }
 
       // 通知 AutonomyEngine 记录反馈，负反馈累积到阈值时触发学习机会检测
       const { recordFeedback } = await import("./autonomy-engine.js");
