@@ -490,7 +490,6 @@ class NodeRuntime(
       scope = scope,
       session = operatorSession,
       json = json,
-      supportsChatSubscribe = false,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
@@ -502,7 +501,6 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        supportsChatSubscribe = false,
         isConnected = { operatorConnected },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
@@ -610,7 +608,6 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      supportsChatSubscribe = true,
       isConnected = { operatorConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
@@ -1150,7 +1147,7 @@ class NodeRuntime(
     NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
     talkMode.ttsOnAllResponses = true
     talkMode.setPlaybackEnabled(speakerEnabled.value)
-    talkMode.ensureChatSubscribed()
+    talkMode.refreshConfig()
     externalAudioCaptureActive.value = true
   }
 
@@ -1222,7 +1219,7 @@ class NodeRuntime(
         }
         // Tapping mic on interrupts any active TTS (barge-in).
         stopVoicePlayback()
-        scope.launch { talkMode.ensureChatSubscribed() }
+        scope.launch { talkMode.refreshConfig() }
         micCapture.setMicEnabled(true)
         externalAudioCaptureActive.value = true
       }
@@ -1235,7 +1232,7 @@ class NodeRuntime(
         NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
         talkMode.ttsOnAllResponses = true
         talkMode.setPlaybackEnabled(speakerEnabled.value)
-        scope.launch { talkMode.ensureChatSubscribed() }
+        scope.launch { talkMode.refreshConfig() }
         talkMode.setEnabled(true)
         externalAudioCaptureActive.value = true
       }
