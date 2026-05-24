@@ -3,7 +3,7 @@ import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.j
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginMetadataSnapshot: vi.fn(() => ({
+  loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
     plugins: [
       {
         id: "document-extract",
