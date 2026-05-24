@@ -454,6 +454,122 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("suppresses OpenAI server-VAD auto response when an outbound initial greeting is queued for issue85846", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const triggerGreeting = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ triggerGreeting });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-issue85846",
+        providerCallId: "CA-issue85846",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {
+          initialMessage: "Hi! Just a quick test of the voice setup.",
+        },
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-issue85846", callSid: "CA-issue85846" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        expect(callbacks?.autoRespondToAudio).toBe(false);
+        expect(callbacks?.restoreAutoRespondToAudioAfterInitialGreeting).toBe(true);
+        callbacks?.onReady?.();
+        expect(triggerGreeting).toHaveBeenCalledTimes(1);
+        expect(triggerGreeting).toHaveBeenCalledWith(
+          expect.stringContaining("Hi! Just a quick test of the voice setup."),
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not suppress OpenAI server-VAD auto response when no initial greeting is queued", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-no-greeting",
+        providerCallId: "CA-no-greeting",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-no-greeting", callSid: "CA-no-greeting" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        expect(callbacks?.autoRespondToAudio).toBeUndefined();
+        expect(callbacks?.restoreAutoRespondToAudioAfterInitialGreeting).toBeUndefined();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("speaks through the active outbound realtime bridge by call id", async () => {
     const triggerGreeting = vi.fn();
     const createBridge = vi.fn(() => makeBridge({ triggerGreeting }));
