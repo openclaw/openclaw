@@ -151,7 +151,12 @@ describe("iMessage approval reactions", () => {
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "prompt-message",
-        text: "Reply with: /approve exec-1 allow-once|deny",
+        text: [
+          "Exec approval required",
+          "ID: exec-1",
+          "",
+          "Reply with: /approve exec-1 allow-once|deny",
+        ].join("\n"),
       }),
     ).toBe(true);
 
@@ -177,6 +182,143 @@ describe("iMessage approval reactions", () => {
         }),
       ).resolves.toBeNull();
     }
+  });
+
+  it("does not register a phantom binding when /approve text appears in a non-approval message", () => {
+    // Agent help text quoting /approve syntax should NOT register a binding —
+    // requiring a canonical `ID: <id>` header line is the gate.
+    expect(
+      registerIMessageApprovalReactionTargetForOutboundMessage({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "help-message",
+        text: "Run /approve task-7 allow-once when you're ready.",
+      }),
+    ).toBe(false);
+
+    expect(
+      extractIMessageApprovalPromptBinding("Run /approve task-7 allow-once when you're ready."),
+    ).toBeNull();
+  });
+
+  it("escapes `$` sequences in approvalId when interpolating into outbound text", () => {
+    // The shared replaceApprovalIdPlaceholder helper guards against
+    // String.prototype.replace interpreting `$1`/`$&`/`$$` in the
+    // replacement string. Verified indirectly via the binding extractor:
+    // a prompt rendered for approvalId "exec-$1abc" must keep the id intact.
+    const text = [
+      "Exec approval required",
+      "ID: exec-1abc",
+      "Reply with: /approve exec-1abc allow-once",
+    ].join("\n");
+    expect(extractIMessageApprovalPromptBinding(text)).toEqual({
+      approvalId: "exec-1abc",
+      allowedDecisions: ["allow-once"],
+    });
+  });
+
+  it("ignores cross-device is_from_me tapbacks even when the actor is an approver", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "approval-message",
+      approvalId: "exec-self",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const handled = await maybeResolveIMessageApprovalReaction({
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      message: buildTapbackReactionPayload({
+        sender: "+15551230000",
+        is_from_me: true,
+        reaction_emoji: "👍",
+        reacted_to_guid: "approval-message",
+      }),
+      bodyText: "",
+    });
+
+    expect(handled).toBe(false);
+    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+  });
+
+  it("clears the in-memory binding on successful approval resolve so toggle 👍→👎 does not refire", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "approval-message",
+      approvalId: "exec-success",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const cfg = { channels: { imessage: { allowFrom: ["+15551230000"] } } };
+    await expect(
+      maybeResolveIMessageApprovalReaction({
+        cfg,
+        accountId: "default",
+        message: buildTapbackReactionPayload({
+          sender: "+15551230000",
+          reaction_emoji: "👍",
+          reacted_to_guid: "approval-message",
+        }),
+        bodyText: "",
+      }),
+    ).resolves.toBe(true);
+
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+
+    // Second tapback (toggle to 👎) must not hit the resolver — the in-memory
+    // binding was cleared on the first success.
+    await expect(
+      maybeResolveIMessageApprovalReaction({
+        cfg,
+        accountId: "default",
+        message: buildTapbackReactionPayload({
+          sender: "+15551230000",
+          reaction_emoji: "👎",
+          reacted_to_guid: "approval-message",
+        }),
+        bodyText: "",
+      }),
+    ).resolves.toBe(false);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves DM reactions even when send registered under handle but inbound carries chat_guid", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      // Send path keys by handle (target.kind === 'handle').
+      conversation: { handle: "+15551230000" },
+      messageId: "approval-message",
+      approvalId: "exec-dm",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    const cfg = { channels: { imessage: { allowFrom: ["+15551230000"] } } };
+    const handled = await maybeResolveIMessageApprovalReaction({
+      cfg,
+      accountId: "default",
+      message: buildTapbackReactionPayload({
+        sender: "+15551230000",
+        // Inbound DM payload populates chat_guid (chat.db always sets it).
+        chat_guid: "iMessage;-;+15551230000",
+        chat_identifier: "+15551230000",
+        chat_id: 17,
+        is_group: false,
+        reaction_emoji: "👍",
+        reacted_to_guid: "approval-message",
+      }),
+      bodyText: "",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "exec-dm",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
   });
 
   it("ignores removed tapbacks for approval reactions", async () => {

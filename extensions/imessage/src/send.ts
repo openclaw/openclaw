@@ -20,7 +20,12 @@ import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
-import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
+import {
+  formatIMessageChatTarget,
+  type IMessageService,
+  normalizeIMessageHandle,
+  parseIMessageTarget,
+} from "./targets.js";
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -97,6 +102,33 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? raw.trim() : null;
+}
+
+// Approval-reaction bindings need to match `reacted_to_guid` on the inbound
+// tapback, which is always the iMessage GUID (never a numeric ROWID). Some imsg
+// bridge variants return a numeric `message_id` from `send` without a `guid` —
+// for the approval path we strictly require the string GUID so we never bind
+// against a numeric id that the inbound side can't produce.
+function resolveOutboundMessageGuid(
+  result: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!result) {
+    return null;
+  }
+  const candidates = [result.guid, result.messageId, result.message_id, result.id];
+  for (const value of candidates) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    // Reject all-digit strings: they came from numeric ROWIDs coerced to
+    // strings (e.g. "12345"), not real GUIDs (which look like
+    // "p:0/ABCD-EFGH-..." or contain non-digit characters).
+    if (trimmed && !/^\d+$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  return null;
 }
 
 function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
@@ -297,20 +329,23 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
       if (message) {
-        const conversation: IMessageApprovalConversationKey =
-          target.kind === "chat_guid"
-            ? { chatGuid: target.chatGuid }
-            : target.kind === "chat_identifier"
-              ? { chatIdentifier: target.chatIdentifier }
-              : target.kind === "chat_id"
-                ? { chatId: target.chatId }
-                : { handle: target.to };
-        registerIMessageApprovalReactionTargetForOutboundMessage({
-          accountId: account.accountId,
-          conversation,
-          messageId: resolvedId,
-          text: message,
-        });
+        const approvalBindingMessageId = resolveOutboundMessageGuid(result);
+        if (approvalBindingMessageId) {
+          const handleForKey =
+            target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
+          const conversation: IMessageApprovalConversationKey = {
+            ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
+            ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
+            ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
+            ...(handleForKey ? { handle: handleForKey } : {}),
+          };
+          registerIMessageApprovalReactionTargetForOutboundMessage({
+            accountId: account.accountId,
+            conversation,
+            messageId: approvalBindingMessageId,
+            text: message,
+          });
+        }
       }
     }
     return {

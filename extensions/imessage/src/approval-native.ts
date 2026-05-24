@@ -37,6 +37,7 @@ import {
 } from "./accounts.js";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import { addIMessageApprovalReactionHintToText } from "./approval-reactions.js";
+import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
@@ -433,10 +434,6 @@ function appendIMessageReactionHint(params: {
     text: params.text ?? "",
     allowedDecisions: params.allowedDecisions,
   });
-}
-
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
 }
 
 function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {

@@ -23,14 +23,15 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildIMessageApprovalReactionHint,
+  addIMessageApprovalReactionHintToText,
   registerIMessageApprovalReactionTarget,
   unregisterIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
+import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { sendMessageIMessage } from "./send.js";
-import { parseIMessageTarget } from "./targets.js";
+import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 const log = createSubsystemLogger("imessage/approvals");
 
@@ -54,18 +55,6 @@ type IMessageFinalPayload = {
   text: string;
 };
 
-function appendReactionHint(params: {
-  text: string;
-  allowedDecisions: IMessagePendingDelivery["allowedDecisions"];
-}): string {
-  const hint = buildIMessageApprovalReactionHint(params.allowedDecisions);
-  return hint ? `${params.text}\n\n${hint}` : params.text;
-}
-
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
-}
-
 function buildPendingPayload(params: {
   request: ApprovalRequest;
   approvalKind: "exec" | "plugin";
@@ -88,6 +77,9 @@ function buildPendingPayload(params: {
             params.view.approvalKind === "exec"
               ? (params.view.warningText ?? undefined)
               : undefined,
+          ask: params.view.approvalKind === "exec" ? (params.view.ask ?? null) : null,
+          agentId: params.view.approvalKind === "exec" ? (params.view.agentId ?? null) : null,
+          sessionKey: params.view.approvalKind === "exec" ? (params.view.sessionKey ?? null) : null,
           command: params.view.approvalKind === "exec" ? params.view.commandText : "",
           cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
           host:
@@ -99,7 +91,10 @@ function buildPendingPayload(params: {
           nowMs: params.nowMs,
         } satisfies ExecApprovalPendingReplyParams);
   return {
-    text: appendReactionHint({
+    // Use the same hint-insertion helper as the render path so the two routes
+    // produce identical prompt text and the helper's idempotency guard
+    // prevents a double-hint when the upstream payload already includes one.
+    text: addIMessageApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),
@@ -155,7 +150,8 @@ function buildConversationKeyForTarget(to: string): IMessageApprovalConversation
     if (parsed.kind === "chat_identifier") {
       return { chatIdentifier: parsed.chatIdentifier };
     }
-    return { handle: parsed.to };
+    const handle = normalizeIMessageHandle(parsed.to);
+    return handle ? { handle } : null;
   } catch {
     return null;
   }
@@ -233,27 +229,57 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) =>
-      registerIMessageApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+    bindPending: ({ entry, request, view, pendingPayload }) => {
+      const accountId = entry.accountId?.trim();
+      if (!accountId) {
+        // An empty accountId would silently fail buildReactionTargetKey and
+        // leave the prompt with no way to be resolved via reaction. Surface
+        // this loudly instead of returning null with no signal.
+        log.error(
+          `imessage approvals: refusing to bind reaction target for ${request.id}; missing accountId in prepared entry`,
+        );
+        return null;
+      }
+      // If the approval is already past expiry by the time we bind (clock skew
+      // or delayed delivery), don't pretend to honor a 1ms TTL — refuse the
+      // binding so callers see an honest "no binding" and the prompt remains
+      // resolvable only via the /approve text fallback.
+      const ttlMs = view.expiresAtMs - Date.now();
+      if (ttlMs <= 0) {
+        log.error(
+          `imessage approvals: refusing to bind reaction target for ${request.id}; approval already expired at bind time`,
+        );
+        return null;
+      }
+      return registerIMessageApprovalReactionTarget({
+        accountId,
         conversation: entry.conversation,
         messageId: entry.messageId,
         approvalId: request.id,
         allowedDecisions: pendingPayload.allowedDecisions,
-        ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
+        ttlMs,
       })
         ? true
-        : null,
+        : null;
+    },
     unbindPending: ({ entry }) => {
+      const accountId = entry.accountId?.trim();
+      if (!accountId) {
+        return;
+      }
       unregisterIMessageApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+        accountId,
         conversation: entry.conversation,
         messageId: entry.messageId,
       });
     },
     cancelDelivered: ({ entry }) => {
+      const accountId = entry.accountId?.trim();
+      if (!accountId) {
+        return;
+      }
       unregisterIMessageApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+        accountId,
         conversation: entry.conversation,
         messageId: entry.messageId,
       });
