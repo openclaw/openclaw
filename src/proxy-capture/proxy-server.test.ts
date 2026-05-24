@@ -26,7 +26,7 @@ describe("parseConnectTarget", () => {
 
 describe("redactHeaders", () => {
   it("redacts all exact-match sensitive header names", () => {
-    const headers = {
+    const headers: Record<string, string> = {
       authorization: "Bearer tok_abc123",
       "proxy-authorization": "Basic cHJveHk6cGFzcw==",
       cookie: "sid=session-value",
@@ -58,7 +58,7 @@ describe("redactHeaders", () => {
   });
 
   it("redacts headers matching sensitive fragments", () => {
-    const headers = {
+    const headers: Record<string, string> = {
       "x-custom-api-key": "my-api-key-value",
       "x-my-apikey-header": "my-apikey-value",
       "x-refresh-token": "refresh-tok-abc",
@@ -74,7 +74,7 @@ describe("redactHeaders", () => {
   });
 
   it("matches header names case-insensitively", () => {
-    const headers = {
+    const headers: Record<string, string> = {
       Authorization: "Bearer tok_case",
       COOKIE: "sid=UPPER",
       "X-API-KEY": "key-upper",
