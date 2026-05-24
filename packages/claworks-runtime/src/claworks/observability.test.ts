@@ -47,6 +47,16 @@ describe("prometheusMetricsText", () => {
     expect(text).toContain("claworks_observation_events");
   });
 
+  it("includes playbook run counters as claworks_playbook_runs_total", () => {
+    globalMetrics.increment("playbook.started", { playbook_id: "daily_self_test" });
+    globalMetrics.increment("playbook.completed", { playbook_id: "daily_self_test" });
+    globalMetrics.increment("playbook.failed", { playbook_id: "alarm_notify" });
+    const text = prometheusMetricsText("test-robot");
+    expect(text).toContain("claworks_playbook_runs_total");
+    expect(text).toContain('status="started"');
+    expect(text).toContain('playbook_id="daily_self_test"');
+  });
+
   it("includes globalMetrics counters when present", () => {
     globalMetrics.increment("playbook.run", { playbook_id: "my_pb" });
     globalMetrics.increment("capability.call", { id: "kb.search" });

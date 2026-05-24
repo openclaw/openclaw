@@ -69,9 +69,57 @@ export function listObservationEvents(limit = 50): ObservationEvent[] {
   return observationEvents.slice(0, limit);
 }
 
+const PLAYBOOK_RUN_COUNTER_NAMES = new Set([
+  "playbook.started",
+  "playbook.completed",
+  "playbook.failed",
+]);
+
+function playbookStatusFromCounterName(name: string): string | null {
+  if (name.startsWith("playbook.started")) {
+    return "started";
+  }
+  if (name.startsWith("playbook.completed")) {
+    return "completed";
+  }
+  if (name.startsWith("playbook.failed")) {
+    return "failed";
+  }
+  return null;
+}
+
+function extractPlaybookIdFromCounterKey(key: string): string {
+  const match = key.match(/playbook_id="([^"]+)"/);
+  return match?.[1] ?? "unknown";
+}
+
+/** 从 globalMetrics 计数器提取 Playbook 运行维度（供 Prometheus 专用指标）。 */
+export function playbookRunMetricsFromSnapshot(
+  counters: Record<string, number>,
+): Array<{ status: string; playbookId: string; value: number }> {
+  const rows: Array<{ status: string; playbookId: string; value: number }> = [];
+  for (const [key, value] of Object.entries(counters)) {
+    const baseName = key.split("{")[0] ?? key;
+    if (!PLAYBOOK_RUN_COUNTER_NAMES.has(baseName)) {
+      continue;
+    }
+    const status = playbookStatusFromCounterName(baseName);
+    if (!status) {
+      continue;
+    }
+    rows.push({
+      status,
+      playbookId: extractPlaybookIdFromCounterKey(key),
+      value,
+    });
+  }
+  return rows;
+}
+
 export function prometheusMetricsText(robotName: string): string {
   const uptime = runtimeUptimeSeconds();
   const snap = globalMetrics.snapshot();
+  const playbookRuns = playbookRunMetricsFromSnapshot(snap.counters);
 
   const lines: string[] = [
     "# HELP claworks_uptime_seconds Process uptime in seconds",
@@ -84,6 +132,19 @@ export function prometheusMetricsText(robotName: string): string {
     "# TYPE claworks_observation_events gauge",
     `claworks_observation_events ${observationEvents.length}`,
   ];
+
+  if (playbookRuns.length > 0) {
+    lines.push(
+      "# HELP claworks_playbook_runs_total Playbook run counters by status and playbook_id",
+      "# TYPE claworks_playbook_runs_total counter",
+    );
+    for (const row of playbookRuns) {
+      const safeId = row.playbookId.replace(/"/g, "'");
+      lines.push(
+        `claworks_playbook_runs_total{status="${row.status}",playbook_id="${safeId}"} ${row.value}`,
+      );
+    }
+  }
 
   // Emit all globalMetrics counters as Prometheus counters
   const counterEntries = Object.entries(snap.counters);
