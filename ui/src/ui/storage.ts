@@ -156,6 +156,55 @@ function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
 
+function isHistoricalRoutedSessionKey(value: string | undefined): boolean {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return false;
+  }
+  const isPeerSessionMarker = (part: string | undefined): boolean =>
+    part === "direct" || part === "dm" || part === "group";
+  const parts = trimmed.split(":");
+  if (parts[0] !== "agent" || !parts[1]) {
+    return false;
+  }
+  const [, , first, second, third, fourth] = parts;
+  if (first === "subagent" || first === "cron" || first === "custom") {
+    return false;
+  }
+  if (parts.length === 4) {
+    return (first === "direct" || first === "dm") && Boolean(second);
+  }
+  if (parts.length >= 5) {
+    if (isPeerSessionMarker(first) && Boolean(second)) {
+      return true;
+    }
+    if (Boolean(first) && isPeerSessionMarker(second) && Boolean(third)) {
+      return true;
+    }
+    if (Boolean(first) && Boolean(second) && isPeerSessionMarker(third) && Boolean(fourth)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function sanitizeRestoredSessionSelection(
+  selection: ScopedSessionSelection,
+  defaults: UiSettings,
+): ScopedSessionSelection {
+  const fallback = defaults.sessionKey || "main";
+  const sessionKey = isHistoricalRoutedSessionKey(selection.sessionKey)
+    ? fallback
+    : selection.sessionKey;
+  const lastActiveSessionKey = isHistoricalRoutedSessionKey(selection.lastActiveSessionKey)
+    ? fallback
+    : selection.lastActiveSessionKey;
+  return {
+    sessionKey,
+    lastActiveSessionKey: lastActiveSessionKey || sessionKey || fallback,
+  };
+}
+
 function resolveScopedSessionSelection(
   gatewayUrl: string,
   parsed: PersistedUiSettings,
@@ -166,10 +215,13 @@ function resolveScopedSessionSelection(
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
   if (scopedSessionKey && scopedLastActiveSessionKey) {
-    return {
-      sessionKey: scopedSessionKey,
-      lastActiveSessionKey: scopedLastActiveSessionKey,
-    };
+    return sanitizeRestoredSessionSelection(
+      {
+        sessionKey: scopedSessionKey,
+        lastActiveSessionKey: scopedLastActiveSessionKey,
+      },
+      defaults,
+    );
   }
 
   const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? defaults.sessionKey;
@@ -178,10 +230,13 @@ function resolveScopedSessionSelection(
     legacySessionKey ??
     defaults.lastActiveSessionKey;
 
-  return {
-    sessionKey: legacySessionKey,
-    lastActiveSessionKey: legacyLastActiveSessionKey,
-  };
+  return sanitizeRestoredSessionSelection(
+    {
+      sessionKey: legacySessionKey,
+      lastActiveSessionKey: legacyLastActiveSessionKey,
+    },
+    defaults,
+  );
 }
 
 function loadSessionToken(gatewayUrl: string): string {
