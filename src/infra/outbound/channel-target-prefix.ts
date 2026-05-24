@@ -58,6 +58,7 @@ function resolvePluginTargetPrefix(prefix: string): string | undefined {
     return undefined;
   }
   const registry = getActivePluginChannelRegistryFromState();
+  const matches: string[] = [];
   for (const entry of registry?.channels ?? []) {
     const plugin = entry.plugin;
     const channelId = normalizeOptionalLowercaseString(plugin.id);
@@ -68,10 +69,10 @@ function resolvePluginTargetPrefix(prefix: string): string | undefined {
         (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedPrefix,
       )
     ) {
-      return channelId;
+      matches.push(channelId);
     }
   }
-  return undefined;
+  return matches.find((channelId) => channelId !== "channel-broker") ?? matches[0];
 }
 
 function resolveChannelTargetProviderPrefix(

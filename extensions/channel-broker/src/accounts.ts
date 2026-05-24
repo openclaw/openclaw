@@ -6,6 +6,7 @@ import {
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { normalizeBrokerPlatformId } from "openclaw/plugin-sdk/channel-broker";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   ChannelBrokerConfig,
@@ -85,6 +86,52 @@ function normalizeCapabilities(
   return normalized;
 }
 
+function hasOwnProperty(record: Record<string, unknown> | undefined, key: string): boolean {
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+}
+
+function resolveProviderConfigRecord(
+  config: ChannelBrokerConfig | undefined,
+  accountId: string,
+): { key: "accounts" | "providers"; value: ChannelBrokerProviderConfig } | undefined {
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const accounts = config?.accounts ?? {};
+  if (hasOwnProperty(accounts, normalizedAccountId)) {
+    return { key: "accounts", value: accounts[normalizedAccountId] ?? {} };
+  }
+  const providers = config?.providers ?? {};
+  if (hasOwnProperty(providers, normalizedAccountId)) {
+    return { key: "providers", value: providers[normalizedAccountId] ?? {} };
+  }
+  return undefined;
+}
+
+function resolveSecretInputPath(params: {
+  config: ChannelBrokerConfig | undefined;
+  accountId: string;
+  field: "outboundToken" | "signingSecret";
+}): string {
+  const provider = resolveProviderConfigRecord(params.config, params.accountId);
+  if (provider && hasOwnProperty(provider.value, params.field)) {
+    return `channels.channel-broker.${provider.key}.${normalizeAccountId(params.accountId)}.${params.field}`;
+  }
+  return `channels.channel-broker.${params.field}`;
+}
+
+function normalizeRuntimeSecretInput(params: {
+  cfg: CoreConfig;
+  value: unknown;
+  path: string;
+}): string | null {
+  return (
+    normalizeResolvedSecretInputString({
+      value: params.value,
+      defaults: params.cfg.secrets?.defaults,
+      path: params.path,
+    }) ?? null
+  );
+}
+
 export function resolveChannelBrokerAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -110,8 +157,24 @@ export function resolveChannelBrokerAccount(params: {
     configured: Boolean(baseUrl),
     name: normalizeOptionalString(merged.name),
     baseUrl,
-    outboundToken: normalizeOptionalString(merged.outboundToken) ?? null,
-    signingSecret: normalizeOptionalString(merged.signingSecret) ?? null,
+    outboundToken: normalizeRuntimeSecretInput({
+      cfg: params.cfg,
+      value: merged.outboundToken,
+      path: resolveSecretInputPath({
+        config: channelConfig,
+        accountId: normalizedAccountId,
+        field: "outboundToken",
+      }),
+    }),
+    signingSecret: normalizeRuntimeSecretInput({
+      cfg: params.cfg,
+      value: merged.signingSecret,
+      path: resolveSecretInputPath({
+        config: channelConfig,
+        accountId: normalizedAccountId,
+        field: "signingSecret",
+      }),
+    }),
     platforms: normalizePlatformList(merged.platforms),
     platformAliases: normalizePlatformAliasMap(merged.platformAliases),
     defaultPlatform,

@@ -1,4 +1,5 @@
 import type { BrokerPlatformCapabilities } from "openclaw/plugin-sdk/channel-broker";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ChannelBrokerPlatformCapabilityConfig = Omit<BrokerPlatformCapabilities, "platform"> & {
   platform?: string;
@@ -8,8 +9,8 @@ export type ChannelBrokerProviderConfig = {
   name?: string;
   enabled?: boolean;
   baseUrl?: string;
-  outboundToken?: string;
-  signingSecret?: string;
+  outboundToken?: SecretInput;
+  signingSecret?: SecretInput;
   accountId?: string;
   platforms?: string[];
   platformAliases?: Record<string, string>;
@@ -33,6 +34,13 @@ export type CoreConfig = {
   };
   session?: {
     store?: string;
+  };
+  secrets?: {
+    defaults?: {
+      env?: string;
+      file?: string;
+      exec?: string;
+    };
   };
 };
 

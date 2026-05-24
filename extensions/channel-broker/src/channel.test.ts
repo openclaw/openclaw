@@ -22,6 +22,7 @@ describe("channel-broker plugin", () => {
   });
 
   it("delivers text through the configured provider and maps the provider receipt", async () => {
+    const controller = new AbortController();
     const sendOutboundRequest = vi.fn(async () =>
       createBrokerReceipt({
         requestId: "broker-send-1",
@@ -56,10 +57,12 @@ describe("channel-broker plugin", () => {
       accountId: "acme",
       replyToId: "native-parent",
       threadId: "topic/a",
+      signal: controller.signal,
     } as never);
 
     expect(sendOutboundRequest).toHaveBeenCalledWith({
       account: expect.objectContaining({ providerId: "acme" }),
+      signal: controller.signal,
       request: {
         version: 1,
         requestId: "broker-send-1",
@@ -121,5 +124,51 @@ describe("channel-broker plugin", () => {
         },
       ],
     });
+  });
+
+  it("passes cancellation through the default HTTP transport", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () =>
+        createBrokerReceipt({
+          requestId: "broker-send-2",
+          providerId: "acme",
+          platform: "Slack",
+          status: "sent",
+          messageIds: ["native-2"],
+        }),
+    }));
+    setChannelBrokerRuntime({ fetch: fetchMock as never, createRequestId: () => "broker-send-2" });
+
+    const result = await channelBrokerPlugin.message?.send.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test/",
+                outboundToken: "resolved-token",
+              },
+            },
+          },
+        },
+      },
+      to: "slack:C123",
+      text: "hello",
+      accountId: "acme",
+      signal: controller.signal,
+    } as never);
+
+    expect(result?.messageId).toBe("native-2");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://broker.example.test/v1/outbound",
+      expect.objectContaining({
+        method: "POST",
+        signal: controller.signal,
+        headers: expect.objectContaining({ authorization: "Bearer resolved-token" }),
+      }),
+    );
   });
 });

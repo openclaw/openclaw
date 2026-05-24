@@ -79,6 +79,12 @@ Scope intent:
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
 - `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
+- `channels.channel-broker.outboundToken`
+- `channels.channel-broker.signingSecret`
+- `channels.channel-broker.accounts.*.outboundToken`
+- `channels.channel-broker.accounts.*.signingSecret`
+- `channels.channel-broker.providers.*.outboundToken`
+- `channels.channel-broker.providers.*.signingSecret`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`
 - `channels.irc.accounts.*.password`

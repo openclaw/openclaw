@@ -9,6 +9,10 @@ export default defineBundledChannelEntry({
     specifier: "./api.js",
     exportName: "channelBrokerPlugin",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
   runtime: {
     specifier: "./api.js",
     exportName: "setChannelBrokerRuntime",
