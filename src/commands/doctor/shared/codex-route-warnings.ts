@@ -2744,7 +2744,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
   }
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
-      const sessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath));
+      const sessionKeys = scanCodexSessionStoreRoutes(
+        loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
     return {
@@ -2767,7 +2769,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedStores = 0;
   let repairedSessions = 0;
   for (const target of targets) {
-    const staleSessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath));
+    const staleSessionKeys = scanCodexSessionStoreRoutes(
+      loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+    );
     if (staleSessionKeys.length === 0) {
       continue;
     }
