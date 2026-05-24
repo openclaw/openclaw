@@ -1,4 +1,5 @@
 import { escapeRegExp } from "../shared/regexp.js";
+import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
@@ -36,9 +37,13 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
+  // Strip reasoning blocks (<think>, <thinking>, etc.) before the exact-match
+  // check. Some models prepend chain-of-thought before NO_REPLY (#66701);
+  // without this, the exact regex fails and the raw reasoning text is posted.
+  const stripped = stripReasoningTagsFromText(text);
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  return getSilentExactRegex(token).test(stripped);
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };

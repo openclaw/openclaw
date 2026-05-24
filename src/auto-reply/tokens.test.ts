@@ -40,6 +40,36 @@ describe("isSilentReplyText", () => {
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
+
+  it("returns true when <think> block precedes token (#66701)", () => {
+    expect(isSilentReplyText("<think>I will stay quiet here.</think>NO_REPLY")).toBe(true);
+  });
+
+  it("returns true when <think> block with whitespace precedes token (#66701)", () => {
+    expect(
+      isSilentReplyText("<think>\nCav is talking to someone else.\n</think>\n\nNO_REPLY"),
+    ).toBe(true);
+  });
+
+  it("returns true for <antthinking> block prefix (#66701)", () => {
+    expect(isSilentReplyText("<antthinking>skip</antthinking>NO_REPLY")).toBe(true);
+  });
+
+  it("returns false when substantive text follows token after reasoning strip (#66701)", () => {
+    expect(isSilentReplyText("<think>reasoning</think>NO_REPLY but also responding")).toBe(false);
+  });
+
+  it("returns true for multiple sequential reasoning blocks before token (#66701)", () => {
+    expect(isSilentReplyText("<think>a</think><think>b</think>NO_REPLY")).toBe(true);
+  });
+
+  it("returns false when token is inside a reasoning block with content after (#66701)", () => {
+    expect(isSilentReplyText("<think>NO_REPLY</think>actual reply")).toBe(false);
+  });
+
+  it("returns false for unclosed reasoning block containing substantive text before token (#66701)", () => {
+    expect(isSilentReplyText("<think>I will stay quiet here.\nNO_REPLY")).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
