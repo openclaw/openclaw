@@ -183,7 +183,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       // Small message (chunk 1)
       { role: "user", content: "Short question about code", timestamp: 1 },
       // Oversized message (will be in chunk 2, triggers the oversized retry)
-      { role: "assistant", content: "x".repeat(500_000), timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "x".repeat(500_000) }], timestamp: 2 },
       // Small message after oversized (should be recovered by oversized retry)
       { role: "user", content: "Follow-up question", timestamp: 3 },
     ];
@@ -214,7 +214,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     const mixedMessages: AgentMessage[] = [
       { role: "user", content: "Short question", timestamp: 1 },
       // Oversized message that will be filtered in the retry
-      { role: "assistant", content: "x".repeat(500_000), timestamp: 2 },
+      { role: "assistant", content: [{ type: "text", text: "x".repeat(500_000) }], timestamp: 2 },
       { role: "user", content: "a".repeat(400), timestamp: 3 },
       { role: "user", content: "b".repeat(400), timestamp: 4 },
     ];
