@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Crabbox: let the wrapper find a sibling Crabbox checkout from linked Git worktrees so Codex worktrees can run remote gates without a PATH shim.
 - Scripts: tolerate the standard `--` option separator in shared script flag parsing so perf/test helpers accept package-manager argument forwarding.
 - Tests: preserve `--` passthrough arguments in live-media, live-shard, and extension batch harnesses so Vitest filters are not misread or silently ignored.
+- Crabbox: default AWS macOS runner requests to on-demand capacity so EC2 Mac proof commands do not fail on the unsupported Spot market default.
 - Tests: run upgrade-survivor config recipe commands through the Windows npm shim so native Windows package walks keep baseline config coverage.
 - Image tool: use bundled Anthropic media limits when resolving image compression policy without provider-runtime hooks.
 - Tests: fail the kitchen-sink RPC Docker walk when gateway RSS sampling is unavailable instead of silently disabling the per-process memory guard.

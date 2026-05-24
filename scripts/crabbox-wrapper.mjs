@@ -387,6 +387,31 @@ function hasOption(commandArgs, name) {
   return false;
 }
 
+function commandOptionEnd(commandArgs) {
+  if (commandArgs[0] === "run") {
+    return runCommandBounds(commandArgs).optionEnd;
+  }
+  const delimiter = commandArgs.indexOf("--");
+  return delimiter >= 0 ? delimiter : commandArgs.length;
+}
+
+function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
+  if (
+    !["run", "warmup"].includes(commandArgs[0]) ||
+    providerName !== "aws" ||
+    optionValue(commandArgs, "--target") !== "macos" ||
+    hasOption(commandArgs, "--market") ||
+    hasOption(commandArgs, "--id")
+  ) {
+    return commandArgs;
+  }
+
+  const optionEnd = commandOptionEnd(commandArgs);
+  const normalizedArgs = [...commandArgs];
+  normalizedArgs.splice(optionEnd, 0, "--market", "on-demand");
+  return normalizedArgs;
+}
+
 const localPathRunOptions = new Set([
   "capture-stderr",
   "capture-stdout",
@@ -669,6 +694,7 @@ const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 const provider = selectedProvider(args);
 const commandProviderValue = commandProvider(args);
+const normalizedArgs = ensureAwsMacOnDemandMarket(args, provider);
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
@@ -712,8 +738,8 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
-if (shouldUseFullCheckoutForCleanSparseRemoteSync(args, provider)) {
-  const runWords = runCommandArgs(args);
+if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
+  const runWords = runCommandArgs(normalizedArgs);
   const changedGateBase =
     isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
   const checkout = prepareFullCheckoutForSync({ changedGateBase });
@@ -737,9 +763,9 @@ function cleanupOnce() {
   cleanupChildCwd();
 }
 
-const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(args));
-if (args[0] === "run" && provider === "aws" && runtimeEntrypoint) {
-  const id = optionValue(args, "--id");
+const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
+if (normalizedArgs[0] === "run" && provider === "aws" && runtimeEntrypoint) {
+  const id = optionValue(normalizedArgs, "--id");
   const hydrate = id
     ? `pnpm crabbox:hydrate -- --id ${id}`
     : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
@@ -752,7 +778,7 @@ const childEnv = { ...process.env };
 if (
   isLocalContainerProvider(provider) &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET &&
-  !hasOption(args, "--local-container-docker-socket")
+  !hasOption(normalizedArgs, "--local-container-docker-socket")
 ) {
   childEnv.CRABBOX_LOCAL_CONTAINER_DOCKER_SOCKET = "1";
   console.error(
@@ -763,7 +789,7 @@ if (
   isLocalContainerProvider(provider) &&
   process.platform !== "win32" &&
   !childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT &&
-  !hasOption(args, "--local-container-work-root")
+  !hasOption(normalizedArgs, "--local-container-work-root")
 ) {
   childEnv.CRABBOX_LOCAL_CONTAINER_WORK_ROOT = "/tmp/openclaw-crabbox-docker-work";
   console.error(
@@ -771,7 +797,7 @@ if (
   );
 }
 
-const childArgs = childCwd === repoRoot ? args : absolutizeLocalRunPaths(args);
+const childArgs = childCwd === repoRoot ? normalizedArgs : absolutizeLocalRunPaths(normalizedArgs);
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

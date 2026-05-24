@@ -112,6 +112,93 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toContain('"local-container"');
   });
 
+  it("defaults AWS macOS runs to on-demand capacity", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "echo ok"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "macos",
+      "--market",
+      "on-demand",
+      "--",
+      "echo ok",
+    ]);
+  });
+
+  it("defaults AWS macOS warmups to on-demand capacity", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["warmup", "--provider", "aws", "--target", "macos"],
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "warmup",
+      "--provider",
+      "aws",
+      "--target",
+      "macos",
+      "--market",
+      "on-demand",
+    ]);
+  });
+
+  it("does not override explicit AWS macOS market or lease selections", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const explicitMarket = runWrapper(helpText, [
+      "run",
+      "--provider",
+      "aws",
+      "--target=macos",
+      "--market",
+      "spot",
+      "--",
+      "echo ok",
+    ]);
+    const existingLease = runWrapper(helpText, [
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "macos",
+      "--id",
+      "cbx_existing",
+      "--",
+      "echo ok",
+    ]);
+
+    expect(explicitMarket.status).toBe(0);
+    expect(parseFakeCrabboxOutput(explicitMarket).args).toEqual([
+      "run",
+      "--provider",
+      "aws",
+      "--target=macos",
+      "--market",
+      "spot",
+      "--",
+      "echo ok",
+    ]);
+    expect(existingLease.status).toBe(0);
+    expect(parseFakeCrabboxOutput(existingLease).args).toEqual([
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "macos",
+      "--id",
+      "cbx_existing",
+      "--",
+      "echo ok",
+    ]);
+  });
+
   it("finds a Crabbox checkout next to the Git common dir in linked worktrees", () => {
     const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
     tempDirs.push(fakeWorkspaceParent);
