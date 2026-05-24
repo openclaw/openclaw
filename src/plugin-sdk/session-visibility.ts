@@ -96,6 +96,7 @@ export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spaw
 
 type CompiledAgentAllowPattern =
   | { kind: "all" }
+  | { kind: "deny" }
   | { kind: "exact"; value: string }
   | {
       kind: "wildcard";
@@ -104,10 +105,10 @@ type CompiledAgentAllowPattern =
       interior: string[];
     };
 
-function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern | null {
+function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern {
   const raw = normalizeOptionalString(pattern) ?? "";
   if (!raw) {
-    return null;
+    return { kind: "deny" };
   }
   if (raw === "*") {
     return { kind: "all" };
@@ -161,9 +162,7 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
   const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
-  const allowPatterns = rawAllowPatterns
-    .map((pattern) => compileAgentAllowPattern(pattern))
-    .filter((pattern): pattern is CompiledAgentAllowPattern => pattern !== null);
+  const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
@@ -173,6 +172,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
     return allowPatterns.some((pattern) => {
       if (pattern.kind === "all") {
         return true;
+      }
+      if (pattern.kind === "deny") {
+        return false;
       }
       if (pattern.kind === "exact") {
         return pattern.value === agentId;

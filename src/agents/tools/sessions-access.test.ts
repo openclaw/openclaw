@@ -137,6 +137,20 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.matchesAllow("ops")).toBe(false);
   });
 
+  it("keeps blank configured allow patterns fail-closed", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: [" "],
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.matchesAllow("ops")).toBe(false);
+    expect(policy.isAllowed("main", "ops")).toBe(false);
+  });
+
   it("handles interior wildcards", () => {
     const policy = createAgentToAgentPolicy({
       tools: {
