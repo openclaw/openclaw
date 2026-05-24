@@ -1,4 +1,11 @@
-import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
+import {
+  SimplePool,
+  finalizeEvent,
+  getPublicKey,
+  verifyEvent,
+  type Event,
+  type Filter,
+} from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import {
   createDirectDmPreCryptoGuardPolicy,
@@ -614,28 +621,25 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
-      },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
-      },
+  const dmFilter: Filter = { kinds: [4], "#p": [pk], since };
+  const sub = pool.subscribeMany(relays, dmFilter, {
+    onevent: handleEvent,
+    oneose: () => {
+      // EOSE handler - called when all stored events have been received
+      for (const relay of relays) {
+        metrics.emit("relay.message.eose", 1, { relay });
+      }
+      onEose?.(relays.join(", "));
     },
-  );
+    onclose: (reason) => {
+      // Handle subscription close
+      for (const relay of relays) {
+        metrics.emit("relay.message.closed", 1, { relay });
+        options.onDisconnect?.(relay);
+      }
+      onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+    },
+  });
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {

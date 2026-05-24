@@ -48,6 +48,7 @@ function installOutboundRuntime(convertMarkdownTables = vi.fn((text: string) => 
 }
 
 async function startOutboundAccount(accountId?: string) {
+  const abort = new AbortController();
   const sendDm = vi.fn(async () => {});
   const bus = {
     sendDm,
@@ -58,13 +59,23 @@ async function startOutboundAccount(accountId?: string) {
   };
   mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
 
-  const cleanup = (await startNostrGatewayAccount(
+  const done = startNostrGatewayAccount(
     createStartAccountContext({
       account: buildResolvedNostrAccount(accountId ? { accountId } : undefined),
+      abortSignal: abort.signal,
     }),
-  )) as { stop: () => void };
+  );
+  await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledTimes(1));
 
-  return { cleanup, sendDm };
+  return {
+    cleanup: async () => {
+      abort.abort();
+      await done;
+    },
+    done,
+    close: bus.close,
+    sendDm,
+  };
 }
 
 describe("nostr outbound cfg threading", () => {
@@ -96,7 +107,21 @@ describe("nostr outbound cfg threading", () => {
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "converted:|a|b|");
 
-    cleanup.stop();
+    await cleanup();
+  });
+
+  it("keeps the gateway account task alive until abort", async () => {
+    installOutboundRuntime();
+    const { cleanup, close, done } = await startOutboundAccount();
+    const finished = vi.fn();
+    void done.then(finished);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(finished).not.toHaveBeenCalled();
+    await cleanup();
+    expect(finished).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("uses the configured defaultAccount when accountId is omitted", async () => {
@@ -125,7 +150,7 @@ describe("nostr outbound cfg threading", () => {
     });
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
 
-    cleanup.stop();
+    await cleanup();
   });
 
   it("backs declared message adapter capabilities with outbound sends", async () => {
@@ -158,6 +183,6 @@ describe("nostr outbound cfg threading", () => {
       },
     });
 
-    cleanup.stop();
+    await cleanup();
   });
 });

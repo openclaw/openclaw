@@ -5,7 +5,7 @@
  * Used to import existing profiles before editing.
  */
 
-import { SimplePool, verifyEvent, type Event } from "nostr-tools";
+import { SimplePool, verifyEvent, type Event, type Filter } from "nostr-tools";
 import type { NostrProfile } from "./config-schema.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
@@ -122,33 +122,28 @@ export async function importProfileFromRelays(
       for (const relay of relays) {
         relaysQueried.push(relay);
 
-        const sub = pool.subscribeMany(
-          [relay],
-          [
-            {
-              kinds: [0],
-              authors: [pubkey],
-              limit: 1,
-            },
-          ] as unknown as Parameters<typeof pool.subscribeMany>[1],
-          {
-            onevent(event) {
-              events.push({ event, relay });
-            },
-            oneose() {
-              completed++;
-              if (completed >= relays.length) {
-                resolve();
-              }
-            },
-            onclose() {
-              completed++;
-              if (completed >= relays.length) {
-                resolve();
-              }
-            },
+        const profileFilter: Filter = {
+          kinds: [0],
+          authors: [pubkey],
+          limit: 1,
+        };
+        const sub = pool.subscribeMany([relay], profileFilter, {
+          onevent(event) {
+            events.push({ event, relay });
           },
-        );
+          oneose() {
+            completed++;
+            if (completed >= relays.length) {
+              resolve();
+            }
+          },
+          onclose() {
+            completed++;
+            if (completed >= relays.length) {
+              resolve();
+            }
+          },
+        });
 
         // Clean up subscription after timeout
         setTimeout(() => {

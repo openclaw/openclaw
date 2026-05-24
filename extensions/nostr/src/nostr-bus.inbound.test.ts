@@ -18,24 +18,27 @@ const mockState = vi.hoisted(() => ({
     successes: [],
     failures: [],
   })),
-}));
-
-vi.mock("nostr-tools", () => {
-  class MockSimplePool {
-    subscribeMany(
+  subscribeMany: vi.fn(
+    (
       _relays: string[],
-      _filters: unknown,
+      _filter: unknown,
       handlers: {
         onevent: (event: Record<string, unknown>) => void | Promise<void>;
         oneose?: () => void;
         onclose?: (reason: string[]) => void;
       },
-    ) {
+    ) => {
       mockState.handlers = handlers;
       return {
         close: vi.fn(),
       };
-    }
+    },
+  ),
+}));
+
+vi.mock("nostr-tools", () => {
+  class MockSimplePool {
+    subscribeMany = mockState.subscribeMany;
 
     publish = vi.fn(async () => {});
   }
@@ -91,6 +94,7 @@ async function emitEvent(event: Record<string, unknown>) {
 describe("startNostrBus inbound guards", () => {
   beforeEach(() => {
     mockState.handlers = null;
+    mockState.subscribeMany.mockClear();
     mockState.verifyEvent.mockClear();
     mockState.verifyEvent.mockReturnValue(true);
     mockState.decrypt.mockClear();
@@ -99,6 +103,23 @@ describe("startNostrBus inbound guards", () => {
 
   afterEach(() => {
     mockState.handlers = null;
+  });
+
+  it("subscribes with a single NIP-01 filter object", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      relays: ["wss://relay.example.com"],
+      onMessage: async () => {},
+      onMetric: () => {},
+    });
+
+    expect(mockState.subscribeMany).toHaveBeenCalledWith(
+      ["wss://relay.example.com"],
+      { kinds: [4], "#p": [BOT_PUBKEY], since: 0 },
+      expect.objectContaining({ onevent: expect.any(Function) }),
+    );
+
+    bus.close();
   });
 
   it("checks sender authorization after verify and before decrypt", async () => {
