@@ -1157,6 +1157,10 @@
           "minimum": 1,
           "type": "number"
         },
+        "model": {
+          "description": "Optional provider-specific model override. Use 'default' to reset; Perplexity only honors allowlisted overrides.",
+          "type": "string"
+        },
         "query": {
           "description": "Search query.",
           "type": "string"
