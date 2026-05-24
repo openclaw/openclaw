@@ -2,6 +2,8 @@ export {
   buildDiscordModelPickerCustomId,
   buildDiscordModelPickerProviderItems,
   computeAlphaBuckets,
+  findModelBucketId,
+  findProviderBucketId,
   DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW,
   DISCORD_COMPONENT_MAX_ROWS,
   DISCORD_COMPONENT_MAX_SELECT_OPTIONS,

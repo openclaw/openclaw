@@ -462,6 +462,54 @@ export function resolveBucket(
   return buckets.find((bucket) => bucket.id === id) ?? buckets[0]!;
 }
 
+/**
+ * Derive the alpha-bucket id that contains a given provider id. Returns
+ * `undefined` when bucketing is inactive (all providers fit in one bucket)
+ * or the provider is unknown. Used by the interaction handler to recompute
+ * `providerBucket` at re-render time without forcing every customId to
+ * carry the bucket field — the bucket is a pure function of the provider
+ * list + provider id.
+ */
+export function findProviderBucketId(
+  data: ModelsProviderData,
+  provider: string,
+): string | undefined {
+  const normalized = normalizeProviderId(provider);
+  const sorted = [...data.providers].toSorted();
+  const idx = sorted.indexOf(normalized);
+  if (idx < 0) {
+    return undefined;
+  }
+  const buckets = computeAlphaBuckets(sorted);
+  const containing = buckets.find((bucket) => idx >= bucket.start && idx < bucket.end);
+  return containing && containing.id !== "all" ? containing.id : undefined;
+}
+
+/**
+ * Derive the alpha-bucket id that contains a given model id within the
+ * named provider. Same rationale as {@link findProviderBucketId} — saves
+ * customId budget by recomputing the bucket from the durable state
+ * (provider + model) rather than carrying it as a parameter.
+ */
+export function findModelBucketId(
+  data: ModelsProviderData,
+  provider: string,
+  model: string,
+): string | undefined {
+  const modelSet = data.byProvider.get(normalizeProviderId(provider));
+  if (!modelSet) {
+    return undefined;
+  }
+  const sorted = [...modelSet].toSorted();
+  const idx = sorted.indexOf(model);
+  if (idx < 0) {
+    return undefined;
+  }
+  const buckets = computeAlphaBuckets(sorted);
+  const containing = buckets.find((bucket) => idx >= bucket.start && idx < bucket.end);
+  return containing && containing.id !== "all" ? containing.id : undefined;
+}
+
 export function buildDiscordModelPickerProviderItems(
   data: ModelsProviderData,
 ): DiscordModelPickerProviderItem[] {
@@ -487,10 +535,23 @@ export function getDiscordModelPickerProviderPage(params: {
   const bucket = resolveBucket(buckets, params.bucket);
   const bucketItems = bucket ? allItems.slice(bucket.start, bucket.end) : allItems;
 
-  const canFitSinglePage = bucketItems.length <= DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX;
-  const maxPageSize = canFitSinglePage
-    ? DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX
+  // Discord caps each message at 5 action rows. The bucket select consumes
+  // one row when bucketing is active, so provider buttons get only 4 rows
+  // (no nav) or 3 rows (with nav). Without buckets the row budget is
+  // unchanged.
+  const bucketingActive = buckets.length > 1;
+  const bucketedSinglePageMax =
+    DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * (DISCORD_COMPONENT_MAX_ROWS - 1);
+  const bucketedPaginatedPageSize =
+    DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW * (DISCORD_COMPONENT_MAX_ROWS - 2);
+  const singlePageMax = bucketingActive
+    ? bucketedSinglePageMax
+    : DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX;
+  const paginatedPageSize = bucketingActive
+    ? bucketedPaginatedPageSize
     : DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE;
+  const canFitSinglePage = bucketItems.length <= singlePageMax;
+  const maxPageSize = canFitSinglePage ? singlePageMax : paginatedPageSize;
   const pageSize = clampPageSize(params.pageSize, maxPageSize, maxPageSize);
   const page = paginateItems({
     items: bucketItems,

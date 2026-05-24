@@ -530,11 +530,14 @@ describe("Discord model picker rendering", () => {
     expect(bucketIds[0]).toMatch(/a=bucket;v=providers;u=42/);
   });
 
-  it("model select customId carries modelBucket so non-first-bucket picks survive re-render", () => {
-    // Regression for the Codex P2 finding: rendering the models view in a
-    // non-first bucket previously encoded a `model` action customId without
-    // the bucket id, so the next interaction would re-render with the
-    // default bucket and the just-selected model would disappear.
+  it("model select customId omits providerBucket/modelBucket (derived at re-render)", () => {
+    // After reviewloop pass 3 we moved providerBucket/modelBucket OUT of
+    // per-item customIds — both are pure functions of the durable state
+    // (provider + picked model) so re-renders compute them via
+    // findProviderBucketId / findModelBucketId. This test pins the new
+    // shape and guards against accidentally re-introducing pb/mb on the
+    // model select, which previously pushed the customId past Discord's
+    // 100-char cap for long providers + 20-digit user ids.
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ vllm: models });
 
@@ -557,14 +560,65 @@ describe("Discord model picker rendering", () => {
 
     const modelActionIds = customIds.filter((customId) => customId.includes(";a=model;"));
     expect(modelActionIds).toHaveLength(1);
-    expect(modelActionIds[0]).toContain("mb=21-30");
+    expect(modelActionIds[0]).not.toMatch(/;pb=/);
+    expect(modelActionIds[0]).not.toMatch(/;mb=/);
   });
 
-  it("provider buttons carry providerBucket so non-first-bucket picks survive the round trip", () => {
-    // Regression for Codex review #2 P2: clicking a provider from bucket
-    // "21-30" previously encoded the provider action customId without
-    // providerBucket, so the next "back" or re-render fell back to the
-    // first bucket and the user's letter range was lost.
+  it("model select customId stays under Discord's 100-char limit for long providers + 20-digit user ids", () => {
+    // Regression for reviewloop pass 3 finding #1: combining a long
+    // provider id, full Discord snowflake user id, and bucket fields was
+    // pushing the model select customId past 100 chars and crashing the
+    // render. With pb/mb dropped, the cap holds.
+    const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
+    const data = createModelsProviderData({ "azure-openai-responses": models });
+
+    const rendered = renderDiscordModelPickerModelsView({
+      command: "models",
+      userId: "12345678901234567890",
+      data,
+      provider: "azure-openai-responses",
+      page: 1,
+      providerPage: 1,
+      providerBucket: "a-z",
+      modelBucket: "21-30",
+      pendingRuntime: "codex",
+    });
+
+    const payload = serializePayload(toDiscordModelPickerMessagePayload(rendered)) as {
+      components?: SerializedComponent[];
+    };
+    const rows = extractContainerRows(payload.components);
+    const allComponents = rows.flatMap((row) => row.components ?? []);
+    for (const component of allComponents) {
+      const id = component.custom_id ?? "";
+      expect(id.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+    }
+  });
+
+  it("provider page sizes shrink to a 4-row budget when buckets are active", () => {
+    // Regression for reviewloop pass 3 finding #2: the bucket select row
+    // consumes one of Discord's 5 message-action rows, so provider button
+    // pages must drop from 25 (single-page) to 20 and from 20 (paginated)
+    // to 15 to avoid exceeding the action-row cap.
+    const entries: Record<string, string[]> = {};
+    for (let i = 1; i <= 26; i += 1) {
+      entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
+    }
+    const data = createModelsProviderData(entries);
+
+    const firstBucket = getDiscordModelPickerProviderPage({ data, page: 1 });
+    // Buckets engaged (26 > 25 threshold) → page size capped at 20 even
+    // though a fits-in-single-page bucket would historically allow 25.
+    expect(firstBucket.buckets.length).toBeGreaterThan(1);
+    expect(firstBucket.items.length).toBeLessThanOrEqual(20);
+  });
+
+  it("provider buttons omit providerBucket; bucket is preserved via the nav row", () => {
+    // After reviewloop pass 3 the provider button customId drops
+    // providerBucket (the bucket is derived from the picked provider on
+    // re-render). The bucket-state hint lives on the nav prev/next row,
+    // which is the only place pagination needs to know which bucket it
+    // is walking.
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= 30; i += 1) {
       entries[`provider-${String(i).padStart(2, "0")}`] = [`model-${i}`];
@@ -588,6 +642,15 @@ describe("Discord model picker rendering", () => {
     const providerActionIds = customIds.filter((customId) => customId.includes(";a=provider;"));
     expect(providerActionIds.length).toBeGreaterThan(0);
     for (const customId of providerActionIds) {
+      // Provider buttons no longer encode pb (derived from picked
+      // provider via findProviderBucketId at re-render time).
+      expect(customId).not.toMatch(/;pb=/);
+    }
+    // The nav customId carries the active bucket because pagination is
+    // bucket-scoped and the user's "current" range is the only durable
+    // hint of where to keep them.
+    const navIds = customIds.filter((customId) => customId.includes(";a=nav;"));
+    for (const customId of navIds) {
       expect(customId).toContain("pb=21-30");
     }
   });

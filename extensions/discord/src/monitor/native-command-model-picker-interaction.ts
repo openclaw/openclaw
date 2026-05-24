@@ -17,6 +17,8 @@ import {
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+  findModelBucketId,
+  findProviderBucketId,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
@@ -306,7 +308,9 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider,
       page: 1,
       providerPage: parsed.providerPage ?? 1,
-      providerBucket: parsed.providerBucket,
+      // bucket-action customId omits providerBucket to stay under 100
+      // chars; derive from the picked provider on re-render.
+      providerBucket: parsed.providerBucket ?? findProviderBucketId(pickerData, provider),
       modelBucket: newBucket,
       currentModel: currentModelRef,
       currentRuntime,
@@ -386,7 +390,10 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider: selectedProvider,
       page: 1,
       providerPage: parsed.providerPage ?? parsed.page,
-      providerBucket: parsed.providerBucket,
+      // Provider button customId no longer carries providerBucket;
+      // derive from the picked provider so the bucket select stays in
+      // sync on the next render.
+      providerBucket: parsed.providerBucket ?? findProviderBucketId(pickerData, selectedProvider),
       currentModel: currentModelRef,
       currentRuntime,
       quickModels,
@@ -412,6 +419,12 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
     const modelRef = `${provider}/${selectedModel}`;
+    // The model select customId omits providerBucket/modelBucket to stay
+    // under Discord's 100-char limit; derive both from the durable state.
+    const derivedProviderBucket =
+      parsed.providerBucket ?? findProviderBucketId(pickerData, provider);
+    const derivedModelBucket =
+      parsed.modelBucket ?? findModelBucketId(pickerData, provider, selectedModel);
     const rendered = renderDiscordModelPickerModelsView({
       command: parsed.command,
       userId: parsed.userId,
@@ -419,8 +432,8 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider,
       page: parsed.page,
       providerPage: parsed.providerPage ?? 1,
-      providerBucket: parsed.providerBucket,
-      modelBucket: parsed.modelBucket,
+      providerBucket: derivedProviderBucket,
+      modelBucket: derivedModelBucket,
       currentModel: currentModelRef,
       currentRuntime,
       pendingModel: modelRef,
@@ -446,6 +459,13 @@ export async function handleDiscordModelPickerInteraction(params: {
       modelIndex: parsed.modelIndex,
     });
     const pendingModel = selectedModel ? `${provider}/${selectedModel}` : undefined;
+    // Runtime select customId also omits the bucket fields; derive from
+    // the pending model + provider.
+    const derivedProviderBucket =
+      parsed.providerBucket ?? findProviderBucketId(pickerData, provider);
+    const derivedModelBucket =
+      parsed.modelBucket ??
+      (selectedModel ? findModelBucketId(pickerData, provider, selectedModel) : undefined);
     const rendered = renderDiscordModelPickerModelsView({
       command: parsed.command,
       userId: parsed.userId,
@@ -453,8 +473,8 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider,
       page: parsed.page,
       providerPage: parsed.providerPage ?? 1,
-      providerBucket: parsed.providerBucket,
-      modelBucket: parsed.modelBucket,
+      providerBucket: derivedProviderBucket,
+      modelBucket: derivedModelBucket,
       currentModel: currentModelRef,
       currentRuntime,
       ...(pendingModel ? { pendingModel } : {}),

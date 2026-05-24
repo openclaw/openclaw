@@ -204,10 +204,11 @@ function buildBucketSelectRow(params: {
   }));
   // The bucket select uses `action: "bucket"` so the interaction handler
   // can route the chosen value (interaction.values[0]) into providerBucket
-  // or modelBucket and re-render. page resets to 1; the rest of the state
-  // (provider, runtime, providerPage, modelIndex, providerBucket on the
-  // models view) is preserved in the customId so a subsequent re-render
-  // keeps context.
+  // or modelBucket and re-render. page resets to 1. providerBucket is
+  // intentionally omitted from the customId — when view=models the handler
+  // derives the provider bucket from `params.provider` via
+  // findProviderBucketId, keeping the customId under Discord's 100-char
+  // cap for long provider ids + 20-digit user ids.
   const select = createModelSelect({
     customId: buildDiscordModelPickerCustomId({
       command: params.command,
@@ -219,9 +220,6 @@ function buildBucketSelectRow(params: {
       runtime: params.runtime,
       providerPage: params.providerPage,
       modelIndex: params.modelIndex,
-      ...(params.view === "models" && params.providerBucket
-        ? { providerBucket: params.providerBucket }
-        : {}),
     }),
     options,
     placeholder:
@@ -329,8 +327,10 @@ function buildProviderRows(params: {
   userId: string;
   page: DiscordModelPickerPage<DiscordModelPickerProviderItem>;
   currentProvider?: string;
-  providerBucket?: string;
 }): Row<Button>[] {
+  // Provider button customId omits providerBucket: the bucket can be
+  // re-derived from the picked provider id at re-render time, freeing
+  // customId budget for longer provider ids and snowflake user ids.
   const rows = chunkProvidersForRows(params.page.items).map(
     (providers) =>
       new Row(
@@ -346,7 +346,6 @@ function buildProviderRows(params: {
               view: "models",
               provider: provider.id,
               page: params.page.page,
-              providerBucket: params.providerBucket,
               userId: params.userId,
             }),
           });
@@ -512,8 +511,6 @@ function buildModelRows(params: {
             page: params.modelPage.page,
             providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
-            providerBucket: activeProviderBucket,
-            modelBucket: runtimeModelBucket,
             userId: params.userId,
           }),
           options: runtimeChoices.map((choice) => {
@@ -547,6 +544,12 @@ function buildModelRows(params: {
       ? params.modelPage.bucket.id
       : undefined;
 
+  // Model select customId omits providerBucket and modelBucket: both are
+  // pure functions of the durable state (provider + picked model) and
+  // including them risks blowing past Discord's 100-char customId cap for
+  // long provider ids + 20-digit user ids + active bucket strings. The
+  // action=model handler derives both buckets via findProviderBucketId /
+  // findModelBucketId at re-render time.
   rows.push(
     new Row([
       createModelSelect({
@@ -558,8 +561,6 @@ function buildModelRows(params: {
           runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
-          providerBucket: activeProviderBucket,
-          modelBucket: activeModelBucket,
           userId: params.userId,
         }),
         options: modelOptions,
@@ -580,6 +581,9 @@ function buildModelRows(params: {
     runtime: stateRuntime,
     providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
+    // Carry both buckets through model pagination so prev/next within a
+    // bucket round-trips back to the same provider bucket on submit/back.
+    providerBucket: activeProviderBucket,
     modelBucket:
       params.modelPage.bucket && params.modelPage.bucket.id !== "all"
         ? params.modelPage.bucket.id
@@ -703,7 +707,6 @@ export function renderDiscordModelPickerProvidersView(
       userId: params.userId,
       page,
       currentProvider: parsedCurrent?.provider,
-      providerBucket: activeProviderBucket,
     }),
   );
 
