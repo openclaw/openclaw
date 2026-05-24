@@ -529,7 +529,8 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  return /\bthread not found:/iu.test(formatErrorMessage(error));
+  const message = formatErrorMessage(error);
+  return /\bthread not found:/iu.test(message) || /\bno thread binding\b/iu.test(message);
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {

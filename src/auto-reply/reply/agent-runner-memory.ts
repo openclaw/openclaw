@@ -124,6 +124,15 @@ const memoryDeps = {
   now: () => Date.now(),
 };
 
+function isRecoverableNativeHarnessCompactionFailure(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const failure = (result as { failure?: { reason?: unknown } }).failure;
+  const reason = typeof failure?.reason === "string" ? failure.reason : "";
+  return reason === "missing_thread_binding" || reason === "stale_thread_binding";
+}
+
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
     runWithModelFallback,
@@ -768,6 +777,12 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (!result?.ok || !result.compacted) {
     const reason = result?.reason ?? "not_compacted";
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    if (isRecoverableNativeHarnessCompactionFailure(result)) {
+      logVerbose(
+        `preflightCompaction continuing after recoverable native harness binding failure: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      return entry ?? params.sessionEntry;
+    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
