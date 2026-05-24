@@ -470,6 +470,36 @@ describe("TwitchClientManager", () => {
       expect((manager as any).messageHandlers.has(key)).toBe(false);
     });
 
+    it("clears pending client message handlers when disconnect cancels connection", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+      const handler = vi.fn();
+      manager.onMessage(testAccount, handler);
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      await manager.disconnect(testAccount);
+
+      const key = manager.getAccountKey(testAccount);
+      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      authSuccessHandlers[0]?.();
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+
+      messageHandlers[0]?.("#testchannel", "testuser", "stale", {
+        userInfo: {
+          userName: "testuser",
+          displayName: "TestUser",
+          userId: "123",
+          isMod: false,
+          isBroadcaster: false,
+          isVip: false,
+          isSubscriber: false,
+        },
+        id: "msg-stale",
+      });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
     it("should handle disconnecting non-existent client gracefully", async () => {
       // Missing clients are ignored.
       await manager.disconnect(testAccount);

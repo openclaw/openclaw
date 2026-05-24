@@ -18,6 +18,13 @@ function createCompletionProgram(): Command {
 
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
+  program
+    .command("agent")
+    .description("Agent commands")
+    .option("--verbose <on|off>", "Set verbosity");
+  const sessions = program.command("sessions").description("Session commands");
+  sessions.option("--verbose", "Verbose output");
+  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
 
   return program;
 }
@@ -102,16 +109,27 @@ describe("completion-cli", () => {
       'complete -c openclaw -n "__fish_use_subcommand" -a "gateway" -d \'Gateway commands\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__openclaw_command_path_matches gateway" -a "status" -d \'Show gateway status\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches gateway -- -t --token" -a "status" -d \'Show gateway status\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches gateway\" -l force -d 'Force the action'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway -- -t --token\" -l force -d 'Force the action'",
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status\" -l json -d 'JSON output'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status -- -t --token\" -l json -d 'JSON output'",
     );
-    expect(script).toContain("set -l value_options -t --token");
+    expect(script).toContain("__openclaw_command_path_matches gateway -- -t --token");
     expect(script).toContain("if contains -- $flag $value_options");
+  });
+
+  it("scopes fish value-taking option skips to the active command path", () => {
+    const script = getCompletionScript("fish", createCompletionProgram());
+
+    expect(script).toContain("__openclaw_command_path_matches agent -- --verbose");
+    expect(script).toContain("__openclaw_command_path_matches sessions cleanup --");
+    expect(script).not.toContain("__openclaw_command_path_matches sessions cleanup -- --verbose");
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches sessions cleanup --\" -l dry-run -d 'Preview cleanup'",
+    );
   });
 
   it("generates Bash completions without comma-suffixed short flags", () => {

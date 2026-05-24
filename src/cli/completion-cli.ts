@@ -56,27 +56,44 @@ function fishOptionFlags(options: Command["options"], wantsValue: boolean): stri
   });
 }
 
-function collectFishOptionFlags(program: Command, wantsValue: boolean): string[] {
-  const flags = new Set<string>();
-  const visit = (cmd: Command) => {
-    for (const flag of fishOptionFlags(cmd.options, wantsValue)) {
+function collectFishPathOptionFlags(
+  program: Command,
+  parents: readonly string[],
+  wantsValue: boolean,
+): string[] {
+  const flags = new Set(fishOptionFlags(program.options, wantsValue));
+  let current: Command | undefined = program;
+  for (const name of parents) {
+    current = current?.commands.find((cmd) => cmd.name() === name);
+    if (!current) {
+      break;
+    }
+    for (const flag of fishOptionFlags(current.options, wantsValue)) {
       flags.add(flag);
     }
-    for (const child of cmd.commands) {
-      visit(child);
-    }
-  };
-  visit(program);
+  }
   return [...flags];
 }
 
-function generateFishPathHelper(program: Command, rootCmd: string): string {
-  const valueOptions = collectFishOptionFlags(program, true);
+function generateFishPathHelper(rootCmd: string): string {
   return `
 function __${rootCmd}_command_path_matches
+  set -l expected
+  set -l value_options
+  set -l reading_value_options 0
+  for arg in $argv
+    if test "$arg" = "--"
+      set reading_value_options 1
+      continue
+    end
+    if test $reading_value_options -eq 1
+      set -a value_options $arg
+    else
+      set -a expected $arg
+    end
+  end
   set -l tokens (commandline -opc)
   set -e tokens[1]
-  set -l value_options ${fishWords(valueOptions)}
   set -l command_tokens
   set -l skip_next 0
   for token in $tokens
@@ -96,8 +113,8 @@ function __${rootCmd}_command_path_matches
     end
     set -a command_tokens $token
   end
-  for i in (seq (count $argv))
-    if test "$command_tokens[$i]" != "$argv[$i]"
+  for i in (seq (count $expected))
+    if test "$command_tokens[$i]" != "$expected[$i]"
       return 1
     end
   end
@@ -106,8 +123,13 @@ end
 `;
 }
 
-function fishCommandPathCondition(rootCmd: string, parents: readonly string[]): string {
-  return `__${rootCmd}_command_path_matches ${parents.join(" ")}`;
+function fishCommandPathCondition(
+  program: Command,
+  rootCmd: string,
+  parents: readonly string[],
+): string {
+  const valueOptions = collectFishPathOptionFlags(program, parents, true);
+  return `__${rootCmd}_command_path_matches ${parents.join(" ")} -- ${fishWords(valueOptions)}`.trimEnd();
 }
 
 async function writeCompletionCache(params: {
@@ -452,7 +474,7 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [generateFishPathHelper(program, rootCmd)];
+  const segments: string[] = [generateFishPathHelper(rootCmd)];
 
   const visit = (cmd: Command, parents: string[]) => {
     // Root logic
@@ -480,7 +502,7 @@ function generateFishCompletion(program: Command): string {
         );
       }
     } else {
-      const condition = fishCommandPathCondition(rootCmd, parents);
+      const condition = fishCommandPathCondition(program, rootCmd, parents);
       // Subcommands
       for (const sub of cmd.commands) {
         segments.push(
