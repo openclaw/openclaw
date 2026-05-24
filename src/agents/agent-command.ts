@@ -841,6 +841,11 @@ async function agentCommandInternal(
   let sessionEntry = prepared.sessionEntry;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
+  const inheritedRuntimeToolsAllow = sessionEntry?.runtimeToolsAllow;
+  const effectiveOpts =
+    opts.toolsAllow === undefined && inheritedRuntimeToolsAllow !== undefined
+      ? { ...opts, toolsAllow: inheritedRuntimeToolsAllow }
+      : opts;
 
   try {
     if (opts.deliver === true) {
@@ -904,6 +909,11 @@ async function agentCommandInternal(
     }
 
     if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
+      if (effectiveOpts.toolsAllow !== undefined) {
+        throw new Error(
+          "toolsAllow is only supported for embedded native runs; ACP sessions cannot enforce runtime tool allowlists.",
+        );
+      }
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(
@@ -1076,7 +1086,7 @@ async function agentCommandInternal(
         cfg,
         deps: resolvedDeps,
         runtime,
-        opts,
+        opts: effectiveOpts,
         outboundSession,
         sessionEntry,
         result,
@@ -1776,7 +1786,7 @@ async function agentCommandInternal(
               }).enabled,
               timeoutMs,
               runId,
-              opts,
+              opts: effectiveOpts,
               runContext,
               spawnedBy,
               messageChannel,

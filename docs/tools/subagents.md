@@ -225,7 +225,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
 <ParamField path="toolsAllow" type="string[]">
-  Native embedded sub-agents only. Narrows the spawned child run's tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path. CLI-backed native runs also reject this field because CLI harnesses do not use OpenClaw's embedded tool construction path.
+  Native embedded sub-agent runs only. Narrows the spawned child's embedded runtime tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. For `thread: true` or `mode: "session"` native spawns, OpenClaw stores the allowlist on the child session and applies it to later turns. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path. CLI-backed native runs also reject this field because CLI harnesses do not use OpenClaw's embedded tool construction path.
 </ParamField>
 
 <Warning>

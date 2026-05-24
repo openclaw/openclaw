@@ -97,4 +97,37 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       operations.lastIndexOf("store:update"),
     );
   });
+
+  it("persists runtime toolsAllow on the child session before starting the run", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        toolsAllow: ["read", "exec"],
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "guildchat",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const [persistedKey, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
+    expect(persistedKey).toMatch(/^agent:main:subagent:/);
+    expect(persistedEntry?.runtimeToolsAllow).toEqual(["read", "exec"]);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          toolsAllow: ["read", "exec"],
+        }),
+      }),
+    );
+  });
 });
