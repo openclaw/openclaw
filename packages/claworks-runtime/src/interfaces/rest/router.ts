@@ -392,6 +392,25 @@ export function createClaworksRestHandler(
       if (method === "POST" && parts[1] === "playbooks" && parts[3] === "runs" && parts[2]) {
         const body = (await readJsonBody(req)) as { input?: Record<string, unknown> };
         const run = await runtime.playbookEngine.trigger(parts[2], body.input ?? {});
+        // 如果请求携带 session_id，且 Playbook 同步完成并有回复文本，写入对话上下文引擎
+        const sessionId = typeof body.input?.session_id === "string" ? body.input.session_id : null;
+        if (sessionId && run.status === "completed" && run.output) {
+          const replyText =
+            typeof run.output.text === "string"
+              ? run.output.text
+              : typeof run.output.reply === "string"
+                ? run.output.reply
+                : typeof run.output.message === "string"
+                  ? run.output.message
+                  : null;
+          if (replyText) {
+            runtime.contextEngine?.append(sessionId, "assistant", replyText, {
+              playbookId: parts[2],
+              runId: run.id,
+              channel: "rest",
+            });
+          }
+        }
         sendJson(res, 202, run);
         return true;
       }
