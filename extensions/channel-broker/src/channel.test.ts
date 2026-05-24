@@ -471,6 +471,162 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it.each([
+    {
+      label: "Microsoft Teams alias",
+      target: "broker:teams:19:meeting-channel",
+      platform: "microsoft-teams",
+      id: "19:meeting-channel",
+      type: "channel",
+    },
+    {
+      label: "Google Chat alias",
+      target: "broker:googlechat:spaces/AAA?threadId=thread-1",
+      platform: "google-chat",
+      id: "spaces/AAA",
+      type: "channel",
+      threadId: "thread-1",
+    },
+    {
+      label: "Matrix room",
+      target: "broker:matrix:!roomid:example.org",
+      platform: "matrix",
+      id: "!roomid:example.org",
+      type: "channel",
+    },
+    {
+      label: "LINE group",
+      target: "broker:line:group:line-room",
+      platform: "line",
+      id: "line-room",
+      type: "group",
+    },
+    {
+      label: "Feishu group",
+      target: "broker:feishu:group:oc_123",
+      platform: "feishu",
+      id: "oc_123",
+      type: "group",
+    },
+    {
+      label: "QQ bot alias",
+      target: "broker:qq:group:123456",
+      platform: "qqbot",
+      id: "123456",
+      type: "group",
+    },
+    {
+      label: "Zalo direct",
+      target: "broker:zalo:direct:84901234567",
+      platform: "zalo",
+      id: "84901234567",
+      type: "direct",
+    },
+    {
+      label: "Mattermost channel",
+      target: "broker:mattermost:channel:team/channel",
+      platform: "mattermost",
+      id: "team/channel",
+      type: "channel",
+    },
+    {
+      label: "Nextcloud Talk room",
+      target: "broker:nextcloud-talk:channel:token-1",
+      platform: "nextcloud-talk",
+      id: "token-1",
+      type: "channel",
+    },
+    {
+      label: "Twitch channel",
+      target: "broker:twitch:channel:openclawdev",
+      platform: "twitch",
+      id: "openclawdev",
+      type: "channel",
+    },
+    {
+      label: "IRC channel",
+      target: "broker:irc:channel:%23openclaw",
+      platform: "irc",
+      id: "#openclaw",
+      type: "channel",
+    },
+    {
+      label: "Nostr direct",
+      target: "broker:nostr:direct:npub1openclaw",
+      platform: "nostr",
+      id: "npub1openclaw",
+      type: "direct",
+    },
+    {
+      label: "Tlon channel",
+      target: "broker:tlon:channel:~zod/test",
+      platform: "tlon",
+      id: "~zod/test",
+      type: "channel",
+    },
+    {
+      label: "Synology Chat channel",
+      target: "broker:synology-chat:channel:42",
+      platform: "synology-chat",
+      id: "42",
+      type: "channel",
+    },
+  ] as const)(
+    "maps broker-prefixed Phase 3 platform target: $label",
+    async ({ target, platform, id, type, threadId }) => {
+      const sendOutboundRequest = vi.fn(async () =>
+        createBrokerReceipt({
+          requestId: `broker-phase3-${platform}`,
+          providerId: "acme",
+          platform,
+          status: "sent",
+          messageIds: [`${platform}-message-1`],
+        }),
+      );
+      setChannelBrokerRuntime({
+        sendOutboundRequest,
+        createRequestId: () => `broker-phase3-${platform}`,
+      });
+
+      await channelBrokerPlugin.message?.send?.text?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                  platforms: [platform],
+                },
+              },
+            },
+          },
+        },
+        to: target,
+        text: "phase 3 proof",
+        accountId: "acme",
+      } as never);
+
+      expect(sendOutboundRequest).toHaveBeenCalledWith({
+        account: expect.objectContaining({ providerId: "acme" }),
+        request: expect.objectContaining({
+          requestId: `broker-phase3-${platform}`,
+          providerId: "acme",
+          platform,
+          conversation: {
+            id,
+            type,
+            ...(threadId ? { threadId } : {}),
+          },
+          requirements: {
+            text: true,
+            ...(threadId ? { thread: true } : {}),
+          },
+        }),
+      });
+    },
+  );
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({

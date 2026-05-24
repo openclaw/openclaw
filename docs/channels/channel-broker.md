@@ -72,10 +72,49 @@ Provider keys:
   encode one; defaults to `channel`.
 - `allowFrom` - sender allowlist used by broker inbound events.
 - `capabilities` - optional per-platform capability metadata for UI/status.
+  Use the nested SDK shape:
+
+```json5
+capabilities: {
+  "google-chat": {
+    delivery: { text: true, media: true, replyTo: true, thread: true },
+    live: { draftPreview: false, previewFinalization: false, progressUpdates: false },
+    receive: { webhook: true, ackAfterDurableSend: true },
+    native: { appApi: true, workspaceHosted: true },
+  },
+}
+```
 
 `providers` is accepted as an alias for `accounts` when a broker service wants
 that naming, but `accounts` is preferred because it matches the rest of
 OpenClaw's multi-account channel tooling.
+
+## Phase 3 platform matrix
+
+Phase 3 broker providers should declare what each official/app channel can
+actually do. A matrix row is evidence for routing and UI/status, not a promise
+that OpenClaw ships a native migration for that platform in the same PR.
+
+| Platform        | Canonical id      | Common aliases     | Expected broker shape                                                                                           |
+| --------------- | ----------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Microsoft Teams | `microsoft-teams` | `msteams`, `teams` | Official app/API provider; workspace hosted; threads and replies when the provider supports the target surface. |
+| Google Chat     | `google-chat`     | `googlechat`       | Official app/API provider; spaces and threads map to `conversation.id` plus `threadId`.                         |
+| Matrix          | `matrix`          | -                  | Appservice or bridge provider; rooms map to channels; self-hosted deployments should mark that under `native`.  |
+| LINE            | `line`            | -                  | Official bot provider; reply-token limits belong in provider metadata and receipt behavior.                     |
+| Feishu          | `feishu`          | -                  | Official app provider; groups/chats route through provider-owned ids.                                           |
+| QQ bot          | `qqbot`           | `qq`               | Regional bot provider; group and direct capability differences must be declared.                                |
+| Zalo            | `zalo`            | -                  | Regional bot/provider API; personal-account parity is not implied.                                              |
+| Mattermost      | `mattermost`      | -                  | App/API provider; self-hosted constraints should be visible as native metadata.                                 |
+| Nextcloud Talk  | `nextcloud-talk`  | -                  | App/API provider; self-hosted constraints should be visible as native metadata.                                 |
+| Twitch          | `twitch`          | -                  | Channel-chat provider; usually channel-only and threadless.                                                     |
+| IRC             | `irc`             | -                  | Bridge/provider mode; media, replies, and threads are usually unsupported.                                      |
+| Nostr           | `nostr`           | -                  | Relay-based provider; expose relay and direct-message constraints through `native`.                             |
+| Tlon            | `tlon`            | -                  | App/API or bridge provider; self-hosted or private-network facts stay in `native`.                              |
+| Synology Chat   | `synology-chat`   | -                  | App/API provider; self-hosted constraints should be visible as native metadata.                                 |
+
+Canonical ids stay open-ended. Providers can still declare additional platform
+ids, but these aliases give OpenClaw one stable migration vocabulary for the
+maintained channel set.
 
 ## Provider contract
 

@@ -48,9 +48,12 @@ Use these helpers to normalize provider target ids:
 
 ```typescript
 import {
+  BROKER_KNOWN_PLATFORM_IDS,
+  BROKER_PLATFORM_ALIASES,
   buildBrokerConversationTarget,
   createBrokerOutboundRequest,
   createBrokerReceipt,
+  normalizeBrokerKnownPlatformId,
   normalizeBrokerPlatformId,
   parseBrokerConversationTarget,
 } from "openclaw/plugin-sdk/channel-broker";
@@ -59,6 +62,34 @@ import {
 `buildBrokerConversationTarget({ platform: "Telegram", conversationId:
 "chat 123", threadId: "topic/7" })` produces a stable target like
 `telegram:chat%20123?threadId=topic%2F7`.
+
+`normalizeBrokerPlatformId(...)` validates and lowercases provider platform
+ids. `normalizeBrokerKnownPlatformId(...)` additionally applies OpenClaw's
+logical aliases for maintained channels, such as `teams` and `msteams` to
+`microsoft-teams`, `googlechat` to `google-chat`, and `qq` to `qqbot`.
+`BROKER_KNOWN_PLATFORM_IDS` is a catalog, not a closed enum; broker providers
+can still introduce additional platform ids.
+
+## Capabilities
+
+Declare platform capabilities with the same nested shape used by
+`BrokerPlatformCapabilities`:
+
+```typescript
+const googleChatCapabilities = {
+  platform: "google-chat",
+  delivery: { text: true, media: true, replyTo: true, thread: true },
+  live: { draftPreview: false, previewFinalization: false, progressUpdates: false },
+  receive: { webhook: true, ackAfterDurableSend: true },
+  native: { appApi: true, workspaceHosted: true },
+};
+```
+
+Provider-wide `delivery`, `live`, and `receive` defaults merge with
+platform-specific entries when OpenClaw evaluates support. Put platform facts
+that do not affect the generic broker lifecycle in `native`, for example
+`appApi`, `bridgeApi`, `regionalApi`, `workspaceHosted`, `selfHostedOptional`,
+`channelOnly`, or `relayBased`.
 
 ## Responsibilities
 

@@ -7,6 +7,7 @@ import {
   createBrokerInboundEvent,
   createBrokerOutboundRequest,
   createBrokerReceipt,
+  normalizeBrokerKnownPlatformId,
   normalizeBrokerPlatformId,
   normalizeBrokerInboundEvent,
   resolveBrokerPlatformCapabilities,
@@ -21,6 +22,15 @@ describe("channel-broker SDK", () => {
 
     expect(() => normalizeBrokerPlatformId("")).toThrow("broker platform id is required");
     expect(() => normalizeBrokerPlatformId("../telegram")).toThrow("invalid broker platform id");
+  });
+
+  it("normalizes known broker platform aliases without closing provider-owned ids", () => {
+    expect(normalizeBrokerKnownPlatformId("Teams")).toBe("microsoft-teams");
+    expect(normalizeBrokerKnownPlatformId("msteams")).toBe("microsoft-teams");
+    expect(normalizeBrokerKnownPlatformId("Google Chat")).toBe("google-chat");
+    expect(normalizeBrokerKnownPlatformId("googlechat")).toBe("google-chat");
+    expect(normalizeBrokerKnownPlatformId("qq")).toBe("qqbot");
+    expect(normalizeBrokerKnownPlatformId("custom-regional-chat")).toBe("custom-regional-chat");
   });
 
   it("round-trips broker conversation targets without losing thread scope", () => {

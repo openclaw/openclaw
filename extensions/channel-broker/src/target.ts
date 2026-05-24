@@ -5,6 +5,7 @@ import {
   type BrokerConversationTarget,
   type BrokerConversationType,
 } from "openclaw/plugin-sdk/channel-broker";
+import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
 import type { ResolvedChannelBrokerAccount } from "./types.js";
 
 const CONVERSATION_TYPE_PREFIXES = new Set(["direct", "group", "channel", "thread"]);
@@ -133,9 +134,10 @@ export function parseChannelBrokerTarget(params: {
       : brokerPrefixed && params.account.defaultPlatform
         ? parsed.conversationId
         : parsed.conversationId;
+  const normalizedRawPlatform = normalizeBrokerPlatformId(rawPlatform);
   const platform =
-    params.account.platformAliases[normalizeBrokerPlatformId(rawPlatform)] ??
-    normalizeBrokerPlatformId(rawPlatform);
+    params.account.platformAliases[normalizedRawPlatform] ??
+    normalizeKnownChannelBrokerPlatformId(rawPlatform);
   const colonParts = rawConversationId.split(":");
   const explicitType = normalizeConversationType(colonParts[0]);
   const platformConversation = parsePlatformConversation({

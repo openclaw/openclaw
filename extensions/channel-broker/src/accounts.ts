@@ -8,6 +8,7 @@ import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resoluti
 import { normalizeBrokerPlatformId } from "openclaw/plugin-sdk/channel-broker";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
 import type {
   ChannelBrokerConfig,
   ChannelBrokerProviderConfig,
@@ -59,7 +60,9 @@ export function resolveDefaultChannelBrokerProviderId(cfg: CoreConfig): string {
 }
 
 function normalizePlatformList(values: readonly string[] | undefined): string[] {
-  return Array.from(new Set((values ?? []).map((value) => normalizeBrokerPlatformId(value))));
+  return Array.from(
+    new Set((values ?? []).map((value) => normalizeKnownChannelBrokerPlatformId(value))),
+  );
 }
 
 function normalizePlatformAliasMap(
@@ -67,7 +70,8 @@ function normalizePlatformAliasMap(
 ): Record<string, string> {
   const normalized: Record<string, string> = {};
   for (const [rawAlias, rawTarget] of Object.entries(aliases ?? {})) {
-    normalized[normalizeBrokerPlatformId(rawAlias)] = normalizeBrokerPlatformId(rawTarget);
+    normalized[normalizeBrokerPlatformId(rawAlias)] =
+      normalizeKnownChannelBrokerPlatformId(rawTarget);
   }
   return normalized;
 }
@@ -77,8 +81,14 @@ function normalizeCapabilities(
 ): NonNullable<ResolvedChannelBrokerAccount["capabilities"]> {
   const normalized: NonNullable<ResolvedChannelBrokerAccount["capabilities"]> = {};
   for (const [rawPlatform, value] of Object.entries(capabilities ?? {})) {
-    const platform = normalizeBrokerPlatformId(rawPlatform);
-    normalized[platform] = { ...value, platform };
+    const platform = normalizeKnownChannelBrokerPlatformId(value.platform ?? rawPlatform);
+    normalized[platform] = {
+      platform,
+      ...(value.delivery ? { delivery: { ...value.delivery } } : {}),
+      ...(value.live ? { live: { ...value.live } } : {}),
+      ...(value.receive ? { receive: { ...value.receive } } : {}),
+      ...(value.native ? { native: { ...value.native } } : {}),
+    };
   }
   return normalized;
 }

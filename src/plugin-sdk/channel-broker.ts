@@ -168,6 +168,39 @@ export type BrokerConversationTarget = {
   threadId?: string;
 };
 
+export const BROKER_KNOWN_PLATFORM_IDS = [
+  "slack",
+  "discord",
+  "telegram",
+  "whatsapp",
+  "signal",
+  "imessage",
+  "matrix",
+  "microsoft-teams",
+  "google-chat",
+  "line",
+  "wechat",
+  "qqbot",
+  "feishu",
+  "zalo",
+  "irc",
+  "mattermost",
+  "nextcloud-talk",
+  "nostr",
+  "tlon",
+  "synology-chat",
+  "twitch",
+] as const;
+
+export type BrokerKnownPlatformId = (typeof BROKER_KNOWN_PLATFORM_IDS)[number];
+
+export const BROKER_PLATFORM_ALIASES = {
+  googlechat: "google-chat",
+  msteams: "microsoft-teams",
+  teams: "microsoft-teams",
+  qq: "qqbot",
+} as const satisfies Record<string, BrokerKnownPlatformId>;
+
 export function normalizeBrokerPlatformId(value: string): string {
   const normalized = value
     .trim()
@@ -180,6 +213,11 @@ export function normalizeBrokerPlatformId(value: string): string {
     throw new Error(`invalid broker platform id: ${value}`);
   }
   return normalized;
+}
+
+export function normalizeBrokerKnownPlatformId(value: string): string {
+  const normalized = normalizeBrokerPlatformId(value);
+  return BROKER_PLATFORM_ALIASES[normalized as keyof typeof BROKER_PLATFORM_ALIASES] ?? normalized;
 }
 
 export function buildBrokerConversationTarget(target: BrokerConversationTarget): string {

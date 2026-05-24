@@ -18,39 +18,12 @@ import {
 } from "./accounts.js";
 import { channelBrokerPluginConfigSchema } from "./config-schema.js";
 import { sendChannelBrokerOutboundText, sendChannelBrokerText } from "./outbound.js";
+import { CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES } from "./platforms.js";
 import { channelBrokerStatus } from "./status.js";
 import { normalizeBrokerTarget, parseChannelBrokerTarget } from "./target.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const CHANNEL_ID = "channel-broker" as const;
-
-const BROKER_PLATFORM_TARGET_PREFIXES = [
-  "broker",
-  "channel-broker",
-  "slack",
-  "discord",
-  "telegram",
-  "whatsapp",
-  "signal",
-  "imessage",
-  "matrix",
-  "msteams",
-  "teams",
-  "googlechat",
-  "google-chat",
-  "line",
-  "wechat",
-  "qq",
-  "feishu",
-  "zalo",
-  "irc",
-  "mattermost",
-  "nextcloud-talk",
-  "nostr",
-  "tlon",
-  "synology-chat",
-  "twitch",
-] as const;
 
 function inferBrokerTargetChatType(to: string) {
   try {
@@ -185,7 +158,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
       }),
     },
     messaging: {
-      targetPrefixes: BROKER_PLATFORM_TARGET_PREFIXES,
+      targetPrefixes: CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES,
       normalizeTarget: normalizeBrokerTarget,
       inferTargetChatType: ({ to }) => inferBrokerTargetChatType(to),
       targetResolver: {

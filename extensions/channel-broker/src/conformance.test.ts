@@ -294,6 +294,125 @@ describe("channel-broker conformance baseline", () => {
     ).toBe(false);
   });
 
+  it("keeps official/app channel differences in broker capability declarations", () => {
+    const capabilities = {
+      providerId: "acme-official",
+      delivery: { text: true },
+      receive: { webhook: true, ackAfterDurableSend: true },
+      platforms: [
+        {
+          platform: "microsoft-teams",
+          delivery: { media: true, replyTo: true, thread: true },
+          native: { appApi: true, workspaceHosted: true },
+        },
+        {
+          platform: "google-chat",
+          delivery: { media: true, replyTo: true, thread: true },
+          native: { appApi: true, workspaceHosted: true },
+        },
+        {
+          platform: "matrix",
+          delivery: { media: true, replyTo: true, thread: true },
+          receive: { polling: true },
+          native: { bridgeApi: true, selfHostedOptional: true },
+        },
+        {
+          platform: "line",
+          delivery: { media: true, replyTo: true },
+          native: { appApi: true, replyTokenWindow: true },
+        },
+        {
+          platform: "feishu",
+          delivery: { media: true, replyTo: true, thread: true },
+          native: { appApi: true, workspaceHosted: true },
+        },
+        {
+          platform: "qqbot",
+          delivery: { media: true },
+          native: { botApi: true, regionalApi: true },
+        },
+        {
+          platform: "zalo",
+          delivery: { media: true },
+          native: { botApi: true, regionalApi: true },
+        },
+        {
+          platform: "mattermost",
+          delivery: { media: true, replyTo: true, thread: true },
+          native: { appApi: true, selfHostedOptional: true },
+        },
+        {
+          platform: "nextcloud-talk",
+          delivery: { media: true, replyTo: true, thread: true },
+          native: { appApi: true, selfHostedOptional: true },
+        },
+        {
+          platform: "twitch",
+          delivery: { media: false, thread: false },
+          native: { chatApi: true, channelOnly: true },
+        },
+        {
+          platform: "irc",
+          delivery: { media: false, replyTo: false, thread: false },
+          receive: { polling: true },
+          native: { bridgeApi: true },
+        },
+        {
+          platform: "nostr",
+          delivery: { replyTo: true },
+          native: { relayBased: true },
+        },
+        {
+          platform: "tlon",
+          delivery: { replyTo: true, thread: true },
+          native: { appApi: true, selfHostedOptional: true },
+        },
+        {
+          platform: "synology-chat",
+          delivery: { replyTo: true },
+          native: { appApi: true, selfHostedOptional: true },
+        },
+      ],
+    };
+
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "microsoft-teams",
+        requirements: {
+          delivery: { text: true, thread: true, replyTo: true },
+          receive: { webhook: true, ackAfterDurableSend: true },
+          native: { appApi: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "matrix",
+        requirements: {
+          delivery: { text: true, media: true },
+          receive: { webhook: true, polling: true },
+          native: { bridgeApi: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "twitch",
+        requirements: { delivery: { thread: true } },
+      }),
+    ).toBe(false);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "irc",
+        requirements: { delivery: { media: true } },
+      }),
+    ).toBe(false);
+  });
+
   it("keeps /verbose and tool-message policy in broker channelData instead of platform branches", () => {
     const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
       cfg: { messages: { visibleReplies: "message_tool" } } as never,
