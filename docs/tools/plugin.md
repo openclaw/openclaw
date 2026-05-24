@@ -182,6 +182,17 @@ Key policy rules:
   for that slot by counting as explicit activation; it can load even when it
   would otherwise be opt-in. `plugins.deny` and
   `plugins.entries.<id>.enabled: false` still block it.
+- Memory also supports purpose-specific role slots:
+  `memory.recall`, `memory.compaction`, `memory.capture`, and
+  `memory.userModel`. The legacy `memory` slot remains accepted as shorthand
+  for `memory.recall`; use role slots when composing complementary memory
+  providers. Per-agent overrides can set the same role slots under
+  `agents.list[].plugins.slots`.
+- Multi-slot memory is tracked in #60572. Related design and compatibility
+  threads include #70823 for machine-readable slot ownership, #85473 for a
+  plugin-facing dreaming protocol, #63067/#65411 for the memory-core dreaming
+  coexistence sidecar, #62275 for slot-aware dreaming config, and #76567/#76495
+  for configured-slot memory runtime checks.
 - Bundled opt-in plugins can auto-activate when config names one of their owned
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.

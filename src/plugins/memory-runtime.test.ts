@@ -14,6 +14,12 @@ const applyPluginAutoEnableMock =
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
 const resolveAgentWorkspaceDirMock =
   vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
+const resolveAgentConfigMock = vi.fn<typeof import("../agents/agent-scope.js").resolveAgentConfig>(
+  (cfg, agentId) => {
+    const agents = (cfg as { agents?: { list?: Array<{ id?: string }> } }).agents?.list ?? [];
+    return agents.find((agent) => agent.id === agentId) as never;
+  },
+);
 const resolveDefaultAgentIdMock = vi.fn<
   typeof import("../agents/agent-scope.js").resolveDefaultAgentId
 >(() => "default");
@@ -23,6 +29,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: resolveDefaultAgentIdMock,
 }));
@@ -157,6 +164,7 @@ describe("memory runtime auto-enable loading", () => {
     ensureStandaloneRuntimePluginRegistryLoadedMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
+    resolveAgentConfigMock.mockClear();
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
     applyPluginAutoEnableMock.mockImplementation((params) => ({
@@ -215,6 +223,74 @@ describe("memory runtime auto-enable loading", () => {
     });
 
     expectMemoryRuntimeLoaded(rawConfig, ["memory-lancedb"]);
+  });
+
+  it("loads the configured memory.recall slot plugin", async () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          memory: "memory-core",
+          "memory.recall": "memory-lancedb",
+        },
+      },
+    };
+    const runtime = createMemoryRuntimeFixture();
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: rawConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    getMemoryRuntimeMock
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+    });
+
+    expectMemoryRuntimeLoaded(rawConfig, ["memory-lancedb"]);
+  });
+
+  it("loads the per-agent memory.recall slot override when present", async () => {
+    const rawConfig = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "nancy",
+            plugins: {
+              slots: {
+                "memory.recall": "openclaw-honcho",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const runtime = createMemoryRuntimeFixture();
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: rawConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
+    getMemoryRuntimeMock
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "nancy",
+    });
+
+    expectMemoryRuntimeLoaded(rawConfig, ["openclaw-honcho"]);
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(rawConfig, "nancy");
   });
 
   it("does not fall back to broad plugin loading when the memory slot is disabled", async () => {

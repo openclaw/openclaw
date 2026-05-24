@@ -3,19 +3,24 @@ import type { PluginSlotsConfig } from "../config/types.plugins.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
+export type ExclusivePluginSlotKey = "memory" | "contextEngine";
 
 type SlotPluginRecord = {
   id: string;
   kind?: PluginKind | PluginKind[];
 };
 
-const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
+const SLOT_BY_KIND: Record<PluginKind, ExclusivePluginSlotKey> = {
   memory: "memory",
   "context-engine": "contextEngine",
 };
 
 const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
   memory: "memory-core",
+  "memory.recall": "memory-core",
+  "memory.compaction": "none",
+  "memory.capture": "none",
+  "memory.userModel": "none",
   contextEngine: "legacy",
 };
 
@@ -46,10 +51,10 @@ export function kindsEqual(
 }
 
 /** Return all slot keys that a plugin's kind field maps to. */
-export function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): PluginSlotKey[] {
+export function slotKeysForPluginKind(kind?: PluginKind | PluginKind[]): ExclusivePluginSlotKey[] {
   return normalizeKinds(kind)
     .map((k) => SLOT_BY_KIND[k])
-    .filter((k): k is PluginSlotKey => k != null);
+    .filter((k): k is ExclusivePluginSlotKey => k != null);
 }
 
 export function defaultSlotIdForKey(slotKey: PluginSlotKey): string {

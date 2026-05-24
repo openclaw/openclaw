@@ -352,6 +352,40 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("plugins.slots memory roles", () => {
+  it("accepts purpose-specific memory slot ids", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+          "memory.compaction": "lossless-claw",
+          "memory.capture": "hindsight",
+          "memory.userModel": "openclaw-honcho",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts per-agent plugin slot overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "nancy",
+            plugins: {
+              slots: {
+                "memory.userModel": "openclaw-honcho",
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("models.pricing", () => {
   it("accepts the model pricing bootstrap toggle", () => {
     for (const enabled of [true, false]) {
