@@ -30,6 +30,8 @@ export function applyModelOverrideToSessionEntry(params: {
   profileOverrideSource?: "auto" | "user";
   preserveAuthProfileOverride?: boolean;
   selectionSource?: "auto" | "user";
+  /** True for explicit selections of the configured default; false for clear/reset commands. */
+  preserveDefaultSelectionSource?: boolean;
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
@@ -40,19 +42,38 @@ export function applyModelOverrideToSessionEntry(params: {
   let profileUpdated = false;
 
   if (selection.isDefault) {
-    if (entry.providerOverride) {
-      delete entry.providerOverride;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverride) {
-      delete entry.modelOverride;
-      updated = true;
-      selectionUpdated = true;
-    }
-    if (entry.modelOverrideSource) {
-      delete entry.modelOverrideSource;
-      updated = true;
+    const preserveDefaultSelectionSource =
+      params.preserveDefaultSelectionSource === true && selectionSource === "user";
+    if (preserveDefaultSelectionSource) {
+      if (entry.providerOverride !== selection.provider) {
+        entry.providerOverride = selection.provider;
+        updated = true;
+        selectionUpdated = true;
+      }
+      if (entry.modelOverride !== selection.model) {
+        entry.modelOverride = selection.model;
+        updated = true;
+        selectionUpdated = true;
+      }
+      if (entry.modelOverrideSource !== "user") {
+        entry.modelOverrideSource = "user";
+        updated = true;
+      }
+    } else {
+      if (entry.providerOverride) {
+        delete entry.providerOverride;
+        updated = true;
+        selectionUpdated = true;
+      }
+      if (entry.modelOverride) {
+        delete entry.modelOverride;
+        updated = true;
+        selectionUpdated = true;
+      }
+      if (entry.modelOverrideSource) {
+        delete entry.modelOverrideSource;
+        updated = true;
+      }
     }
     updated = clearFallbackOrigin(entry) || updated;
   } else {

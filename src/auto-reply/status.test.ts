@@ -1717,7 +1717,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain(
       "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
     );
-    expect(normalized).toContain("Clear with: /model zhipu/glm-4.5-air or /reset");
+    expect(normalized).toContain("Clear with: /model default");
     expect(normalized).toContain(
       "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );

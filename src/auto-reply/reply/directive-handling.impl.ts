@@ -450,6 +450,7 @@ export async function handleDirectiveOnly(
         entry: sessionEntry,
         selection: modelSelection,
         profileOverride,
+        preserveDefaultSelectionSource: modelSelection.preserveDefaultSelectionSource !== false,
         markLiveSwitchPending: true,
       });
       modelSelectionUpdated = applied.updated;

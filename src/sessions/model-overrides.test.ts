@@ -180,6 +180,44 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 
+  it("records explicit default selections as exact user-sourced overrides", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-explicit-default",
+      updatedAt: before,
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 128_000,
+      fallbackNoticeSelectedModel: "openai/gpt-5.5",
+      fallbackNoticeActiveModel: "openai/gpt-5.4",
+      fallbackNoticeReason: "rate limit",
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.5",
+        isDefault: true,
+      },
+      preserveDefaultSelectionSource: true,
+      markLiveSwitchPending: true,
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.5");
+    expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBe(true);
+    expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
   it("marks non-default overrides with the provided source", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5a",

@@ -7094,6 +7094,70 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.modelOverrideSource).toBe("user");
   });
 
+  it("does not persist fallback selection for an explicit default model selection", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    followupRun.run.hasSessionModelOverride = true;
+    followupRun.run.modelOverrideSource = "user";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      // User explicitly selected the configured default; it is still an exact
+      // session selection, not a temporary auto-fallback slot.
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.5");
+    expect(sessionEntry.modelOverrideSource).toBe("user");
+  });
+
   it("keeps same-provider auth profile when fallback only changes model", async () => {
     const applyFallbackCandidateSelectionToEntry =
       await getApplyFallbackCandidateSelectionToEntry();

@@ -22,6 +22,7 @@ export type ModelDirectiveSelection = {
   model: string;
   isDefault: boolean;
   alias?: string;
+  preserveDefaultSelectionSource?: boolean;
 };
 
 function formatAddModelCommand(modelRef: string): string {

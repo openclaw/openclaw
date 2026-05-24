@@ -250,6 +250,71 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
   });
 
+  it("keeps explicit default model selections ahead of channel overrides", async () => {
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-default-pin-channel-"));
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+        },
+      },
+      channels: {
+        telegram: { allowFrom: ["*"] },
+        modelByChannel: {
+          telegram: {
+            "*": "openai/gpt-5.4",
+          },
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } satisfies OpenClawConfig;
+    vi.mocked(loadConfigMock).mockReturnValue(cfg);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-5.4" },
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          channel: "telegram",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.5",
+          modelOverrideSource: "user",
+        },
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "agent:main:telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: "message",
+        senderIsOwner: false,
+        resetHookTriggered: false,
+      }),
+    );
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, {} as OpenClawConfig),
+    ).resolves.toEqual({
+      text: "ok",
+    });
+
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.provider).toBe("openai");
+    expect(directiveParams.model).toBe("gpt-5.5");
+  });
+
   it("marks configs through withFastReplyConfig()", async () => {
     const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
 

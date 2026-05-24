@@ -75,6 +75,7 @@ export function resolveModelSelectionFromDirective(params: {
         provider: params.defaultProvider,
         model: params.defaultModel,
         isDefault: true,
+        preserveDefaultSelectionSource: false,
       },
     };
   }

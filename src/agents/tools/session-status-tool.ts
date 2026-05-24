@@ -789,6 +789,7 @@ export function createSessionStatusTool(opts?: {
                   model: selection.model,
                   isDefault: selection.isDefault,
                 },
+          preserveDefaultSelectionSource: selection.kind !== "reset",
           markLiveSwitchPending: true,
         });
         if (applied.updated) {

@@ -324,6 +324,27 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("treats explicit default model selections as session selections for fallback policy", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-id",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    };
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore: { "session-key": sessionEntry },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.hasSessionModelOverride).toBe(true);
+    expect(call.followupRun.run.modelOverrideSource).toBe("user");
+  });
+
   it("propagates non-visible assistant silence for group runs", async () => {
     await runPreparedReply(baseParams());
 

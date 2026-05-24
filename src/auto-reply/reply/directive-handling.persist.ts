@@ -271,6 +271,8 @@ export async function persistInlineDirectives(params: {
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
+          preserveDefaultSelectionSource:
+            modelResolution.modelSelection.preserveDefaultSelectionSource !== false,
           markLiveSwitchPending: params.markLiveSwitchPending,
         });
         const runtimeOverride = resolveModelRuntimeOverride({
