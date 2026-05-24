@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- MiniMax: store OAuth token expiry as an absolute millisecond timestamp so OAuth profiles no longer appear expired on every request. (#83480) Thanks @NianJiuZst.
 - Gateway/restart: honor the configured restart drain budget for embedded runs and avoid spending the deferral timeout twice after forced restart timeouts. (#85708) Thanks @Kaspre.
 - Meeting Notes: include a speaker-labeled transcript section in generated summaries so Discord group voice captures show who said each captured utterance.
 - Discord/voice: recover stale realtime playback state when Discord stream-close/player-idle events do not arrive, and keep generated runtime plugin aliases available after postbuild rewrites.

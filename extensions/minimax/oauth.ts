@@ -17,6 +17,8 @@ const MINIMAX_OAUTH_CONFIG = {
 
 const MINIMAX_OAUTH_SCOPE = "group_id profile model.completion";
 const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
+const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
+const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -52,29 +54,16 @@ type TokenResult =
   | { status: "error"; message: string };
 
 /**
- * Convert a MiniMax OAuth `expired_in` value to an absolute millisecond timestamp.
- *
- * MiniMax returns `expired_in` from the token endpoint as a relative duration
- * in seconds (standard OAuth `expires_in` semantics), but the auth profile
- * store requires an absolute timestamp in milliseconds so
- * `hasUsableOAuthCredential()` can correctly determine token validity.
- *
- * Without this conversion the token appears perpetually expired, triggering
- * a slow OAuth refresh on every request (#83449).
+ * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
+ * contract: absolute Unix milliseconds.
  */
-export function normalizeOAuthExpires(expiredIn: number): number {
-  // If the value is small enough to be a relative duration in seconds
-  // (e.g. 86400 for 24h), convert it to an absolute ms timestamp.
-  // Threshold: 1_000_000_000 (≈ Sep 2001 in Unix epoch seconds).
-  // Any value below this is unambiguously a duration, not a timestamp.
-  if (expiredIn < 1_000_000_000) {
-    return Date.now() + expiredIn * 1000;
+export function normalizeOAuthExpires(expiredIn: number, now = Date.now()): number {
+  if (expiredIn < MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD) {
+    return now + expiredIn * 1000;
   }
-  // Values between 1e9 and 1e12 are Unix timestamps in seconds.  Convert.
-  if (expiredIn < 1_000_000_000_000) {
+  if (expiredIn < MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD) {
     return expiredIn * 1000;
   }
-  // Values ≥ 1e12 are already absolute millisecond timestamps.
   return expiredIn;
 }
 
@@ -194,20 +183,12 @@ async function pollOAuthToken(params: {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
 
-  // Normalize expired_in to an absolute millisecond timestamp.
-  // MiniMax returns expired_in as a relative duration in seconds (standard
-  // OAuth expires_in semantics), but the auth profile store expects an
-  // absolute timestamp in milliseconds for hasUsableOAuthCredential().
-  // Without this conversion the token appears perpetually expired, which
-  // triggers a slow OAuth refresh on every request (#83449).
-  const expiresAbsoluteMs = normalizeOAuthExpires(tokenPayload.expired_in);
-
   return {
     status: "success",
     token: {
       access: tokenPayload.access_token,
       refresh: tokenPayload.refresh_token,
-      expires: expiresAbsoluteMs,
+      expires: normalizeOAuthExpires(tokenPayload.expired_in),
       resourceUrl: tokenPayload.resource_url,
       notification_message: tokenPayload.notification_message,
     },
@@ -231,7 +212,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   const noteLines = [
     `Open ${verificationUrl} to approve access.`,
     `If prompted, enter the code ${oauth.user_code}.`,
-    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${oauth.expired_in} unix timestamp`,
+    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${new Date(oauth.expired_in).toISOString()}`,
   ];
   await params.note(noteLines.join("\n"), "MiniMax OAuth");
 
@@ -242,6 +223,7 @@ export async function loginMiniMaxPortalOAuth(params: {
   }
 
   let pollIntervalMs = oauth.interval ? oauth.interval : 2000;
+  // The authorization endpoint returns an absolute millisecond deadline.
   const expireTimeMs = oauth.expired_in;
 
   while (Date.now() < expireTimeMs) {
