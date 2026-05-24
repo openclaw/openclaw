@@ -20,7 +20,7 @@ Skills own workflows; root owns hard policy and routing.
 ## Map
 
 - Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `src/gateway/protocol/*`; docs/apps: `docs/`, `apps/`.
-- Installers: sibling `../openclaw.ai`.
+- Installers: sibling `../openclaw.ai`. Video compositions: sibling `../remotion-videos` (Remotion 4, private).
 - Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,gateway/protocol,agents}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
 ## Architecture
