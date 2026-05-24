@@ -159,7 +159,7 @@ function validateBrokerReceiptForRequest(
   }
   if (!BROKER_RECEIPT_STATUSES.has(receipt.status)) {
     throw new Error(
-      `Channel broker provider ${request.providerId} returned invalid receipt status ${String(receipt.status)}.`,
+      `Channel broker provider ${request.providerId} returned invalid receipt status ${receipt.status}.`,
     );
   }
   if (!Array.isArray(receipt.messageIds)) {
