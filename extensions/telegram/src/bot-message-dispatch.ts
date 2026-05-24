@@ -80,6 +80,7 @@ import {
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import {
+  buildTelegramGroupPeerId,
   buildTelegramGroupFrom,
   buildTelegramInboundOriginTarget,
   getTelegramTextParts,
@@ -460,8 +461,21 @@ function resolveDispatchTelegramContext(params: {
           threadId: String(threadSpec.id),
         }
       : params.context.turn.record.updateLastRoute;
+  const recoveredHistoryKey = params.context.isGroup
+    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
+    : params.context.historyKey;
+  const recoveredInboundHistory =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? createChannelHistoryWindow({
+          historyMap: params.context.groupHistories,
+        }).buildInboundHistory({
+          historyKey: recoveredHistoryKey,
+          limit: params.context.historyLimit,
+        })
+      : params.context.ctxPayload.InboundHistory;
   return {
     ...params.context,
+    historyKey: recoveredHistoryKey,
     threadSpec,
     resolvedThreadId: threadSpec.id,
     replyThreadId: threadSpec.id,
@@ -478,6 +492,7 @@ function resolveDispatchTelegramContext(params: {
         : {
             ...params.context.ctxPayload,
             From: recoveredFrom,
+            InboundHistory: recoveredInboundHistory,
             MessageThreadId: threadSpec.id,
             OriginatingTo: recoveredRoutingTarget,
             To: recoveredRoutingTarget,

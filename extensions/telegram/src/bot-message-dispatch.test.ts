@@ -557,6 +557,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
+    const oldHistoryKey = "-1003774691294:topic:1";
+    const recoveredHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [oldHistoryKey, [{ sender: "Alice", body: "general topic context", timestamp: 1 }]],
+      [recoveredHistoryKey, [{ sender: "Bob", body: "recovered topic context", timestamp: 2 }]],
+    ]);
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
       delivery: {
@@ -593,6 +599,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyThreadId: undefined,
         resolvedThreadId: undefined,
         threadSpec: { id: 1, scope: "forum" },
+        historyKey: oldHistoryKey,
+        historyLimit: 10,
+        groupHistories,
         turn: {
           storePath: "/tmp/openclaw/telegram-sessions.json",
           recordInboundSession,
@@ -623,6 +632,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       To: "telegram:-1003774691294:topic:3731",
       SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
     });
+    const outboundCtxPayload = expectRecordFields(outbound.ctxPayload, {});
+    expect(outboundCtxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "recovered topic context", sender: "Bob" }),
+    ]);
+    expect(outboundCtxPayload.InboundHistory).not.toEqual([
+      expect.objectContaining({ body: "general topic context", sender: "Alice" }),
+    ]);
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({
