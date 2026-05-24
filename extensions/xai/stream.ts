@@ -3,6 +3,7 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
+  createPlainTextToolCallPromotionWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
@@ -354,6 +355,7 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
     }
     wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+    wrappedStreamFn = createPlainTextToolCallPromotionWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
   });
 }
