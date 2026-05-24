@@ -16,7 +16,6 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.j
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { resolveImageModelOverridePlan } from "../../auto-reply/reply/image-model-override-plan.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -1263,6 +1262,31 @@ async function transcriptHasIdempotencyKey(
   }
 }
 
+async function findAssistantTranscriptMessageByIdempotencyKey(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<{ messageId: string; message: Record<string, unknown> } | null> {
+  const trimmedIdempotencyKey = idempotencyKey.trim();
+  if (!trimmedIdempotencyKey) {
+    return null;
+  }
+  const index = await readSessionTranscriptIndex(transcriptPath);
+  const target = index?.entries.toReversed().find((entry) => {
+    const message = entry.record.message as Record<string, unknown> | undefined;
+    return (
+      typeof entry.id === "string" &&
+      entry.id.trim().length > 0 &&
+      message?.role === "assistant" &&
+      message.idempotencyKey === trimmedIdempotencyKey
+    );
+  });
+  const message = target?.record.message as Record<string, unknown> | undefined;
+  if (!target?.id || !message) {
+    return null;
+  }
+  return { messageId: target.id, message };
+}
+
 async function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -1803,7 +1827,6 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
-
 
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
@@ -2648,10 +2671,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
               await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              await internalSourceReplyProjector.projectIfNeeded({
-                payload,
-                agentRunStarted,
-              });
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted
@@ -2737,6 +2756,12 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
+              const broadcastedSourceReplyFinal = await internalSourceReplyProjector.projectReplies(
+                {
+                  deliveredReplies,
+                  agentRunStarted,
+                },
+              );
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -2934,7 +2959,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (returnedAgentErrorPayloads.length > 0) {
+              }
+              const shouldBroadcastAgentError =
+                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+              if (shouldBroadcastAgentError) {
                 if (!hasBeforeAgentRunGate) {
                   await emitUserTranscriptUpdateAfterAgentRun();
                 }
@@ -2944,31 +2972,29 @@ export const chatHandlers: GatewayRequestHandlers = {
                   sessionKey,
                   errorMessage: returnedAgentErrorMessage,
                 });
-              } else if (!hasBeforeAgentRunGate) {
+              } else if (agentRunStarted && !hasBeforeAgentRunGate) {
                 await emitUserTranscriptUpdateAfterAgentRun();
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
-                const returnedAgentError =
-                  returnedAgentErrorPayloads.length > 0
-                    ? errorShape(
-                        ErrorCodes.UNAVAILABLE,
-                        returnedAgentErrorMessage ?? "agent returned an error payload",
-                      )
-                    : undefined;
+                const returnedAgentError = shouldBroadcastAgentError
+                  ? errorShape(
+                      ErrorCodes.UNAVAILABLE,
+                      returnedAgentErrorMessage ?? "agent returned an error payload",
+                    )
+                  : undefined;
                 setGatewayDedupeEntry({
                   dedupe: context.dedupe,
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
-                    ok: returnedAgentErrorPayloads.length === 0,
-                    payload:
-                      returnedAgentErrorPayloads.length > 0
-                        ? {
-                            runId: clientRunId,
-                            status: "error" as const,
-                            summary: returnedAgentErrorMessage ?? "agent returned an error payload",
-                          }
-                        : { runId: clientRunId, status: "ok" as const },
+                    ok: !shouldBroadcastAgentError,
+                    payload: shouldBroadcastAgentError
+                      ? {
+                          runId: clientRunId,
+                          status: "error" as const,
+                          summary: returnedAgentErrorMessage ?? "agent returned an error payload",
+                        }
+                      : { runId: clientRunId, status: "ok" as const },
                     ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });

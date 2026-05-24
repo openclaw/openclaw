@@ -20,7 +20,6 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {

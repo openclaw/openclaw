@@ -191,6 +191,18 @@ export function stripManagedOutgoingAssistantContentBlocks(
   return filtered.length > 0 ? filtered : undefined;
 }
 
+export function hasManagedOutgoingAssistantContent(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): boolean {
+  return Boolean(
+    content?.some(
+      (block) =>
+        block?.type === "image" &&
+        (isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl)),
+    ),
+  );
+}
+
 export function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
