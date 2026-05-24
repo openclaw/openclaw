@@ -183,10 +183,7 @@ export default definePluginEntry({
 
     // Register dreaming provider so the runtime can discover it through
     // the plugin capability protocol instead of hardcoded imports.
-    const dreamingProvider = createMemoryCoreDreamingProvider();
-    api.registerMemoryCapability({
-      dreaming: dreamingProvider,
-    });
+ const dreamingProvider = createMemoryCoreDreamingProvider();
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
@@ -197,6 +194,7 @@ export default definePluginEntry({
           return await listMemoryCorePublicArtifacts(params);
         },
       },
+      dreaming: dreamingProvider,
     });
 
     api.registerTool((ctx) => createLazyMemorySearchTool(resolveMemoryToolOptions(ctx)), {
