@@ -15,6 +15,12 @@ export type ClaworksRobotConfig = {
   production_mode?: boolean;
   api?: {
     api_key?: string;
+    /**
+     * 并行有效的 API 密钥列表（用于密钥轮换不中断服务）。
+     * api_key 和 api_keys 中的任意一个匹配即通过认证。
+     * 轮换流程：先在 api_keys 加入新密钥 → 客户端切换 → 从列表中移除旧密钥。
+     */
+    api_keys?: string[];
     /** 是否要求 API key（默认 false；生产模式建议设为 true） */
     require_api_key?: boolean;
     /** MCP 接口是否单独要求认证（默认与 REST 一致） */

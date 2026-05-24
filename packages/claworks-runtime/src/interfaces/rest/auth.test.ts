@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { ClaworksRuntime } from "../../claworks/runtime.js";
 import { checkClaworksApiAuth, resolveAuthContext } from "./auth.js";
 
-function fakeRuntime(apiKey?: string): ClaworksRuntime {
+function fakeRuntime(apiKey?: string, extraKeys?: string[]): ClaworksRuntime {
   return {
-    config: { api: apiKey ? { api_key: apiKey } : {} },
+    config: {
+      api: {
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(extraKeys ? { api_keys: extraKeys } : {}),
+      },
+    },
   } as ClaworksRuntime;
 }
 
@@ -53,5 +58,33 @@ describe("resolveAuthContext channel_user header", () => {
     const ctx = resolveAuthContext(req, fakeRuntime());
     expect(ctx.subjectType).toBe("channel_user");
     expect(ctx.subjectId).toBe("feishu:owner");
+  });
+});
+
+describe("multi-key support (key rotation)", () => {
+  it("accepts secondary key from api_keys list", () => {
+    const rt = fakeRuntime("primary-key", ["rotation-key-1", "rotation-key-2"]);
+    const req = (token: string) =>
+      ({ headers: { authorization: `Bearer ${token}` } }) as import("node:http").IncomingMessage;
+    expect(resolveAuthContext(req("primary-key"), rt).authenticated).toBe(true);
+    expect(resolveAuthContext(req("rotation-key-1"), rt).authenticated).toBe(true);
+    expect(resolveAuthContext(req("rotation-key-2"), rt).authenticated).toBe(true);
+    expect(resolveAuthContext(req("stale-key"), rt).authenticated).toBe(false);
+  });
+
+  it("works when only api_keys list is set (no primary api_key)", () => {
+    const rt = fakeRuntime(undefined, ["only-key"]);
+    const req = (token: string) =>
+      ({ headers: { authorization: `Bearer ${token}` } }) as import("node:http").IncomingMessage;
+    expect(resolveAuthContext(req("only-key"), rt).authenticated).toBe(true);
+    expect(resolveAuthContext(req("wrong"), rt).authenticated).toBe(false);
+  });
+
+  it("ignores duplicate keys between api_key and api_keys", () => {
+    const rt = fakeRuntime("shared-key", ["shared-key", "extra-key"]);
+    const req = (token: string) =>
+      ({ headers: { authorization: `Bearer ${token}` } }) as import("node:http").IncomingMessage;
+    expect(resolveAuthContext(req("shared-key"), rt).authenticated).toBe(true);
+    expect(resolveAuthContext(req("extra-key"), rt).authenticated).toBe(true);
   });
 });

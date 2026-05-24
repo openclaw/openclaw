@@ -25,14 +25,29 @@ function readChannelUserHeader(req: IncomingMessage): string {
   return "";
 }
 
+/**
+ * 收集所有有效 API 密钥（primary + rotation list），去除空值。
+ * 支持多密钥并行（密钥轮换不中断服务）。
+ */
+function collectValidKeys(runtime: ClaworksRuntime): string[] {
+  const keys: string[] = [];
+  const primary = runtime.config.api?.api_key?.trim();
+  if (primary) keys.push(primary);
+  for (const k of runtime.config.api?.api_keys ?? []) {
+    const t = k?.trim();
+    if (t && !keys.includes(t)) keys.push(t);
+  }
+  return keys;
+}
+
 export function resolveAuthContext(req: IncomingMessage, runtime: ClaworksRuntime): AuthContext {
-  const expected = runtime.config.api?.api_key?.trim();
+  const validKeys = collectValidKeys(runtime);
   const requireApiKey = runtime.config.api?.require_api_key === true;
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   const channelUser = readChannelUserHeader(req);
 
-  if (!expected) {
+  if (validKeys.length === 0) {
     // require_api_key=true but no api_key configured → deny (misconfigured, fail safe)
     if (requireApiKey) {
       return { authenticated: false, subjectType: "apikey", subjectId: "unknown" };
@@ -43,7 +58,7 @@ export function resolveAuthContext(req: IncomingMessage, runtime: ClaworksRuntim
     return { authenticated: true, subjectType: "system", subjectId: "local" };
   }
 
-  if (token === expected) {
+  if (token && validKeys.includes(token)) {
     if (channelUser) {
       return { authenticated: true, subjectType: "channel_user", subjectId: channelUser };
     }

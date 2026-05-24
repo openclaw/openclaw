@@ -1,3 +1,5 @@
+import { globalMetrics } from "../kernel/metrics.js";
+
 export type DecisionLogEntry = {
   id: string;
   at: string;
@@ -69,13 +71,47 @@ export function listObservationEvents(limit = 50): ObservationEvent[] {
 
 export function prometheusMetricsText(robotName: string): string {
   const uptime = runtimeUptimeSeconds();
-  return [
-    "# HELP claworks_uptime_seconds Process uptime",
+  const snap = globalMetrics.snapshot();
+
+  const lines: string[] = [
+    "# HELP claworks_uptime_seconds Process uptime in seconds",
     "# TYPE claworks_uptime_seconds gauge",
     `claworks_uptime_seconds{robot="${robotName}"} ${uptime}`,
-    "# HELP claworks_decision_log_entries Decision log size",
+    "# HELP claworks_decision_log_entries Number of entries in the in-memory decision log",
     "# TYPE claworks_decision_log_entries gauge",
     `claworks_decision_log_entries ${decisionLog.length}`,
-    "",
-  ].join("\n");
+    "# HELP claworks_observation_events Number of entries in the in-memory observation event log",
+    "# TYPE claworks_observation_events gauge",
+    `claworks_observation_events ${observationEvents.length}`,
+  ];
+
+  // Emit all globalMetrics counters as Prometheus counters
+  const counterEntries = Object.entries(snap.counters);
+  if (counterEntries.length > 0) {
+    lines.push(
+      "# HELP claworks_counter_total Runtime event / capability / playbook counters",
+      "# TYPE claworks_counter_total counter",
+    );
+    for (const [key, value] of counterEntries) {
+      // key may already include labels like `playbook.run{playbook_id="x"}`
+      const safeKey = key.replace(/[^a-zA-Z0-9_{}"=,. ]/g, "_");
+      lines.push(`claworks_counter_total{name="${safeKey}"} ${value}`);
+    }
+  }
+
+  // Emit histogram p50/p95/p99 as gauges
+  const histEntries = Object.entries(snap.histograms);
+  if (histEntries.length > 0) {
+    lines.push(
+      "# HELP claworks_duration_p95_ms p95 duration in milliseconds",
+      "# TYPE claworks_duration_p95_ms gauge",
+    );
+    for (const [key, stats] of histEntries) {
+      const safeKey = key.replace(/[^a-zA-Z0-9_{}"=,. ]/g, "_");
+      lines.push(`claworks_duration_p95_ms{name="${safeKey}"} ${stats.p95}`);
+    }
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }

@@ -1254,8 +1254,8 @@ export function makeConnectorCapabilities(runtime: ClaworksRuntime): CapabilityD
           correlationId: ctx.correlationId,
         });
 
-        await runtime.connectorManager.invoke(connectorId, method, methodParams);
-        return { status: "ok", connector_id: connectorId, method };
+        const result = await runtime.connectorManager.invoke(connectorId, method, methodParams);
+        return { status: "ok", connector_id: connectorId, method, result };
       },
     },
   ];
@@ -1264,6 +1264,13 @@ export function makeConnectorCapabilities(runtime: ClaworksRuntime): CapabilityD
 // ── L16: schedule.* ───────────────────────────────────────────────────────
 
 export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDescriptor[] {
+  // Track dynamically-added cron overrides so schedule.remove doesn't lose them
+  // during reload. Key = playbook_id, value = minimal PlaybookDefinition with schedule trigger.
+  const dynamicSchedules = new Map<
+    string,
+    import("../planes/orch/playbook-types.js").PlaybookDefinition
+  >();
+
   return [
     {
       id: "schedule.list",
@@ -1317,18 +1324,21 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
         }
 
         // Build a minimal PlaybookDefinition and register in scheduler
+        const dynDef = {
+          id: playbookId,
+          name: existing.name ?? playbookId,
+          pack: existing.pack ?? "dynamic",
+          priority: existing.priority ?? 50,
+          trigger: { kind: "schedule" as const, cron, timezone },
+          steps: existing.steps,
+        };
         try {
-          runtime.scheduler.add({
-            id: playbookId,
-            name: existing.name ?? playbookId,
-            pack: existing.pack ?? "dynamic",
-            priority: existing.priority ?? 50,
-            trigger: { kind: "schedule", cron, timezone },
-            steps: existing.steps,
-          });
+          runtime.scheduler.add(dynDef);
         } catch {
           return { status: "error", reason: `invalid cron expression: '${cron}'` };
         }
+        // Record so schedule.remove can preserve other dynamic crons during reload
+        dynamicSchedules.set(playbookId, dynDef);
 
         await runtime.kernel
           .publish("schedule.job_registered", "schedule.add", {
@@ -1354,9 +1364,12 @@ export function makeScheduleCapabilities(runtime: ClaworksRuntime): CapabilityDe
       },
       handler: async (_ctx, params) => {
         const playbookId = String(params.playbook_id ?? "");
-        // 通过 reload 排除该 playbook 来取消（轻量近似实现）
-        const remaining = runtime.playbookEngine.list().filter((p) => p.id !== playbookId);
-        runtime.scheduler.reload(remaining);
+        // Remove from dynamic tracking first
+        dynamicSchedules.delete(playbookId);
+        // Rebuild: static schedule playbooks (excluding removed) + remaining dynamic overrides
+        const staticRemaining = runtime.playbookEngine.list().filter((p) => p.id !== playbookId);
+        const dynamicRemaining = [...dynamicSchedules.values()].filter((p) => p.id !== playbookId);
+        runtime.scheduler.reload([...staticRemaining, ...dynamicRemaining]);
         return { status: "reloaded_without", playbook_id: playbookId };
       },
     },
@@ -4025,16 +4038,19 @@ export function makeSecurityCapabilities(runtime: ClaworksRuntime): CapabilityDe
       description: "查询 API Key 配置状态（不返回实际 Key）",
       owner: { kind: "core" },
       handler: async () => {
-        const hasKey = !!runtime.config.api?.api_key?.trim();
+        const primaryKey = runtime.config.api?.api_key?.trim();
+        const extraKeys = (runtime.config.api?.api_keys ?? []).filter((k) => k?.trim());
+        const totalConfigured = (primaryKey ? 1 : 0) + extraKeys.length;
         const required =
           runtime.config.api?.require_api_key === true ||
           runtime.config.security?.require_api_key === true ||
           process.env.CLAWORKS_REQUIRE_API_KEY === "1";
         const envKeySet = !!process.env.CLAWORKS_API_KEY?.trim();
         return {
-          api_key_configured: hasKey || envKeySet,
+          api_key_configured: totalConfigured > 0 || envKeySet,
           api_key_required: required,
-          source: envKeySet ? "env" : hasKey ? "config" : "none",
+          source: envKeySet ? "env" : totalConfigured > 0 ? "config" : "none",
+          key_count: totalConfigured + (envKeySet ? 1 : 0),
         };
       },
     },
