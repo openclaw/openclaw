@@ -6,6 +6,7 @@ export type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 export {
   closeAllMemorySearchManagers,
+  closeIdleMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
   type MemorySearchManagerPurpose,

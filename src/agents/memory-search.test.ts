@@ -257,6 +257,8 @@ describe("memory search config", () => {
       watchDebounceMs: 25,
       intervalMinutes: 3,
       embeddingBatchTimeoutSeconds: undefined,
+      idleEvictMs: 15 * 60_000,
+      idleEvictScanMs: 5 * 60_000,
       sessions: {
         deltaBytes: 321,
         deltaMessages: 7,

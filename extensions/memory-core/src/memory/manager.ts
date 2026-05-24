@@ -32,6 +32,7 @@ import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js"
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
+  closeIdleManagedCacheEntries,
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
@@ -64,8 +65,11 @@ export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
-const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
-  resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+const INDEX_MANAGER_CACHE = resolveSingletonManagedCache<MemoryIndexManager>(
+  MEMORY_INDEX_MANAGER_CACHE_KEY,
+);
+const INDEX_CACHE = INDEX_MANAGER_CACHE.cache;
+const INDEX_CACHE_PENDING = INDEX_MANAGER_CACHE.pending;
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -80,8 +84,35 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   await closeManagedCacheEntries({
     cache: INDEX_CACHE,
     pending: INDEX_CACHE_PENDING,
+    lastAccessAt: INDEX_MANAGER_CACHE.lastAccessAt,
     onCloseError: (err) => {
       log.warn(`failed to close memory index manager: ${String(err)}`);
+    },
+  });
+}
+
+// Idle-TTL eviction for cached MemoryIndexManager instances in long-running
+// gateway daemons. Each manager owns a chokidar FSWatcher that accumulates
+// native handles and file descriptors over time; CLI-exit-only cleanup
+// (see closeAllMemoryIndexManagers) is not enough for daemon processes.
+//
+// This is intended to run on a slow periodic tick (every few minutes). The
+// idle threshold should be larger than the typical gap between memory
+// searches to avoid churning the cache.
+export async function closeIdleMemoryIndexManagers(opts: {
+  idleMs: number;
+}): Promise<{ evicted: number; remaining: number }> {
+  return await closeIdleManagedCacheEntries({
+    cache: INDEX_MANAGER_CACHE,
+    idleMs: opts.idleMs,
+    onCloseError: (err) => {
+      log.warn(`failed to close idle memory index manager: ${String(err)}`);
+    },
+    onEvictKey: (key) => {
+      // Drop the embedding probe entry so the next request re-probes the
+      // provider rather than serving a stale TTL result tied to the evicted
+      // manager instance.
+      EMBEDDING_PROBE_CACHE.delete(key);
     },
   });
 }
@@ -105,6 +136,7 @@ export async function closeMemoryIndexManagersForAgent(params: {
     return;
   }
   INDEX_CACHE.delete(key);
+  INDEX_MANAGER_CACHE.lastAccessAt.delete(key);
   try {
     await manager.close();
   } catch (err) {
@@ -208,6 +240,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
+      lastAccessAt: INDEX_MANAGER_CACHE.lastAccessAt,
       key,
       bypassCache: transient,
       create: async () =>
@@ -985,6 +1018,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (INDEX_CACHE.get(this.cacheKey) === this) {
         INDEX_CACHE.delete(this.cacheKey);
       }
+      INDEX_MANAGER_CACHE.lastAccessAt.delete(this.cacheKey);
     }
     const closeError = closeErrors.values().next().value;
     if (closeError) {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  closeIdleManagedCacheEntries,
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
@@ -132,6 +133,170 @@ describe("manager cache", () => {
     expect(resolvedFirst).toBe(first);
     expect(resolvedSecond).toBe(second);
     expect(resolvedSecond).not.toBe(resolvedFirst);
+  });
+
+  it("records lastAccessAt when forwarded to getOrCreateManagedCacheEntry", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const before = Date.now();
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => createEntry("e"),
+    });
+    const recorded = cache.lastAccessAt.get("k");
+    expect(recorded).toBeTypeOf("number");
+    expect(recorded!).toBeGreaterThanOrEqual(before);
+  });
+
+  it("refreshes lastAccessAt on cache hit", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => createEntry("e"),
+    });
+    const firstAccess = cache.lastAccessAt.get("k")!;
+    // Advance time deterministically so the second access has a later
+    // timestamp without depending on wall-clock granularity.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(firstAccess + 5_000);
+    try {
+      await getOrCreateManagedCacheEntry({
+        cache: cache.cache,
+        pending: cache.pending,
+        lastAccessAt: cache.lastAccessAt,
+        key: "k",
+        create: async () => createEntry("never-called"),
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(cache.lastAccessAt.get("k")).toBe(firstAccess + 5_000);
+  });
+
+  it("closeIdleManagedCacheEntries evicts entries past the idle threshold", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry = createEntry("idle");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    // Make the entry look ancient.
+    cache.lastAccessAt.set("k", Date.now() - 10_000);
+    const evictedKeys: string[] = [];
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      onEvictKey: (key) => evictedKeys.push(key),
+    });
+    expect(result.evicted).toBe(1);
+    expect(result.remaining).toBe(0);
+    expect(entry.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("k")).toBe(false);
+    expect(cache.lastAccessAt.has("k")).toBe(false);
+    expect(evictedKeys).toEqual(["k"]);
+  });
+
+  it("closeIdleManagedCacheEntries leaves recently accessed entries alone", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const fresh = createEntry("fresh");
+    const stale = createEntry("stale");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "fresh",
+      create: async () => fresh,
+    });
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "stale",
+      create: async () => stale,
+    });
+    cache.lastAccessAt.set("stale", Date.now() - 10_000);
+    const result = await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(result.evicted).toBe(1);
+    expect(result.remaining).toBe(1);
+    expect(fresh.close).not.toHaveBeenCalled();
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("fresh")).toBe(true);
+    expect(cache.cache.has("stale")).toBe(false);
+  });
+
+  it("closeIdleManagedCacheEntries isolates close() errors and still evicts the rest", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const failing: TestEntry = {
+      id: "failing",
+      close: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    };
+    const ok = createEntry("ok");
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "failing",
+      create: async () => failing,
+    });
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "ok",
+      create: async () => ok,
+    });
+    cache.lastAccessAt.set("failing", Date.now() - 10_000);
+    cache.lastAccessAt.set("ok", Date.now() - 10_000);
+    const errors: unknown[] = [];
+    const result = await closeIdleManagedCacheEntries({
+      cache,
+      idleMs: 5_000,
+      onCloseError: (err) => errors.push(err),
+    });
+    expect(result.evicted).toBe(2);
+    expect(failing.close).toHaveBeenCalledTimes(1);
+    expect(ok.close).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveLength(1);
+    expect(cache.cache.size).toBe(0);
+  });
+
+  it("closeIdleManagedCacheEntries is idempotent when entry.close removes its own cache slot", async () => {
+    const cache = createTestCache();
+    cachesForCleanup.push(cache);
+    const entry: TestEntry = {
+      id: "self-evict",
+      close: vi.fn(async () => {
+        // Simulate MemoryIndexManager.close() removing its own cache entry.
+        cache.cache.delete("k");
+        cache.lastAccessAt.delete("k");
+      }),
+    };
+    await getOrCreateManagedCacheEntry({
+      cache: cache.cache,
+      pending: cache.pending,
+      lastAccessAt: cache.lastAccessAt,
+      key: "k",
+      create: async () => entry,
+    });
+    cache.lastAccessAt.set("k", Date.now() - 10_000);
+    const result = await closeIdleManagedCacheEntries({ cache, idleMs: 5_000 });
+    expect(result.evicted).toBe(1);
+    expect(entry.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.size).toBe(0);
   });
 
   it("bypasses identity caching for status-only callers", async () => {

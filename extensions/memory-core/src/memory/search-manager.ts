@@ -431,6 +431,20 @@ export async function closeMemorySearchManager(params: {
   }
 }
 
+// Idle-TTL sweep over the process-wide MemoryIndexManager cache. The qmd
+// manager layer above does not currently retain its own watchers (managers
+// are created on demand and closed by the caller), so this only forwards to
+// the lower-level cache that backs file-backed indexes.
+export async function closeIdleMemorySearchManagers(opts: {
+  idleMs: number;
+}): Promise<{ evicted: number; remaining: number }> {
+  if (managerRuntimePromise === null) {
+    return { evicted: 0, remaining: 0 };
+  }
+  const { closeIdleMemoryIndexManagers } = await loadManagerRuntime();
+  return await closeIdleMemoryIndexManagers({ idleMs: opts.idleMs });
+}
+
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: Maybe<MemorySearchManager> = null;
   private primaryFailed = false;
