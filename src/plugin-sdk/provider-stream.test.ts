@@ -185,6 +185,16 @@ describe("buildProviderStreamFamilyHooks", () => {
     expectDefaultThinkingBudget(kilocodeAutoPayload);
     expect(kilocodeAutoPayload).not.toHaveProperty("reasoning");
 
+    payloadSeed = { stop: "\n" };
+    void requireStreamFn(
+      requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        modelId: "deepseek/deepseek-v4-flash",
+      } as never),
+    )({ provider: "kilocode", id: "deepseek/deepseek-v4-flash" } as never, {} as never, {});
+    const kilocodeStopPayload = requirePayload(capturedPayload);
+    expect(kilocodeStopPayload.stop).toEqual(["\n"]);
+
     const moonshotHooks = MOONSHOT_THINKING_STREAM_HOOKS;
     const moonshotStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({

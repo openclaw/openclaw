@@ -150,6 +150,17 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   }
 }
 
+function normalizeKilocodeStopPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return;
+  }
+
+  const payloadObj = payload as Record<string, unknown>;
+  if (typeof payloadObj.stop === "string") {
+    payloadObj.stop = [payloadObj.stop];
+  }
+}
+
 /** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -250,6 +261,7 @@ export function createKilocodeWrapper(
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
+        normalizeKilocodeStopPayload(payload);
       },
     );
   };
