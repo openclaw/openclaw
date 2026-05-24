@@ -1005,6 +1005,25 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // POST /v1/evolution/simulate — 触发模拟蒸馏流水线（发布 evolution.simulation_requested）
+      if (method === "POST" && parts[1] === "evolution" && parts[2] === "simulate") {
+        if (!(await requireWrite("evolution:simulate"))) return true;
+        let body: { payload?: Record<string, unknown> } = {};
+        try {
+          body = (await readJsonBody(req)) as { payload?: Record<string, unknown> };
+        } catch {
+          body = {};
+        }
+        await runtime.kernel.publish(
+          "evolution.simulation_requested",
+          "rest-api",
+          body.payload ?? {},
+          { subjectType: auth.subjectType, subjectId: auth.subjectId },
+        );
+        sendJson(res, 200, { status: "ok", message: "流水线已触发" });
+        return true;
+      }
+
       // GET /v1/events/stream — SSE 实时事件流（Studio UI / 监控面板）
       if (method === "GET" && parts[1] === "events" && parts[2] === "stream") {
         if (!(await requireRead())) return true;
