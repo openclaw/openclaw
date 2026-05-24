@@ -331,6 +331,146 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("maps broker-prefixed Slack DMs into direct provider requests", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-slack-dm-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["slack-message-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-slack-dm-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:slack:user:U12345678",
+      text: "dm proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-slack-dm-1",
+        providerId: "acme",
+        platform: "slack",
+        conversation: {
+          id: "U12345678",
+          type: "direct",
+        },
+        requirements: { text: true },
+      }),
+    });
+  });
+
+  it("maps broker-prefixed Slack channel threads into provider thread requests", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-slack-thread-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["slack-message-2"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-slack-thread-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:slack:channel:C12345678?threadId=1716500000.000001",
+      text: "thread proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-slack-thread-1",
+        providerId: "acme",
+        platform: "slack",
+        conversation: {
+          id: "C12345678",
+          type: "channel",
+          threadId: "1716500000.000001",
+        },
+        requirements: { text: true, thread: true },
+      }),
+    });
+  });
+
+  it("canonicalizes Slack DM and thread routes with native target semantics preserved", () => {
+    const cfg = {
+      channels: {
+        "channel-broker": {
+          accounts: {
+            acme: {
+              enabled: true,
+              baseUrl: "https://broker.example.test",
+              platforms: ["slack"],
+            },
+          },
+        },
+      },
+    };
+
+    const dmRoute = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg,
+      agentId: "agent",
+      accountId: "acme",
+      target: "broker:slack:user:U12345678",
+    } as never);
+    const threadRoute = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg,
+      agentId: "agent",
+      accountId: "acme",
+      target: "broker:slack:channel:C12345678?threadId=1716500000.000001",
+    } as never);
+
+    expect(dmRoute).toMatchObject({
+      chatType: "direct",
+      peer: { kind: "direct", id: "slack:U12345678" },
+      to: "slack:direct%3AU12345678",
+    });
+    expect(threadRoute).toMatchObject({
+      chatType: "channel",
+      peer: { kind: "channel", id: "slack:C12345678" },
+      to: "slack:C12345678?threadId=1716500000.000001",
+      threadId: "1716500000.000001",
+    });
+  });
+
   it("passes cancellation through the default HTTP transport", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async () => ({

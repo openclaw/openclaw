@@ -79,6 +79,23 @@ function parseDiscordConversation(rawConversationId: string): {
   };
 }
 
+function parseSlackConversation(rawConversationId: string): {
+  conversationId: string;
+  threadId?: string;
+  conversationType?: BrokerConversationType;
+} {
+  const kindMatch = /^(user|dm|direct|channel):(.+)$/i.exec(rawConversationId);
+  const rawKind = kindMatch?.[1]?.toLowerCase();
+  const id = kindMatch?.[2]?.trim();
+  if (!rawKind || !id) {
+    return { conversationId: rawConversationId };
+  }
+  return {
+    conversationId: id,
+    conversationType: rawKind === "channel" ? "channel" : "direct",
+  };
+}
+
 function parsePlatformConversation(params: { platform: string; rawConversationId: string }): {
   conversationId: string;
   threadId?: string;
@@ -89,6 +106,9 @@ function parsePlatformConversation(params: { platform: string; rawConversationId
   }
   if (params.platform === "discord") {
     return parseDiscordConversation(params.rawConversationId);
+  }
+  if (params.platform === "slack") {
+    return parseSlackConversation(params.rawConversationId);
   }
   return { conversationId: params.rawConversationId };
 }
