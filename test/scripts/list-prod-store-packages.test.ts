@@ -110,6 +110,8 @@ describe("list-prod-store-packages", () => {
         "packages:",
         "  recma-jsx@1.0.1(acorn@8.16.0):",
         "    resolution: {integrity: sha512-test}",
+        "  '/@scope/peer-wrapper@2.0.0(@scope/peer@1.0.0)':",
+        "    resolution: {integrity: sha512-test}",
         "",
         "snapshots: {}",
         "",
@@ -118,6 +120,6 @@ describe("list-prod-store-packages", () => {
     const result = runListProdStorePackages({ dependencies: {} }, cwd);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("recma-jsx@1.0.1");
+    expect(result.stdout).toBe("@scope/peer-wrapper@2.0.0\nrecma-jsx@1.0.1");
   });
 });

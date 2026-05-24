@@ -26,11 +26,15 @@ function packageSpecFromLockfileKey(key) {
     return undefined;
   }
   const normalizedKey = key.startsWith("/") ? key.slice(1) : key;
-  const separator = normalizedKey.lastIndexOf("@");
+  const keyWithoutPeerSuffix = normalizedKey.replace(/\(.+\)$/, "");
+  const separator = keyWithoutPeerSuffix.lastIndexOf("@");
   if (separator <= 0) {
     return undefined;
   }
-  return packageSpec(normalizedKey.slice(0, separator), normalizedKey.slice(separator + 1));
+  return packageSpec(
+    keyWithoutPeerSuffix.slice(0, separator),
+    keyWithoutPeerSuffix.slice(separator + 1),
+  );
 }
 
 function visitListNode(node) {
