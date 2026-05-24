@@ -19,7 +19,8 @@ const WebSearchSchema = {
     },
     model: {
       type: "string",
-      description: "Optional provider-specific model override. Use 'default' to reset.",
+      description:
+        "Optional provider-specific model override. Use 'default' to reset; Perplexity only honors allowlisted overrides.",
     },
     country: {
       type: "string",

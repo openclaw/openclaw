@@ -26,6 +26,7 @@ Optional compatibility controls:
 
 - `plugins.entries.perplexity.config.webSearch.baseUrl`
 - `plugins.entries.perplexity.config.webSearch.model`
+- `plugins.entries.perplexity.config.webSearch.allowedModels`
 
 ## Config examples
 
@@ -66,6 +67,7 @@ Optional compatibility controls:
             apiKey: "<openrouter-api-key>",
             baseUrl: "https://openrouter.ai/api/v1",
             model: "perplexity/sonar-pro",
+            allowedModels: ["perplexity/sonar", "perplexity/sonar-pro"],
           },
         },
       },
@@ -106,7 +108,7 @@ Number of results to return (1-10).
 </ParamField>
 
 <ParamField path="model" type="string">
-Optional Sonar/OpenRouter model override for the chat-completions path. Use `default` to fall back to the configured model.
+Optional Sonar/OpenRouter model override for the chat-completions path. Use `default` to fall back to the configured model. Per-call overrides must be allowlisted via `plugins.entries.perplexity.config.webSearch.allowedModels`.
 </ParamField>
 
 <ParamField path="country" type="string">
@@ -144,7 +146,7 @@ Per-page token limit.
 For the legacy Sonar/OpenRouter compatibility path:
 
 - `query`, `count`, and `freshness` are accepted
-- `model` can override the configured Sonar/OpenRouter model for a single call
+- `model` can override the configured Sonar/OpenRouter model for a single call when it is present in `plugins.entries.perplexity.config.webSearch.allowedModels`
 - `count` is compatibility-only there; the response is still one synthesized
   answer with citations rather than an N-result list
 - Search API-only filters such as `country`, `language`, `date_after`,
@@ -204,6 +206,7 @@ await web_search({
 
 - Perplexity Search API returns structured web search results (`title`, `url`, `snippet`)
 - OpenRouter or explicit `plugins.entries.perplexity.config.webSearch.baseUrl` / `model` switches Perplexity back to Sonar chat completions for compatibility
+- `plugins.entries.perplexity.config.webSearch.allowedModels` gates which per-call `model` overrides are accepted
 - Sonar/OpenRouter compatibility returns one synthesized answer with citations, not structured result rows
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`)
 

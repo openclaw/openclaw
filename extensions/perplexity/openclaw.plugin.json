@@ -20,6 +20,10 @@
     "webSearch.model": {
       "label": "Perplexity Model",
       "help": "Optional Sonar/OpenRouter model override."
+    },
+    "webSearch.allowedModels": {
+      "label": "Perplexity Allowed Models",
+      "help": "Optional allowlist of model ids that can be selected per call. Use * to allow any model."
     }
   },
   "contracts": {
@@ -44,6 +48,12 @@
           },
           "model": {
             "type": "string"
+          },
+          "allowedModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

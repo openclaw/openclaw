@@ -55,6 +55,34 @@ describe("perplexity web search provider", () => {
     ).toBe("perplexity/sonar-pro");
   });
 
+  it("rejects per-call model overrides that are not allowlisted", async () => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {},
+          searchConfig: {},
+        });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(
+          tool.execute({
+            query: "OpenClaw docs",
+            model: "perplexity/sonar",
+          }),
+        ).resolves.toEqual({
+          error: "unsupported_model_override",
+          message:
+            "model overrides are only supported for allowlisted Perplexity models. Add the requested model to plugins.entries.perplexity.config.webSearch.allowedModels or use the configured default model.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
+  });
+
   it("chooses direct search_api transport only for direct base urls without legacy overrides", () => {
     expect(
       testing.resolvePerplexityTransport({
@@ -133,7 +161,11 @@ describe("perplexity web search provider", () => {
         const provider = createPerplexityWebSearchProvider();
         const tool = provider.createTool({
           config: {},
-          searchConfig: {},
+          searchConfig: {
+            perplexity: {
+              allowedModels: ["perplexity/sonar"],
+            },
+          },
         });
         if (!tool) {
           throw new Error("Expected tool definition");

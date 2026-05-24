@@ -33,7 +33,8 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     },
     model: {
       type: "string",
-      description: "Optional Sonar/OpenRouter model override. Use 'default' to reset.",
+      description:
+        "Optional Sonar/OpenRouter model override. Use 'default' to reset; allowlisted overrides only.",
     },
     freshness: {
       type: "string",
