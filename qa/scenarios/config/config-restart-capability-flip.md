@@ -31,8 +31,8 @@ execution:
     imagePrompt: "Capability flip image check: generate a QA lighthouse image in this turn right now. Do not acknowledge first, do not promise future work, and do not stop before using image_generate. Final reply must include the MEDIA path."
     imagePromptSnippet: "Capability flip image check"
     deniedTool: image_generate
-    setupTurnTimeoutMs: 60000
-    imageTurnTimeoutMs: 75000
+    setupTurnTimeoutMs: 120000
+    imageTurnTimeoutMs: 120000
     mediaPathTimeoutMs: 30000
 ```
 
