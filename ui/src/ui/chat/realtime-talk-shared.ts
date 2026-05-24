@@ -231,15 +231,51 @@ function waitForChatResult(params: {
       return;
     }
     const timer = window.setTimeout(() => {
-      cleanup();
-      reject(new Error("OpenClaw tool call timed out"));
+      settleReject(new Error("OpenClaw tool call timed out"));
     }, params.timeoutMs);
+    let settled = false;
+    let emptyFinalWaitStarted = false;
     const onAbort = () => {
-      cleanup();
-      reject(new DOMException("OpenClaw tool call aborted", "AbortError"));
+      settleReject(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
     params.signal?.addEventListener("abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
+    const settleResolve = (value: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const settleReject = (error: Error | DOMException) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const waitForEmptyFinalFallback = () => {
+      if (emptyFinalWaitStarted) {
+        return;
+      }
+      emptyFinalWaitStarted = true;
+      void params.client
+        .request<{ status?: string; error?: string }>("agent.wait", {
+          runId: params.runId,
+          timeoutMs: params.timeoutMs,
+        })
+        .then((result) => {
+          if (settled || result?.status === "timeout") {
+            return;
+          }
+          settleResolve("OpenClaw finished with no text.");
+        })
+        .catch((error) => {
+          settleReject(error instanceof Error ? error : new Error(String(error)));
+        });
+    };
     unsubscribe = params.client.addEventListener((evt: GatewayEventFrame) => {
       if (evt.event !== "chat") {
         return;
@@ -250,16 +286,18 @@ function waitForChatResult(params: {
       }
       emitRealtimeTalkAgentProgress(params.emitTalkEvent, payload);
       if (payload.state === "final") {
-        cleanup();
-        resolve(extractTextFromMessage(payload.message) || "OpenClaw finished with no text.");
+        const finalText = extractTextFromMessage(payload.message);
+        if (finalText) {
+          settleResolve(finalText);
+          return;
+        }
+        waitForEmptyFinalFallback();
       } else if (payload.state === "aborted") {
-        cleanup();
-        reject(
+        settleReject(
           new DOMException(payload.errorMessage ?? "OpenClaw tool call aborted", "AbortError"),
         );
       } else if (payload.state === "error") {
-        cleanup();
-        reject(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
+        settleReject(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
     function cleanup() {
