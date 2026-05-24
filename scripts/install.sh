@@ -1643,7 +1643,7 @@ install_node() {
                 run_quiet_step "Configuring NodeSource repository" env DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             else
-                run_quiet_step "Configuring NodeSource repository" sudo env DEBIAN_FRONTEND=noninteractive bash "$tmp"
+                run_quiet_step "Configuring NodeSource repository" sudo -E env DEBIAN_FRONTEND=noninteractive bash "$tmp"
                 run_quiet_step "Installing Node.js" apt_get_install nodejs
             fi
         elif command -v dnf &> /dev/null; then

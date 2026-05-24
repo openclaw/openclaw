@@ -64,7 +64,7 @@ describe("install.sh", () => {
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,
     );
     expect(script).toContain(
-      'run_quiet_step "Configuring NodeSource repository" sudo env DEBIAN_FRONTEND=noninteractive bash "$tmp"',
+      'run_quiet_step "Configuring NodeSource repository" sudo -E env DEBIAN_FRONTEND=noninteractive bash "$tmp"',
     );
   });
 
