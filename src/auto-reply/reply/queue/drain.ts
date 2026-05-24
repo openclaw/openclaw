@@ -274,8 +274,18 @@ function previewRestorableQueueSummaryPrompt(params: {
   return {
     prompt,
     restore: () => {
-      params.state.droppedCount = snapshot.droppedCount;
-      params.state.summaryLines = [...snapshot.summaryLines];
+      const currentLines = params.state.summaryLines;
+      const hasSnapshotPrefix =
+        params.state.droppedCount >= snapshot.droppedCount &&
+        snapshot.summaryLines.every((line, index) => currentLines[index] === line);
+      if (hasSnapshotPrefix) {
+        return;
+      }
+      params.state.droppedCount =
+        params.state.droppedCount >= snapshot.droppedCount
+          ? params.state.droppedCount
+          : params.state.droppedCount + snapshot.droppedCount;
+      params.state.summaryLines = [...snapshot.summaryLines, ...currentLines];
     },
   };
 }

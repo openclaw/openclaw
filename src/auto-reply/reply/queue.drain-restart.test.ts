@@ -297,6 +297,41 @@ describe("followup queue drain restart after idle window", () => {
     expect(prompts[1]).toContain("dropped while busy");
   });
 
+  it("merges overflow summaries added while a deferred retry is waiting", async () => {
+    const key = `test-deferred-summary-merge-${Date.now()}`;
+    const prompts: string[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const retried = createDeferred<void>();
+    let attempts = 0;
+
+    const runFollowup = async (run: FollowupRun) => {
+      attempts++;
+      prompts.push(run.prompt);
+      if (attempts === 1) {
+        enqueueFollowupRun(key, createRun({ prompt: "newer dropped while waiting" }), settings);
+        enqueueFollowupRun(key, createRun({ prompt: "newer kept while waiting" }), settings);
+        throw new FollowupRunDeferredError("reply lane busy");
+      }
+      retried.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "original dropped while busy" }), settings);
+    enqueueFollowupRun(key, createRun({ prompt: "original kept while busy" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+
+    await retried.promise;
+
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("Dropped 3 messages");
+    expect(prompts[1]).toContain("original dropped while busy");
+    expect(prompts[1]).toContain("newer dropped while waiting");
+  });
+
   it("does not process messages after clearSessionQueues clears the callback", async () => {
     const key = `test-clear-callback-${Date.now()}`;
     const calls: FollowupRun[] = [];
