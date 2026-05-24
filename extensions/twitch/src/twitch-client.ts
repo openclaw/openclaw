@@ -231,14 +231,21 @@ export class TwitchClientManager {
             `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
           );
         }),
-        client.onDisconnect((_manual, reason) => {
-          if (authRetryPending) {
+        client.onDisconnect((manual, reason) => {
+          if (authRetryPending && !manual) {
             this.logger.debug?.(
               `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
             );
             return;
           }
-          finish(reason ?? new Error(`Twitch disconnected before ready for ${account.username}`));
+          finish(
+            reason ??
+              new Error(
+                manual
+                  ? `Twitch connection cancelled for ${account.username}`
+                  : `Twitch disconnected before ready for ${account.username}`,
+              ),
+          );
         }),
       );
       timeout = setTimeout(

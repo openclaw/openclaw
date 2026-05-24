@@ -231,6 +231,17 @@ describe("TwitchClientManager", () => {
       await expect(connection).resolves.toBeTruthy();
     });
 
+    it("rejects pending auth retry connections on manual disconnect", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      authFailureHandlers[0]?.("bad token", 1);
+      disconnectHandlers[0]?.(true);
+
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+    });
+
     it("does not cache pending connections after disconnectAll", async () => {
       mockConnect.mockImplementationOnce(() => {});
 
