@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentCompactionConfig, resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentCompactionConfig } from "../agent-scope-config.js";
 import { type CompactionEntry, type SessionEntry, type SessionHeader } from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 import {

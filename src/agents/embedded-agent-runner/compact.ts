@@ -370,7 +370,13 @@ function hasExplicitCompactionModel(
   params: CompactEmbeddedAgentSessionParams,
   agentId?: string,
 ): boolean {
-  return Boolean(resolveAgentCompactionConfig(params.config, agentId)?.model);
+  return Boolean(
+    (params.config && agentId
+      ? (resolveAgentConfig(params.config, agentId)?.compaction ??
+        params.config.agents?.defaults?.compaction)
+      : params.config?.agents?.defaults?.compaction
+    )?.model,
+  );
 }
 
 function resolveCompactionFallbacksOverride(
@@ -1349,8 +1355,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
               const hardenedBoundary = await hardenManualCompactionBoundary({
                 sessionFile: params.sessionFile,
                 preserveRecentTail:
-                  typeof resolveAgentCompactionConfig(params.config, sessionAgentId)
-                    ?.keepRecentTokens === "number",
+                  typeof (
+                    params.config && sessionAgentId
+                      ? (resolveAgentConfig(params.config, sessionAgentId)?.compaction ??
+                        params.config.agents?.defaults?.compaction)
+                      : params.config?.agents?.defaults?.compaction
+                  )?.keepRecentTokens === "number",
               });
               if (hardenedBoundary.applied) {
                 effectiveFirstKeptEntryId =

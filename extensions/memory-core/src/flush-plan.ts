@@ -1,7 +1,7 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
-  resolveAgentCompactionConfig,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
@@ -93,6 +93,19 @@ function appendCurrentTimeLine(text: string, timeLine: string): string {
   return `${trimmed}\n${timeLine}`;
 }
 
+function resolveCompactionConfig(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"] | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  if (agentId) {
+    return resolveAgentConfig(cfg, agentId)?.compaction ?? cfg.agents?.defaults?.compaction;
+  }
+  return cfg.agents?.defaults?.compaction;
+}
+
 export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
@@ -103,7 +116,7 @@ export function buildMemoryFlushPlan(
   const resolved = params;
   const nowMs = Number.isFinite(resolved.nowMs) ? (resolved.nowMs as number) : Date.now();
   const cfg = resolved.cfg;
-  const compaction = resolveAgentCompactionConfig(cfg, resolved.agentId);
+  const compaction = resolveCompactionConfig(cfg, resolved.agentId);
   const memoryFlush = compaction?.memoryFlush;
   if (memoryFlush?.enabled === false) {
     return null;

@@ -191,7 +191,11 @@ export function buildEmbeddedExtensionFactories(params: {
   modelRegistry?: ModelRegistry;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  const compactionCfg = resolveAgentCompactionConfig(params.cfg, params.agentId);
+  const compactionCfg =
+    params.cfg && params.agentId
+      ? (resolveAgentConfig(params.cfg, params.agentId)?.compaction ??
+        params.cfg.agents?.defaults?.compaction)
+      : params.cfg?.agents?.defaults?.compaction;
   if (resolveEffectiveCompactionMode(params.cfg, params.agentId) === "safeguard") {
     const compactionSlot =
       params.cfg && !compactionCfg?.provider

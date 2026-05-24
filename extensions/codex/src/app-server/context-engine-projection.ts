@@ -1,5 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentCompactionConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
 type CodexContextProjection = {
@@ -89,10 +89,12 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
   config?: unknown;
   activeAgentId?: string | null;
 }): number | undefined {
-  const compaction = resolveAgentCompactionConfig(
-    params.config as Parameters<typeof resolveAgentCompactionConfig>[0],
-    params.activeAgentId,
-  );
+  const cfg = params.config as Parameters<typeof resolveAgentConfig>[0] | undefined;
+  const compaction =
+    cfg && params.activeAgentId
+      ? (resolveAgentConfig(cfg, params.activeAgentId)?.compaction ??
+        cfg.agents?.defaults?.compaction)
+      : cfg?.agents?.defaults?.compaction;
   const configuredReserveTokens = toNonNegativeInt(asRecord(compaction)?.reserveTokens);
   const configuredReserveTokensFloor = toNonNegativeInt(asRecord(compaction)?.reserveTokensFloor);
 

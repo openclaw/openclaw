@@ -1,4 +1,4 @@
-import { resolveAgentCompactionConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { legacyModelKey, modelKey } from "../../agents/model-selection-normalize.js";
@@ -27,7 +27,10 @@ export function resolveMaxActiveTranscriptBytes(
   cfg?: OpenClawConfig,
   agentId?: string,
 ): number | undefined {
-  const compaction = resolveAgentCompactionConfig(cfg, agentId);
+  const compaction =
+    cfg && agentId
+      ? (resolveAgentConfig(cfg, agentId)?.compaction ?? cfg.agents?.defaults?.compaction)
+      : cfg?.agents?.defaults?.compaction;
   if (compaction?.truncateAfterCompaction !== true) {
     return undefined;
   }

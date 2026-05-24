@@ -33,7 +33,6 @@ export {
   listAgentEntries,
   listAgentIds,
   resolveAgentConfig,
-  resolveAgentCompactionConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,

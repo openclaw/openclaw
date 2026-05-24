@@ -2196,8 +2196,11 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
       const midTurnPrecheckEnabled =
-        resolveAgentCompactionConfig(params.config, sessionAgentId)?.midTurnPrecheck?.enabled ===
-        true;
+        (params.config && sessionAgentId
+          ? (resolveAgentConfig(params.config, sessionAgentId)?.compaction ??
+            params.config.agents?.defaults?.compaction)
+          : params.config?.agents?.defaults?.compaction
+        )?.midTurnPrecheck?.enabled === true;
       let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
       const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
         pendingMidTurnPrecheckRequest = request;
