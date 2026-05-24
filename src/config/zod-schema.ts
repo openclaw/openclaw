@@ -971,6 +971,14 @@ export const OpenClawSchema = z
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),
+        modelWorkerPool: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxWorkers: z.number().int().min(1).max(16).optional(),
+            timeoutMs: z.number().int().positive().max(600_000).optional(),
+          })
+          .strict()
+          .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -992,6 +1000,15 @@ export const OpenClawSchema = z
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
             deferralTimeoutMs: z.number().int().min(0).optional(),
+            forceDrain: z
+              .object({
+                gracefulMs: z.number().int().positive().max(300_000).optional(),
+                softAbortMs: z.number().int().positive().max(300_000).optional(),
+                forceCloseMs: z.number().int().positive().max(300_000).optional(),
+                hardKillMs: z.number().int().positive().max(300_000).optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),

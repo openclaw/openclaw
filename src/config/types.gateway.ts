@@ -244,6 +244,29 @@ export type GatewayRemoteConfig = {
 
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
+export type GatewayForceDrainConfig = {
+  /**
+   * Phase 1 (ms): Graceful wait for in-flight agent turns to complete normally.
+   * Default: 10000.
+   */
+  gracefulMs?: number;
+  /**
+   * Phase 2 (ms): Soft abort — AbortController.abort() on all active model calls.
+   * Cumulative from restart trigger. Default: 20000.
+   */
+  softAbortMs?: number;
+  /**
+   * Phase 3 (ms): Force close — Destroy WebSocket connections, reject pending promises.
+   * Cumulative from restart trigger. Default: 30000.
+   */
+  forceCloseMs?: number;
+  /**
+   * Phase 4 (ms): Hard kill — process.exit(0) if still hanging.
+   * Cumulative from restart trigger. Default: 40000.
+   */
+  hardKillMs?: number;
+};
+
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
@@ -257,6 +280,12 @@ export type GatewayReloadConfig = {
    * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
+  /**
+   * Graduated force-close drain config for gateway restart.
+   * Defines a multi-phase cascade: graceful drain → soft abort → force close → hard kill.
+   * Each phase timestamp is cumulative from the restart trigger.
+   */
+  forceDrain?: GatewayForceDrainConfig;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -513,4 +542,17 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Offload LLM API fetch() calls to a worker_threads pool to prevent
+   * event-loop starvation on the main gateway thread during long-running
+   * streaming model responses.
+   */
+  modelWorkerPool?: {
+    /** Enable the model worker pool. Default: false. */
+    enabled?: boolean;
+    /** Maximum number of worker threads. Default: 4. */
+    maxWorkers?: number;
+    /** Per-request timeout in milliseconds. Default: 300000 (5 min). */
+    timeoutMs?: number;
+  };
 };

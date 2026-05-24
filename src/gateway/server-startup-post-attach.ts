@@ -993,6 +993,19 @@ export async function startGatewayPostAttachRuntime(
         ]);
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
+
+        // Initialize the model worker pool if configured
+        const poolConfig = params.cfgAtStart.gateway?.modelWorkerPool;
+        if (poolConfig?.enabled) {
+          const { configureModelWorkerPool } = await import(
+            "../agents/model-worker-pool.js"
+          );
+          configureModelWorkerPool(poolConfig);
+          params.log.info(
+            `model worker pool enabled: maxWorkers=${poolConfig.maxWorkers ?? 4}, timeoutMs=${poolConfig.timeoutMs ?? 300000}`,
+          );
+        }
+
         return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
       });
 

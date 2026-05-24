@@ -105,6 +105,12 @@ export const FIELD_HELP: Record<string, string> = {
     "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
     "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
+  "gateway.modelWorkerPool.enabled":
+    "Offload LLM API fetch() calls to a worker_threads pool to prevent event-loop starvation on the main gateway thread. When enabled, model streaming responses are isolated from gateway I/O processing.",
+  "gateway.modelWorkerPool.maxWorkers":
+    "Maximum number of worker threads in the model worker pool. Each worker handles one concurrent model API call. Default: 4.",
+  "gateway.modelWorkerPool.timeoutMs":
+    "Per-request timeout for model worker pool fetch calls. Workers that exceed this timeout are returned to the pool and the request falls back to the main thread. Default: 300000 (5 min).",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
@@ -572,6 +578,14 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "gateway.reload.deferralTimeoutMs":
     "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+  "gateway.reload.forceDrain.gracefulMs":
+    "Phase 1 of the graduated force-drain cascade (ms from restart trigger). Gateway waits for in-flight agent turns to complete normally.",
+  "gateway.reload.forceDrain.softAbortMs":
+    "Phase 2 of the graduated force-drain cascade (ms from restart trigger). Calls AbortController.abort() on all active model fetch calls.",
+  "gateway.reload.forceDrain.forceCloseMs":
+    "Phase 3 of the graduated force-drain cascade (ms from restart trigger). Destroys WebSocket connections and rejects pending promises.",
+  "gateway.reload.forceDrain.hardKillMs":
+    "Phase 4 of the graduated force-drain cascade (ms from restart trigger). Calls process.exit(0) if the process is still hanging.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
