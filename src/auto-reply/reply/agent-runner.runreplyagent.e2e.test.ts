@@ -13,6 +13,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -116,6 +117,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedPiSessionMock.mockReset();
   state.compactEmbeddedPiSessionMock.mockResolvedValue({
     ok: true,
@@ -228,6 +230,42 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    active.complete();
+  });
+
+  it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const { run, typing } = createMinimalRun({
+      opts: { abortSignal: abortController.signal },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },

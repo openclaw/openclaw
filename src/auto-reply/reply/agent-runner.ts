@@ -1276,15 +1276,19 @@ export async function runReplyAgent(params: {
   if (providedReplyOperation) {
     replyOperation = providedReplyOperation;
   } else {
+    const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
       sessionId: followupRun.run.sessionId,
       sessionKey: replySessionKey ?? "",
-      kind: resolveReplyTurnKind(opts),
+      kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       upstreamAbortSignal: opts?.abortSignal,
     });
     if (admission.status === "skipped") {
       typing.cleanup();
+      if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
+        return undefined;
+      }
       return markReplyPayloadForSourceSuppressionDelivery({
         text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
