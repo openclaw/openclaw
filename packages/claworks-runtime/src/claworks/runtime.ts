@@ -4,6 +4,8 @@ import { createResearchAgent } from "../agents/research-agent.js";
 import { ConnectorManager } from "../interfaces/connectors/connector-manager.js";
 import { resolveConnectorConfigs } from "../interfaces/connectors/presets.js";
 import { createActionRegistry } from "../kernel/action-registry.js";
+import { createBridgeRegistry } from "../kernel/bridge-registry.js";
+import { createCardBuilder } from "../kernel/card-builder.js";
 import { createContextEngine } from "../kernel/context-engine.js";
 import { createCoreCapabilityRegistry } from "../kernel/core-capabilities.js";
 import { createEventKernel, type EventKernel } from "../kernel/event-kernel.js";
@@ -14,6 +16,7 @@ import { registerExtensionCapabilities } from "../kernel/extension-capabilities.
 import { createHookEngine } from "../kernel/hook-engine.js";
 import { createIngressRouter, DEFAULT_INGRESS_POLICIES } from "../kernel/ingress.js";
 import { createIntentRegistry } from "../kernel/intent-registry.js";
+import { createNotificationRouter } from "../kernel/notification-router.js";
 import {
   createConstitutionV2,
   DEFAULT_OPERATOR_CONSTITUTION,
@@ -22,6 +25,7 @@ import { createRobotIdentityManager } from "../kernel/robot-identity-manager.js"
 import { createScaffoldEngine } from "../kernel/scaffold-engine.js";
 import { createPlaybookScheduler } from "../kernel/scheduler.js";
 import { createScriptLibrary, registerBuiltinScripts } from "../kernel/script-library.js";
+import { createStructuredOutputEngine } from "../kernel/structured-output.js";
 import type { KnowledgeBase, RobotInfo } from "../kernel/types.js";
 import { createUserProfileStore } from "../kernel/user-profile-store.js";
 import { createPackLoader } from "../pack-loader/index.js";
@@ -352,6 +356,10 @@ export async function createClaworksRuntime(
   if (opts?.skillRun) {
     runtime.skillRun = opts.skillRun;
   }
+  // 将 llmComplete 挂载到 runtime（供 structuredOutput 等延迟引用访问）
+  if (opts?.llmComplete) {
+    runtime.llmComplete = opts.llmComplete;
+  }
 
   // Create capability registry after runtime is fully assembled (it needs the runtime ref)
   const capabilities = createCoreCapabilityRegistry(runtime);
@@ -415,6 +423,23 @@ export async function createClaworksRuntime(
 
   // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
   runtime.evolutionSync = new EvolutionSyncManager(runtime);
+
+  // 初始化桥接注册表（LLM / 通知 / Skill 等外部服务）
+  runtime.bridges = createBridgeRegistry();
+
+  // 初始化卡片构建器（飞书/企微/钉钉 富交互卡片渲染）
+  runtime.cardBuilder = createCardBuilder();
+
+  // 初始化通知路由器（用户偏好渠道管理，跨渠道分发）
+  runtime.notificationRouter = createNotificationRouter(runtime);
+
+  // 初始化结构化输出引擎（强制 LLM 返回合规 JSON，含重试和多数投票）
+  // 使用延迟引用 runtime.llmComplete，允许在 structuredOutput 创建后才注入 LLM
+  runtime.structuredOutput = createStructuredOutputEngine(async (opts) => {
+    const fn = runtime.llmComplete ?? runtime.bridges?.get("llm")?.complete;
+    if (!fn) throw new Error("LLM 未配置：请设置 CLAWORKS_LLM_BASE_URL 或对接 OpenClaw 提供商");
+    return fn(opts);
+  });
 
   // 注册 Pack factory 贡献（action handlers / intent mappings / capabilities）
   await applyPackContributions(runtime, packs);
