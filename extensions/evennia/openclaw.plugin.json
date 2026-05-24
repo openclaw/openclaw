@@ -26,6 +26,9 @@
           "enabled": { "type": "boolean" },
           "baseUrl": { "type": "string" },
           "websocketUrl": { "type": "string" },
+          "historyLimit": { "type": "integer", "minimum": 0 },
+          "timeoutSeconds": { "type": "integer", "minimum": 0 },
+          "blockReplyTimeoutMs": { "type": "integer", "minimum": 0 },
           "accounts": {
             "type": "object",
             "additionalProperties": {
@@ -36,6 +39,9 @@
                 "agentId": { "type": "string" },
                 "baseUrl": { "type": "string" },
                 "websocketUrl": { "type": "string" },
+                "historyLimit": { "type": "integer", "minimum": 0 },
+                "timeoutSeconds": { "type": "integer", "minimum": 0 },
+                "blockReplyTimeoutMs": { "type": "integer", "minimum": 0 },
                 "username": { "type": "string" },
                 "passwordFile": { "type": "string" },
                 "character": { "type": "string" },
@@ -68,6 +74,9 @@
           "enabled": { "type": "boolean" },
           "baseUrl": { "type": "string" },
           "websocketUrl": { "type": "string" },
+          "historyLimit": { "type": "integer", "minimum": 0 },
+          "timeoutSeconds": { "type": "integer", "minimum": 0 },
+          "blockReplyTimeoutMs": { "type": "integer", "minimum": 0 },
           "accounts": {
             "type": "object",
             "additionalProperties": {
@@ -78,6 +87,9 @@
                 "agentId": { "type": "string" },
                 "baseUrl": { "type": "string" },
                 "websocketUrl": { "type": "string" },
+                "historyLimit": { "type": "integer", "minimum": 0 },
+                "timeoutSeconds": { "type": "integer", "minimum": 0 },
+                "blockReplyTimeoutMs": { "type": "integer", "minimum": 0 },
                 "username": { "type": "string" },
                 "passwordFile": { "type": "string" },
                 "character": { "type": "string" },

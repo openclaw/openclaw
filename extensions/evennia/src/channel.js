@@ -1,16 +1,21 @@
 import { readReactionParams } from "openclaw/plugin-sdk/channel-actions";
 import { createChannelPluginBase, createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { jsonResult } from "openclaw/plugin-sdk/core";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { Type } from "typebox";
 import { EvenniaClient } from "./evennia-client.js";
 
 const clients = new Map();
+const evenniaHistories = new Map();
 
 const ROOM_CONTEXT_MAX_CHARS = 5000;
 const HELP_CONTEXT_MAX_CHARS = 2500;
 const COMMAND_OUTPUT_MAX_CHARS = 6000;
 const COMMAND_OUTPUT_WAIT_MS = 3000;
 const COMMAND_ROOM_SNAPSHOT_MAX_CHARS = 3500;
+const DEFAULT_EVENNIA_HISTORY_LIMIT = 20;
+const DEFAULT_EVENNIA_TIMEOUT_SECONDS = 0;
+const DEFAULT_EVENNIA_BLOCK_REPLY_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_CHANNEL_ID = "evennia";
 
 const EVENNIA_AGENT_PROMPT = [
@@ -58,6 +63,8 @@ function resolveAccount(cfg, accountId = null, channelId = DEFAULT_CHANNEL_ID) {
   const accounts = section.accounts || {};
   const id = accountId || Object.keys(accounts)[0] || "default";
   const raw = accounts[id] || {};
+  const historyLimit =
+    raw.historyLimit ?? section.historyLimit ?? cfg.messages?.groupChat?.historyLimit;
   return {
     channelId,
     accountId: id,
@@ -73,6 +80,15 @@ function resolveAccount(cfg, accountId = null, channelId = DEFAULT_CHANNEL_ID) {
     allowFrom: raw.allowFrom || [],
     allowedRooms: raw.allowedRooms || [],
     respondToAmbientMentions: raw.respondToAmbientMentions !== false,
+    historyLimit: Math.max(
+      DEFAULT_EVENNIA_HISTORY_LIMIT,
+      Number.isFinite(historyLimit) ? Math.floor(historyLimit) : DEFAULT_EVENNIA_HISTORY_LIMIT,
+    ),
+    timeoutSeconds: raw.timeoutSeconds ?? section.timeoutSeconds ?? DEFAULT_EVENNIA_TIMEOUT_SECONDS,
+    blockReplyTimeoutMs:
+      raw.blockReplyTimeoutMs ??
+      section.blockReplyTimeoutMs ??
+      DEFAULT_EVENNIA_BLOCK_REPLY_TIMEOUT_MS,
   };
 }
 
@@ -566,6 +582,58 @@ function isMentioned(event, account) {
   return event.text?.toLowerCase().includes(trigger) === true;
 }
 
+function isDirectEvenniaEvent(event) {
+  return event.kind === "tell" || event.kind === "whisper";
+}
+
+export function evenniaHistoryKey(account, event) {
+  const direct = isDirectEvenniaEvent(event);
+  const target = direct ? event.sender : event.room || "room";
+  return `${account.channelId}:${account.accountId}:${direct ? "direct" : "room"}:${target}`;
+}
+
+function evenniaHistoryEntry(event) {
+  const body = String(event.text ?? "").trim();
+  if (!body) {
+    return null;
+  }
+  return {
+    sender: event.sender || "unknown",
+    body,
+    timestamp: event.timestamp || Date.now(),
+    messageId: event.id,
+  };
+}
+
+function getEvenniaHistoryWindow() {
+  return createChannelHistoryWindow({ historyMap: evenniaHistories });
+}
+
+export function buildEvenniaInboundHistory(account, event) {
+  if (account.historyLimit <= 0) {
+    return undefined;
+  }
+  return getEvenniaHistoryWindow().buildInboundHistory({
+    historyKey: evenniaHistoryKey(account, event),
+    limit: account.historyLimit,
+  });
+}
+
+export function recordEvenniaHistoryEvent(account, event) {
+  if (account.historyLimit <= 0) {
+    return;
+  }
+  getEvenniaHistoryWindow().record({
+    historyKey: evenniaHistoryKey(account, event),
+    limit: account.historyLimit,
+    entry: evenniaHistoryEntry(event),
+  });
+}
+
+export function clearEvenniaHistoryForTests() {
+  evenniaHistories.clear();
+}
+
 function resolveActionClient(channelId = DEFAULT_CHANNEL_ID, accountId, params = {}) {
   const requestedChannelId =
     (typeof params.channelId === "string" && params.channelId.trim()) || channelId;
@@ -660,15 +728,19 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     ctx.log?.warn?.("evennia channelRuntime unavailable; inbound ignored");
     return;
   }
-  const direct = event.kind === "tell" || event.kind === "whisper";
+  const direct = isDirectEvenniaEvent(event);
   const mentioned = isMentioned(event, account);
+  const inboundHistory = buildEvenniaInboundHistory(account, event);
   if (!direct && !account.respondToAmbientMentions) {
+    recordEvenniaHistoryEvent(account, event);
     return;
   }
   if (direct && account.respondToAmbientMentions === false) {
+    recordEvenniaHistoryEvent(account, event);
     return;
   }
   if (!direct && !mentioned) {
+    recordEvenniaHistoryEvent(account, event);
     return;
   }
 
@@ -728,6 +800,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
       body: event.text,
       bodyForAgent: `[Evennia ${direct ? "tell" : "room"} from ${event.sender}${event.room ? ` in ${event.room}` : ""}]\n${event.text}${stateContext}`,
       commandBody: event.text,
+      inboundHistory,
       envelopeFrom: event.sender,
       senderLabel: event.sender,
       preview: event.text.slice(0, 200),
@@ -765,6 +838,7 @@ async function dispatchEvenniaEvent(ctx, account, event) {
     ? createEvenniaStatusPoseController(statusClient, ctx.log)
     : null;
   await statusPoses?.setEmoji("👀");
+  recordEvenniaHistoryEvent(account, event);
 
   try {
     await rt.turn.dispatchAssembled({
@@ -779,6 +853,8 @@ async function dispatchEvenniaEvent(ctx, account, event) {
       dispatchReplyWithBufferedBlockDispatcher: rt.reply.dispatchReplyWithBufferedBlockDispatcher,
       messageId,
       replyOptions: {
+        timeoutOverrideSeconds: account.timeoutSeconds,
+        blockReplyTimeoutMs: account.blockReplyTimeoutMs,
         onToolResult: async (payload) => {
           await statusPoses?.setToolResult(payload);
         },
