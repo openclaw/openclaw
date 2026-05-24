@@ -7,6 +7,53 @@ import {
 } from "../../../config/legacy.shared.js";
 import { isModelThinkingFormat } from "../../../config/types.models.js";
 
+const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
+  "deepseek/deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
+} as const;
+
+function resolveStaleContextWindowFix(params: {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+}): { stale: number; correct: number } | undefined {
+  if (params.providerId !== "deepseek") {
+    return undefined;
+  }
+  const scopedModelId = params.modelId.includes("/")
+    ? params.modelId
+    : `deepseek/${params.modelId}`;
+  const fix = STALE_CONTEXT_WINDOW_FIXES[scopedModelId];
+  return fix && params.contextWindow === fix.stale ? fix : undefined;
+}
+
+function hasStaleContextWindowValue(providers: unknown): boolean {
+  const providersRecord = getRecord(providers);
+  if (!providersRecord) {
+    return false;
+  }
+
+  for (const [providerId, provider] of Object.entries(providersRecord)) {
+    const models = getRecord(provider)?.models;
+    if (!Array.isArray(models)) {
+      continue;
+    }
+
+    for (const model of models) {
+      const modelRecord = getRecord(model);
+      const modelId = typeof modelRecord?.id === "string" ? modelRecord.id : undefined;
+      const contextWindow = modelRecord?.contextWindow;
+      if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
+        continue;
+      }
+      if (resolveStaleContextWindowFix({ providerId, modelId, contextWindow })) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function hasInvalidThinkingFormat(providers: unknown): boolean {
   const providersRecord = getRecord(providers);
   if (!providersRecord) {
@@ -36,6 +83,13 @@ const INVALID_THINKING_FORMAT_RULE: LegacyConfigRule = {
   message:
     'models.providers.<id>.models[*].compat.thinkingFormat has an unrecognized value; run "openclaw doctor --fix" to remove it and restore the runtime default.',
   match: (value) => hasInvalidThinkingFormat(value),
+};
+
+const STALE_CONTEXT_WINDOW_RULE: LegacyConfigRule = {
+  path: ["models", "providers"],
+  message:
+    'models.providers.<id>.models[*].contextWindow has a stale catalog value; run "openclaw doctor --fix" to repair it.',
+  match: (value) => hasStaleContextWindowValue(value),
 };
 
 function normalizeString(value: unknown): string {
@@ -534,6 +588,48 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
           delete compat.thinkingFormat;
           changes.push(
             `Removed models.providers.${providerId}.models.${index}.compat.thinkingFormat (unrecognized value ${JSON.stringify(thinkingFormat)}; runtime default applies).`,
+          );
+        }
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "models.providers.*.models.*.contextWindow-stale",
+    describe: "Repair stale contextWindow values to match catalog defaults",
+    legacyRules: [STALE_CONTEXT_WINDOW_RULE],
+    apply: (raw, changes) => {
+      const providers = getRecord(getRecord(raw.models)?.providers);
+      if (!providers) {
+        return;
+      }
+
+      for (const [providerId, provider] of Object.entries(providers)) {
+        const models = getRecord(provider)?.models;
+        if (!Array.isArray(models)) {
+          continue;
+        }
+
+        for (const [index, model] of models.entries()) {
+          if (!getRecord(model)) {
+            continue;
+          }
+          const modelId = typeof model.id === "string" ? model.id : undefined;
+          if (!modelId) {
+            continue;
+          }
+          const contextWindow = model.contextWindow;
+          if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
+            continue;
+          }
+
+          const fix = resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
+          if (!fix) {
+            continue;
+          }
+
+          model.contextWindow = fix.correct;
+          changes.push(
+            `Repaired models.providers.${providerId}.models[${index}].${modelId}.contextWindow (${contextWindow} → ${fix.correct} to match catalog default).`,
           );
         }
       }

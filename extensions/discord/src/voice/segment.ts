@@ -3,6 +3,8 @@ import { Readable } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
@@ -96,26 +98,44 @@ export async function processDiscordVoiceSegment(params: {
     return;
   }
 
-  const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
-  const turn = await runDiscordVoiceAgentTurn({
+  let replyText: string;
+  const control = await maybeControlDiscordVoiceAgentRun({
     entry,
-    userId,
-    message: prompt,
-    cfg: params.cfg,
-    discordConfig: params.discordConfig,
-    runtime: params.runtime,
-    context: ingress,
-    ownerAllowFrom: params.ownerAllowFrom,
-    fetchGuildName: params.fetchGuildName,
-    speakerContext: params.speakerContext,
-  });
-  if (!turn) {
-    logVoiceVerbose(
-      `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+    text: transcript,
+  }).catch((error: unknown) => {
+    logger.warn(
+      `discord voice: active-run control failed; falling back to normal segment handling: ${formatErrorMessage(error)}`,
     );
-    return;
+    return undefined;
+  });
+
+  if (control?.handled) {
+    logger.info(
+      `discord voice: active-run control handled mode=${control.result.mode} ok=${control.result.ok} active=${control.result.active} reason=${control.result.reason ?? "none"} session=${entry.route.sessionKey}`,
+    );
+    replyText = control.speakText ?? "";
+  } else {
+    const prompt = formatVoiceIngressPrompt(transcript, ingress.speakerLabel);
+    const turn = await runDiscordVoiceAgentTurn({
+      entry,
+      userId,
+      message: prompt,
+      cfg: params.cfg,
+      discordConfig: params.discordConfig,
+      runtime: params.runtime,
+      context: ingress,
+      ownerAllowFrom: params.ownerAllowFrom,
+      fetchGuildName: params.fetchGuildName,
+      speakerContext: params.speakerContext,
+    });
+    if (!turn) {
+      logVoiceVerbose(
+        `segment unauthorized before agent turn: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
+    replyText = turn.text;
   }
-  const replyText = turn.text;
 
   if (!replyText) {
     logVoiceVerbose(

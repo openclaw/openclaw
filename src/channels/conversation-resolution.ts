@@ -174,6 +174,7 @@ function resolveBindingAccountId(params: {
 function resolveFallbackConversationTargetId(params: {
   rawTarget: string;
   allowNumericTopicShorthand?: boolean;
+  preserveExplicitTopicSuffix?: boolean;
 }): string | undefined {
   const { allowNumericTopicShorthand = false } = params;
   const target = normalizeOptionalString(params.rawTarget);
@@ -181,9 +182,12 @@ function resolveFallbackConversationTargetId(params: {
     return undefined;
   }
   const withoutKind = stripTargetKindPrefix(target);
-  const withoutTopic = stripTargetTopicSuffix(withoutKind, {
-    allowNumericShorthand: allowNumericTopicShorthand,
-  });
+  const withoutTopic =
+    params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
+      ? withoutKind
+      : stripTargetTopicSuffix(withoutKind, {
+          allowNumericShorthand: allowNumericTopicShorthand,
+        });
   return (
     resolveConversationIdFromTargets({
       targets: [withoutTopic],
@@ -198,6 +202,7 @@ function resolveFallbackConversationTargetId(params: {
 function resolveChannelTargetId(params: {
   channel: string;
   target?: string | null;
+  preserveExplicitTopicSuffix?: boolean;
 }): string | undefined {
   const target = normalizeOptionalString(params.target);
   if (!target) {
@@ -210,6 +215,7 @@ function resolveChannelTargetId(params: {
     return resolveChannelTargetId({
       channel: params.channel,
       target: target.slice(channelPrefix.length),
+      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
   }
   if (CANONICAL_TARGET_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
@@ -221,6 +227,7 @@ function resolveChannelTargetId(params: {
     const explicitConversationId = resolveFallbackConversationTargetId({
       rawTarget: target,
       allowNumericTopicShorthand: params.channel === "telegram",
+      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     if (explicitConversationId) {
       return explicitConversationId;
@@ -235,6 +242,7 @@ function resolveChannelTargetId(params: {
     const conversationId = resolveFallbackConversationTargetId({
       rawTarget: withoutProvider,
       allowNumericTopicShorthand: params.channel === "telegram",
+      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
   }
@@ -450,24 +458,29 @@ export function resolveInboundConversationResolution(
     resolveChannelTargetId({
       channel,
       target: params.to,
+      preserveExplicitTopicSuffix: threadId == null,
     }) ??
     resolveChannelTargetId({
       channel,
       target: params.conversationId,
+      preserveExplicitTopicSuffix: threadId == null,
     }) ??
     resolveChannelTargetId({
       channel,
       target: params.groupId,
+      preserveExplicitTopicSuffix: threadId == null,
     });
   const genericConversationId =
     threadId ??
     resolveChannelTargetId({
       channel,
       target: params.conversationId,
+      preserveExplicitTopicSuffix: threadId == null,
     }) ??
     resolveChannelTargetId({
       channel,
       target: params.groupId,
+      preserveExplicitTopicSuffix: threadId == null,
     }) ??
     parentConversationId;
   if (!genericConversationId) {

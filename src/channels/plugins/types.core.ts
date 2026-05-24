@@ -151,12 +151,29 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationPlan = {
-  kind: "copy" | "move";
-  label: string;
-  sourcePath: string;
-  targetPath: string;
-};
+export type ChannelLegacyStateMigrationPlan =
+  | {
+      kind: "copy" | "move";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+    }
+  | {
+      kind: "plugin-state-import";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+      pluginId: string;
+      namespace: string;
+      maxEntries: number;
+      scopeKey: string;
+      stateDir?: string;
+      cleanupSource?: "rename";
+      preview?: string;
+      readEntries: () =>
+        | Array<{ key: string; value: unknown }>
+        | Promise<Array<{ key: string; value: unknown }>>;
+    };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {

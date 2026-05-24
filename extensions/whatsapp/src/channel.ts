@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { createWhatsAppLoginTool } from "./agent-tools-login.js";
-import { whatsappApprovalAuth } from "./approval-auth.js";
+import { whatsappApprovalCapability } from "./approval-native.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   describeWhatsAppMessageActions,
@@ -178,7 +178,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             toolContext,
           }),
       },
-      approvalCapability: whatsappApprovalAuth,
+      approvalCapability: whatsappApprovalCapability,
       auth: {
         login: async ({ cfg, accountId, runtime, verbose }) => {
           const resolvedAccountId =
@@ -324,6 +324,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               statusSink: (next: WebChannelStatus) =>
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
+              channelRuntime: ctx.channelRuntime,
             },
           );
         },

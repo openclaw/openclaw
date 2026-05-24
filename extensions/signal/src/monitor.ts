@@ -86,7 +86,7 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
     },
     async waitForIdle(): Promise<void> {
       while (inFlight.size > 0) {
-        await Promise.allSettled(Array.from(inFlight));
+        await Promise.allSettled(inFlight);
       }
     },
   };

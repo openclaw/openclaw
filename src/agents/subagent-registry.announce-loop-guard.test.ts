@@ -150,14 +150,13 @@ describe("announce loop guard (#18264)", () => {
       createdAt: now - 60_000,
       startedAt: now - 55_000,
       endedAt: now - 50_000,
-      announceRetryCount: 3,
-      lastAnnounceRetryAt: now - 10_000,
+      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 10_000 },
     });
 
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
     const entry = requireRunById(runs, "test-loop-guard");
-    expect(entry.announceRetryCount).toBe(3);
-    expect(entry.lastAnnounceRetryAt).toBe(now - 10_000);
+    expect(entry.delivery?.attemptCount).toBe(3);
+    expect(entry.delivery?.lastAttemptAt).toBe(now - 10_000);
   });
 
   test.each([
@@ -175,8 +174,7 @@ describe("announce loop guard (#18264)", () => {
         startedAt: now - 14 * 60_000,
         endedAt: now - 10 * 60_000,
         cleanupCompletedAt: undefined,
-        announceRetryCount: 3,
-        lastAnnounceRetryAt: now - 9 * 60_000,
+        delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
       }),
     },
     {
@@ -192,8 +190,7 @@ describe("announce loop guard (#18264)", () => {
         startedAt: now - 90_000,
         endedAt: now - 60_000,
         cleanupCompletedAt: undefined,
-        announceRetryCount: 3,
-        lastAnnounceRetryAt: now - 30_000,
+        delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 30_000 },
       }),
     },
   ])("$name", async ({ createEntry }) => {
@@ -278,9 +275,9 @@ describe("announce loop guard (#18264)", () => {
 
     const stored = await waitForRun(
       runId,
-      (run) => run.cleanupHandled === false && run.announceRetryCount === 1,
+      (run) => run.cleanupHandled === false && run.delivery?.attemptCount === 1,
     );
     expect(stored.cleanupCompletedAt).toBeUndefined();
-    expect(stored.lastAnnounceRetryAt).toBeTypeOf("number");
+    expect(stored.delivery?.lastAttemptAt).toBeTypeOf("number");
   });
 });

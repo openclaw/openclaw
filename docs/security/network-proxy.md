@@ -96,7 +96,7 @@ proxy:
   loopbackMode: gateway-only # gateway-only, proxy, or block
 ```
 
-- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in Proxyline's managed bypass policy so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered. The bundled Ollama memory embedding provider can also use its own narrower guarded direct path for the exact configured host-local loopback embedding origin.
+- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in Proxyline's managed bypass policy so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered. The bundled browser plugin can also register the exact local CDP readiness and DevTools WebSocket endpoints for OpenClaw-launched managed browsers, and the bundled Ollama memory embedding provider can use its own narrower guarded direct path for the exact configured host-local loopback embedding origin.
 - `proxy`: OpenClaw does not register Gateway or Ollama loopback bypasses, so that loopback traffic is sent through the managed proxy. If the proxy is remote, it must provide special routing for the OpenClaw host's loopback service, such as mapping it to a proxy-reachable hostname, IP, or tunnel. Standard remote proxies resolve `127.0.0.1` and `localhost` from the proxy host, not from the OpenClaw host.
 - `block`: OpenClaw denies Gateway loopback control-plane connections and guarded Ollama host-local embedding loopback connections before opening a socket.
 

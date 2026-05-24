@@ -46,6 +46,8 @@ export type MeetingNotesSessionDescriptor = {
 export type MeetingNotesStartRequest = {
   cfg?: OpenClawConfig;
   session: MeetingNotesSessionDescriptor;
+  abortSignal?: AbortSignal;
+  startupWaitMs?: number;
   onUtterance: (utterance: MeetingNotesUtterance) => void | Promise<void>;
   onStatus?: (status: MeetingNotesSourceStatus) => void | Promise<void>;
 };
