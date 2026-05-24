@@ -55,6 +55,30 @@ describe("stale contextWindow migration", () => {
     expect(changes).toHaveLength(0);
   });
 
+  it("preserves non-stale custom contextWindow values", () => {
+    const changes: string[] = [];
+    const raw = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                contextWindow: 500_000,
+                maxTokens: 61_440,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    migration!.apply(raw, changes);
+
+    expect(raw.models.providers.deepseek.models[0].contextWindow).toBe(500_000);
+    expect(changes).toHaveLength(0);
+  });
+
   it("handles provider-prefixed model IDs", () => {
     const changes: string[] = [];
     const raw = {

@@ -7,13 +7,9 @@ import {
 } from "../../../config/legacy.shared.js";
 import { isModelThinkingFormat } from "../../../config/types.models.js";
 
-/**
- * Catalog-correct contextWindow values for models that shipped with stale
- * defaults in older OpenClaw releases.
- */
-const STALE_CONTEXT_WINDOW_FIXES: Record<string, number> = {
-  "deepseek/deepseek-v4-flash": 1_000_000,
-  "deepseek-v4-flash": 1_000_000,
+const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: number }> = {
+  "deepseek/deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
+  "deepseek-v4-flash": { stale: 200_000, correct: 1_000_000 },
 } as const;
 
 function hasInvalidThinkingFormat(providers: unknown): boolean {
@@ -576,17 +572,16 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS: LegacyConfigMigrationSpec[
             continue;
           }
 
-          // Check against both "deepseek-v4-flash" and "deepseek/deepseek-v4-flash"
-          const correct =
+          const fix =
             STALE_CONTEXT_WINDOW_FIXES[modelId] ??
             STALE_CONTEXT_WINDOW_FIXES[`${providerId}/${modelId}`];
-          if (correct === undefined || contextWindow === correct) {
+          if (fix === undefined || contextWindow !== fix.stale) {
             continue;
           }
 
-          model.contextWindow = correct;
+          model.contextWindow = fix.correct;
           changes.push(
-            `Repaired models.providers.${providerId}.models[${index}].${modelId}.contextWindow (${contextWindow} → ${correct} to match catalog default).`,
+            `Repaired models.providers.${providerId}.models[${index}].${modelId}.contextWindow (${contextWindow} → ${fix.correct} to match catalog default).`,
           );
         }
       }
