@@ -192,6 +192,7 @@ function buildBucketSelectRow(params: {
   runtime?: string;
   providerPage?: number;
   modelIndex?: number;
+  providerBucket?: string;
 }): Row<StringSelectMenu> | null {
   if (params.buckets.length <= 1) {
     return null;
@@ -204,8 +205,9 @@ function buildBucketSelectRow(params: {
   // The bucket select uses `action: "bucket"` so the interaction handler
   // can route the chosen value (interaction.values[0]) into providerBucket
   // or modelBucket and re-render. page resets to 1; the rest of the state
-  // (provider, runtime, providerPage, modelIndex) is preserved in the
-  // customId so a subsequent re-render keeps context.
+  // (provider, runtime, providerPage, modelIndex, providerBucket on the
+  // models view) is preserved in the customId so a subsequent re-render
+  // keeps context.
   const select = createModelSelect({
     customId: buildDiscordModelPickerCustomId({
       command: params.command,
@@ -217,6 +219,9 @@ function buildBucketSelectRow(params: {
       runtime: params.runtime,
       providerPage: params.providerPage,
       modelIndex: params.modelIndex,
+      ...(params.view === "models" && params.providerBucket
+        ? { providerBucket: params.providerBucket }
+        : {}),
     }),
     options,
     placeholder:
@@ -507,6 +512,7 @@ function buildModelRows(params: {
             page: params.modelPage.page,
             providerPage: providerPage.page,
             modelIndex: params.pendingModelIndex,
+            providerBucket: activeProviderBucket,
             modelBucket: runtimeModelBucket,
             userId: params.userId,
           }),
@@ -552,6 +558,7 @@ function buildModelRows(params: {
           runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
+          providerBucket: activeProviderBucket,
           modelBucket: activeModelBucket,
           userId: params.userId,
         }),
@@ -796,8 +803,13 @@ export function renderDiscordModelPickerModelsView(
     buckets: modelPage.buckets,
     currentBucketId: modelPage.bucket?.id,
     provider: modelPage.provider,
-    runtime: params.currentRuntime,
+    // Carry the pending runtime through bucket changes so a runtime
+    // selection followed by a bucket switch does not regress to the
+    // saved-state runtime before Submit. The bucket action handler
+    // reads `parsed.runtime` to re-render.
+    runtime: params.pendingRuntime ?? params.currentRuntime,
     providerPage,
+    providerBucket: params.providerBucket,
   });
   if (bucketRow) {
     rows.push(bucketRow);

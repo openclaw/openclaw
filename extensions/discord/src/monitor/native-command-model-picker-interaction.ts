@@ -310,6 +310,10 @@ export async function handleDiscordModelPickerInteraction(params: {
       modelBucket: newBucket,
       currentModel: currentModelRef,
       currentRuntime,
+      // The bucket select carries the pending runtime in `parsed.runtime`
+      // so a user who picked a runtime and then changed bucket keeps that
+      // runtime as a pending choice through the re-render.
+      pendingRuntime: parsed.runtime,
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
