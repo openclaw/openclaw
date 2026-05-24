@@ -1320,8 +1320,9 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
       const freshVisibleEntry: SessionEntry = {
-        sessionId,
+        sessionId: "fresh-visible-session-id",
         updatedAt: 2,
+        sessionStartedAt: 777,
         lastInteractionAt: 20,
         modelProvider: "openai",
         model: "gpt-5.5",
@@ -1377,6 +1378,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const next = sessionStore[sessionKey];
+      expect(next?.sessionId).toBe("fresh-visible-session-id");
+      expect(next?.sessionStartedAt).toBe(777);
       expect(next?.modelProvider).toBe("openai");
       expect(next?.model).toBe("gpt-5.5");
       expect(next?.contextTokens).toBe(400_000);

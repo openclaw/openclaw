@@ -249,18 +249,21 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
-        sessionId,
         updatedAt: next.updatedAt,
-        sessionStartedAt: next.sessionStartedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
   const persisted = await updateSessionStore(storePath, (store) => {
+    if (preserveUserFacingRunState && !store[sessionKey]) {
+      return undefined;
+    }
     const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
     store[sessionKey] = merged;
     return merged;
   });
-  sessionStore[sessionKey] = persisted;
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
 }
 
 export async function clearCliSessionInStore(params: {
