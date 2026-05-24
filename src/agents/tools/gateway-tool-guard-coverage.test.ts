@@ -70,6 +70,7 @@ describe("gateway config mutation guard coverage", () => {
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
       "messages.groupChat.unmentionedInbound",
     );
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("plugins.bundledDiscovery");
   });
 
   it("allows documented subagent thinking default edits via config.patch", () => {
@@ -167,6 +168,25 @@ describe("gateway config mutation guard coverage", () => {
         },
       },
     );
+  });
+
+  it("allows hardening bundled plugin discovery to allowlist via config.patch", () => {
+    expectAllowed(
+      { plugins: { allow: ["codex", "telegram"], bundledDiscovery: "compat" } },
+      { plugins: { bundledDiscovery: "allowlist" } },
+    );
+  });
+
+  it("blocks loosening bundled plugin discovery back to compat via config.patch", () => {
+    expect(() =>
+      assertGatewayConfigMutationAllowedForTest({
+        action: "config.patch",
+        currentConfig: {
+          plugins: { allow: ["codex", "telegram"], bundledDiscovery: "allowlist" },
+        },
+        raw: JSON.stringify({ plugins: { bundledDiscovery: "compat" } }),
+      }),
+    ).toThrow(/cannot loosen bundled plugin discovery/);
   });
 
   it("blocks disabling sandbox mode via config.patch", () => {
