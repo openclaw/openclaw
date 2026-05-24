@@ -18,7 +18,7 @@ export interface ProcessedLineMessage {
 /**
  * Regex patterns for markdown detection
  */
-const MARKDOWN_TABLE_REGEX = /^\|(.+)\|[\r\n]+\|[-:\s|]+\|[\r\n]+((?:\|.+\|[\r\n]*)+)/gm;
+const MARKDOWN_TABLE_REGEX = /^\s*\|(.+)\|[\r\n]+\s*\|[-:\s|]+\|[\r\n]+((?:\s*\|.+\|[\r\n]*)+)/gm;
 const MARKDOWN_CODE_BLOCK_REGEX = /```(\w*)\n([\s\S]*?)```/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 
@@ -150,7 +150,8 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     paddingBottom: "sm",
   } as FlexBox;
 
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => {
+  const maxDisplayRows = 10;
+  const dataRows: FlexComponent[] = rowCells.slice(0, maxDisplayRows).map((row, rowIndex) => {
     const rowContents = table.headers.map((_, colIndex) => {
       const cell = row[colIndex] ?? { text: "-", bold: false, hasMarkup: false };
       return {
@@ -172,12 +173,32 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     } as FlexBox;
   });
 
+  // Add truncation hint if data rows were cut off
+  const truncatedHint: FlexComponent[] =
+    rowCells.length > maxDisplayRows
+      ? [
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              {
+                type: "text",
+                text: `… ${rowCells.length - maxDisplayRows} more rows`,
+                size: "xs",
+                color: "#999999",
+                align: "center",
+              } as FlexText,
+            ],
+          } as FlexBox,
+        ]
+      : [];
+
   return {
     type: "bubble",
     body: {
       type: "box",
       layout: "vertical",
-      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows],
+      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows, ...truncatedHint],
       paddingAll: "lg",
     },
   };
@@ -355,8 +376,9 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = textWithoutTables;
 
   for (const table of tables) {
+    const summary = `Table: ${table.rows.length} rows × ${table.headers.length} cols`;
     const bubble = convertTableToFlexBubble(table);
-    flexMessages.push(toFlexMessage("Table", bubble));
+    flexMessages.push(toFlexMessage(summary, bubble));
   }
 
   // 2. Extract and convert code blocks
