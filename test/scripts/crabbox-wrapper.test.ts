@@ -45,6 +45,7 @@ function makeFakeGit(responses: Record<string, { status?: number; stdout?: strin
     "const args = process.argv.slice(2);",
     "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
     "if (args[0] === 'worktree' && args[1] === 'remove') { process.exit(0); }",
     "const key = args.join('\\u0000');",
     "const response = responses.get(key);",
@@ -246,6 +247,58 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).not.toContain('"--no-sync"');
     expect(result.stderr).toContain("syncing from temporary full checkout");
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+  });
+
+  it("uses a temporary full checkout for clean sparse AWS syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from origin/main");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+  });
+
+  it("keeps clean sparse local-container syncs on the original checkout", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--", "echo ok"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
+  });
+
+  it("keeps existing AWS leases on the original sparse checkout", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--id", "cbx_existing", "--", "echo ok"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
   });
 
   it("uses a temporary full checkout when clean sparse branches differ from the Blacksmith ref", () => {

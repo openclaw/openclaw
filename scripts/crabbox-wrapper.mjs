@@ -426,8 +426,8 @@ function runCommandArgs(commandArgs) {
   return start >= 0 ? commandArgs.slice(start) : [];
 }
 
-function commandRuntimeEntrypoint(commandArgs) {
-  const words = commandArgs.length === 1 ? commandArgs[0].split(/\s+/u) : commandArgs;
+function normalizedCommandWords(commandArgs) {
+  const words = commandArgs.length === 1 ? commandArgs[0].split(/\s+/u) : [...commandArgs];
   while (words[0] === "env") {
     words.shift();
     while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
@@ -437,11 +437,41 @@ function commandRuntimeEntrypoint(commandArgs) {
   while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
     words.shift();
   }
-  const first = (words[0] ?? "")
-    .replace(/^['"]|['";|&()]+$/g, "")
-    .split("/")
-    .pop();
+  return words.map((word) => word.replace(/^['"]|['";|&()]+$/g, ""));
+}
+
+function commandRuntimeEntrypoint(commandArgs) {
+  const words = normalizedCommandWords(commandArgs);
+  const first = (words[0] ?? "").split("/").pop();
   return ["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"].includes(first) ? first : "";
+}
+
+function isChangedGateCommand(commandArgs) {
+  const words = normalizedCommandWords(commandArgs);
+  if (words[0] === "corepack") {
+    words.shift();
+  }
+  return (
+    (words[0] === "pnpm" && words[1] === "check:changed") ||
+    (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
+    (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
+  );
+}
+
+function headInRemoteRefs() {
+  const refs = gitOutput([
+    "for-each-ref",
+    "--contains",
+    "HEAD",
+    "--format=%(refname)",
+    "refs/remotes",
+  ]);
+  return refs.status === 0 && refs.stdout !== "";
+}
+
+function mergeBaseForChangedGate() {
+  const base = gitOutput(["merge-base", "origin/main", "HEAD"]);
+  return base.status === 0 && base.stdout ? base.stdout : "origin/main";
 }
 
 function isSparseCheckout() {
@@ -457,8 +487,8 @@ function isWorktreeClean() {
   return gitOutput(["status", "--porcelain=v1"]).stdout === "";
 }
 
-function shouldUseFullCheckoutForCleanSparseBlacksmithSync(commandArgs, providerName) {
-  if (commandArgs[0] !== "run" || providerName !== "blacksmith-testbox") {
+function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || isLocalContainerProvider(providerName)) {
     return false;
   }
   if (
@@ -471,7 +501,7 @@ function shouldUseFullCheckoutForCleanSparseBlacksmithSync(commandArgs, provider
   return isSparseCheckout() && isWorktreeClean();
 }
 
-function prepareFullCheckoutForSync() {
+function prepareFullCheckoutForSync(options = {}) {
   const dir = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-sync-"));
   let active = false;
   const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
@@ -487,8 +517,17 @@ function prepareFullCheckoutForSync() {
     throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
   }
 
+  if (options.changedGateBase) {
+    const reset = gitOutput(["-C", dir, "reset", "--mixed", "--quiet", options.changedGateBase]);
+    if (reset.status !== 0) {
+      cleanupFullCheckout(dir, active);
+      throw new Error(`git reset for changed-gate sync failed: ${reset.text}`);
+    }
+  }
+
   return {
     dir,
+    changedGateBase: options.changedGateBase ?? "",
     cleanup() {
       cleanupFullCheckout(dir, active);
       active = false;
@@ -645,13 +684,21 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
-if (shouldUseFullCheckoutForCleanSparseBlacksmithSync(args, provider)) {
-  const checkout = prepareFullCheckoutForSync();
+if (shouldUseFullCheckoutForCleanSparseRemoteSync(args, provider)) {
+  const runWords = runCommandArgs(args);
+  const changedGateBase =
+    isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
+  const checkout = prepareFullCheckoutForSync({ changedGateBase });
   childCwd = checkout.dir;
   cleanupChildCwd = () => checkout.cleanup();
   console.error(
     `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
   );
+  if (checkout.changedGateBase) {
+    console.error(
+      `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+    );
+  }
 }
 
 function cleanupOnce() {
