@@ -102,6 +102,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("exit", (code, signal) => {
+    // If a newer watcher has replaced this child, do not respawn.
+    if (watcherProcess !== null && watcherProcess !== child) {
+      return;
+    }
     if (shuttingDown) {
       return;
     }
@@ -134,6 +138,8 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 function settleProcess(proc: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    let finalTimeout: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       if (settled) {
         return;
@@ -150,7 +156,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
 
     proc.kill("SIGTERM");
 
-    const escalation = setTimeout(() => {
+    escalation = setTimeout(() => {
       try {
         proc.kill("SIGKILL");
       } catch {
@@ -158,7 +164,7 @@ function settleProcess(proc: ChildProcess): Promise<void> {
       }
     }, 3_000);
 
-    const finalTimeout = setTimeout(() => {
+    finalTimeout = setTimeout(() => {
       if (!settled) {
         log.warn("gog process did not exit after SIGKILL; giving up");
         settle();
