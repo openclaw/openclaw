@@ -295,6 +295,60 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   reason: string;
 };
 
+export type DiagnosticCodexNativeThreadLifecycleAction =
+  | "bypassed"
+  | "failed"
+  | "invalidated"
+  | "rejected"
+  | "reused"
+  | "rotated";
+
+export type DiagnosticCodexNativeThreadLifecycleEvent = DiagnosticBaseEvent & {
+  type: "codex.native_thread.lifecycle";
+  action: DiagnosticCodexNativeThreadLifecycleAction;
+  reason: string;
+  threadId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+  bindingMode?: "legacy" | "none" | "per_turn" | "thread_bootstrap" | "transient";
+  contextEngineId?: string;
+  contextEnginePolicyFingerprint?: string;
+  previousContextEngineId?: string;
+  previousContextEnginePolicyFingerprint?: string;
+  projectionMode?: "per_turn" | "thread_bootstrap";
+  projectionEpoch?: string;
+  projectionFingerprint?: string;
+  previousProjectionEpoch?: string;
+  previousProjectionFingerprint?: string;
+  dynamicToolsFingerprint?: string;
+  previousDynamicToolsFingerprint?: string;
+  userMcpServersFingerprint?: string;
+  previousUserMcpServersFingerprint?: string;
+  mcpServersFingerprint?: string;
+  previousMcpServersFingerprint?: string;
+  environmentSelectionFingerprint?: string;
+  previousEnvironmentSelectionFingerprint?: string;
+  pluginAppsFingerprint?: string;
+  previousPluginAppsFingerprint?: string;
+  pluginAppsInputFingerprint?: string;
+  previousPluginAppsInputFingerprint?: string;
+  contextTokenBudget?: number;
+  sessionTokens?: number;
+  nativeTokens?: number;
+  maxActiveTranscriptTokens?: number;
+  maxActiveTranscriptBytes?: number;
+  nativeTranscriptBytes?: number;
+  renderedPromptChars?: number;
+  renderedDeveloperInstructionChars?: number;
+  renderedPromptTokensEstimate?: number;
+  renderedDeveloperInstructionTokensEstimate?: number;
+  contextEngineProjectionContributed?: boolean;
+  workspaceBootstrapContributed?: boolean;
+  nativeToolSurfaceEnabled?: boolean;
+  semanticReuse?: boolean;
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -668,6 +722,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
+  | DiagnosticCodexNativeThreadLifecycleEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent
@@ -768,6 +823,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.completed",
   "model.call.error",
   "run.progress",
+  "codex.native_thread.lifecycle",
   "harness.run.started",
   "harness.run.completed",
   "harness.run.error",
