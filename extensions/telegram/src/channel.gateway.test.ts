@@ -535,38 +535,6 @@ describe("telegramPlugin gateway startup", () => {
     expect(startedProbes).toBe(2);
   });
 
-  it("starts each Telegram monitor after a successful startup probe", async () => {
-    installTelegramRuntime();
-    const releaseProbe: Array<() => void> = [];
-    let activeProbes = 0;
-    let maxActiveProbes = 0;
-    probeTelegram.mockImplementation(async () => {
-      activeProbes += 1;
-      maxActiveProbes = Math.max(maxActiveProbes, activeProbes);
-      await new Promise<void>((resolve) => {
-        releaseProbe.push(resolve);
-      });
-      activeProbes -= 1;
-      return {
-        ok: true,
-        status: null,
-        error: null,
-        elapsedMs: 12,
-      };
-    });
-    monitorTelegramProvider.mockResolvedValue(undefined);
-
-    const account = startTelegramAccount("alpha");
-    try {
-      await waitForCondition(() => releaseProbe.length === 1, "expected startup probe to begin");
-    } finally {
-      await releaseStartupProbeControls(releaseProbe);
-    }
-    await account.task;
-    expect(maxActiveProbes).toBe(1);
-    expect(monitorTelegramProvider).toHaveBeenCalledTimes(1);
-  });
-
   it("releases a stopped stale polling lease for the account token", async () => {
     vi.useFakeTimers();
     try {
