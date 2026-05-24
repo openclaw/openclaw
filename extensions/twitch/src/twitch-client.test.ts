@@ -201,7 +201,7 @@ describe("TwitchClientManager", () => {
       expect(client1).toBe(client2);
     });
 
-    it("waits for disconnect after authentication failure retry events", async () => {
+    it("waits through authentication failure retry disconnects", async () => {
       mockConnect.mockImplementationOnce(() => {});
 
       const connection = manager.getClient(testAccount);
@@ -224,7 +224,11 @@ describe("TwitchClientManager", () => {
       );
 
       disconnectHandlers[0]?.(false, new Error("disconnected"));
-      await expect(connection).rejects.toThrow("disconnected");
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      authSuccessHandlers[0]?.();
+      await expect(connection).resolves.toBeTruthy();
     });
 
     it("does not cache pending connections after disconnectAll", async () => {
