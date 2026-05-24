@@ -825,9 +825,16 @@ function makePerceiveMessageDescriptor(runtime: ClaworksRuntime): CapabilityDesc
       }
 
       const prompt = [
-        "请分析以下消息，以JSON格式回答（不要有任何多余文字）:",
+        "你是工业机器人的消息分析助手。分析用户消息，严格输出 JSON，不要任何解释或 markdown。",
+        "",
+        "输出格式（字段必须完整）：",
+        '{"intent":"意图词","entities":["实体1","实体2"],"sentiment":"positive|neutral|negative","priority":"urgent|high|normal|low","summary":"一句话摘要","action_hint":"建议做什么"}',
+        "",
+        "示例：",
+        '消息:"E001压缩机温度高报警" → {"intent":"alarm_report","entities":["E001","压缩机","温度高"],"sentiment":"negative","priority":"urgent","summary":"E001压缩机温度高报警","action_hint":"触发报警处理流程"}',
+        '消息:"帮我查一下3号工单进度" → {"intent":"workorder_query","entities":["3号工单"],"sentiment":"neutral","priority":"normal","summary":"查询工单进度","action_hint":"调用工单查询能力"}',
+        "",
         `消息: "${text}"`,
-        '返回格式: {"intent":"...", "entities":["..."], "sentiment":"positive|neutral|negative", "priority":"urgent|high|normal|low", "summary":"一句话摘要", "action_hint":"建议机器人做什么"}',
       ].join("\n");
 
       try {
@@ -903,12 +910,20 @@ function makePerceiveClassifyDescriptor(runtime: ClaworksRuntime): CapabilityDes
         return { status: "no_llm", category: categories[0], confidence: 0 };
       }
 
+      const catList = categories.map((c, i) => `${i + 1}. ${c}`).join("\n");
       const prompt = [
-        context ? `背景：${context}` : "",
-        `将以下文本分类到最匹配的类别（只能选一个）：`,
-        `文本："${text}"`,
-        `候选类别：${categories.join("、")}`,
-        `以JSON格式回答：{"category":"...","confidence":0.0-1.0,"reason":"..."}`,
+        "你是文本分类专家。从候选类别中选出最匹配的一个，严格输出 JSON，不要任何解释。",
+        "",
+        context ? `分类背景：${context}` : "",
+        "",
+        `候选类别：\n${catList}`,
+        "",
+        "示例：",
+        `文本："设备报警了" 候选：alarm_report、workorder_query、chat → {"category":"alarm_report","confidence":0.95,"reason":"包含报警关键词"}`,
+        `文本："你好" 候选：greeting、alarm_report、help → {"category":"greeting","confidence":0.99,"reason":"问候语"}`,
+        "",
+        `待分类文本："${text}"`,
+        `输出格式：{"category":"类别名","confidence":0.0-1.0,"reason":"一句话理由"}`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -1188,9 +1203,15 @@ function makePerceiveSentimentDescriptor(runtime: ClaworksRuntime): CapabilityDe
       }
 
       const prompt =
-        `分析以下消息的情绪，返回 JSON（只输出 JSON，不要解释）：\n` +
-        `{"sentiment":"urgent|calm|frustrated|satisfied","urgency":0-1}\n` +
-        `消息：${text}`;
+        `你是情绪分析助手。判断消息的情绪状态，严格输出 JSON，不要任何解释。\n` +
+        `输出格式：{"sentiment":"urgent|calm|frustrated|satisfied","urgency":0-1}\n` +
+        `\n` +
+        `示例：\n` +
+        `消息："设备马上要爆炸了，快来！" → {"sentiment":"urgent","urgency":0.95}\n` +
+        `消息："今天生产情况怎么样" → {"sentiment":"calm","urgency":0.2}\n` +
+        `消息："为什么这个功能又不行了" → {"sentiment":"frustrated","urgency":0.6}\n` +
+        `\n` +
+        `消息："${text}"`;
 
       try {
         const raw = await llmFn(prompt);

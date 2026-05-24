@@ -69,6 +69,12 @@ export interface RuleEngine {
   listTables(): DecisionTable[];
 
   /**
+   * 向已有决策表动态追加一条规则（表不存在时自动创建）。
+   * 用于在线学习：用户纠正后立即生效，秒级响应，无需重启。
+   */
+  addRule(tableId: string, rule: Rule): void;
+
+  /**
    * 对上下文数据执行决策表，返回触发的规则及动作。
    * 规则按 priority 降序排列。stopOnMatch=true 时命中即停止。
    */
@@ -159,6 +165,25 @@ export function createRuleEngine(opts?: {
 
     listTables() {
       return [...tables.values()];
+    },
+
+    addRule(tableId, rule) {
+      const existing = tables.get(tableId);
+      if (existing) {
+        // 避免重复插入相同 id 的规则
+        const idx = existing.rules.findIndex((r) => r.id === rule.id);
+        if (idx >= 0) {
+          existing.rules[idx] = rule;
+        } else {
+          existing.rules.push(rule);
+        }
+      } else {
+        tables.set(tableId, {
+          id: tableId,
+          name: tableId,
+          rules: [rule],
+        });
+      }
     },
 
     async evaluate(tableId, context) {
@@ -317,25 +342,37 @@ export const BUILTIN_IM_QUICK_RULES_TABLE: DecisionTable = {
         or: [
           { field: "text", op: "contains", value: "帮助" },
           { field: "text", op: "eq", value: "help" },
+          { field: "text", op: "eq", value: "?" },
           { field: "text", op: "contains", value: "功能" },
           { field: "text", op: "contains", value: "怎么用" },
+          { field: "text", op: "contains", value: "教程" },
+          { field: "text", op: "contains", value: "使用指南" },
         ],
       },
-      action: { kind: "publish_event", params: { event_type: "im.help_requested" } },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "im.help_requested", route_intent: "help" },
+      },
       stopOnMatch: true,
     },
     {
-      id: "status",
-      name: "状态查询",
+      id: "system_status",
+      name: "系统状态查询",
       priority: 90,
       condition: {
         or: [
           { field: "text", op: "contains", value: "状态" },
           { field: "text", op: "contains", value: "运行情况" },
           { field: "text", op: "contains", value: "在线吗" },
+          { field: "text", op: "contains", value: "健康" },
+          { field: "text", op: "contains", value: "运行中" },
+          { field: "text", op: "contains", value: "正常吗" },
         ],
       },
-      action: { kind: "publish_event", params: { event_type: "system.status_requested" } },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "system.status_requested", route_intent: "system_status" },
+      },
       stopOnMatch: true,
     },
     {
@@ -347,9 +384,105 @@ export const BUILTIN_IM_QUICK_RULES_TABLE: DecisionTable = {
           { field: "text", op: "contains", value: "报警" },
           { field: "text", op: "contains", value: "告警" },
           { field: "text", op: "contains", value: "异常" },
+          { field: "text", op: "contains", value: "故障" },
         ],
       },
-      action: { kind: "publish_event", params: { event_type: "alarm.query_requested" } },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "alarm.query_requested", route_intent: "alarm_query" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "alarm_acknowledge",
+      name: "报警确认",
+      priority: 83,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "确认" },
+          { field: "text", op: "contains", value: "知道了" },
+          { field: "text", op: "contains", value: "我知道了" },
+          { field: "text", op: "contains", value: "收到" },
+          { field: "text", op: "contains", value: "已处理" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "alarm.acknowledge_requested", route_intent: "alarm_acknowledge" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "work_order_query",
+      name: "工单查询",
+      priority: 80,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "工单" },
+          { field: "text", op: "contains", value: "维修单" },
+          { field: "text", op: "contains", value: "任务单" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "work_order.query_requested", route_intent: "workorder_query" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "report_request",
+      name: "报告请求",
+      priority: 75,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "报告" },
+          { field: "text", op: "contains", value: "统计" },
+          { field: "text", op: "contains", value: "总结" },
+          { field: "text", op: "contains", value: "汇总" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "report.generate_requested", route_intent: "report_request" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "shift_handover",
+      name: "交接班",
+      priority: 72,
+      condition: {
+        or: [
+          { field: "text", op: "contains", value: "交班" },
+          { field: "text", op: "contains", value: "交接" },
+          { field: "text", op: "contains", value: "接班" },
+          { field: "text", op: "contains", value: "班次" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "shift.handover_requested", route_intent: "shift_handover" },
+      },
+      stopOnMatch: true,
+    },
+    {
+      id: "greeting",
+      name: "问候/打招呼",
+      priority: 10,
+      condition: {
+        or: [
+          { field: "text", op: "eq", value: "你好" },
+          { field: "text", op: "eq", value: "hello" },
+          { field: "text", op: "eq", value: "hi" },
+          { field: "text", op: "contains", value: "早上好" },
+          { field: "text", op: "contains", value: "下午好" },
+          { field: "text", op: "contains", value: "晚上好" },
+        ],
+      },
+      action: {
+        kind: "publish_event",
+        params: { event_type: "im.greeting_received", route_intent: "chat" },
+      },
       stopOnMatch: true,
     },
   ],

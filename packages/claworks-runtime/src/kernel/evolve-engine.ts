@@ -9,6 +9,41 @@
  *   verify()   → 发布测试事件，订阅结果，等待触发
  *   learn()    → 写入 CbrStore 供后续检索
  *   remove()   → 从文件系统删除并从引擎卸载
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * 自改进流水线（Self-Improvement Pipeline）
+ *
+ * 私域（弱模型）→ 商业模型 → 进化包 → 导入回来的完整闭环：
+ *
+ * 1. 数据采集（私域实时）
+ *    - perceive.intent 失败 → im.intent_unresolved 事件 → AutonomyEngine 检测
+ *    - 用户负反馈 → learn.from_feedback → CBR 标记失败案例
+ *    - PlaybookRun failed → cw_playbook_runs 记录
+ *
+ * 2. 导出（evolution.export_data）
+ *    - 导出失败执行记录 + 用户纠正数据 + 未解析意图样本
+ *    - 格式：EvolutionExportPackage（see: evolution-sync.ts）
+ *
+ * 3. 商业模型处理（离线，在联网环境）
+ *    - 用 Claude/GPT 分析失败案例，生成改进方案
+ *    - 输出：改进的 Playbook YAML + 新规则表 + 优化的 prompt 模板
+ *    - 这一步是"顶级教授教学"环节
+ *
+ * 4. 导入（evolution.import_pack）
+ *    - 将商业模型生成的进化包导入私域
+ *    - pack.reload 热更新 Playbook
+ *    - RuleEngine 更新规则表
+ *    - PromptTemplateRegistry 更新模板
+ *
+ * 5. 验证（PlaybookSimulator）
+ *    - 用历史失败案例跑 regression 测试
+ *    - 对比进化前后的成功率
+ *
+ * 集成点：
+ * - 触发导出：`runtime.autonomyEngine.exportLearningData()`（待实现）
+ * - 触发导入：`POST /v1/evolution/import`（已实现）
+ * - 触发验证：`POST /v1/playbooks/:id/simulate`（已实现）
+ * ──────────────────────────────────────────────────────────────────────────
  */
 
 import {} from "node:crypto";

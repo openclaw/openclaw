@@ -3571,46 +3571,112 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
     {
       id: "skill.list",
       verb: "query",
-      description: "@deprecated 使用 script.list；列出已注册脚本（向后兼容别名）",
+      description:
+        "列出所有可用 skill：本地 Pack 脚本 + OpenClaw harness skill（如已连接）。" +
+        "@deprecated 本地脚本部分请使用 script.list。",
       owner: { kind: "core" },
       handler: async () => {
-        const raw = runtime.scriptLibrary?.list() ?? [];
-        const skills = raw.map((s) => ({
+        // 本地脚本
+        const localRaw = runtime.scriptLibrary?.list() ?? [];
+        const localSkills = localRaw.map((s) => ({
           id: s.id,
           name: s.name,
           description: s.description,
+          source: "local" as const,
         }));
-        return { skills, count: skills.length };
+
+        // OpenClaw harness skill list（如果 harness bridge 存在）
+        const harnessListFn = (
+          runtime as unknown as {
+            skillRun?: unknown;
+            harnessSkillList?: () => Promise<
+              Array<{ id: string; name?: string; description?: string }>
+            >;
+          }
+        ).harnessSkillList;
+        let harnessSkills: Array<{
+          id: string;
+          name: string;
+          description: string;
+          source: "harness";
+        }> = [];
+        if (harnessListFn) {
+          try {
+            const raw = await harnessListFn();
+            harnessSkills = raw.map((s) => ({
+              id: s.id,
+              name: s.name ?? s.id,
+              description: s.description ?? "",
+              source: "harness" as const,
+            }));
+          } catch {
+            // harness 不可用时静默降级
+          }
+        }
+
+        const skills = [...localSkills, ...harnessSkills];
+        return {
+          skills,
+          count: skills.length,
+          local_count: localSkills.length,
+          harness_count: harnessSkills.length,
+        };
       },
     },
 
     // ── skill.run ─────────────────────────────────────────────────────────
-    // 正式的 OpenClaw ClawHub Skill 调用能力。
-    // 底层路径：skill.run → runtime.skillRun（SkillRunFn）→ runEmbeddedAgent。
+    // 统一 Skill 入口：先查本地 scriptLibrary，找不到再走 OpenClaw harness。
     // Playbook 中也可直接用 kind: skill（step-executor 直接调用 deps.skillRun）；
     // 此能力供 action 步骤（kind: action, action: "skill.run"）使用。
     {
       id: "skill.run",
       verb: "execute",
       description:
-        "调用 OpenClaw ClawHub Skill（SKILL.md 驱动的 AI 能力，通过 runEmbeddedAgent）。" +
-        "与 skill.execute / script.execute 不同，这里调用的是有 LLM 推理的 AI Skill，" +
-        "而非确定性内置脚本。",
+        "统一 Skill 执行入口：优先调用本地 Pack 脚本，未找到时代理到 OpenClaw ClawHub Skill（runEmbeddedAgent）。" +
+        "与 script.execute 不同，这里走 fallthrough 统一注册池。",
       owner: { kind: "core" },
       paramsSchema: {
         type: "object",
         required: ["skill_id"],
         properties: {
-          skill_id: { type: "string", description: "OpenClaw ClawHub Skill ID" },
+          skill_id: {
+            type: "string",
+            description: "Skill ID（本地脚本或 OpenClaw ClawHub Skill ID）",
+          },
           input: { type: "object", description: "传入 skill 的输入参数（可选）" },
         },
       },
       handler: async (_ctx, params) => {
-        const SKILL_TIMEOUT_MS = 180_000; // 3分钟，与 OpenClaw subagent 一致
+        const SKILL_TIMEOUT_MS = 180_000;
         const skillId = String(params.skill_id ?? "");
         if (!skillId) {
           return { status: "error", reason: "skill_id 参数缺失" };
         }
+
+        // 1. 先查本地 scriptLibrary（Pack 贡献的确定性脚本）
+        const localScript = runtime.scriptLibrary?.get(skillId);
+        if (localScript) {
+          const { skill_id: _, input: _input, ...rest } = params;
+          const mergedInput = { ...((params.input as Record<string, unknown>) ?? {}), ...rest };
+          try {
+            const result = await runtime.scriptLibrary?.invoke(skillId, mergedInput);
+            return {
+              status: "ok",
+              skill_id: skillId,
+              source: "local",
+              ...(result as Record<string, unknown>),
+            };
+          } catch (err) {
+            return {
+              status: "error",
+              skill_id: skillId,
+              source: "local",
+              reason: err instanceof Error ? err.message : String(err),
+            };
+          }
+        }
+
+        // 2. 本地未找到，fallthrough 到 OpenClaw harness bridge
         const skillRunFn = (
           runtime as unknown as {
             skillRun?: (args: {
@@ -3621,9 +3687,9 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
         ).skillRun;
         if (!skillRunFn) {
           return {
-            status: "not_available",
+            status: "not_found",
             skill_id: skillId,
-            reason: "OpenClaw skill bridge 未连接（skillRun 未注入）",
+            reason: "本地未找到该 skill，且 OpenClaw skill bridge 未连接（skillRun 未注入）",
           };
         }
         try {
@@ -3635,7 +3701,12 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
             ),
           );
           const result = await Promise.race([skillRunFn({ skillId, input }), timeoutPromise]);
-          return { status: "ok", skill_id: skillId, ...(result as Record<string, unknown>) };
+          return {
+            status: "ok",
+            skill_id: skillId,
+            source: "harness",
+            ...(result as Record<string, unknown>),
+          };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (msg.includes("timeout")) {
