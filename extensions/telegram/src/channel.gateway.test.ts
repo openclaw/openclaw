@@ -145,12 +145,13 @@ function sendMessageOptionsAt(index: number): Record<string, unknown> {
   return options;
 }
 
-async function waitForCondition(check: () => boolean, message: string, attempts = 100) {
-  for (let i = 0; i < attempts; i += 1) {
+async function waitForCondition(check: () => boolean, message: string, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (check()) {
       return;
     }
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error(message);
 }
