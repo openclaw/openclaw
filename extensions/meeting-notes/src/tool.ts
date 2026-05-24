@@ -106,7 +106,7 @@ async function waitForPendingAutoStartsToSettle(
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      Promise.allSettled([...pendingStarts]).then(() => true),
+      Promise.allSettled(pendingStarts).then(() => true),
       new Promise<boolean>((resolve) => {
         timeout = setTimeout(() => resolve(false), AUTO_START_STOP_TIMEOUT_MS);
         timeout.unref?.();
