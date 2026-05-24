@@ -189,10 +189,16 @@ Key policy rules:
   providers. Per-agent overrides can set the same role slots under
   `agents.list[].plugins.slots`.
 - Multi-slot memory is tracked in #60572. Related design and compatibility
-  threads include #70823 for machine-readable slot ownership, #85473 for a
-  plugin-facing dreaming protocol, #63067/#65411 for the memory-core dreaming
-  coexistence sidecar, #62275 for slot-aware dreaming config, and #76567/#76495
-  for configured-slot memory runtime checks.
+  threads include #2306 and #38874 for stackable/supplementary memory plugins,
+  #25359 and #54501 for per-agent slot overrides and multi-instance memory
+  configuration, #57507 for dual-kind plugin slot ownership, #70823 for
+  machine-readable slot ownership, #61936/#63067/#63590/#63831/#70489/#85473
+  for decoupling dreaming from primary memory slot ownership, #62275/#63874 and
+  #85863 for slot-aware and provider-owned dreaming config/runtime surfaces,
+  #64423 and #76567/#76495 for selected-slot startup and runtime checks,
+  #78540/#78557 for doctor/status recognition of alternate memory owners,
+  #77906/#82265/#82266/#82977 for active-memory and custom recall-tool
+  compatibility, and #76680 for hook-driven capture behavior.
 - Bundled opt-in plugins can auto-activate when config names one of their owned
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
