@@ -5818,3 +5818,71 @@ export function makeEvolveCapabilities(runtime: ClaworksRuntime): CapabilityDesc
     },
   ];
 }
+
+// ── L43: vision.* 视觉识别连接器 ─────────────────────────────────────────
+
+export function makeVisionCapabilities(runtime: ClaworksRuntime): CapabilityDescriptor[] {
+  return [
+    {
+      id: "vision.analyze",
+      verb: "read",
+      description:
+        "分析图片内容，返回对象识别、文字提取和场景描述（连接器层预处理，结构化输出供弱模型推理）",
+      owner: { kind: "core" },
+      paramsSchema: {
+        type: "object",
+        properties: {
+          image_url: { type: "string", description: "图片 URL" },
+          prompt: { type: "string", description: "额外分析指令（可选）" },
+        },
+        required: ["image_url"],
+      },
+      handler: async (_ctx, params) => {
+        const imageUrl = String(params.image_url ?? "");
+        const extraPrompt = params.prompt ? String(params.prompt) : "";
+        const llm = runtime.llmComplete ?? runtime.bridges?.get(BRIDGE_LLM)?.complete;
+
+        if (!llm) {
+          return {
+            status: "no_llm",
+            image_url: imageUrl,
+            scene_description: "视觉分析需要配置 LLM bridge",
+            objects: [],
+            text_regions: [],
+          };
+        }
+
+        const analysisPrompt = `分析这张图片${extraPrompt ? "（" + extraPrompt + "）" : ""}。
+返回严格 JSON：
+{"objects": [{"label": "物体名称", "confidence": 0.9}], "text_regions": [{"text": "识别到的文字"}], "scene_description": "整体场景描述"}
+图片 URL：${imageUrl}`;
+
+        try {
+          const response = await llm({ prompt: analysisPrompt });
+          const text =
+            typeof response === "string"
+              ? response
+              : String((response as Record<string, unknown>).text ?? "{}");
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          const parsed = jsonMatch ? (JSON.parse(jsonMatch[0]) as Record<string, unknown>) : {};
+          return {
+            status: "ok",
+            image_url: imageUrl,
+            objects: (parsed.objects ?? []) as unknown[],
+            text_regions: (parsed.text_regions ?? []) as unknown[],
+            scene_description: String(parsed.scene_description ?? ""),
+            analyzed_at: new Date().toISOString(),
+          };
+        } catch (e) {
+          return {
+            status: "error",
+            reason: String(e),
+            image_url: imageUrl,
+            objects: [],
+            text_regions: [],
+          };
+        }
+      },
+    },
+  ];
+}
