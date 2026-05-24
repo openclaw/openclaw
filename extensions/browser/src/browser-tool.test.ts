@@ -443,6 +443,7 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   };
+  extra?: { scopes?: string[] };
 } {
   const toolName = mockCallArg<string>(gatewayMocks.callGatewayTool, callIndex, 0);
   const options = mockCallArg<{ timeoutMs?: number }>(gatewayMocks.callGatewayTool, callIndex, 1);
@@ -458,8 +459,13 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   }>(gatewayMocks.callGatewayTool, callIndex, 2);
+  const extra = mockCallArg<{ scopes?: string[] } | undefined>(
+    gatewayMocks.callGatewayTool,
+    callIndex,
+    3,
+  );
   expect(toolName).toBe("node.invoke");
-  return { options, request };
+  return { options, request, extra };
 }
 
 function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
@@ -855,8 +861,9 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
-    const { options, request } = lastNodeInvokeCall();
+    const { options, request, extra } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(25_000);
+    expect(extra?.scopes).toEqual(["operator.admin"]);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
