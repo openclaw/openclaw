@@ -106,6 +106,51 @@ When an account sets `agentId`, OpenClaw requires the explicit
 can run completions for that bot agent. Keep it off if you only use the default
 agent route.
 
+## Slash command suggestions
+
+The ClickClack plugin exposes a backend suggestion route for ClickClack composer
+autocomplete:
+
+- `POST /clickclack/commands/suggest`
+
+The request includes the current composer `query`, sender identity, channel or
+DM context, and optional `accountId`. OpenClaw returns insertable slash command
+suggestions with descriptions, usage text, aliases, and a compact preview. The
+route does not send chat messages; it is for UI preview/autocomplete only.
+
+Suggestions come from the shared OpenClaw command registry and include
+plugin-provided commands registered for ClickClack. Results are filtered before
+they leave OpenClaw:
+
+- The ClickClack account `allowFrom` list decides whether the sender can reach
+  the bot.
+- `commands.allowFrom.clickclack` or `commands.allowFrom["*"]` can further
+  restrict who sees OpenClaw commands.
+- `commands.ownerAllowFrom` hides owner-only commands such as `/restart`,
+  `/config`, and sensitive diagnostics from non-owners.
+
+Example response:
+
+```json
+{
+  "query": "/st",
+  "suggestions": [
+    {
+      "name": "/status",
+      "command": "/status",
+      "insertText": "/status",
+      "description": "Show current status.",
+      "usage": "/status",
+      "preview": "/status\nShow current status.",
+      "source": "core",
+      "aliases": [],
+      "acceptsArgs": false
+    }
+  ],
+  "preview": "/status\nShow current status."
+}
+```
+
 ## Targets
 
 - `channel:<name-or-id>` sends to a workspace channel. Bare targets default to `channel:`.

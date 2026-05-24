@@ -89,6 +89,7 @@ export type ClickClackMessage = {
   body_format: "markdown";
   created_at: string;
   author?: ClickClackUser;
+  channel?: ClickClackChannel;
 };
 
 export type ClickClackEvent = {

@@ -1,4 +1,16 @@
-import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+
+function registerClickClackHttpRoutes(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "registerClickClackHttpRoutes",
+  });
+  register(api);
+}
 
 export default defineBundledChannelEntry({
   id: "clickclack",
@@ -13,4 +25,5 @@ export default defineBundledChannelEntry({
     specifier: "./api.js",
     exportName: "setClickClackRuntime",
   },
+  registerFull: registerClickClackHttpRoutes,
 });
