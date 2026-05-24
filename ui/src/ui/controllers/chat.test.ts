@@ -158,6 +158,65 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("does not duplicate an active-run final already loaded from history", () => {
+    const persistedMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Live reply" }],
+      __openclaw: { source: "chat.history" },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [persistedMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([persistedMessage]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("keeps repeated assistant text when a user turn separates it from the tail", () => {
+    const priorAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Live reply" }],
+    };
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Say it again" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [priorAssistant, userMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([priorAssistant, userMessage, payload.message]);
+  });
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {

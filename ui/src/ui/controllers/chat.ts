@@ -185,6 +185,15 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
+function hasTailDisplayDuplicate(messages: unknown[], message: unknown): boolean {
+  const messageSignature = messageDisplaySignature(message);
+  if (!messageSignature) {
+    return false;
+  }
+  const lastMessage = messages[messages.length - 1];
+  return messageDisplaySignature(lastMessage) === messageSignature;
+}
+
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
@@ -677,7 +686,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
-      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (
+        finalMessage &&
+        !shouldHideAssistantChatMessage(finalMessage) &&
+        !hasTailDisplayDuplicate(state.chatMessages, finalMessage)
+      ) {
         state.chatMessages = [...state.chatMessages, finalMessage];
         return null;
       }
@@ -713,7 +726,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+      if (!hasTailDisplayDuplicate(state.chatMessages, finalMessage)) {
+        state.chatMessages = [...state.chatMessages, finalMessage];
+      }
     } else if (
       state.chatStream?.trim() &&
       !isSilentReplyStream(state.chatStream) &&
