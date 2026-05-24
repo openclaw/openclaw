@@ -999,23 +999,6 @@ function ensureListener() {
         });
         return;
       }
-      if (isBlockedLivenessState(livenessState)) {
-        clearPendingLifecycleError(evt.runId);
-        clearPendingLifecycleTimeout(evt.runId);
-        await completeSubagentRun({
-          runId: evt.runId,
-          endedAt,
-          outcome: {
-            status: "error",
-            error: formatBlockedLivenessError(error),
-          },
-          reason: SUBAGENT_ENDED_REASON_ERROR,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
-        });
-        return;
-      }
       if (isAbortedAgentStopReason(stopReason)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
@@ -1027,6 +1010,23 @@ function ensureListener() {
             error: "subagent run terminated",
           },
           reason: SUBAGENT_ENDED_REASON_KILLED,
+          sendFarewell: true,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+        });
+        return;
+      }
+      if (isBlockedLivenessState(livenessState)) {
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        await completeSubagentRun({
+          runId: evt.runId,
+          endedAt,
+          outcome: {
+            status: "error",
+            error: formatBlockedLivenessError(error),
+          },
+          reason: SUBAGENT_ENDED_REASON_ERROR,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,

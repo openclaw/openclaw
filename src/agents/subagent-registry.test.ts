@@ -1009,6 +1009,7 @@ describe("subagent registry seam flow", () => {
         startedAt: 10,
         endedAt: 20,
         aborted: true,
+        livenessState: "blocked",
         stopReason: "aborted",
       },
     });
