@@ -1,8 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import {
+  clearTopicNameCache,
+  getTopicEntry,
+  getTopicName,
+  resetTopicNameCacheForTest,
+  resolveTopicNameCacheScope,
+  setTelegramTopicNameStoreFactoryForTest,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -43,6 +53,8 @@ const createForumTopicTelegram = vi.fn(async () => ({
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
+type TopicEntry = NonNullable<Awaited<ReturnType<typeof getTopicEntry>>>;
+
 type MockCallSource = {
   mock: {
     calls: ArrayLike<ReadonlyArray<unknown>>;
@@ -62,6 +74,32 @@ function mockCall(source: MockCallSource, callIndex: number, label: string) {
     throw new Error(`Expected Telegram mock call: ${label}`);
   }
   return call;
+}
+
+function installTopicNameMemoryStores(): void {
+  const stores = new Map<string, Map<string, TopicEntry>>();
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    const entries = stores.get(namespace) ?? new Map<string, TopicEntry>();
+    stores.set(namespace, entries);
+    return {
+      async register(key, value) {
+        entries.set(key, value);
+      },
+      async entries() {
+        return Array.from(entries, ([key, value]) => ({ key, value }));
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async clear() {
+        entries.clear();
+      },
+    };
+  });
+}
+
+function topicNameScopeForConfig(cfg: OpenClawConfig, accountId?: string): string {
+  return resolveTopicNameCacheScope(resolveStorePath(cfg.session?.store, { agentId: accountId }));
 }
 
 function resultDetails(result: Awaited<ReturnType<typeof handleTelegramAction>>) {
@@ -129,8 +167,11 @@ describe("handleTelegramAction", () => {
     expect(options.remove).toBe(false);
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    installTopicNameMemoryStores();
+    await clearTopicNameCache();
+    resetTopicNameCacheForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
       sendMessageTelegram,
@@ -156,6 +197,7 @@ describe("handleTelegramAction", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    setTelegramTopicNameStoreFactoryForTest(undefined);
   });
 
   it("adds reactions when reactionLevel is minimal", async () => {
@@ -864,6 +906,53 @@ describe("handleTelegramAction", () => {
       expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
     },
   );
+
+  it.each([
+    {
+      name: "createForumTopic",
+      params: { action: "createForumTopic", chatId: "123", name: "Topic" },
+      cfg: telegramConfig({ actions: { createForumTopic: true } }),
+      expectedTopicId: 99,
+      expectedName: "Topic",
+    },
+    {
+      name: "editForumTopic",
+      params: { action: "editForumTopic", chatId: "123", messageThreadId: 42, name: "New" },
+      cfg: telegramConfig({ actions: { editForumTopic: true } }),
+      expectedTopicId: 42,
+      expectedName: "New",
+    },
+  ])("persists topic names after $name succeeds", async (testCase) => {
+    await handleTelegramAction(testCase.params, testCase.cfg);
+
+    await expect(
+      getTopicName("123", testCase.expectedTopicId, topicNameScopeForConfig(testCase.cfg)),
+    ).resolves.toBe(testCase.expectedName);
+  });
+
+  it("keeps the cached topic name when editing only the forum topic icon", async () => {
+    const cfg = telegramConfig({ actions: { editForumTopic: true } });
+    const scope = topicNameScopeForConfig(cfg);
+    await updateTopicName("123", 42, { name: "Deployments" }, scope);
+    editForumTopicTelegram.mockResolvedValueOnce({
+      ok: true,
+      chatId: "123",
+      messageThreadId: 42,
+      iconCustomEmojiId: "emoji-1",
+    });
+
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "123",
+        messageThreadId: 42,
+        iconCustomEmojiId: "emoji-1",
+      },
+      cfg,
+    );
+
+    await expect(getTopicName("123", 42, scope)).resolves.toBe("Deployments");
+  });
 
   it.each([
     {

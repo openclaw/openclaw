@@ -100,6 +100,7 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
@@ -127,6 +128,7 @@ type TelegramCommandAuthResult = {
   senderUsername: string;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  topicName?: string;
   commandAuthorized: boolean;
   senderIsOwner: boolean;
 };
@@ -136,6 +138,7 @@ type TelegramNativeCommandThreadContext = {
   isGroup: boolean;
   isForum: boolean;
   messageThreadId: number | undefined;
+  topicName: string | undefined;
   threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
@@ -364,8 +367,10 @@ async function cleanupTelegramProgressPlaceholder(params: {
 async function resolveTelegramNativeCommandThreadContext(params: {
   msg: NonNullable<TelegramNativeCommandContext["message"]>;
   bot: Bot;
+  cfg: OpenClawConfig;
+  accountId: string;
 }): Promise<TelegramNativeCommandThreadContext> {
-  const { msg, bot } = params;
+  const { msg, bot, cfg, accountId } = params;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
@@ -386,14 +391,37 @@ async function resolveTelegramNativeCommandThreadContext(params: {
     isForum,
     messageThreadId,
   });
+  const topicName = await resolveTelegramNativeCommandTopicName({
+    cfg,
+    accountId,
+    chatId,
+    threadSpec,
+    isForum,
+  });
   return {
     chatId,
     isGroup,
     isForum,
     messageThreadId,
+    topicName,
     threadSpec,
     threadParams: buildTelegramThreadParams(threadSpec),
   };
+}
+
+async function resolveTelegramNativeCommandTopicName(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  chatId: number;
+  threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+  isForum: boolean;
+}): Promise<string | undefined> {
+  if (!params.isForum || params.threadSpec.scope !== "forum") {
+    return undefined;
+  }
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.accountId });
+  const cacheScope = resolveTopicNameCacheScope(storePath);
+  return await getTopicName(params.chatId, params.threadSpec.id, cacheScope);
 }
 
 export type RegisterTelegramHandlerParams = {
@@ -513,8 +541,8 @@ async function resolveTelegramCommandAuth(params: {
     resolveTelegramGroupConfig,
     requireAuth,
   } = params;
-  const { chatId, isGroup, isForum, messageThreadId, threadParams } =
-    await resolveTelegramNativeCommandThreadContext({ msg, bot });
+  const { chatId, isGroup, isForum, messageThreadId, threadParams, topicName } =
+    await resolveTelegramNativeCommandThreadContext({ msg, bot, cfg, accountId });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
@@ -679,6 +707,7 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     groupConfig,
     topicConfig,
+    topicName,
     commandAuthorized,
     senderIsOwner: ownerAccess.senderIsOwner,
   };
@@ -983,6 +1012,7 @@ export const registerTelegramNativeCommands = ({
           senderUsername,
           groupConfig,
           topicConfig,
+          topicName,
           commandAuthorized,
         } = auth;
         const runtimeContext = await resolveCommandRuntimeContext({
@@ -1181,6 +1211,7 @@ export const registerTelegramNativeCommands = ({
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
+          TopicName: isForum && topicName ? topicName : undefined,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
@@ -1279,7 +1310,12 @@ export const registerTelegramNativeCommands = ({
         const chatId = msg.chat.id;
         const runtimeCfg = loadFreshRuntimeConfig();
         const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
-        const { threadParams } = await resolveTelegramNativeCommandThreadContext({ msg, bot });
+        const { threadParams } = await resolveTelegramNativeCommandThreadContext({
+          msg,
+          bot,
+          cfg: runtimeCfg,
+          accountId,
+        });
         const rawText = ctx.match?.trim() ?? "";
         const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
         const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();

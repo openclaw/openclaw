@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createDeferred,
@@ -12,8 +12,18 @@ import {
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
 import { type RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import {
+  clearTopicNameCache,
+  getTopicEntry,
+  resetTopicNameCacheForTest,
+  resolveTopicNameCacheScope,
+  setTelegramTopicNameStoreFactoryForTest,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
+
+type TopicEntry = NonNullable<Awaited<ReturnType<typeof getTopicEntry>>>;
 
 type ResolveConfiguredBindingRouteFn =
   typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredBindingRoute;
@@ -35,6 +45,28 @@ const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
   counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
 };
+
+function installTopicNameMemoryStores(): void {
+  const stores = new Map<string, Map<string, TopicEntry>>();
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    const entries = stores.get(namespace) ?? new Map<string, TopicEntry>();
+    stores.set(namespace, entries);
+    return {
+      async register(key, value) {
+        entries.set(key, value);
+      },
+      async entries() {
+        return Array.from(entries, ([key, value]) => ({ key, value }));
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async clear() {
+        entries.clear();
+      },
+    };
+  });
+}
 
 const persistentBindingMocks = vi.hoisted(() => ({
   resolveConfiguredBindingRoute: vi.fn<ResolveConfiguredBindingRouteFn>(({ route }) => ({
@@ -544,7 +576,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    installTopicNameMemoryStores();
+    await clearTopicNameCache();
+    resetTopicNameCacheForTest();
     persistentBindingMocks.resolveConfiguredBindingRoute.mockClear();
     persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
       createConfiguredBindingRoute(route, null),
@@ -584,6 +619,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
+  });
+
+  afterEach(() => {
+    setTelegramTopicNameStoreFactoryForTest(undefined);
   });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
@@ -1059,6 +1098,36 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
+  });
+
+  it("includes cached Telegram forum topic names in native command context", async () => {
+    const cacheScope = resolveTopicNameCacheScope("/tmp/openclaw-sessions.json");
+    await updateTopicName(-1001234567890, 42, { name: "Deployments" }, cacheScope);
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+      }),
+    });
+
+    await handler(createTelegramTopicCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { TopicName?: string; IsForum?: boolean; MessageThreadId?: number } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.IsForum).toBe(true);
+    expect(dispatchCall?.ctx?.MessageThreadId).toBe(42);
+    expect(dispatchCall?.ctx?.TopicName).toBe("Deployments");
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ ctx?: { TopicName?: string } }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.ctx?.TopicName).toBe("Deployments");
   });
 
   it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {

@@ -16,6 +16,7 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
@@ -40,6 +41,7 @@ import {
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
+import { resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 export const telegramActionRuntime = {
   createForumTopicTelegram,
@@ -275,6 +277,16 @@ async function maybePinTelegramActionSend(params: {
       throw err;
     }
   }
+}
+
+function resolveTelegramActionTopicNameCacheScope(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): string {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.accountId,
+  });
+  return resolveTopicNameCacheScope(storePath);
 }
 
 export async function handleTelegramAction(
@@ -726,6 +738,12 @@ export async function handleTelegramAction(
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
     });
+    await updateTopicName(
+      result.chatId ?? chatId ?? "",
+      result.topicId,
+      { name: result.name, iconColor, iconCustomEmojiId: iconCustomEmojiId ?? undefined },
+      resolveTelegramActionTopicNameCacheScope({ cfg, accountId }),
+    );
     return jsonResult({
       ok: true,
       topicId: result.topicId,
@@ -762,6 +780,12 @@ export async function handleTelegramAction(
         iconCustomEmojiId: iconCustomEmojiId ?? undefined,
         gatewayClientScopes: options?.gatewayClientScopes,
       },
+    );
+    await updateTopicName(
+      result.chatId ?? chatId ?? "",
+      result.messageThreadId ?? messageThreadId,
+      { name: name ?? result.name, iconCustomEmojiId: iconCustomEmojiId ?? undefined },
+      resolveTelegramActionTopicNameCacheScope({ cfg, accountId }),
     );
     return jsonResult(result);
   }
