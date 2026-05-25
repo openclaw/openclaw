@@ -208,3 +208,4 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.sendChat(message = message, thinking = thinking, attachments = attachments)
   }
 }
+
