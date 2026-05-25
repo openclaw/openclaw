@@ -634,7 +634,7 @@ final class NodeAppModel {
             await MainActor.run {
                 self.startOperatorGatewayLoop(
                     url: config.url,
-                    stableID: config.stableID,
+                    stableID: config.effectiveStableID,
                     token: config.token,
                     bootstrapToken: config.bootstrapToken,
                     password: config.password,

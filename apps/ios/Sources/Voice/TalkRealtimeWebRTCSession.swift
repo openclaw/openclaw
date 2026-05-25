@@ -386,14 +386,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private func handleRealtimeAudioStateEvent(_ event: TalkRealtimeServerEvent) -> Bool {
         switch event.type {
-        case "response.audio.delta", "response.output_audio.delta":
+        case "response.audio.delta", "response.output_audio.delta", "conversation.output_audio.delta":
             self.markAssistantAudioActive()
             return true
         case "response.created":
             self.trace("response created")
             self.markAssistantAudioActive()
             return true
-        case "response.audio.done", "response.output_audio.done", "response.done":
+        case "response.audio.done", "response.output_audio.done", "conversation.output_audio.done", "response.done":
             self.scheduleAssistantAudioFinished()
             return true
         case "input_audio_buffer.speech_started":
