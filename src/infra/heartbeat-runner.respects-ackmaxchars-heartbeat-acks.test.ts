@@ -332,6 +332,53 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
+  it("preserves heartbeat mirror text when notifications include media URLs", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+      const sessionKey = "agent:main:whatsapp:direct:test-user";
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "direct-sid",
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "test-user",
+      });
+
+      replySpy.mockResolvedValue({
+        text: "Deepali sent the programme attachment.",
+        mediaUrls: ["file:///tmp/programme.pdf"],
+      });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "test-user",
+        "Deepali sent the programme attachment.",
+        expect.any(Object),
+      );
+      expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+      const appendCall =
+        transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0];
+      expect(appendCall).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        text: "Deepali sent the programme attachment.",
+      });
+      expect(appendCall?.text).not.toBe("programme.pdf");
+      expect(appendCall?.idempotencyKey).toMatch(/^heartbeat-delivery-mirror:v1:/);
+    });
+  });
+
   it.each([
     {
       title: "does not deliver HEARTBEAT_OK to telegram when showOk is false",

@@ -216,11 +216,12 @@ function buildHeartbeatDeliveryMirror(params: {
   if (!text && mediaUrls.length === 0) {
     return undefined;
   }
+  const mirrorMediaUrls = text ? [] : mediaUrls;
   return {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     ...(text ? { text } : {}),
-    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(mirrorMediaUrls.length > 0 ? { mediaUrls: mirrorMediaUrls } : {}),
     idempotencyKey: buildHeartbeatMirrorIdempotencyKey({
       runSessionKey: params.runSessionKey,
       sessionKey: params.sessionKey,
