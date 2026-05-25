@@ -3090,7 +3090,7 @@ function scopedAgentPolicyFields(
   overlay: Record<string, unknown>,
 ): readonly ScopedAgentPolicyField[] {
   const prefix = `scopes/${ocPathSegment(scopeName)}`;
-  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds") === true)
+  return POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds"))
     .map((rule) => ({ rule, value: scopedPolicyValue(overlay, rule.policyPath) }))
     .filter((entry) => entry.value !== undefined)
     .map(({ rule, value }) => ({
@@ -3119,6 +3119,7 @@ export function isPolicyValueAtLeastAsStrict(
     case "exact-list":
       return samePolicyStringList(candidate, baseline, metadata);
   }
+  return false;
 }
 
 function isPolicyAllowlistSubset(

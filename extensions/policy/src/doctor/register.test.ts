@@ -22,6 +22,7 @@ import {
   isPolicyValueAtLeastAsStrict,
   registerPolicyDoctorChecks,
   resetPolicyDoctorChecksForTest,
+  type PolicyRuleMetadata,
 } from "./register.js";
 
 let workspaceDir: string;
@@ -112,8 +113,8 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("describes strictness for agent-scoped policy fields", () => {
     expect(
-      POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds") === true).map(
-        (rule) => ({
+      POLICY_RULE_METADATA.filter((rule) => rule.scopeSelectors?.includes("agentIds")).map(
+        (rule: PolicyRuleMetadata) => ({
           path: rule.policyPath.join("."),
           strictness: rule.strictness,
           emptyList: rule.emptyList,

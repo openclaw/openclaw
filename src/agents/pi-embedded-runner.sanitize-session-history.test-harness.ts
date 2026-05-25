@@ -92,6 +92,7 @@ export function createSanitizeSessionHistoryProviderHookRuntimeMock(
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),
     resolveProviderPluginsForHooks: vi.fn(() => []),
+    clearProviderRuntimePluginCacheForTest: vi.fn(),
     prepareProviderExtraParams: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
     testing: {},
