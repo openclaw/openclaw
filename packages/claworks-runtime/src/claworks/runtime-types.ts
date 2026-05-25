@@ -247,6 +247,12 @@ export type ClaworksRuntime = {
   evolutionSync?: EvolutionSyncManager;
 
   /**
+   * 自主学习引擎薄封装（exportLearningData 等跨模块入口）。
+   * 由 createClaworksRuntime 在 evolutionSync 初始化后注入。
+   */
+  autonomyEngine?: import("../kernel/autonomy-engine.js").AutonomyEngine;
+
+  /**
    * 额外的可扩展运行时属性（由宿主或插件动态挂载）。
    * 类型为 unknown，调用者需自行断言。
    */

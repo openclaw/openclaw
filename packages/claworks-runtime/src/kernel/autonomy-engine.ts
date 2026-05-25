@@ -9,7 +9,7 @@
  */
 
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
-import type { EvolutionPack, EvolutionSyncManager } from "./evolution-sync.js";
+import type { EvolutionExportData, EvolutionPack, EvolutionSyncManager } from "./evolution-sync.js";
 import { createEvolveEngine, hasEvolveLlmBridge, type EvolveEngine } from "./evolve-engine.js";
 
 // ── 公开类型 ──────────────────────────────────────────────────────────────
@@ -29,6 +29,24 @@ export type AutonomyLearnHandleResult = {
   cbr_cases_added: number;
   rules_added: number;
 };
+
+/** 自主学习引擎薄封装（导出学习数据等跨模块入口） */
+export type AutonomyEngine = {
+  /** 导出进化学习数据包（委托 evolutionSync.exportEvolutionData） */
+  exportLearningData(days?: number): Promise<EvolutionExportData>;
+};
+
+export function createAutonomyEngine(runtime: ClaworksRuntime): AutonomyEngine {
+  return {
+    async exportLearningData(days = 30) {
+      const mgr = runtime.evolutionSync as EvolutionSyncManager | undefined;
+      if (!mgr) {
+        throw new Error("evolutionSync 未初始化");
+      }
+      return mgr.exportEvolutionData(days);
+    },
+  };
+}
 
 // ── 内部辅助 ──────────────────────────────────────────────────────────────
 

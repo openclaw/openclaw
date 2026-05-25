@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleAutonomyLearnOpportunity } from "./autonomy-engine.js";
+import { createAutonomyEngine, handleAutonomyLearnOpportunity } from "./autonomy-engine.js";
 
 function makeRuntime(
   overrides: Partial<{
@@ -145,5 +145,28 @@ describe("handleAutonomyLearnOpportunity", () => {
 
     expect(result.actions_taken).not.toContain("evolve_draft_proposed");
     expect(published.some((e) => e.type === "evolve.playbook_drafted")).toBe(false);
+  });
+});
+
+describe("createAutonomyEngine", () => {
+  it("exportLearningData 委托 evolutionSync.exportEvolutionData", async () => {
+    const exportData = { robot_id: "r1", exported_at: "2026-01-01", days: 7 };
+    const runtime = {
+      evolutionSync: {
+        exportEvolutionData: vi.fn(async (days: number) => ({ ...exportData, days })),
+      },
+    };
+
+    const engine = createAutonomyEngine(runtime as never);
+    const data = await engine.exportLearningData(7);
+
+    expect(runtime.evolutionSync.exportEvolutionData).toHaveBeenCalledWith(7);
+    expect(data.robot_id).toBe("r1");
+    expect(data.days).toBe(7);
+  });
+
+  it("exportLearningData 在 evolutionSync 缺失时抛错", async () => {
+    const engine = createAutonomyEngine({} as never);
+    await expect(engine.exportLearningData()).rejects.toThrow(/evolutionSync/);
   });
 });
