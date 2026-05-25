@@ -2,6 +2,12 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -38,10 +44,12 @@ vi.mock("./builtin-pi.js", () => ({
 const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
+  resetDiagnosticEventsForTest();
   clearAgentHarnesses();
 });
 
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   clearAgentHarnesses();
   piRunAttempt.mockClear();
   if (originalRuntime == null) {
@@ -278,6 +286,7 @@ describe("runAgentHarnessAttempt", () => {
     expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "codex",
       runtimeSource: "implicit",
+      runtimeReason: "openai_official_default_codex",
     });
 
     const result = await runAgentHarnessAttempt({
@@ -289,14 +298,74 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("emits a structured diagnostic warning for implicit official OpenAI Codex selection", async () => {
+    registerSuccessfulCodexHarness();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+    await waitForDiagnosticEventsDrained();
+    stop();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "harness.selection",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        selectedHarnessId: "codex",
+        selectedReason: "implicit_plugin",
+        runtime: "codex",
+        runtimeSource: "implicit",
+        runtimeReason: "openai_official_default_codex",
+        warning: "openai_official_implicit_codex_harness",
+      }),
+    );
+  });
+
+  it("emits a structured diagnostic warning for explicit Codex runtime mappings", async () => {
+    registerSuccessfulCodexHarness();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    await runAgentHarnessAttempt({
+      ...createAttemptParams(agentModelRuntimeConfig("openai/*", "codex")),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+    await waitForDiagnosticEventsDrained();
+    stop();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "harness.selection",
+        selectedHarnessId: "codex",
+        selectedReason: "forced_plugin",
+        runtime: "codex",
+        runtimeSource: "model",
+        warning: "explicit_codex_runtime_mapping",
+      }),
+    );
+  });
+
   it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
     expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "codex",
       runtimeSource: "implicit",
+      runtimeReason: "openai_official_default_codex",
     });
     expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
       runtime: "pi",
       runtimeSource: "implicit",
+      runtimeReason: "openai_official_default_codex",
     });
 
     const result = await runAgentHarnessAttempt({

@@ -12,6 +12,7 @@ import {
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
+  runtimeReason?: "openai_official_default_codex" | "openai_codex_provider_default";
 };
 
 export function resolveAgentHarnessPolicy(params: {
@@ -39,13 +40,21 @@ export function resolveAgentHarnessPolicy(params: {
     openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
   ) {
     if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
+      return {
+        runtime: "codex",
+        runtimeSource,
+        runtimeReason: "openai_official_default_codex",
+      };
     }
     return { runtime, runtimeSource };
   }
   if (isOpenAICodexProvider(params.provider)) {
     if (runtime === "auto") {
-      return { runtime: "codex", runtimeSource };
+      return {
+        runtime: "codex",
+        runtimeSource,
+        runtimeReason: "openai_codex_provider_default",
+      };
     }
     return { runtime, runtimeSource };
   }

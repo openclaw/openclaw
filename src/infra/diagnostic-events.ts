@@ -483,6 +483,34 @@ type DiagnosticHarnessRunBaseEvent = DiagnosticBaseEvent & {
   pluginId?: string;
 };
 
+export type DiagnosticHarnessSelectionEvent = DiagnosticBaseEvent & {
+  type: "harness.selection";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+  selectedHarnessId: string;
+  selectedReason:
+    | "forced_pi"
+    | "forced_plugin"
+    | "implicit_plugin"
+    | "implicit_plugin_unavailable_pi"
+    | "cli_runtime_passthrough_pi"
+    | "auto_plugin"
+    | "auto_pi";
+  runtime: string;
+  runtimeSource?: "model" | "provider" | "implicit";
+  runtimeReason?: "openai_official_default_codex" | "openai_codex_provider_default";
+  warning?:
+    | "openai_official_implicit_codex_harness"
+    | "openai_codex_provider_harness"
+    | "explicit_codex_runtime_mapping";
+};
+
 export type DiagnosticHarnessRunStartedEvent = DiagnosticHarnessRunBaseEvent & {
   type: "harness.run.started";
 };
@@ -680,6 +708,7 @@ export type DiagnosticEventPayload =
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
+  | DiagnosticHarnessSelectionEvent
   | DiagnosticHarnessRunStartedEvent
   | DiagnosticHarnessRunCompletedEvent
   | DiagnosticHarnessRunErrorEvent
@@ -748,6 +777,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.completed",
   "model.call.error",
   "run.progress",
+  "harness.selection",
   "harness.run.started",
   "harness.run.completed",
   "harness.run.error",

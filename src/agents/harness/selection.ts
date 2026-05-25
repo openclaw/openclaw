@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
@@ -58,6 +59,8 @@ type AgentHarnessSelectionDecision = {
   selectedReason:
     | "forced_pi"
     | "forced_plugin"
+    // Implicit policy selected a registered plugin harness.
+    | "implicit_plugin"
     // Implicit Codex preference found no registered Codex harness, so PI handled the run.
     | "implicit_plugin_unavailable_pi"
     // Explicit provider-owned CLI runtime aliases have no agent harness plugin
@@ -162,7 +165,7 @@ function selectAgentHarnessDecision(params: {
       return buildSelectionDecision({
         harness: forced,
         policy,
-        selectedReason: "forced_plugin",
+        selectedReason: policy.runtimeSource === "implicit" ? "implicit_plugin" : "forced_plugin",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
@@ -246,6 +249,16 @@ export async function runAgentHarnessAttempt(
     modelId: params.modelId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+  });
+  emitAgentHarnessSelectionDiagnostic(selection, {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId: params.modelId,
+    trigger: params.trigger,
+    messageChannel: params.messageChannel,
   });
   const v2Harness = adaptAgentHarnessToV2(harness);
   if (harness.id === "pi") {
@@ -452,8 +465,66 @@ function logAgentHarnessSelection(
     selectedHarnessId: selection.selectedHarnessId,
     selectedReason: selection.selectedReason,
     runtime: selection.policy.runtime,
+    runtimeSource: selection.policy.runtimeSource,
+    runtimeReason: selection.policy.runtimeReason,
+    warning: resolveAgentHarnessSelectionWarning(selection),
     candidates: selection.candidates,
   });
+}
+
+function emitAgentHarnessSelectionDiagnostic(
+  selection: AgentHarnessSelectionDecision,
+  params: {
+    runId: string;
+    sessionId?: string;
+    sessionKey?: string;
+    agentId?: string;
+    provider: string;
+    modelId?: string;
+    trigger?: string;
+    messageChannel?: string;
+  },
+): void {
+  const warning = resolveAgentHarnessSelectionWarning(selection);
+  emitTrustedDiagnosticEvent({
+    type: "harness.selection",
+    runId: params.runId,
+    provider: params.provider,
+    model: params.modelId,
+    selectedHarnessId: selection.selectedHarnessId,
+    selectedReason: selection.selectedReason,
+    runtime: selection.policy.runtime,
+    ...(selection.policy.runtimeSource ? { runtimeSource: selection.policy.runtimeSource } : {}),
+    ...(selection.policy.runtimeReason ? { runtimeReason: selection.policy.runtimeReason } : {}),
+    ...(warning ? { warning } : {}),
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.trigger ? { trigger: params.trigger } : {}),
+    ...(params.messageChannel ? { channel: params.messageChannel } : {}),
+  });
+}
+
+function resolveAgentHarnessSelectionWarning(
+  selection: AgentHarnessSelectionDecision,
+):
+  | "openai_official_implicit_codex_harness"
+  | "openai_codex_provider_harness"
+  | "explicit_codex_runtime_mapping"
+  | undefined {
+  if (selection.selectedHarnessId !== "codex") {
+    return undefined;
+  }
+  if (selection.policy.runtimeReason === "openai_official_default_codex") {
+    return "openai_official_implicit_codex_harness";
+  }
+  if (selection.policy.runtimeReason === "openai_codex_provider_default") {
+    return "openai_codex_provider_harness";
+  }
+  if (selection.policy.runtimeSource === "model" || selection.policy.runtimeSource === "provider") {
+    return "explicit_codex_runtime_mapping";
+  }
+  return undefined;
 }
 
 export async function maybeCompactAgentHarnessSession(
