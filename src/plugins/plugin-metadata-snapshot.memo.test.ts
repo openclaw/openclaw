@@ -404,7 +404,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(readSpy).not.toHaveBeenCalled();
   });
 
-  it("does not memoize policy-stale derived snapshots", () => {
+  it("memoizes policy-stale derived snapshots within the process", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -422,10 +422,10 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
-  it("refreshes policy-stale derived snapshots when derived plugin files change", () => {
+  it("keeps process-stable derived snapshots when derived plugin files change", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     const pluginDir = path.join(stateDir, "current", "derived");
@@ -448,8 +448,8 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     writeJson(manifestPath, { id: "derived", version: "2.0.0", commandAliases: [{ name: "new" }] });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -457,7 +457,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     ["persisted-registry-stale-source", undefined],
     ["persisted-registry-disabled", undefined],
     [undefined, { preferPersisted: false }],
-  ])("does not memoize derived snapshots for %s diagnostics", (code, options) => {
+  ])("memoizes derived snapshots for %s diagnostics within the process", (code, options) => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -469,7 +469,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, ...options });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, ...options });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
   it("refreshes when the persisted registry file changes", () => {
