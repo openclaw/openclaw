@@ -180,7 +180,7 @@ describe("qa suite gateway helpers", () => {
         raw: expect.stringContaining('"deny"'),
         baseHash: "hash-1",
       }),
-      { timeoutMs: 90_000 },
+      { timeoutMs: 180_000 },
     );
     expect(waitReady).toHaveBeenCalledWith({
       gateway: env.gateway,

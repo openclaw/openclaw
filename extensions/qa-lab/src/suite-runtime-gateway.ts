@@ -275,7 +275,7 @@ async function runConfigMutation(params: {
   restartDelayMs?: number;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
-  const timeoutMs = liveTurnTimeoutMs(params.env, 90_000);
+  const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
