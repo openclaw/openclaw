@@ -386,7 +386,6 @@ async function compactCodexNativeThread(
     } catch (error) {
       waiter.cancel();
       if (isCodexThreadNotFoundError(error)) {
-        await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
         return failedCodexThreadBindingCompactionResult(params, {
           threadId: binding.threadId,
           reason: formatCompactionError(error),
