@@ -194,7 +194,7 @@ Recommended constrained-provider interpretation:
 | WhatsApp    | Prefer Business/Cloud-style provider integrations for hosted broker providers. QR/linked-device providers must declare `deviceBound`, `qrPairing`, `linkedDevice`, and `sessionFragile` rather than claiming Business API parity. |
 | Signal      | Treat as self-hosted/device-bound. Providers should declare `selfHosted`, `deviceBound`, `phoneNumberRequired`, and `signalCli` when backed by `signal-cli`.                                                                      |
 | iMessage    | Treat as Mac-hosted/device-bound. Providers should declare `macHostRequired`, `messagesSignedIn`, and private API requirements.                                                                                                   |
-| BlueBubbles | Do not revive a native OpenClaw BlueBubbles channel. A broker provider may expose an iMessage bridge it owns and badge it with `externalBridge`.                                                                                  |
+| BlueBubbles | Do not revive a native OpenClaw BlueBubbles channel. A broker provider may expose an iMessage bridge it owns, but it must still badge `externalBridge`, `macHostRequired`, and `messagesSignedIn`.                                |
 
 ## Provider contract
 
