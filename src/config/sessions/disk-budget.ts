@@ -238,6 +238,16 @@ function isDiskBudgetRemovableSessionFile(
   );
 }
 
+function isDiskBudgetCountedSessionFile(
+  file: Pick<SessionsDirFileStat, "canonicalPath" | "name">,
+  referencedPaths: ReadonlySet<string>,
+): boolean {
+  if (isTrajectorySessionArtifactName(file.name) && referencedPaths.has(file.canonicalPath)) {
+    return false;
+  }
+  return true;
+}
+
 async function removeFileIfExists(filePath: string): Promise<number> {
   const stat = await fs.promises.stat(filePath).catch(() => null);
   if (!stat?.isFile()) {
@@ -349,12 +359,26 @@ export async function enforceSessionDiskBudget(params: {
   const sessionsDir = path.dirname(params.storePath);
   const files = await readSessionsDirFiles(sessionsDir);
   const fileSizesByPath = new Map(files.map((file) => [file.canonicalPath, file.size]));
+  const referencedPaths = resolveReferencedSessionArtifactPaths({
+    sessionsDir,
+    store: params.store,
+  });
+  const budgetCountedFileSizesByPath = new Map(
+    files
+      .filter((file) => isDiskBudgetCountedSessionFile(file, referencedPaths))
+      .map((file) => [file.canonicalPath, file.size]),
+  );
   const simulatedRemovedPaths = new Set<string>();
   const resolvedStorePath = canonicalizePathForComparison(params.storePath);
   const storeFile = files.find((file) => file.canonicalPath === resolvedStorePath);
   let projectedStoreBytes = measureStoreBytes(params.store);
   let total =
-    files.reduce((sum, file) => sum + file.size, 0) - (storeFile?.size ?? 0) + projectedStoreBytes;
+    files.reduce(
+      (sum, file) => sum + (budgetCountedFileSizesByPath.get(file.canonicalPath) ?? 0),
+      0,
+    ) -
+    (budgetCountedFileSizesByPath.get(storeFile?.canonicalPath ?? "") ?? 0) +
+    projectedStoreBytes;
   const totalBefore = total;
   if (total <= maxBytes) {
     return {
@@ -392,10 +416,6 @@ export async function enforceSessionDiskBudget(params: {
   let removedEntries = 0;
   let freedBytes = 0;
 
-  const referencedPaths = resolveReferencedSessionArtifactPaths({
-    sessionsDir,
-    store: params.store,
-  });
   const removableFileQueue = files
     .filter((file) => isDiskBudgetRemovableSessionFile(file, referencedPaths))
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
@@ -414,7 +434,7 @@ export async function enforceSessionDiskBudget(params: {
     if (deletedBytes <= 0) {
       continue;
     }
-    total -= deletedBytes;
+    total -= budgetCountedFileSizesByPath.get(file.canonicalPath) ?? 0;
     freedBytes += deletedBytes;
     removedFiles += 1;
   }
@@ -466,8 +486,10 @@ export async function enforceSessionDiskBudget(params: {
       }
       sessionIdRefCounts.delete(sessionId);
       for (const artifactPath of resolveSessionArtifactPathsForEntry({ sessionsDir, entry })) {
+        const canonicalArtifactPath = canonicalizePathForComparison(artifactPath);
         const deletedBytes = await removeFileForBudget({
           filePath: artifactPath,
+          canonicalPath: canonicalArtifactPath,
           dryRun,
           fileSizesByPath,
           simulatedRemovedPaths,
@@ -476,7 +498,7 @@ export async function enforceSessionDiskBudget(params: {
         if (deletedBytes <= 0) {
           continue;
         }
-        total -= deletedBytes;
+        total -= budgetCountedFileSizesByPath.get(canonicalArtifactPath) ?? 0;
         freedBytes += deletedBytes;
         removedFiles += 1;
       }

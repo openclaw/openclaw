@@ -244,6 +244,49 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("excludes referenced trajectory sidecars from conversation disk pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "active-trajectory";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const referencedRuntime = resolveTrajectoryFilePath({
+        env: {},
+        sessionFile: transcriptPath,
+        sessionId,
+      });
+      const referencedPointer = resolveTrajectoryPointerFilePath(transcriptPath);
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "t".repeat(80), "utf-8");
+      await fs.writeFile(referencedRuntime, "r".repeat(5000), "utf-8");
+      await fs.writeFile(referencedPointer, "p".repeat(5000), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: "agent:main:main",
+        maintenance: {
+          maxDiskBytes: 1000,
+          highWaterBytes: 800,
+        },
+        warnOnly: false,
+      });
+
+      await expectPathExists(transcriptPath);
+      await expectPathExists(referencedRuntime);
+      await expectPathExists(referencedPointer);
+      expectBudgetResult(result);
+      expect(result.overBudget).toBe(false);
+      expect(result.removedFiles).toBe(0);
+      expect(result.removedEntries).toBe(0);
+    });
+  });
+
   it("does not evict protected thread session entries under store pressure", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
