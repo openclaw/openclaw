@@ -127,6 +127,20 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("ollama:default");
   });
 
+  it("routes OpenAI PI compaction through Codex auth provider when auth profile is openai-codex", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai-codex:work",
+    });
+    expect(result.provider).toBe("openai-codex");
+    expect(result.model).toBe("gpt-5.5");
+    expect(result.authProfileId).toBe("openai-codex:work");
+  });
+
   it("preserves scoped active process session references for compaction", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));

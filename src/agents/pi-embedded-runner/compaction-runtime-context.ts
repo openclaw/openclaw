@@ -1,6 +1,7 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -51,10 +52,20 @@ export function resolveEmbeddedCompactionTarget(params: {
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
   if (!override) {
+    const authProfileId = params.authProfileId ?? undefined;
     return {
-      provider,
+      provider:
+        provider === undefined
+          ? undefined
+          : resolveOpenAIRuntimeProviderForPi({
+              provider,
+              harnessRuntime: "pi",
+              authProfileProvider: authProfileId?.split(":", 1)[0],
+              authProfileId,
+              config: params.config,
+            }),
       model,
-      authProfileId: params.authProfileId ?? undefined,
+      authProfileId,
     };
   }
   const slashIdx = override.indexOf("/");
