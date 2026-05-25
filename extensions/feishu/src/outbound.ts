@@ -19,6 +19,7 @@ import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -530,9 +531,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     }
 
-    const mediaUrls = resolvePayloadMediaUrls(ctx.payload)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(ctx.payload));
     return attachChannelToResult(
       "feishu",
       await sendPayloadMediaSequenceAndFinalize({
