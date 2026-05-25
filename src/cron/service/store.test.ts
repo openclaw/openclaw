@@ -223,6 +223,82 @@ describe("cron service store seam coverage", () => {
     ]);
   });
 
+  it("skips preserved unsupported rows that collide with supported jobs by canonical id", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeJobStore(storePath, [
+      {
+        id: "trimmed-collision",
+        name: "supported trimmed collision",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "  trimmed-collision  ",
+        name: "stale unsupported padded id",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "command", command: "echo stale" },
+      },
+      {
+        id: "legacy-jobid-collision",
+        name: "supported legacy jobId collision",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 120_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick legacy" },
+        state: {},
+      },
+      {
+        jobId: "  legacy-jobid-collision  ",
+        name: "stale unsupported legacy jobId",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentmessage", message: "summarize stale" },
+      },
+    ]);
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([
+      "trimmed-collision",
+      "legacy-jobid-collision",
+    ]);
+
+    await persist(state);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(config.jobs.map((job) => job.id)).toEqual([
+      "trimmed-collision",
+      "legacy-jobid-collision",
+    ]);
+    expect(config.jobs.map((job) => job.name)).toEqual([
+      "supported trimmed collision",
+      "supported legacy jobId collision",
+    ]);
+    expect(config.jobs.some((job) => job.jobId === "  legacy-jobid-collision  ")).toBe(false);
+    expect(config.jobs.some((job) => job.name === "stale unsupported padded id")).toBe(false);
+    expect(config.jobs.some((job) => job.name === "stale unsupported legacy jobId")).toBe(false);
+  });
+
   it("normalizes jobId-only jobs in memory so scheduler lookups resolve by stable id", async () => {
     const { storePath } = await makeStorePath();
 

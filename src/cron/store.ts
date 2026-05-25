@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
@@ -86,8 +87,7 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
 }
 
 function persistedJobId(job: Record<string, unknown>): string | null {
-  const id = job.id;
-  return typeof id === "string" && id.trim() ? id : null;
+  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId) ?? null;
 }
 
 function mergePreservedConfigJobs(
