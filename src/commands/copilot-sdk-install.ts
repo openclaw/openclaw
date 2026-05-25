@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { modelSelectionShouldEnsureCopilotSdk as routingShouldEnsure } from "../agents/copilot-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,6 +33,23 @@ export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.4";
 
 export const COPILOT_SDK_PACKAGE_LABEL = "GitHub Copilot SDK (@github/copilot-sdk)";
 
+/**
+ * Directory containing the checked-in {@link COPILOT_SDK_SPEC} install graph
+ * (`package.json` + `package-lock.json`). Both files are generated via
+ * `npm install --package-lock-only` and committed under
+ * `src/commands/copilot-sdk-install-manifest/`. The build step in
+ * `scripts/copy-copilot-sdk-manifest.ts` copies them alongside the
+ * compiled output so `import.meta.url`-based resolution works in
+ * published tarballs.
+ *
+ * Using `npm ci` against this graph means user installs cannot pull a
+ * newer Copilot CLI or transitive dependency set than the one this PR
+ * was reviewed against (review #2, P1).
+ */
+export const COPILOT_SDK_INSTALL_MANIFEST_DIR = fileURLToPath(
+  new URL("./copilot-sdk-install-manifest/", import.meta.url),
+);
+
 export type CopilotSdkInstallStatus = "already-installed" | "installed" | "declined" | "failed";
 
 export type CopilotSdkInstallResult = {
@@ -56,8 +74,9 @@ export function isCopilotSdkInstalled(fallbackDir: string = COPILOT_SDK_FALLBACK
 export interface InstallCopilotSdkOptions {
   readonly fallbackDir?: string;
   readonly spec?: string;
+  readonly manifestDir?: string;
   readonly logger?: (message: string) => void;
-  readonly runInstall?: (cmd: { dir: string; spec: string }) => Promise<void>;
+  readonly runInstall?: (cmd: { dir: string; spec: string; manifestDir: string }) => Promise<void>;
 }
 
 export interface InstallCopilotSdkResult {
@@ -79,21 +98,24 @@ export async function installCopilotSdk(
   }
 
   mkdirSync(fallbackDir, { recursive: true });
-  const pkgPath = path.join(fallbackDir, "package.json");
-  if (!existsSync(pkgPath)) {
-    writeFileSync(
-      pkgPath,
-      JSON.stringify(
-        { name: "openclaw-copilot-runtime", version: "0.0.0", private: true },
-        null,
-        2,
-      ) + "\n",
-    );
+  const manifestDir = options.manifestDir ?? COPILOT_SDK_INSTALL_MANIFEST_DIR;
+  // Stage the pinned package.json + package-lock.json into the fallback dir
+  // so the subsequent `npm ci` resolves the same dependency graph that this
+  // PR was reviewed against. We intentionally overwrite any prior copies so a
+  // bumped manifest in a later openclaw release re-pins user installs cleanly.
+  for (const file of ["package.json", "package-lock.json"]) {
+    const source = path.join(manifestDir, file);
+    if (!existsSync(source)) {
+      throw new Error(
+        `[copilot] missing Copilot SDK install manifest at ${source}; expected the openclaw build to copy src/commands/copilot-sdk-install-manifest/`,
+      );
+    }
+    copyFileSync(source, path.join(fallbackDir, file));
   }
 
   const runInstall = options.runInstall ?? defaultRunInstall;
-  logger(`[copilot] installing ${spec} into ${fallbackDir} ...`);
-  await runInstall({ dir: fallbackDir, spec });
+  logger(`[copilot] installing ${spec} into ${fallbackDir} (npm ci against pinned manifest) ...`);
+  await runInstall({ dir: fallbackDir, spec, manifestDir });
   if (!isCopilotSdkInstalled(fallbackDir)) {
     throw new Error(
       `[copilot] install of ${spec} appeared to succeed but ${path.join(
@@ -108,23 +130,30 @@ export async function installCopilotSdk(
   return { installed: true, fallbackDir, spec };
 }
 
-async function defaultRunInstall(cmd: { dir: string; spec: string }): Promise<void> {
+async function defaultRunInstall(cmd: {
+  dir: string;
+  spec: string;
+  manifestDir: string;
+}): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      "npm",
-      ["install", cmd.spec, "--prefix", cmd.dir, "--no-audit", "--no-fund", "--loglevel=error"],
-      {
-        stdio: ["ignore", "inherit", "inherit"],
-        shell: process.platform === "win32",
-      },
-    );
+    // `npm ci` requires the lockfile we just staged into cmd.dir and refuses
+    // to resolve anything outside it; this is what gives us a deterministic
+    // graph across user machines. We deliberately keep install scripts
+    // enabled because the @github/copilot CLI has a postinstall that pulls
+    // the platform-specific binary, which is the whole reason we run npm
+    // here instead of a single tarball fetch.
+    const child = spawn("npm", ["ci", "--no-audit", "--no-fund", "--loglevel=error"], {
+      cwd: cmd.dir,
+      stdio: ["ignore", "inherit", "inherit"],
+      shell: process.platform === "win32",
+    });
     child.on("error", reject);
     child.on("exit", (code) => {
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(`[copilot] npm install ${cmd.spec} exited with code ${code ?? "null"}`));
+      reject(new Error(`[copilot] npm ci ${cmd.spec} exited with code ${code ?? "null"}`));
     });
   });
 }
@@ -167,7 +196,7 @@ export async function ensureCopilotSdkForModelSelection(params: {
 
   if (!proceed) {
     await params.prompter.note(
-      "Skipped. The Copilot agent runtime will fail at first invocation with an install message. Re-run setup or install manually with `npm install @github/copilot-sdk@1.0.0-beta.4 --prefix ~/.openclaw/npm-runtime/copilot`.",
+      "Skipped. The Copilot agent runtime will fail at first invocation with an install message. Re-run setup to retry; the pinned dependency graph ships with openclaw under src/commands/copilot-sdk-install-manifest/.",
       COPILOT_SDK_PACKAGE_LABEL,
     );
     return { cfg: params.cfg, required: true, installed: false, status: "declined" };
@@ -193,7 +222,7 @@ export async function ensureCopilotSdkForModelSelection(params: {
     progress.stop("Install failed.");
     const message = err instanceof Error ? err.message : String(err);
     await params.prompter.note(
-      `Install failed: ${message}\n\nYou can install manually with:\n  npm install @github/copilot-sdk@1.0.0-beta.4 --prefix ~/.openclaw/npm-runtime/copilot`,
+      `Install failed: ${message}\n\nRe-run setup to retry the install (the pinned dependency graph ships with openclaw under src/commands/copilot-sdk-install-manifest/).`,
       COPILOT_SDK_PACKAGE_LABEL,
     );
     return { cfg: params.cfg, required: true, installed: false, status: "failed" };

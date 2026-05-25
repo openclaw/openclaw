@@ -1696,6 +1696,28 @@ describe("runCopilotAttempt", () => {
       expect(bridgeArgs?.workspaceDir).toBe("C:\\workspace");
     });
 
+    it("sandbox=null: SDK session workingDirectory matches original workspace", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => null);
+
+      await runCopilotAttempt(makeParams(), {
+        createToolBridge,
+        pool,
+        resolveSandboxContextOverride,
+      });
+
+      const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        workingDirectory?: unknown;
+      };
+      expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
+    });
+
     it("forwards rw sandbox: bridge sees original workspace and no spawn override", async () => {
       const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
       const sdk = makeFakeSdk({
@@ -1722,6 +1744,29 @@ describe("runCopilotAttempt", () => {
       // rw sandbox keeps the original workspace; subagent spawn inherits the same path.
       expect(bridgeArgs?.workspaceDir).toBe("C:\\workspace");
       expect(bridgeArgs?.spawnWorkspaceDir).toBeUndefined();
+    });
+
+    it("forwards rw sandbox: SDK session workingDirectory stays on the original workspace", async () => {
+      const sandbox = makeSandboxStub({ workspaceAccess: "rw" });
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+      const resolveSandboxContextOverride = vi.fn(async () => sandbox);
+
+      await runCopilotAttempt(makeParams(), {
+        createToolBridge,
+        pool,
+        resolveSandboxContextOverride,
+      });
+
+      const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        workingDirectory?: unknown;
+      };
+      expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
     });
 
     it("forwards ro sandbox: bridge sees sandbox copy, spawn keeps original workspace", async () => {
@@ -1755,6 +1800,12 @@ describe("runCopilotAttempt", () => {
         await expect(fsp.stat(sandboxDir)).resolves.toBeTruthy();
         expect(bridgeArgs?.spawnWorkspaceDir).toBe(workspaceDir);
       } finally {
+        const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+          workingDirectory?: unknown;
+        };
+        // SDK session must point at the sandbox copy so native tool ops (shell,
+        // write, AGENTS.md loader) cannot escape into the host workspace.
+        expect(sessionConfig?.workingDirectory).toBe(sandboxDir);
         await fsp.rm(sandboxDir, { recursive: true, force: true });
         await fsp.rm(workspaceDir, { recursive: true, force: true });
       }
@@ -1784,6 +1835,12 @@ describe("runCopilotAttempt", () => {
       };
       expect(bridgeArgs?.sandbox).toBeNull();
       expect(bridgeArgs?.workspaceDir).toBe("C:\\workspace");
+      const sessionConfig = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        workingDirectory?: unknown;
+      };
+      // Fallback path must keep the SDK session on the original workspace
+      // when sandbox provisioning fails; never leak a half-resolved sandbox path.
+      expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
     });
   });
 });

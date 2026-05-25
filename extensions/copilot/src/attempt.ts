@@ -298,6 +298,7 @@ export async function runCopilotAttempt(
       sdkTools,
       poolAcquire.auth,
       workspaceBootstrap.instructions,
+      effectiveWorkspaceDir,
     );
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
@@ -634,6 +635,7 @@ function createSessionConfig(
   sdkTools: SdkTool[],
   resolvedAuth: ReturnType<typeof resolveCopilotAuth>,
   workspaceBootstrapInstructions: string | undefined,
+  effectiveWorkspaceDir: string | undefined,
 ): Pick<
   SessionConfig,
   | "enableSessionTelemetry"
@@ -696,7 +698,8 @@ function createSessionConfig(
     ...(infiniteSessions ? { infiniteSessions } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
-    workingDirectory: readString(params.workspaceDir) ?? readString(params.cwd),
+    workingDirectory:
+      effectiveWorkspaceDir ?? readString(params.workspaceDir) ?? readString(params.cwd),
     // Session-level GitHub token. INDEPENDENT of the client-level
     // token in `CopilotClientOptions.gitHubToken` (set in
     // `resolvePoolAcquire().options`). Per the SDK contract

@@ -49,7 +49,11 @@ your openclaw install footprint, and most openclaw users do not select
 a Copilot model.
 
 The wizard offers to install the SDK the first time you select a
-`github-copilot/*` model:
+`github-copilot/*` model **and** your config opts the model (or its
+provider) into the Copilot agent runtime via
+`agentRuntime: { id: "copilot" }` (see [Quickstart](#quickstart) below).
+Without the opt-in, openclaw uses its built-in GitHub Copilot provider
+and never prompts for the SDK install:
 
 ```
 The Copilot agent runtime needs @github/copilot-sdk (~260 MB on first
@@ -58,13 +62,17 @@ Install now? [Y/n]
 ```
 
 If you accept, the SDK is installed into
-`~/.openclaw/npm-runtime/copilot/` and detected on subsequent runs.
-If you decline, the runtime will fail at first invocation with an
-actionable install message; you can install it manually at any time:
+`~/.openclaw/npm-runtime/copilot/` and detected on subsequent runs. The
+install runs `npm ci` against a checked-in `package-lock.json` shipped
+with openclaw at
+`src/commands/copilot-sdk-install-manifest/package-lock.json`, so the
+exact transitive graph reviewed for this release lands on disk on every
+user machine.
 
-```sh
-npm install @github/copilot-sdk@1.0.0-beta.4 --prefix ~/.openclaw/npm-runtime/copilot
-```
+If you decline, the runtime will fail at first invocation with an
+actionable install message; re-run `openclaw setup` to retry the install
+(or copy the pinned manifest into `~/.openclaw/npm-runtime/copilot/` and
+run `npm ci` yourself if you need to install offline).
 
 The runtime resolves the SDK in this order:
 
@@ -98,8 +106,8 @@ Pin one model (or one provider) to the harness:
 
 Both routes are equivalent. Use `agentRuntime.id` on a single model entry
 when only that model should be routed through the harness; set
-`runtime.id` on a provider when every model under that provider should use
-it.
+`agentRuntime.id` on a provider when every model under that provider should
+use it.
 
 ## Supported providers
 

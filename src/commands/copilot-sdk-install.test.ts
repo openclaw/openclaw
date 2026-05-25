@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   COPILOT_SDK_FALLBACK_DIR,
+  COPILOT_SDK_INSTALL_MANIFEST_DIR,
   COPILOT_SDK_SPEC,
   ensureCopilotSdkForModelSelection,
   installCopilotSdk,
@@ -37,11 +38,32 @@ function fakePrompter(overrides: Partial<WizardPrompter> = {}): WizardPrompter {
 
 const emptyCfg = {} as OpenClawConfig;
 
+function cfgWithCopilotRuntime(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        "github-copilot": { agentRuntime: { id: "copilot" } },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
 describe("selectedModelShouldEnsureCopilotSdk", () => {
-  it("returns true for github-copilot/* model refs", () => {
+  it("returns false for github-copilot/* without explicit agentRuntime opt-in", () => {
+    // Built-in GitHub Copilot provider already supports github-copilot/*;
+    // we must not nag users with the SDK install prompt by default.
     expect(
       selectedModelShouldEnsureCopilotSdk({
         cfg: emptyCfg,
+        model: "github-copilot/gpt-4o",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for github-copilot/* when agentRuntime.id = copilot is set", () => {
+    expect(
+      selectedModelShouldEnsureCopilotSdk({
+        cfg: cfgWithCopilotRuntime(),
         model: "github-copilot/gpt-4o",
       }),
     ).toBe(true);
@@ -76,11 +98,30 @@ describe("ensureCopilotSdkForModelSelection", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it("returns already-installed without prompting when SDK is present", async () => {
+  it("returns required=false for github-copilot when config does not opt into the SDK runtime", async () => {
+    // Same model, same env, but no agentRuntime.id=copilot anywhere in the
+    // config -> the built-in GitHub Copilot provider stays in charge and the
+    // SDK installer is not invoked. This is the entire point of P1 gating.
     const confirm = vi.fn();
     const install = vi.fn();
     const result = await ensureCopilotSdkForModelSelection({
       cfg: emptyCfg,
+      model: "github-copilot/gpt-4o",
+      prompter: fakePrompter({ confirm }),
+      runtime: fakeRuntime(),
+      isInstalled: () => false,
+      install,
+    });
+    expect(result.required).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("returns already-installed without prompting when SDK is present", async () => {
+    const confirm = vi.fn();
+    const install = vi.fn();
+    const result = await ensureCopilotSdkForModelSelection({
+      cfg: cfgWithCopilotRuntime(),
       model: "github-copilot/gpt-4o",
       prompter: fakePrompter({ confirm }),
       runtime: fakeRuntime(),
@@ -102,7 +143,7 @@ describe("ensureCopilotSdkForModelSelection", () => {
       spec: COPILOT_SDK_SPEC,
     }));
     const result = await ensureCopilotSdkForModelSelection({
-      cfg: emptyCfg,
+      cfg: cfgWithCopilotRuntime(),
       model: "github-copilot/gpt-4o",
       prompter: fakePrompter({ confirm }),
       runtime: fakeRuntime(),
@@ -121,7 +162,7 @@ describe("ensureCopilotSdkForModelSelection", () => {
     const install = vi.fn();
     const note = vi.fn();
     const result = await ensureCopilotSdkForModelSelection({
-      cfg: emptyCfg,
+      cfg: cfgWithCopilotRuntime(),
       model: "github-copilot/gpt-4o",
       prompter: fakePrompter({ confirm, note }),
       runtime: fakeRuntime(),
@@ -143,7 +184,7 @@ describe("ensureCopilotSdkForModelSelection", () => {
     });
     const note = vi.fn();
     const result = await ensureCopilotSdkForModelSelection({
-      cfg: emptyCfg,
+      cfg: cfgWithCopilotRuntime(),
       model: "github-copilot/gpt-4o",
       prompter: fakePrompter({ confirm, note }),
       runtime: fakeRuntime(),
@@ -156,32 +197,54 @@ describe("ensureCopilotSdkForModelSelection", () => {
     expect(note).toHaveBeenCalledOnce();
     const noteMessage = (note as unknown as { mock: { calls: string[][] } }).mock.calls[0]![0]!;
     expect(noteMessage).toContain("network down");
-    expect(noteMessage).toContain("npm install @github/copilot-sdk");
+    expect(noteMessage).toContain("copilot-sdk-install-manifest");
   });
 });
 
 describe("installCopilotSdk", () => {
-  it("runs the install command and bootstraps package.json when SDK missing", async () => {
+  it("stages the pinned manifest and runs the install command when SDK is missing", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const os = await import("node:os");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    fs.writeFileSync(
+      path.join(manifestDir, "package.json"),
+      JSON.stringify({ dependencies: { "@github/copilot-sdk": "1.0.0-beta.4" } }),
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    );
     try {
-      const runInstall = vi.fn(async ({ dir }: { dir: string; spec: string }) => {
-        fs.mkdirSync(path.join(dir, "node_modules", "@github", "copilot-sdk"), {
-          recursive: true,
-        });
-      });
+      const runInstall = vi.fn(
+        async ({ dir }: { dir: string; spec: string; manifestDir: string }) => {
+          fs.mkdirSync(path.join(dir, "node_modules", "@github", "copilot-sdk"), {
+            recursive: true,
+          });
+        },
+      );
       const result = await installCopilotSdk({
         fallbackDir: tmp,
+        manifestDir,
         runInstall,
       });
       expect(runInstall).toHaveBeenCalledOnce();
-      expect(result.installed).toBe(true);
+      // Staged manifest must land in fallbackDir for `npm ci` to use.
       expect(fs.existsSync(path.join(tmp, "package.json"))).toBe(true);
-      expect(fs.existsSync(path.join(tmp, "node_modules", "@github", "copilot-sdk"))).toBe(true);
+      expect(fs.existsSync(path.join(tmp, "package-lock.json"))).toBe(true);
+      // And the staged manifest must be byte-identical to the pinned source.
+      expect(fs.readFileSync(path.join(tmp, "package-lock.json"), "utf8")).toBe(
+        fs.readFileSync(path.join(manifestDir, "package-lock.json"), "utf8"),
+      );
+      // runInstall receives the manifestDir argument so it can rely on it.
+      const call = runInstall.mock.calls[0]![0];
+      expect(call.manifestDir).toBe(manifestDir);
+      expect(call.dir).toBe(tmp);
+      expect(result.installed).toBe(true);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
     }
   });
 
@@ -208,11 +271,41 @@ describe("installCopilotSdk", () => {
     const path = await import("node:path");
     const os = await import("node:os");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    fs.writeFileSync(
+      path.join(manifestDir, "package.json"),
+      JSON.stringify({ dependencies: { "@github/copilot-sdk": "1.0.0-beta.4" } }),
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    );
     try {
       const runInstall = vi.fn(async () => undefined);
-      await expect(installCopilotSdk({ fallbackDir: tmp, runInstall })).rejects.toThrow(/missing/);
+      await expect(
+        installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall }),
+      ).rejects.toThrow(/missing/);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws a useful error when the manifest dir is missing the pinned files", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      const runInstall = vi.fn();
+      await expect(
+        installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall }),
+      ).rejects.toThrow(/missing Copilot SDK install manifest/);
+      expect(runInstall).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
     }
   });
 });
@@ -228,5 +321,43 @@ describe("constants", () => {
 
   it("isCopilotSdkInstalled returns false for nonexistent dirs", () => {
     expect(isCopilotSdkInstalled("/tmp/definitely-does-not-exist-openclaw")).toBe(false);
+  });
+});
+
+describe("copilot-sdk install manifest (contract)", () => {
+  it("pins the manifest package.json to the exact spec advertised by COPILOT_SDK_SPEC", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const raw = fs.readFileSync(
+      path.join(COPILOT_SDK_INSTALL_MANIFEST_DIR, "package.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as {
+      dependencies?: Record<string, string>;
+    };
+    const expectedVersion = COPILOT_SDK_SPEC.split("@").pop()!;
+    expect(parsed.dependencies?.["@github/copilot-sdk"]).toBe(expectedVersion);
+  });
+
+  it("ships a lockfile that includes the SDK and a Copilot CLI binary", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const raw = fs.readFileSync(
+      path.join(COPILOT_SDK_INSTALL_MANIFEST_DIR, "package-lock.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as {
+      lockfileVersion?: number;
+      packages?: Record<string, { version?: string; integrity?: string }>;
+    };
+    // Reject older lockfile formats so the install graph stays npm v7+ compatible.
+    expect(parsed.lockfileVersion).toBeGreaterThanOrEqual(2);
+    const sdkEntry = parsed.packages?.["node_modules/@github/copilot-sdk"];
+    expect(sdkEntry).toBeDefined();
+    expect(sdkEntry?.version).toBe(COPILOT_SDK_SPEC.split("@").pop()!);
+    expect(sdkEntry?.integrity).toMatch(/^sha512-/);
+    // The Copilot CLI is what gives the runtime its native shell/write tools;
+    // its presence here proves the lockfile resolves the transitive graph.
+    expect(parsed.packages?.["node_modules/@github/copilot"]).toBeDefined();
   });
 });
