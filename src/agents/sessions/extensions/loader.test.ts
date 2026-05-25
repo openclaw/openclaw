@@ -50,4 +50,38 @@ export default async function(api) {
     expect(result.extensions).toHaveLength(1);
     expect(result.extensions[0]?.commands.has("sdk-subpath-probe")).toBe(true);
   });
+
+  it("resolves generic plugin SDK subpaths through the shared plugin loader aliases", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
+    tempDirs.push(dir);
+    const extensionPath = join(dir, "extension.ts");
+    await writeFile(
+      extensionPath,
+      `
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { defineTool } from "@openclaw/plugin-sdk/agent-sessions";
+
+export default async function(api) {
+  if (normalizeLowercaseStringOrEmpty("  MIXED  ") !== "mixed") {
+    throw new Error("generic sdk subpath unavailable");
+  }
+  const tool = defineTool({
+    name: "shared-sdk-probe",
+    description: "probe",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    handler() {
+      return { content: [{ type: "text", text: "ok" }] };
+    },
+  });
+  api.registerTool(tool);
+}
+`,
+    );
+
+    const result = await loadExtensions([extensionPath], dir);
+
+    expect(result.errors).toEqual([]);
+    expect(result.extensions).toHaveLength(1);
+    expect(result.extensions[0]?.tools.has("shared-sdk-probe")).toBe(true);
+  });
 });
