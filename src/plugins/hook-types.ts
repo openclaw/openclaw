@@ -430,7 +430,6 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
-<<<<<<< HEAD
 export type PluginHookReplyPayloadSendingEvent = {
   payload: ReplyPayload;
   kind: ReplyDispatchKind;
@@ -456,30 +455,6 @@ export type PluginHookReplyPayloadSendingResult = {
 
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
-=======
-export type PluginHookReplyPayloadSendingEvent = {
-  payload: ReplyPayload;
-  kind: ReplyDispatchKind;
-  channel?: string;
-  sessionKey?: string;
-  runId?: string;
-};
-
-export type PluginHookReplyPayloadSendingContext = {
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-  runId?: string;
-};
-
-export type PluginHookReplyPayloadSendingResult = {
-  payload?: ReplyPayload;
-  cancel?: boolean;
-  reason?: string;
-};
->>>>>>> 5cf861cc (feat(plugin-sdk): add reply payload sending hook)
 
 export type PluginHookToolContext = {
   agentId?: string;
