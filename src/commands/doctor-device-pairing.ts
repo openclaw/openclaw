@@ -104,10 +104,6 @@ function isDeviceAuthStoreTokenEntry(value: unknown): value is DeviceAuthStore["
   );
 }
 
-function uniqueStrings(...items: Array<string | string[] | undefined>): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(items.flatMap((item) => item ?? []));
-}
-
 function normalizeGatewayPairedDevice(device: GatewayListedPairedDevice): DoctorPairedDevice {
   return {
     ...device,
@@ -255,7 +251,9 @@ function resolvePendingPairingIssue(
       removeCommand: formatCliArgs(["openclaw", "devices", "remove", pending.deviceId]),
     };
   }
-  const requestedRoles = uniqueStrings(pending.roles, pending.role);
+  const requestedRoles = normalizeUniqueSingleOrTrimmedStringList(
+    [pending.roles, pending.role].flat(),
+  );
   const approvedRoles = listApprovedPairedDeviceRoles(paired);
   if (requestedRoles.some((role) => !approvedRoles.includes(role))) {
     return {
