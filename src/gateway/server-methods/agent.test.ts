@@ -2997,6 +2997,80 @@ describe("gateway agent handler", () => {
     }
   });
 
+  it("emits lifecycle hooks when a committed rotation later fails delivery validation", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "stale-before-validation-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        return updater(store);
+      });
+      mocks.agentCommand.mockClear();
+      const respond = vi.fn();
+
+      await invokeAgent(
+        {
+          message: "strict missing delivery target after rollover",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          deliver: true,
+          replyChannel: "telegram",
+          bestEffortDeliver: false,
+          idempotencyKey: "lifecycle-before-delivery-validation",
+        },
+        {
+          reqId: "lifecycle-before-delivery-validation",
+          respond,
+          flushDispatch: false,
+        },
+      );
+
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      const error = expectRespondError(respond, {});
+      expectStringFieldContains(error, "message", "requires target");
+      expect(mocks.emitGatewaySessionEndPluginHook).toHaveBeenCalledTimes(1);
+      expectRecordFields(
+        mockCallArg(mocks.emitGatewaySessionEndPluginHook) as Record<string, unknown>,
+        {
+          sessionKey: "agent:main:main",
+          sessionId: "stale-before-validation-id",
+          reason: "daily",
+        },
+      );
+      expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledTimes(1);
+      expectRecordFields(
+        mockCallArg(mocks.emitGatewaySessionStartPluginHook) as Record<string, unknown>,
+        {
+          sessionKey: "agent:main:main",
+          resumedFrom: "stale-before-validation-id",
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits lifecycle hooks and sessions.changed when an explicit sessionId replaces a fresh session", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();

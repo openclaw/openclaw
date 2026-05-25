@@ -1206,7 +1206,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       let isNewSession = false;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
-      let sessionLifecycleTransition: AgentSendSessionLifecycleTransition | undefined;
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
@@ -1574,6 +1573,32 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupId = patchBuild.groupId;
         resolvedGroupChannel = patchBuild.groupChannel;
         resolvedGroupSpace = patchBuild.groupSpace;
+        if (
+          !suppressVisibleSessionEffects &&
+          isNewSession &&
+          resolvedSessionId &&
+          storePath &&
+          !patchBuild.freshSessionRotatedSinceLoad
+        ) {
+          const previousSessionId = rotatedSessionId ? entry?.sessionId : undefined;
+          const sessionLifecycleTransition: AgentSendSessionLifecycleTransition = {
+            cfg,
+            sessionKey: canonicalSessionKey,
+            sessionId: resolvedSessionId,
+            storePath,
+            sessionFile: sessionEntry?.sessionFile,
+            agentId,
+            previousSessionId,
+            previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
+            previousEndReason: previousSessionId
+              ? (freshness?.staleReason ??
+                (usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId
+                  ? "new"
+                  : "unknown"))
+              : undefined,
+          };
+          emitAgentSendSessionLifecycleTransition(sessionLifecycleTransition);
+        }
         if (request.deliver === true) {
           const sendPolicy = resolveSendPolicy({
             cfg,
@@ -1590,31 +1615,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-        }
-        if (
-          !suppressVisibleSessionEffects &&
-          isNewSession &&
-          resolvedSessionId &&
-          storePath &&
-          !patchBuild.freshSessionRotatedSinceLoad
-        ) {
-          const previousSessionId = rotatedSessionId ? entry?.sessionId : undefined;
-          sessionLifecycleTransition = {
-            cfg,
-            sessionKey: canonicalSessionKey,
-            sessionId: resolvedSessionId,
-            storePath,
-            sessionFile: sessionEntry?.sessionFile,
-            agentId,
-            previousSessionId,
-            previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
-            previousEndReason: previousSessionId
-              ? (freshness?.staleReason ??
-                (usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId
-                  ? "new"
-                  : "unknown"))
-              : undefined,
-          };
         }
         if (
           !suppressVisibleSessionEffects &&
@@ -1914,7 +1914,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
 
           if (requestedSessionKey && resolvedSessionKey && isNewSession) {
-            emitAgentSendSessionLifecycleTransition(sessionLifecycleTransition);
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
               reason: "create",
