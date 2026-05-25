@@ -323,7 +323,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, patch summaries, or Codex preamble/commentary text in Codex app-server mode. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later.
 
-    Direct chats can use native Telegram drafts for these tool-progress lines without persisting tool chatter into chat history. Native drafts stop before answer text starts; final answers stay on the normal persistent delivery path. This lane is off by default and should be gated to trusted DM IDs first:
+    Direct chats can use native Telegram drafts for these tool-progress lines without persisting tool chatter into chat history. Native drafts stop before answer text starts; final answers stay on the normal persistent delivery path. This lane is off by default and should be gated to trusted DM IDs first.
+
+    <Warning>
+      Native tool-progress drafts use Telegram's `sendMessageDraft` action. Some Telegram clients, including Telegram Android, can treat an active bot draft as a passive-viewing state and replace the normal send control while the draft is active. Keep `nativeToolProgress` disabled when users need to send `/steer`, `/stop`, corrections, or other mid-run follow-ups from the same chat. Use the regular edited preview lane (`toolProgress: true`, `nativeToolProgress: false`) for interactive control workflows.
+    </Warning>
 
     ```json
     {
