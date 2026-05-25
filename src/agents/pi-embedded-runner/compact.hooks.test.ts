@@ -484,6 +484,72 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     }
   });
 
+  it("preserves Codex OAuth across same-provider OpenAI compaction fallbacks", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "oauth fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      authProfileId: "openai-codex:default",
+      trigger: "overflow",
+      modelFallbacksOverride: ["openai/gpt-fallback"],
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("oauth fallback summary");
+    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
+      const policyArg = arg as Record<string, unknown>;
+      return policyArg.provider === "openai" && policyArg.modelId === "gpt-primary";
+    });
+    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
+      const policyArg = arg as Record<string, unknown>;
+      return policyArg.provider === "openai" && policyArg.modelId === "gpt-fallback";
+    });
+    findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-primary",
+    );
+    findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-fallback",
+    );
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+      authProfileId: "openai-codex:default",
+    });
+  });
+
   it("routes OpenAI compaction through the selected Codex runtime provider before auth", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
@@ -552,7 +618,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
   });
 
-  it("uses the persisted Codex runtime for compaction context windows", async () => {
+  it("uses Codex auth for runtime model loading while preserving OpenAI context config", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "pi" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [], contextWindow: 1_000_000 },
@@ -568,7 +634,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
-      agentHarnessId: "codex",
+      authProfileId: "openai-codex:work",
       config: {
         models: {
           providers: {
@@ -588,7 +654,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5",
     });
   });
