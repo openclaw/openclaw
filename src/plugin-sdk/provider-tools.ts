@@ -471,7 +471,7 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     )
   ) {
     const enumValues = nonNullVariants.map(
-      (v) => (v as Record<string, unknown>).const as string
+      (v) => v.const
     );
     return {
       type: "string",
