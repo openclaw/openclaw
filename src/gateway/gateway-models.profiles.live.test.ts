@@ -2958,7 +2958,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           ensureOpenClawModelsJson(cfg, undefined, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
-            providerDiscoveryEntriesOnly: true,
           }),
           "[all-models] prepare models.json",
         );

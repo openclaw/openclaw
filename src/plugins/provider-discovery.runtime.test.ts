@@ -50,6 +50,32 @@ function createManifestPlugin(id: string): PluginManifestRecord {
   };
 }
 
+function createManifestPluginWithModelCatalog(id: string): PluginManifestRecord {
+  return {
+    ...createManifestPluginWithoutDiscovery({ id }),
+    modelCatalog: {
+      providers: {
+        [id]: {
+          baseUrl: "https://catalog.example.test/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "catalog-model",
+              name: "Catalog Model",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 128000,
+              maxTokens: 4096,
+              cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+      discovery: { [id]: "static" },
+    },
+  };
+}
+
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
   providerAuthEnvVars?: Record<string, string[]>;
@@ -283,6 +309,69 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(providers[0]?.pluginId).toBe("deepseek");
     expect(providers[0]?.staticCatalog).toBe(staticProvider.staticCatalog);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("returns manifest model catalogs as static discovery entries", async () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("openai")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
+    expect(providers[0]?.pluginId).toBe("openai");
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+    await expect(
+      providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toEqual({
+      providers: {
+        openai: {
+          baseUrl: "https://catalog.example.test/v1",
+          api: "openai-responses",
+          models: [
+            expect.objectContaining({
+              id: "catalog-model",
+              name: "Catalog Model",
+              reasoning: true,
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps manifest catalogs and loads only scoped plugins that have no entry", () => {
+    const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithoutDiscovery({ id: "minimax" }),
+          createManifestPluginWithModelCatalog("openai"),
+        ],
+        diagnostics: [],
+      },
+    });
+    mocks.resolvePluginProviders.mockReturnValue([dynamicProvider]);
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      onlyPluginIds: ["minimax", "openai"],
+    });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai", "minimax"]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["minimax"]);
   });
 
   it("does not fall back to full plugin loading when discovery entries are requested only", () => {
