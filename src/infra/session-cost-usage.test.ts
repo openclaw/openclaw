@@ -194,13 +194,14 @@ describe("session cost usage", () => {
     });
   });
 
-  it("preserves an operator-configured zero-cost model as a complete $0, not missing", async () => {
-    const root = await makeSessionCostRoot("cost-intentional-free");
+  it("counts token usage for a configured all-zero model as missing because pricing is still unknown", async () => {
+    const root = await makeSessionCostRoot("cost-configured-zero-unknown");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    // Same shape of turn, but here the operator deliberately priced the model at 0
-    // (e.g. a local/self-hosted free model). That intentional $0 must be respected.
+    // Same shape of turn, with a configured all-zero cost block. After config defaults,
+    // omitted cost and explicit all-zero cost are indistinguishable, so a zero-rate
+    // token-burning turn is still safer to report as missing than as complete $0 spend.
     const entry = {
       type: "message",
       timestamp: new Date().toISOString(),
@@ -225,8 +226,8 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    // The operator explicitly configured this model's price as 0 — an intentional
-    // "free" price that must be preserved as complete $0 cost data.
+    // This mirrors normalized config where a model declaration without pricing has
+    // already received default zero rates.
     const config = {
       models: {
         providers: {
@@ -247,8 +248,7 @@ describe("session cost usage", () => {
       const summary = await loadCostUsageSummary({ days: 30, config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
-      // Operator-configured $0 is intentional and complete — not a missing entry.
-      expect(summary.totals.missingCostEntries).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(1);
     });
   });
 
