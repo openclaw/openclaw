@@ -2995,3 +2995,27 @@ describe("previewRemHarness", () => {
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });
+
+describe("dreaming session-corpus candidate hygiene", () => {
+  it("rejects assistant process chatter before session-corpus ingestion", () => {
+    expect(__testing.shouldRejectDreamingSessionCorpusSnippet("Assistant: Need commit PR.")).toBe(true);
+    expect(__testing.shouldRejectDreamingSessionCorpusSnippet("Assistant: Now inspect.")).toBe(true);
+    expect(
+      __testing.shouldRejectDreamingSessionCorpusSnippet(
+        "Assistant: Oops worktree maybe not created yet due first command still running. poll.",
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves explicit durable signals", () => {
+    expect(
+      __testing.shouldRejectDreamingSessionCorpusSnippet(
+        "Arthur confirmed PR #249 accepted; verification PASS.",
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves non-assistant poll requests", () => {
+    expect(__testing.shouldRejectDreamingSessionCorpusSnippet("User: Please poll.")).toBe(false);
+  });
+});
