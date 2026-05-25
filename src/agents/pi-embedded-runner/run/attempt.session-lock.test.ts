@@ -1431,4 +1431,45 @@ describe("embedded attempt session lock lifecycle", () => {
     await controllerB.releaseForPrompt();
     expect(controllerB.hasSessionTakeover()).toBe(false);
   });
+
+  it("dispose-after-releaseForPrompt vacates the prompt turn so the next same-file controller does not hang", async () => {
+    // Regression for the ClawSweeper P2 finding on #86067: after
+    // releaseForPrompt() opens the prompt window, heldLock is undefined but
+    // activePromptSessionTurn is still set until reacquireAfterPrompt clears
+    // it. If teardown runs in that window (mid-stream throw, etc.), dispose
+    // must release+clear the prompt turn or the file-scoped queue tail
+    // never resolves and the next same-file controller waits forever.
+    resetEmbeddedAttemptSessionFilePromptGuardsForTest();
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLock = vi.fn(async () => ({
+      release: vi.fn(async () => {}),
+    }));
+    const controllerA = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controllerA.releaseForPrompt();
+    // Teardown without going through reacquireAfterPrompt — the case the
+    // outer-finally `releaseRetainedSessionLock?.()` covers when the prompt
+    // stream throws.
+    await controllerA.dispose();
+    // Idempotent: second dispose must be safe (the outer finally can run
+    // even after acquireForCleanup has handed off the lock).
+    await controllerA.dispose();
+
+    // A new controller on the same file must be able to open its own
+    // prompt window without hanging on A's vacated turn.
+    const controllerB = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await expect(
+      Promise.race([
+        controllerB.releaseForPrompt().then(() => "released"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 200)),
+      ]),
+    ).resolves.toBe("released");
+    expect(controllerB.hasSessionTakeover()).toBe(false);
+  });
 });

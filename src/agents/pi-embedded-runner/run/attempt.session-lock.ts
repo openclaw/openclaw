@@ -981,6 +981,18 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return takeoverDetected;
     },
     async dispose(): Promise<void> {
+      // Vacate the prompt turn first, regardless of whether heldLock is set.
+      // After `releaseForPrompt`, heldLock is undefined but
+      // activePromptSessionTurn is still set until `reacquireAfterPrompt`
+      // clears it. If teardown runs in that window without going through
+      // reacquireAfterPrompt (e.g. mid-stream throw before the outer
+      // finally hits acquireForCleanup), the file-scoped queue tail never
+      // resolves and later same-file controllers block on it forever.
+      // Release the turn here so dispose-after-releaseForPrompt is safe.
+      if (activePromptSessionTurn) {
+        activePromptSessionTurn.release();
+        activePromptSessionTurn = undefined;
+      }
       if (!heldLock) {
         return;
       }
