@@ -95,7 +95,7 @@ export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
 
 export function createChatSessionsLoadOverrides(
-  state: { sessionsShowArchived?: boolean },
+  state: { sessionsShowArchived?: boolean; agentsSelectedId?: string | null },
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): LoadSessionsOverrides {
   const overrides: LoadSessionsOverrides = {
@@ -105,6 +105,10 @@ export function createChatSessionsLoadOverrides(
     includeUnknown: true,
     configuredAgentsOnly: true,
   };
+  const agentId = state.agentsSelectedId?.trim();
+  if (agentId) {
+    overrides.agentId = agentId;
+  }
   if (typeof state.sessionsShowArchived === "boolean") {
     overrides.showArchived = state.sessionsShowArchived;
   }
