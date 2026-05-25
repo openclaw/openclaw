@@ -10,6 +10,19 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+export type UiProtocolFreshnessIssue =
+  | {
+      readonly kind: "missing-assets";
+      readonly uiIndexPath: string;
+      readonly canBuild: boolean;
+    }
+  | {
+      readonly kind: "stale-assets";
+      readonly uiIndexPath: string;
+      readonly changesSinceBuild: readonly string[];
+      readonly canBuild: boolean;
+    };
+
 export async function maybeRepairUiProtocolFreshness(
   _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -151,4 +164,71 @@ export async function maybeRepairUiProtocolFreshness(
     // If git fails, we silently skip.
     // runtime.debug(`UI freshness check failed: ${String(err)}`);
   }
+}
+
+export async function detectUiProtocolFreshnessIssues(
+  opts: { readonly root?: string; readonly argv1?: string; readonly cwd?: string } = {},
+): Promise<readonly UiProtocolFreshnessIssue[]> {
+  const root =
+    opts.root ??
+    (await resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: opts.argv1 ?? process.argv[1],
+      cwd: opts.cwd ?? process.cwd(),
+    }));
+  if (!root) {
+    return [];
+  }
+
+  const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+  const uiHealth = await resolveControlUiDistIndexHealth({
+    root,
+    argv1: opts.argv1 ?? process.argv[1],
+  });
+  const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
+  const uiSourcesPath = path.join(root, "ui/package.json");
+
+  try {
+    const [schemaStats, uiStats, uiSourcesStats] = await Promise.all([
+      fs.stat(schemaPath).catch(() => null),
+      fs.stat(uiIndexPath).catch(() => null),
+      fs.stat(uiSourcesPath).catch(() => null),
+    ]);
+    if (!schemaStats) {
+      return [];
+    }
+    const canBuild = uiSourcesStats !== null;
+    if (!uiStats) {
+      return [{ kind: "missing-assets", uiIndexPath, canBuild }];
+    }
+    if (schemaStats.mtime <= uiStats.mtime) {
+      return [];
+    }
+    const changesSinceBuild = await collectProtocolSchemaChangesSince(root, uiStats.mtime);
+    return [{ kind: "stale-assets", uiIndexPath, changesSinceBuild, canBuild }];
+  } catch {
+    return [];
+  }
+}
+
+async function collectProtocolSchemaChangesSince(
+  root: string,
+  uiMtime: Date,
+): Promise<readonly string[]> {
+  const gitLog = await runCommandWithTimeout(
+    [
+      "git",
+      "-C",
+      root,
+      "log",
+      `--since=${uiMtime.toISOString()}`,
+      "--format=%h %s",
+      "src/gateway/protocol/schema.ts",
+    ],
+    { timeoutMs: 5000 },
+  ).catch(() => null);
+  if (!gitLog || gitLog.code !== 0 || !gitLog.stdout.trim()) {
+    return [];
+  }
+  return gitLog.stdout.trim().split("\n");
 }

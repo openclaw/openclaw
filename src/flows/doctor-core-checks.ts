@@ -471,6 +471,47 @@ const openAIOAuthTlsCheck: HealthCheck = {
   },
 };
 
+const uiFreshnessCheck: HealthCheck = {
+  id: "core/doctor/ui-freshness",
+  kind: "core",
+  description: "Control UI assets match the gateway protocol schema.",
+  source: "doctor",
+  async detect() {
+    const { detectUiProtocolFreshnessIssues } = await import("../commands/doctor-ui.js");
+    const issues = await detectUiProtocolFreshnessIssues();
+    return issues.map((issue): HealthFinding => {
+      if (issue.kind === "missing-assets") {
+        return {
+          checkId: "core/doctor/ui-freshness",
+          severity: "warning",
+          message: "Control UI assets are missing.",
+          path: issue.uiIndexPath,
+          fixHint: issue.canBuild
+            ? "Run `openclaw doctor --fix` to build Control UI assets."
+            : "Install a package that includes Control UI sources, then run `pnpm ui:build`.",
+        };
+      }
+      return {
+        checkId: "core/doctor/ui-freshness",
+        severity: "warning",
+        message: "Control UI assets are older than the gateway protocol schema.",
+        path: issue.uiIndexPath,
+        fixHint: issue.canBuild
+          ? formatUiFreshnessFixHint(issue.changesSinceBuild)
+          : "Install a package that includes Control UI sources, then run `pnpm ui:build`.",
+      };
+    });
+  },
+};
+
+function formatUiFreshnessFixHint(changesSinceBuild: readonly string[]): string {
+  const base = "Run `openclaw doctor --fix --force` to rebuild Control UI assets.";
+  if (changesSinceBuild.length === 0) {
+    return base;
+  }
+  return `${base} Protocol changes since the last build: ${changesSinceBuild.join("; ")}`;
+}
+
 const legacyWhatsAppCrontabCheck: HealthCheck = {
   id: "core/doctor/legacy-whatsapp-crontab",
   kind: "core",
@@ -746,6 +787,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
+    uiFreshnessCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
     createWorkspaceSuggestionsCheck(deps),

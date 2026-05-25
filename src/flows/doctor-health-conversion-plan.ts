@@ -168,6 +168,12 @@ export const doctorHealthConversionRules = [
     rule: "Expose OAuth TLS prerequisites as findings; preserve deep-mode detail as finding metadata.",
   },
   {
+    contributionId: "doctor:ui-freshness",
+    conversion: "detect-only",
+    target: ["core/doctor/ui-freshness"],
+    rule: "Expose missing or stale Control UI build assets as findings; keep build/rebuild execution on the legacy doctor preflight path.",
+  },
+  {
     contributionId: "doctor:hooks-model",
     conversion: "detect-only",
     target: ["core/doctor/hooks-model"],
