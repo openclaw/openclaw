@@ -265,7 +265,11 @@ function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
   timeoutSkippedCount: number;
   total: number;
 }): void {
-  if (params.total === 0 || params.skippedCount !== params.total || params.timeoutSkippedCount === 0) {
+  if (
+    params.total === 0 ||
+    params.skippedCount !== params.total ||
+    params.timeoutSkippedCount === 0
+  ) {
     return;
   }
   throw new Error(
@@ -927,6 +931,19 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
         requestedLevel: "low",
       }),
     ).toBe("off");
+  });
+});
+
+describe("buildLiveGatewayConfig", () => {
+  it("pins selected live gateway models to the Pi runtime", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {},
+      candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
+    });
+
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
+      agentRuntime: { id: "pi" },
+    });
   });
 });
 
@@ -1884,7 +1901,15 @@ function buildLiveGatewayConfig(params: {
         // Live tests should avoid Docker sandboxing so tool probes can
         // operate on the temporary probe files we create in the host workspace.
         sandbox: { mode: "off" },
-        models: Object.fromEntries(params.candidates.map((m) => [`${m.provider}/${m.id}`, {}])),
+        // This suite validates direct provider/API-key gateway behavior. OpenAI
+        // agent models otherwise use the implicit Codex runtime, which tests a
+        // different auth/runtime path and can hang until the model timeout.
+        models: Object.fromEntries(
+          params.candidates.map((m) => [
+            `${m.provider}/${m.id}`,
+            { agentRuntime: { id: "pi" as const } },
+          ]),
+        ),
       },
     },
     models:
