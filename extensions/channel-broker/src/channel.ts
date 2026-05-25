@@ -82,28 +82,11 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
-      reconcileUnknownSend: true,
-      afterCommit: true,
     },
   },
   receive: {
     defaultAckPolicy: "after_durable_send",
     supportedAckPolicies: ["after_receive_record", "after_agent_dispatch", "after_durable_send"],
-  },
-  live: {
-    capabilities: {
-      draftPreview: true,
-      previewFinalization: true,
-      progressUpdates: true,
-    },
-    finalizer: {
-      capabilities: {
-        finalEdit: true,
-        normalFallback: true,
-        previewReceipt: true,
-        retainOnAmbiguousFailure: true,
-      },
-    },
   },
   send: {
     text: async (ctx) =>
@@ -232,7 +215,6 @@ export const channelBrokerPlugin = createChatChannelPlugin({
           replyTo: true,
           thread: true,
           messageSendingHooks: true,
-          reconcileUnknownSend: true,
         },
       },
       resolveTarget: ({ to, cfg, accountId }) => {

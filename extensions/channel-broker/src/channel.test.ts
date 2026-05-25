@@ -16,16 +16,17 @@ describe("channel-broker plugin", () => {
       media: true,
       replyTo: true,
       thread: true,
+      messageSendingHooks: true,
+    });
+    expect(channelBrokerPlugin.message?.durableFinal?.capabilities).not.toMatchObject({
+      reconcileUnknownSend: true,
+      afterCommit: true,
     });
     expect(channelBrokerPlugin.message?.receive).toEqual({
       defaultAckPolicy: "after_durable_send",
       supportedAckPolicies: ["after_receive_record", "after_agent_dispatch", "after_durable_send"],
     });
-    expect(channelBrokerPlugin.message?.live?.capabilities).toEqual({
-      draftPreview: true,
-      previewFinalization: true,
-      progressUpdates: true,
-    });
+    expect(channelBrokerPlugin.message?.live).toBeUndefined();
   });
 
   it("exposes the bundled runtime setter declared by the channel entry", () => {
