@@ -933,19 +933,11 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-<<<<<<< HEAD
 export function loadSessionEntry(
   sessionKey: string,
   opts?: { agentId?: string; cfg?: OpenClawConfig; clone?: boolean },
 ) {
   const cfg = opts?.cfg ?? getRuntimeConfig();
-=======
-export function loadSessionEntry(
-  sessionKey: string,
-  opts?: { agentId?: string; cfg?: OpenClawConfig },
-) {
-  const cfg = opts?.cfg ?? getRuntimeConfig();
->>>>>>> 31b37f3d70 (gateway: fix reset session type drift)
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,

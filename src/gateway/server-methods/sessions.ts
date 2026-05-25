@@ -2362,7 +2362,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     emitSessionsChanged(context, {
-      action: "updated",
+      reason,
       sessionKey: result.key,
     });
     respond(true, { ok: true, key: result.key, entry: result.entry }, undefined);
