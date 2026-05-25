@@ -123,3 +123,22 @@ Status: branch-local checkpoint, not release notes.
   harness/check timings, not WhatsApp message RTT: branch Crabbox changed gate
   sync `42.195s`, command `3m37.34s`, total `5m42.476s`; live WhatsApp before
   and after remain `blocked-before-scenario`.
+- Latest QALab/CI repair on `5f851a52e8f` removes the WhatsApp
+  maintainer-role workflow input/secret dependency, keeps GitHub live lanes on
+  the CI Convex secret, quarantines logged-out WhatsApp leases until final
+  cleanup, and forwards `excludeCredentialIds` on Convex acquire retries. The
+  pre-push changed gate passed on AWS Crabbox `cbx_d98d892e0a6f`
+  (`run_e9c89bbd79c4`): sync `43.234s`, command `3m39.296s`, total
+  `5m44.301s`.
+- Fresh live before/after still cannot report WhatsApp message RTT because the
+  live Convex CI pool/broker returned the same logged-out credential after the
+  branch explicitly excluded it. Current-main before run `26422757876`
+  (`00f98095316a`) failed `whatsapp-canary` with Baileys `401 Unauthorized /
+  Connection Failure` in `3.730s` of scenario runtime
+  (`2026-05-25T22:49:58.141Z` -> `2026-05-25T22:50:01.871Z`). Branch after run
+  `26422778357` (`5f851a52e8f`) failed `whatsapp-canary-rtt` after
+  `302.862s` (`2026-05-25T22:52:54.940Z` -> `2026-05-25T22:57:57.802Z`):
+  it rejected credential fingerprint `6b2d34243bac`, then the broker returned
+  the same excluded credential again. Driver/SUT archive fingerprints stayed
+  `a8ebbdf4bbdd` / `c9a96833bbc0`, so the remaining blocker is live credential
+  pool or broker-side exclusion support, not the workflow secret shape.
