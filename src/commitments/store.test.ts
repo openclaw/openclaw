@@ -235,7 +235,7 @@ describe("commitment store delivery selection", () => {
     expect(expiredCommitments[0]?.status).toBe("expired");
   });
 
-  it("serializes concurrent markCommitmentsStatus on disjoint ids without losing a write (#13)", async () => {
+  it("serializes concurrent markCommitmentsStatus on disjoint ids without losing a write", async () => {
     await useTempStateDir();
     await saveCommitmentStore(undefined, {
       version: 1,
@@ -256,7 +256,7 @@ describe("commitment store delivery selection", () => {
     expect(byId.cm_raceB).toBe("dismissed");
   });
 
-  it("serializes concurrent markCommitmentsAttempted bumps without losing the counter (#13)", async () => {
+  it("serializes concurrent markCommitmentsAttempted bumps without losing the counter", async () => {
     await useTempStateDir();
     await saveCommitmentStore(undefined, {
       version: 1,
@@ -273,7 +273,7 @@ describe("commitment store delivery selection", () => {
     expect(after.commitments[0]?.attempts).toBe(5);
   });
 
-  it("serializes a markCommitmentsStatus dismiss against a concurrent attempted bump (#13)", async () => {
+  it("serializes a markCommitmentsStatus dismiss against a concurrent attempted bump", async () => {
     await useTempStateDir();
     await saveCommitmentStore(undefined, {
       version: 1,
