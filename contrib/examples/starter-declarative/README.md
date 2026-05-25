@@ -14,7 +14,8 @@
 cp -r contrib/examples/starter-declarative ~/.claworks/packs/
 
 # 触发健康检查验证加载
-pnpm openclaw health
+node claworks.mjs health
+# 或：pnpm claworks:start 后访问 Studio
 ```
 
 ## 文件结构

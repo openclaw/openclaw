@@ -48,7 +48,7 @@
 | HTTP           | `registerHttpRoute`              | `/v1`, `/a2a`, `/mcp`, `/studio`     | ✅                           |
 | Security audit | `registerSecurityAuditCollector` | `security-audit.ts`                  | ✅ 本轮注册                  |
 
-Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `openclaw_bridge_im`（用户可见文案为 Gateway LLM bridge，非 OpenClaw 品牌）。
+Doctor 新增检查项：`gateway_bridge_llm` / `gateway_bridge_notify` / `gateway_bridge_im`；生产模式下 `connectors_simulate` / `connectors_echo_demo` 报错，doctor --fix 关闭 simulate 与 echo 演示连接器。
 
 **Onboarding 白标（2026-05-24）**：`wizardT`/`formatCliCommand`/`product-surface` 覆盖 setup/configure/doctor 首屏与 next steps；`onboard-remote` 默认 WS 18800；`claworks:setup` 一键 doctor→init→onboard；`init` 对 OT simulate/echo 与个人 `personal_work` profile 给出明确提示（避免误以为演示连接器可用于生产）。详见 `REBRAND-TO-CLAWORKS.md` onboarding 小节。
 
@@ -159,22 +159,37 @@ Doctor 新增检查项：`openclaw_bridge_llm` / `openclaw_bridge_notify` / `ope
 ### 8.3 推荐开箱路径（生产前）
 
 ```bash
-CLAWORKS_INIT_SECURE=1 pnpm claworks:init
-pnpm claworks:setup                    # doctor --fix + onboard
+pnpm claworks:setup                   # doctor --fix → init → onboard（首次）
+pnpm claworks:start                   # Gateway 18800（含 bootstrap）
+pnpm claworks:doctor                  # 双层 health
+pnpm claworks:smoke                   # 快速验收
+```
+
+生产加固：
+
+```bash
+CLAWORKS_INIT_SECURE=1 pnpm claworks:init --force
 CLAWORKS_VECTOR_KB=1 pnpm claworks:repair
-pnpm claworks:start                    # 非 claworks:gateway（含 bootstrap）
-pnpm claworks:smoke
 pnpm claworks:gateway:e2e
 ```
 
-个人工作 profile：`pnpm claworks:repair:personal` → `pnpm claworks:personal:verify` → `pnpm claworks:kb-smoke`。
+个人工作 profile（自托管 Qwen + 向量 KB，不用 Ali `qwen` 插件）：
+
+```bash
+cp contrib/examples/claworks-personal.env.example ~/.claworks/personal.env
+# 生产叠加：cat contrib/examples/claworks-personal-production.env.example >> ~/.claworks/personal.env
+source ~/.claworks/personal.env && pnpm claworks:repair:personal
+pnpm claworks:personal:verify && pnpm claworks:kb-smoke
+```
+
+Runtime 热修复：`POST /v1/doctor?fix=true`（与 `claworks doctor --fix` / `pnpm claworks:repair` 共用 `product-config-repair`）。
 
 ### 8.4 开箱即用评分（2026-05-24）
 
 | 维度             | 评分    | 说明                                                                                                                          |
 | ---------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | CLI 命令面       | **99%** | 继承 OpenClaw + 产品 npm aliases；help/channels/qr/wizard i18n/ doctor lint/config issue/update/onboard/插件诊断 提示已产品化 |
-| Doctor/fix       | **92%** | 双层 + 端口/LaunchAgent 隔离 repair                                                                                           |
+| Doctor/fix       | **94%** | 双层 + 端口/LaunchAgent 隔离；生产 OT simulate/echo 检查与 repair                                                             |
 | 零配置启动       | **75%** | 仍需 claworks-packs 外仓 + 模型/飞书凭据                                                                                      |
 | 运维可观测       | **85%** | `/v1/health`、metrics、decision-log；无 OTEL                                                                                  |
 | 与 OpenClaw 共存 | **95%** | 18800 / ~/.claworks / ai.claworks.gateway                                                                                     |
@@ -206,7 +221,7 @@ pnpm claworks:gateway:e2e
 | ----------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
 | Extension doctor-contract（ollama/vllm/plugin-sdk ssrf 等） | 🔲   | 少量 provider/index 与 SDK legacy 规则仍裸 `openclaw configure` / doctor |
 | `schema.help.ts` 静态源字符串                               | —    | 显示层已产品化；源文件仍保留 openclaw 真源供 upstream 合并               |
-| `doctor-core-checks` / gateway client 等 core 诊断          | 🔲   | 部分 fixHint 仍硬编码，非 extension 热路径                               |
+| `doctor-core-checks` / gateway client 等 core 诊断          | ✅   | fixHint 经 `doctorFixHint` → `productizeUserCopy`                        |
 | `update-cli` progress 内部日志                              | ⏭️   | 审计已标跳过                                                             |
 | feishu / webhooks extension                                 | —    | 无 doctor-contract 或 onboarding 裸 `openclaw` 提示                      |
 

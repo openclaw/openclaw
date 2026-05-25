@@ -24,10 +24,10 @@
 cp -r contrib/examples/starter-imperative ~/.claworks/packs/
 
 # 测试消息回显
-pnpm openclaw event publish starter.echo_requested '{"text": "hello", "channel": "feishu"}'
+node claworks.mjs event publish starter.echo_requested '{"text": "hello", "channel": "feishu"}'
 
 # 测试知识库查询
-pnpm openclaw event publish starter.lookup_requested '{"query": "请假流程"}'
+node claworks.mjs event publish starter.lookup_requested '{"query": "请假流程"}'
 ```
 
 ## 文件结构
