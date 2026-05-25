@@ -1788,6 +1788,7 @@
     "claworks:prune-extensions:apply": "node scripts/claworks-prune-extensions.mjs --apply",
     "claworks:runtime:build": "node scripts/build-claworks-runtime.mjs",
     "claworks:runtime:dist-smoke": "node --import tsx scripts/claworks-runtime-dist-smoke.mjs",
+    "claworks:runtime:publish:dry-run": "node scripts/claworks-runtime-publish-dry-run.mjs",
     "claworks:runtime:test": "vitest run packages/claworks-runtime",
     "claworks:migrate": "node scripts/claworks-migrate.mjs",
     "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs",

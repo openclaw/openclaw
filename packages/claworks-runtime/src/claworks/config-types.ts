@@ -146,6 +146,12 @@ export type ClaworksRobotConfig = {
     auto_import_watch?: boolean;
     /** 收集数据的天数窗口（默认 30） */
     data_window_days?: number;
+    /**
+     * 沙盒回归通过后自动晋升到生产 Pack（默认 false）。
+     * production_mode=true 或 CLAWORKS_PRODUCTION=1 时强制禁用（fail-closed）。
+     * 生产环境请保持 false，通过 HITL 调用 evolution.promote_sandbox。
+     */
+    auto_promote_sandbox?: boolean;
   };
   /**
    * Playbook 及 Kernel 超时配置（统一入口，避免多处散落）。

@@ -3,6 +3,7 @@
 ClaWorks 采用 **单体 Gateway** 模型：一个进程承载 ObjectStore、Playbook、KB、MCP/A2A/REST 与 OpenClaw 渠道桥接。
 
 **运维清单**：[`docs/OPERATOR-CHECKLIST.md`](docs/OPERATOR-CHECKLIST.md)（三仓 clone、env、启动命令）。  
+**可观测性**：[`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)（Prometheus、traceparent、OTEL collector）。  
 **多实例 / A2A**：[`docs/MULTI-INSTANCE-DEPLOYMENT.md`](docs/MULTI-INSTANCE-DEPLOYMENT.md)（多 monolith、twin/ops 拆分、peer mesh）。
 
 **Canonical 运行时**：
