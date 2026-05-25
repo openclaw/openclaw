@@ -1631,6 +1631,35 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("lets a newer bare deferred response clear stale manual speech instructions", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+
+    bridge.triggerGreeting?.("Say exactly: stale manual speech.");
+    bridge.sendUserMessage("Respond to this newer user message.");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
+  });
+
   it("does not request a realtime response for continuing tool results", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

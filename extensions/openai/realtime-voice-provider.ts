@@ -1266,9 +1266,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.continuingToolCallIds.size > 0
     ) {
       this.responseCreatePending = true;
-      if (instructions) {
-        this.pendingResponseCreateInstructions = instructions;
-      }
+      this.pendingResponseCreateInstructions = instructions;
       return;
     }
     this.responseCreatePending = false;
