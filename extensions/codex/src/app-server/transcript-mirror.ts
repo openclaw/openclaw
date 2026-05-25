@@ -186,6 +186,7 @@ export async function mirrorCodexAppServerTranscript(params: {
       const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
         transcriptPath: params.sessionFile,
         message: messageToAppend,
+        idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
         config: params.config,
       });
       if (appendedMessage.role === "user") {

@@ -241,6 +241,8 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
+  /** Use only when the caller already checked this idempotency key under the session write lock. */
+  idempotencyLookup?: "scan" | "caller-checked";
   config?: OpenClawConfig;
 };
 
@@ -305,9 +307,10 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     ...(params.cwd ? { cwd: params.cwd } : {}),
   });
   const idempotencyKey = readMessageIdempotencyKey(params.message);
-  const existing = idempotencyKey
-    ? await findTranscriptMessageByIdempotencyKey<TMessage>(params.transcriptPath, idempotencyKey)
-    : undefined;
+  const existing =
+    idempotencyKey && params.idempotencyLookup !== "caller-checked"
+      ? await findTranscriptMessageByIdempotencyKey<TMessage>(params.transcriptPath, idempotencyKey)
+      : undefined;
   if (existing) {
     return { ...existing, appended: false };
   }
