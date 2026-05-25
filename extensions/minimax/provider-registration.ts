@@ -300,5 +300,3 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
   api.registerProvider(buildMinimaxApiProviderPlugin());
   api.registerProvider(buildMinimaxPortalProviderPlugin());
 }
-
-export default [buildMinimaxApiProviderPlugin(), buildMinimaxPortalProviderPlugin()];
