@@ -7,6 +7,7 @@ import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -434,6 +435,20 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
         ...nextDefaults,
         subagents: nextSubagents,
       },
+    },
+  };
+}
+
+export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const raw = cfg.cron?.maxConcurrentRuns;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    cron: {
+      ...cfg.cron,
+      maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     },
   };
 }
