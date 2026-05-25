@@ -139,6 +139,28 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
   });
 
+  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "dashboard",
+        "--no-open",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
   it("does not respawn on Windows when stack size is already configured", () => {
     expect(
       buildCliRespawnPlan({
