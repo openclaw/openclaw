@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { setProgramRawArgv } from "./program-context.js";
 
 const buildParseArgvMock = vi.hoisted(() => vi.fn());
 const resolveActionArgsMock = vi.hoisted(() => vi.fn());
@@ -28,10 +29,9 @@ describe("reparseProgramFromActionArgs", () => {
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
     const actionCommand = {
       name: () => "status",
-      parent: {
-        rawArgs: ["node", "openclaw", "status", "--json"],
-      },
+      parent: new Command(),
     } as unknown as Command;
+    setProgramRawArgv(actionCommand.parent as Command, ["node", "openclaw", "status", "--json"]);
     resolveActionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
@@ -78,8 +78,30 @@ describe("reparseProgramFromActionArgs", () => {
     expect(resolveCommandOptionArgsMock).toHaveBeenCalledWith(program);
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "browser",
-      rawArgs: [],
+      rawArgs: undefined,
       fallbackArgv: ["--json", "open", "about:blank"],
+    });
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+  });
+
+  it("reuses raw argv stored on an ancestor command", async () => {
+    const program = new Command().name("browser");
+    const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const root = new Command().name("openclaw");
+    const browser = new Command().name("browser");
+    browser.parent = root;
+    setProgramRawArgv(root, ["node", "openclaw", "browser", "--json", "tabs"]);
+    const actionCommand = {
+      name: () => "tabs",
+      parent: browser,
+    } as unknown as Command;
+
+    await reparseProgramFromActionArgs(program, [actionCommand]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "browser",
+      rawArgs: ["node", "openclaw", "browser", "--json", "tabs"],
+      fallbackArgv: ["tabs"],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
@@ -93,7 +115,7 @@ describe("reparseProgramFromActionArgs", () => {
     expect(resolveActionArgsMock).toHaveBeenCalledWith(undefined);
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
-      rawArgs: [],
+      rawArgs: undefined,
       fallbackArgv: [],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);

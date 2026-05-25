@@ -9,6 +9,7 @@ const createProgramContextMock = vi.hoisted(() => vi.fn());
 const configureProgramHelpMock = vi.hoisted(() => vi.fn());
 const registerPreActionHooksMock = vi.hoisted(() => vi.fn());
 const setProgramContextMock = vi.hoisted(() => vi.fn());
+const setProgramRawArgvMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./command-registry.js", () => ({
   registerProgramCommands: registerProgramCommandsMock,
@@ -28,6 +29,7 @@ vi.mock("./preaction.js", () => ({
 
 vi.mock("./program-context.js", () => ({
   setProgramContext: setProgramContextMock,
+  setProgramRawArgv: setProgramRawArgvMock,
 }));
 
 describe("buildProgram", () => {
@@ -74,6 +76,7 @@ describe("buildProgram", () => {
 
       expect(program).toBeInstanceOf(Command);
       expect(setProgramContextMock).toHaveBeenCalledWith(program, ctx);
+      expect(setProgramRawArgvMock).toHaveBeenCalledWith(program, argv);
       expect(configureProgramHelpMock).toHaveBeenCalledWith(program, ctx);
       expect(registerPreActionHooksMock).toHaveBeenCalledWith(program, ctx.programVersion);
       expect(registerProgramCommandsMock).toHaveBeenCalledWith(program, ctx, argv);

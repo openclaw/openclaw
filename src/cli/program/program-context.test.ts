@@ -1,7 +1,12 @@
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import type { ProgramContext } from "./context.js";
-import { getProgramContext, setProgramContext } from "./program-context.js";
+import {
+  getProgramContext,
+  getProgramRawArgv,
+  setProgramContext,
+  setProgramRawArgv,
+} from "./program-context.js";
 
 function makeCtx(version: string): ProgramContext {
   return {
@@ -34,5 +39,26 @@ describe("program context storage", () => {
 
     expect(getProgramContext(programA)).toBe(ctxA);
     expect(getProgramContext(programB)).toBe(ctxB);
+  });
+
+  it("resolves context from ancestor commands", () => {
+    const root = new Command();
+    const child = new Command();
+    child.parent = root;
+    const ctx = makeCtx("root");
+
+    setProgramContext(root, ctx);
+
+    expect(getProgramContext(child)).toBe(ctx);
+  });
+
+  it("stores and resolves raw argv across the command tree", () => {
+    const root = new Command();
+    const child = new Command();
+    child.parent = root;
+
+    setProgramRawArgv(root, ["node", "openclaw", "browser", "status"]);
+
+    expect(getProgramRawArgv(child)).toEqual(["node", "openclaw", "browser", "status"]);
   });
 });

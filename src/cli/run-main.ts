@@ -783,7 +783,8 @@ export async function runCli(argv: string[] = process.argv) {
           import("../../packages/terminal-core/src/restore.js"),
         ]),
       );
-      const program = await startupTrace.measure("build-program", () => buildProgram());
+      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
+      const program = await startupTrace.measure("build-program", () => buildProgram(parseArgv));
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
       // These log the error and exit gracefully instead of crashing without trace.
@@ -814,7 +815,6 @@ export async function runCli(argv: string[] = process.argv) {
         process.exit(1);
       });
 
-      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.

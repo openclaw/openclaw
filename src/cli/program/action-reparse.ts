@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { buildParseArgv } from "../argv.js";
+import { getProgramRawArgv } from "./program-context.js";
 import { resolveActionArgs, resolveCommandOptionArgs } from "./helpers.js";
 
 function buildFallbackArgv(program: Command, actionCommand: Command | undefined): string[] {
@@ -16,8 +17,7 @@ export async function reparseProgramFromActionArgs(
   actionArgs: unknown[],
 ): Promise<void> {
   const actionCommand = actionArgs.at(-1) as Command | undefined;
-  const root = actionCommand?.parent ?? program;
-  const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
+  const rawArgs = getProgramRawArgv(actionCommand?.parent ?? program);
   const fallbackArgv = buildFallbackArgv(program, actionCommand);
   const parseArgv = buildParseArgv({
     programName: program.name(),

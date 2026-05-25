@@ -4,9 +4,9 @@ import { registerProgramCommands } from "./command-registry.js";
 import { createProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
 import { registerPreActionHooks } from "./preaction.js";
-import { setProgramContext } from "./program-context.js";
+import { setProgramContext, setProgramRawArgv } from "./program-context.js";
 
-export function buildProgram() {
+export function buildProgram(argv: readonly string[] = process.argv) {
   const program = new Command();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
@@ -17,9 +17,9 @@ export function buildProgram() {
     throw err;
   });
   const ctx = createProgramContext();
-  const argv = process.argv;
 
   setProgramContext(program, ctx);
+  setProgramRawArgv(program, argv);
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
 
