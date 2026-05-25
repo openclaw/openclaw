@@ -487,7 +487,11 @@ async function main(): Promise<void> {
     ),
     HTTPS_PROXY: `http://127.0.0.1:${proxy.connectPort}`,
     NODE_EXTRA_CA_CERTS: certs.caPath,
-    NODE_OPTIONS: `--require "${TTY_SPOOF_PATH}"`,
+    // Forward-slash the path: Node's NODE_OPTIONS tokenizer strips backslashes
+    // on Windows, mangling the Windows path so the --require module resolves to a
+    // non-existent path and the spawned child crashes (MODULE_NOT_FOUND). Node
+    // accepts forward-slash paths on Windows, so normalize before injecting.
+    NODE_OPTIONS: `--require "${TTY_SPOOF_PATH.replace(/\\/g, "/")}"`,
   };
 
   const claudeBinary = process.env["OPENCLAW_INTERACTIVE_CLAUDE_BINARY"] || "claude";
