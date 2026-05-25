@@ -332,6 +332,59 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers).not.toHaveProperty("OpenAI-Beta");
   });
 
+  it("prefers Codex OAuth over OPENAI_API_KEY for default GPT realtime bridges", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
+    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "ephemeral-realtime-secret" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      providerConfig: { model: "gpt-realtime-2" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    bridge.close();
+
+    expectRecordFields(requireFetchHeaders(), "fetch headers", {
+      Authorization: "Bearer oauth-token", // pragma: allowlist secret
+    });
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer ephemeral-realtime-secret");
+  });
+
+  it("keeps explicit OpenAI realtime API keys as the advanced override", () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-configured", // pragma: allowlist secret
+        model: "gpt-realtime-2",
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    void bridge.connect();
+    bridge.close();
+
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe("Bearer sk-configured");
+  });
+
   it("does not fall back to Codex OAuth for custom realtime endpoints", async () => {
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-token");
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -573,6 +626,37 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await provider.createBrowserSession({
       cfg,
       providerConfig: {},
+      instructions: "Be concise.",
+    });
+
+    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
+      provider: "openai-codex",
+      cfg,
+    });
+    expectRecordFields(requireFetchHeaders(), "fetch headers", {
+      Authorization: "Bearer oauth-realtime-token", // pragma: allowlist secret
+    });
+  });
+
+  it("prefers Codex OAuth over OPENAI_API_KEY for default GPT browser sessions", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "sk-env"); // pragma: allowlist secret
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("oauth-realtime-token");
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({
+        client_secret: { value: "client-secret-123" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+    const cfg = { agents: { defaults: {} } } as never;
+
+    await provider.createBrowserSession({
+      cfg,
+      providerConfig: {},
+      model: "gpt-realtime-2",
       instructions: "Be concise.",
     });
 
