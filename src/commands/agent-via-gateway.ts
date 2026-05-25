@@ -53,6 +53,8 @@ const EMBEDDED_FALLBACK_META = {
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
+const LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS = 30;
+const AGENT_CLI_TIMEOUT_EXIT_CODE = 124;
 
 type AgentCliOpts = {
   message: string;
@@ -85,6 +87,7 @@ type AgentCliProcessLike = {
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
 };
+type EmbeddedAgentCommandOpts = Parameters<typeof agentCommand>[0];
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
@@ -211,6 +214,96 @@ function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): AgentCliOpts {
 
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
+}
+
+function createAgentCliTimeoutError(timeoutSeconds: number): Error {
+  const err = new Error(
+    `local agent command timed out after ${timeoutSeconds}s plus ${LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS}s grace`,
+  );
+  err.name = "TimeoutError";
+  return err;
+}
+
+function createAgentCliSignalAbortError(): Error {
+  const err = new Error("local agent command aborted by process signal");
+  err.name = "AbortError";
+  return err;
+}
+
+function resolveLocalAgentCliHardTimeoutMs(timeoutSeconds: number): number | undefined {
+  if (timeoutSeconds === 0) {
+    return undefined;
+  }
+  return Math.min(
+    NO_GATEWAY_TIMEOUT_MS,
+    Math.max(1, (timeoutSeconds + LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS) * 1000),
+  );
+}
+
+function createLocalAgentCliRunSignal(params: {
+  sourceSignal: AbortSignal;
+  runtime: RuntimeEnv;
+  timeoutSeconds: number;
+}): {
+  signal: AbortSignal;
+  signalAbortPromise: Promise<never>;
+  timeoutPromise?: Promise<never>;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const hardTimeoutMs = resolveLocalAgentCliHardTimeoutMs(params.timeoutSeconds);
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let rejectForSourceAbort: (() => void) | undefined;
+  const signalAbortPromise = new Promise<never>((_resolve, reject) => {
+    rejectForSourceAbort = () => {
+      reject(createAgentCliSignalAbortError());
+    };
+  });
+  const abortFromSource = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(params.sourceSignal.reason);
+    }
+    rejectForSourceAbort?.();
+  };
+
+  if (params.sourceSignal.aborted) {
+    abortFromSource();
+  } else {
+    params.sourceSignal.addEventListener("abort", abortFromSource, { once: true });
+  }
+
+  const timeoutPromise =
+    hardTimeoutMs === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          timeoutHandle = setTimeout(() => {
+            const err = createAgentCliTimeoutError(params.timeoutSeconds);
+            if (!controller.signal.aborted) {
+              controller.abort(err);
+            }
+            params.runtime.error?.(err.message);
+            try {
+              params.runtime.exit(AGENT_CLI_TIMEOUT_EXIT_CODE);
+            } catch {
+              // Non-default runtimes may throw instead of exiting; the timeout remains the error.
+            }
+            reject(err);
+          }, hardTimeoutMs);
+        });
+  void signalAbortPromise.catch(() => {});
+  void timeoutPromise?.catch(() => {});
+
+  return {
+    signal: controller.signal,
+    signalAbortPromise,
+    ...(timeoutPromise ? { timeoutPromise } : {}),
+    dispose: () => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      params.sourceSignal.removeEventListener("abort", abortFromSource);
+    },
+  };
 }
 
 function readAcceptedRunContext(payload: unknown): {
@@ -432,6 +525,40 @@ function returnAfterSignalExit<T>(
   runtime: RuntimeEnv,
 ): T | undefined {
   return exitForReceivedSignal(signal, runtime) ? undefined : value;
+}
+
+async function runEmbeddedAgentCommandWithCliBoundary(params: {
+  opts: EmbeddedAgentCommandOpts;
+  runtime: RuntimeEnv;
+  deps?: AgentCliDeps;
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>;
+  timeoutSeconds: number;
+}): Promise<Awaited<ReturnType<typeof agentCommand>> | undefined> {
+  const localRunSignal = createLocalAgentCliRunSignal({
+    sourceSignal: params.signalBridge.signal,
+    runtime: params.runtime,
+    timeoutSeconds: params.timeoutSeconds,
+  });
+  try {
+    const localRun = agentCommand(
+      {
+        ...params.opts,
+        timeout: String(params.timeoutSeconds),
+        abortSignal: localRunSignal.signal,
+      },
+      params.runtime,
+      params.deps,
+    );
+    void localRun.catch(() => {});
+    const result = await Promise.race([
+      localRun,
+      localRunSignal.signalAbortPromise,
+      ...(localRunSignal.timeoutPromise ? [localRunSignal.timeoutPromise] : []),
+    ]);
+    return returnAfterSignalExit(result, params.signalBridge.getReceivedSignal(), params.runtime);
+  } finally {
+    localRunSignal.dispose();
+  }
 }
 
 function createGatewayTimeoutFallbackSessionId(): string {
@@ -701,6 +828,14 @@ export async function agentCliCommand(
     ? dispatchOpts
     : { ...dispatchOpts, runId: randomIdempotencyKey() };
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
+  let resolvedLocalBoundaryTimeoutSeconds: number | undefined;
+  const resolveLocalBoundaryTimeoutSeconds = () => {
+    resolvedLocalBoundaryTimeoutSeconds ??= parseTimeoutSeconds({
+      cfg: getRuntimeConfig(),
+      timeout: dispatchOpts.timeout,
+    });
+    return resolvedLocalBoundaryTimeoutSeconds;
+  };
   const localOpts = {
     ...gatewayDispatchOpts,
     agentId: gatewayDispatchOpts.agent,
@@ -711,8 +846,13 @@ export async function agentCliCommand(
   };
   try {
     if (dispatchOpts.local === true) {
-      const result = await agentCommand(localOpts, runtime, deps);
-      return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+      return await runEmbeddedAgentCommandWithCliBoundary({
+        opts: localOpts,
+        runtime,
+        deps,
+        signalBridge,
+        timeoutSeconds: resolveLocalBoundaryTimeoutSeconds(),
+      });
     }
 
     try {
@@ -735,8 +875,8 @@ export async function agentCliCommand(
         runtime.error?.(
           `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
         );
-        const result = await agentCommand(
-          {
+        return await runEmbeddedAgentCommandWithCliBoundary({
+          opts: {
             ...localOpts,
             sessionId: fallbackSession.sessionId,
             sessionKey: fallbackSession.sessionKey,
@@ -750,8 +890,9 @@ export async function agentCliCommand(
           },
           runtime,
           deps,
-        );
-        return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+          signalBridge,
+          timeoutSeconds: resolveLocalBoundaryTimeoutSeconds(),
+        });
       }
 
       if (!isGatewayAgentEmbeddedFallbackError(err)) {
@@ -761,15 +902,16 @@ export async function agentCliCommand(
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
       );
-      const result = await agentCommand(
-        {
+      return await runEmbeddedAgentCommandWithCliBoundary({
+        opts: {
           ...localOpts,
           resultMetaOverrides: EMBEDDED_FALLBACK_META,
         },
         runtime,
         deps,
-      );
-      return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+        signalBridge,
+        timeoutSeconds: resolveLocalBoundaryTimeoutSeconds(),
+      });
     }
   } catch (err) {
     if (isAbortError(err) && exitForReceivedSignal(signalBridge.getReceivedSignal(), runtime)) {

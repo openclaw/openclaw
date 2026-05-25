@@ -66,6 +66,81 @@ const CLI_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+const LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS = 30;
+const AGENT_CLI_TIMEOUT_EXIT_CODE = 124;
+const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+
+function readFlagValue(argv: string[], flag: string): string | undefined {
+  for (let index = 2; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--") {
+      return undefined;
+    }
+    if (token === flag) {
+      return argv[index + 1];
+    }
+    if (token?.startsWith(`${flag}=`)) {
+      return token.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function hasFlag(argv: string[], flag: string): boolean {
+  for (let index = 2; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === "--") {
+      return false;
+    }
+    if (token === flag || token?.startsWith(`${flag}=`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseNonNegativeInteger(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+export function resolveLocalAgentCliStartupHardTimeoutMs(argv: string[]): number | undefined {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion || invocation.primary !== "agent" || !hasFlag(argv, "--local")) {
+    return undefined;
+  }
+  const timeoutSeconds = parseNonNegativeInteger(readFlagValue(argv, "--timeout")) ?? 600;
+  if (timeoutSeconds === 0) {
+    return undefined;
+  }
+  return Math.min(
+    NO_GATEWAY_TIMEOUT_MS,
+    Math.max(1, (timeoutSeconds + LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS) * 1000),
+  );
+}
+
+function armLocalAgentCliStartupHardTimeout(argv: string[]): { dispose: () => void } | undefined {
+  const timeoutMs = resolveLocalAgentCliStartupHardTimeoutMs(argv);
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  const timeoutSeconds = timeoutMs / 1000 - LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS;
+  const timeout = setTimeout(() => {
+    process.stderr.write(
+      `local agent command timed out after ${timeoutSeconds}s plus ${LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS}s grace\n`,
+    );
+    process.exit(AGENT_CLI_TIMEOUT_EXIT_CODE);
+  }, timeoutMs);
+  timeout.unref?.();
+  return {
+    dispose: () => {
+      clearTimeout(timeout);
+    },
+  };
+}
 
 function createGatewayCliMainStartupTrace(argv: string[]) {
   const enabled =
@@ -479,6 +554,7 @@ export async function runCli(argv: string[] = process.argv) {
   let normalizedArgv = parsedProfile.argv;
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
+  const localAgentCliHardTimeout = armLocalAgentCliStartupHardTimeout(normalizedArgv);
   startupTrace.mark("argv");
 
   if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
@@ -861,6 +937,7 @@ export async function runCli(argv: string[] = process.argv) {
       stopStartupProgress();
     }
   } finally {
+    localAgentCliHardTimeout?.dispose();
     if (onSigterm) {
       process.off("SIGTERM", onSigterm);
     }

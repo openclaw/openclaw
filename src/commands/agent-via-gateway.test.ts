@@ -992,6 +992,198 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("exits promptly for local runs that ignore SIGTERM aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise(() => {});
+        });
+
+        const run = agentCliCommand(
+          { message: "hi", to: "+1555", local: true, timeout: "2" },
+          runtime,
+          { process: signals.processLike },
+        );
+        const runExpectation = expect(run).resolves.toBeUndefined();
+        await Promise.resolve();
+
+        signals.emit("SIGTERM");
+        await Promise.resolve();
+
+        await runExpectation;
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+
+        await vi.advanceTimersByTimeAsync(32_000);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+        expect(signals.listenerCount("SIGTERM")).toBe(0);
+        expect(signals.listenerCount("SIGINT")).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers the signal exit when local abort teardown rejects", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
+        return await new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("local teardown failed"));
+            },
+            { once: true },
+          );
+        });
+      });
+
+      const run = agentCliCommand(
+        { message: "hi", to: "+1555", local: true, timeout: "2" },
+        runtime,
+        { process: signals.processLike },
+      );
+      await Promise.resolve();
+      signals.emit("SIGTERM");
+
+      await expect(run).resolves.toBeUndefined();
+      expect(runtime.exit).toHaveBeenCalledWith(143);
+    });
+  });
+
+  it("hard-exits local runs that ignore the CLI timeout abort", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise(() => {});
+        });
+
+        const run = agentCliCommand(
+          { message: "hi", to: "+1555", local: true, timeout: "2" },
+          runtime,
+        );
+        const runExpectation = expect(run).rejects.toThrow("local agent command timed out");
+        await Promise.resolve();
+
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        const localOpts = requireRecord(
+          requireFirstCallArg(agentCommand, "embedded agent"),
+          "embedded agent options",
+        ) as { abortSignal?: AbortSignal };
+        expect(localOpts.abortSignal?.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(31_999);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        await runExpectation;
+        expect(localOpts.abortSignal?.aborted).toBe(true);
+        expect(runtime.exit).toHaveBeenCalledWith(124);
+        expect(callGateway).not.toHaveBeenCalled();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the default local hard timeout when --timeout is omitted", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise(() => {});
+        });
+
+        const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime);
+        const runExpectation = expect(run).rejects.toThrow("local agent command timed out");
+        await Promise.resolve();
+
+        await vi.advanceTimersByTimeAsync(629_999);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+
+        await vi.advanceTimersByTimeAsync(1);
+
+        await runExpectation;
+        const localOpts = requireRecord(
+          requireFirstCallArg(agentCommand, "embedded agent"),
+          "embedded agent options",
+        ) as { timeout?: string };
+        expect(localOpts.timeout).toBe("600");
+        expect(runtime.exit).toHaveBeenCalledWith(124);
+        expect(callGateway).not.toHaveBeenCalled();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the local hard timeout after successful local runs", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        let resolveLocal: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
+        agentCommand.mockImplementationOnce(async () => {
+          return await new Promise((resolve) => {
+            resolveLocal = resolve;
+          });
+        });
+
+        const run = agentCliCommand(
+          { message: "hi", to: "+1555", local: true, timeout: "2" },
+          runtime,
+        );
+        await Promise.resolve();
+
+        resolveLocal?.({
+          payloads: [],
+          meta: { durationMs: 1 },
+        } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+        await run;
+
+        await vi.advanceTimersByTimeAsync(32_000);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not arm a local hard timeout when --timeout is 0", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        let resolveLocal: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
+        agentCommand.mockImplementationOnce(async () => {
+          return await new Promise((resolve) => {
+            resolveLocal = resolve;
+          });
+        });
+
+        const run = agentCliCommand(
+          { message: "hi", to: "+1555", local: true, timeout: "0" },
+          runtime,
+        );
+        await Promise.resolve();
+
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(runtime.exit).not.toHaveBeenCalledWith(124);
+
+        resolveLocal?.({
+          payloads: [],
+          meta: { durationMs: 1 },
+        } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+        await run;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("exits for embedded fallback runs that resolve after SIGTERM aborts them", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
@@ -1020,6 +1212,33 @@ describe("agentCliCommand", () => {
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
+  });
+
+  it("hard-exits embedded fallback runs that ignore the CLI timeout abort", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        callGateway.mockRejectedValueOnce(createGatewayClosedError());
+        agentCommand.mockImplementationOnce(async (_opts: { abortSignal?: AbortSignal }) => {
+          return await new Promise(() => {});
+        });
+
+        const run = agentCliCommand({ message: "hi", to: "+1555", timeout: "2" }, runtime);
+        const runExpectation = expect(run).rejects.toThrow("local agent command timed out");
+        for (let attempt = 0; attempt < 10 && agentCommand.mock.calls.length === 0; attempt += 1) {
+          await Promise.resolve();
+        }
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(32_000);
+
+        await runExpectation;
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(runtime.exit).toHaveBeenCalledWith(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not route abort errors through embedded gateway fallback classification", async () => {
