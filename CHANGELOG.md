@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway: keep session-only Control UI tool-start mirrors flowing during diagnostic queue pressure instead of silently dropping non-terminal tool updates.
 - Gateway: avoid sending duplicate tool-event frames to Control UI connections that are subscribed by both run and session.
 - Discord/OpenAI voice: accept longer leading wake-name mistranscripts such as "Open Club" for OpenClaw.
 - Discord/OpenAI voice: accept leading fuzzy wake-name transcripts such as "Monty" or "Moti" for a Molty agent while keeping ambient speech gated.
