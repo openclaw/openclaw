@@ -14,6 +14,11 @@ export {
   readStringValue,
 } from "../shared/string-coerce.js";
 export {
+  asFiniteNumber,
+  asPositiveSafeInteger,
+  parseFiniteNumber,
+} from "../shared/number-coercion.js";
+export {
   asRecord,
   asNullableRecord,
   asOptionalRecord,

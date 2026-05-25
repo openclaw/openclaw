@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asFiniteNumber as readFiniteNumber,
+  normalizeOptionalString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   scanDirectReplyTranscriptSentinels,
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
@@ -131,14 +135,6 @@ const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|no
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function sha256(value: string) {
