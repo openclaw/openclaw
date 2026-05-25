@@ -61,6 +61,8 @@ export type RealtimeVoiceForcedConsultCoordinator<TContext = unknown> = {
   isCancelled(handle: RealtimeVoiceForcedConsultHandle<TContext>): boolean;
   nativeCallIds(handle: RealtimeVoiceForcedConsultHandle<TContext>): readonly string[];
   handles(): readonly RealtimeVoiceForcedConsultHandle<TContext>[];
+  rememberQuestion(handle: RealtimeVoiceForcedConsultHandle<TContext>, question: string): void;
+  findRecent(question: string): RealtimeVoiceForcedConsultHandle<TContext> | undefined;
   hasRecent(question: string): boolean;
   hasRecentNativeConsult(
     question: string,
@@ -74,6 +76,7 @@ type StoredForcedConsult<TContext> = {
   handle: RealtimeVoiceForcedConsultHandle<TContext>;
   createdAt: number;
   nativeCallIds: Set<string>;
+  questions: string[];
   pending: boolean;
   started: boolean;
   delivered: boolean;
@@ -148,8 +151,26 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     }
     const stored = [...state.values()]
       .toReversed()
-      .find((candidate) => questionsMatch(candidate.handle.question, question));
+      .find((candidate) =>
+        candidate.questions.some((candidateQuestion) =>
+          questionsMatch(candidateQuestion, question),
+        ),
+      );
     return stored;
+  };
+
+  const rememberStoredQuestion = (
+    stored: StoredForcedConsult<TContext>,
+    question: string | undefined,
+  ) => {
+    const trimmed = question?.trim();
+    if (!trimmed) {
+      return;
+    }
+    if (stored.questions.some((candidate) => questionsMatch(candidate, trimmed))) {
+      return;
+    }
+    stored.questions.push(trimmed);
   };
 
   const recordRecentNativeConsult = (question: string | undefined) => {
@@ -196,6 +217,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
         handle,
         createdAt: now(),
         nativeCallIds: new Set(),
+        questions: [trimmed],
         pending: true,
         started: false,
         delivered: false,
@@ -231,7 +253,11 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
           ? pendingCandidates[0]
           : pendingCandidates
               .toReversed()
-              .find((candidate) => questionsMatch(candidate.handle.question, question));
+              .find((candidate) =>
+                candidate.questions.some((candidateQuestion) =>
+                  questionsMatch(candidateQuestion, question),
+                ),
+              );
       if (!stored?.pending) {
         return undefined;
       }
@@ -254,14 +280,20 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       const pending = [...state.values()]
         .toReversed()
         .find(
-          (candidate) => candidate.pending && questionsMatch(candidate.handle.question, question),
+          (candidate) =>
+            candidate.pending &&
+            candidate.questions.some((candidateQuestion) =>
+              questionsMatch(candidateQuestion, question),
+            ),
         );
       if (pending) {
         clearTimer(pending);
+        rememberStoredQuestion(pending, question);
         if (nativeCallId) {
           pending.nativeCallIds.add(nativeCallId);
         }
-        state.delete(pending.handle.id);
+        pending.pending = false;
+        scheduleCleanup(pending);
         return { kind: "pending", question, handle: pending.handle };
       }
       const stored = findMatching(question);
@@ -271,6 +303,7 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
       if (nativeCallId) {
         stored.nativeCallIds.add(nativeCallId);
       }
+      rememberStoredQuestion(stored, question);
       if (stored.delivered) {
         return { kind: "already_delivered", question, handle: stored.handle };
       }
@@ -317,6 +350,16 @@ export function createRealtimeVoiceForcedConsultCoordinator<TContext = unknown>(
     },
     handles() {
       return [...state.values()].map((stored) => stored.handle);
+    },
+    rememberQuestion(handle, question) {
+      const stored = getStored(handle);
+      if (stored) {
+        rememberStoredQuestion(stored, question);
+      }
+    },
+    findRecent(question) {
+      prune();
+      return findMatching(question)?.handle;
     },
     hasRecent(question) {
       return Boolean(findMatching(question));
