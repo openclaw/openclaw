@@ -156,6 +156,14 @@ export function getSerializedSessionStoreCacheStatsForTest(): {
   };
 }
 
+export function getSessionStoreSnapshotCacheStatsForTest(): {
+  entries: number;
+} {
+  return {
+    entries: SESSION_STORE_SNAPSHOT_CACHE.size(),
+  };
+}
+
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> {
   if (!value || typeof value !== "object") {
     return value as DeepReadonly<T>;

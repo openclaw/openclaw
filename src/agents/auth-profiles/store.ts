@@ -7,12 +7,16 @@ import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
+  listRuntimeExternalAuthProfiles,
   overlayExternalAuthProfiles,
-  shouldPersistExternalAuthProfile,
   syncPersistedExternalCliAuthProfiles,
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
-import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import {
+  isSafeToAdoptMainStoreOAuthIdentity,
+  shouldPersistRuntimeExternalOAuthProfile,
+  type RuntimeExternalOAuthProfile,
+} from "./oauth-shared.js";
 import {
   ensureAuthStoreFile,
   resolveAuthStatePath,
@@ -364,6 +368,7 @@ function shouldKeepProfileInLocalStore(params: {
   credential: AuthProfileStore["profiles"][string];
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
+  externalProfiles: () => RuntimeExternalOAuthProfile[];
 }): boolean {
   if (params.credential.type !== "oauth") {
     return true;
@@ -380,11 +385,10 @@ function shouldKeepProfileInLocalStore(params: {
   if (params.options?.filterExternalAuthProfiles === false) {
     return true;
   }
-  return shouldPersistExternalAuthProfile({
-    store: params.store,
+  return shouldPersistRuntimeExternalOAuthProfile({
     profileId: params.profileId,
     credential: params.credential,
-    agentDir: params.agentDir,
+    profiles: params.externalProfiles(),
   });
 }
 
@@ -394,6 +398,12 @@ function buildLocalAuthProfileStoreForSave(params: {
   options?: SaveAuthProfileStoreOptions;
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(params.store);
+  let externalProfiles: RuntimeExternalOAuthProfile[] | undefined;
+  const getExternalProfiles = (): RuntimeExternalOAuthProfile[] =>
+    (externalProfiles ??= listRuntimeExternalAuthProfiles({
+      store: params.store,
+      agentDir: params.agentDir,
+    }));
   localStore.profiles = Object.fromEntries(
     Object.entries(localStore.profiles).filter(([profileId, credential]) =>
       shouldKeepProfileInLocalStore({
@@ -402,6 +412,7 @@ function buildLocalAuthProfileStoreForSave(params: {
         credential,
         agentDir: params.agentDir,
         options: params.options,
+        externalProfiles: getExternalProfiles,
       }),
     ),
   );
