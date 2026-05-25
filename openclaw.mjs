@@ -247,8 +247,20 @@ if (
   }
 }
 
-const isModuleNotFoundError = (err) =>
-  err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
+const isModuleNotFoundError = (err) => {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  // Node sets code === "ERR_MODULE_NOT_FOUND". Bun (as of v1.3.x) does not set
+  // this code on its module-resolution errors, so we also accept the textual
+  // signature when code is absent or different.
+  if ("code" in err && err.code === "ERR_MODULE_NOT_FOUND") {
+    return true;
+  }
+  const message =
+    "message" in err && typeof err.message === "string" ? err.message : "";
+  return /Cannot find module/.test(message);
+};
 
 const isDirectModuleNotFoundError = (err, specifier) => {
   if (!isModuleNotFoundError(err)) {
@@ -264,7 +276,11 @@ const isDirectModuleNotFoundError = (err, specifier) => {
   const expectedPath = fileURLToPath(expectedUrl);
   return (
     message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
+    message.includes(`Cannot find module "${expectedPath}"`) ||
+    // Bun reports the raw specifier (relative form) in its error message,
+    // not the resolved absolute path that Node uses.
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`)
   );
 };
 
