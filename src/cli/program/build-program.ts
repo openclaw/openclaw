@@ -6,6 +6,25 @@ import { configureProgramHelp } from "./help.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext, setProgramRawArgv } from "./program-context.js";
 
+function installRawArgvTracking(program: Command): void {
+  const originalParse = program.parse.bind(program);
+  const originalParseAsync = program.parseAsync.bind(program);
+
+  program.parse = ((argv, parseOptions) => {
+    if (Array.isArray(argv)) {
+      setProgramRawArgv(program, argv);
+    }
+    return originalParse(argv, parseOptions);
+  }) as typeof program.parse;
+
+  program.parseAsync = (async (argv, parseOptions) => {
+    if (Array.isArray(argv)) {
+      setProgramRawArgv(program, argv);
+    }
+    return await originalParseAsync(argv, parseOptions);
+  }) as typeof program.parseAsync;
+}
+
 export function buildProgram(argv: readonly string[] = process.argv) {
   const program = new Command();
   const registrationArgv = [...argv];
@@ -21,6 +40,7 @@ export function buildProgram(argv: readonly string[] = process.argv) {
 
   setProgramContext(program, ctx);
   setProgramRawArgv(program, argv);
+  installRawArgvTracking(program);
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
 

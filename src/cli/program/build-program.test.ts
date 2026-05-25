@@ -85,6 +85,21 @@ describe("buildProgram", () => {
     }
   });
 
+  it("refreshes stored raw argv when parseAsync receives user argv later", async () => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw"];
+    try {
+      const program = buildProgram();
+      program.command("test").argument("[value]").action(() => undefined);
+
+      await program.parseAsync(["test", "value"], { from: "user" });
+
+      expect(setProgramRawArgvMock).toHaveBeenLastCalledWith(program, ["test", "value"]);
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
   it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
     const program = buildProgram();
     program.command("test").description("Test command");
