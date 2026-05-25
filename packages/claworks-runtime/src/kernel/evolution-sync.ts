@@ -29,6 +29,7 @@ import {
   loadPendingSandboxPromotions,
   savePendingSandboxPromotion,
 } from "./evolution-pending-store.js";
+import { runSandboxPlaybookSimulation } from "./sandbox-playbook-runner.js";
 
 // ── 导出数据结构 ───────────────────────────────────────────────────────────
 
@@ -481,56 +482,16 @@ export class EvolutionSyncManager {
   private async runSandboxRegression(
     playbookIds: string[],
   ): Promise<Array<{ playbook_id: string; passed: boolean; error?: string }>> {
-    const { createPlaybookSimulator } = await import("../planes/orch/playbook-simulator.js");
     const playbookEngine = this.runtime.playbookEngine;
-
-    const simulator = createPlaybookSimulator(async (pid, initVars, trigEvent, mockStore) => {
-      const steps: import("../planes/orch/playbook-simulator.js").SimulateStepLog[] = [];
-      if (!playbookEngine?.trigger) {
-        return { steps, error: "playbookEngine.trigger 不可用" };
-      }
-      try {
-        const run = await playbookEngine.trigger(
-          pid,
-          typeof trigEvent === "object" && trigEvent !== null && !Array.isArray(trigEvent)
-            ? (trigEvent as Record<string, unknown>)
-            : {},
-          {
-            variables: { ...initVars, _simulate: true, _sandbox: true },
-          },
-        );
-        if (run?.steps) {
-          for (let i = 0; i < run.steps.length; i++) {
-            const s = run.steps[i]!;
-            const durationMs =
-              s.completedAt && s.startedAt ? s.completedAt.getTime() - s.startedAt.getTime() : 0;
-            steps.push({
-              step: i,
-              type: s.stepId,
-              name: s.stepId,
-              status: s.status === "failed" ? "error" : "ok",
-              durationMs,
-              output: s.output,
-              error: s.error,
-            });
-          }
-        }
-        return { steps, error: run.error };
-      } catch (e) {
-        return { steps, error: String(e) };
-      }
-    });
-
     const results: Array<{ playbook_id: string; passed: boolean; error?: string }> = [];
     for (const playbookId of playbookIds) {
-      const result = await simulator.simulate(
-        playbookId,
-        { _sandbox: true },
-        { type: `sandbox.regression.${playbookId}` },
-      );
+      const result = await runSandboxPlaybookSimulation(playbookEngine, playbookId, {
+        testPayload: { _sandbox: true },
+        triggerEventType: `sandbox.regression.${playbookId}`,
+      });
       results.push({
         playbook_id: playbookId,
-        passed: result.status === "ok",
+        passed: result.passed,
         error: result.error,
       });
     }
