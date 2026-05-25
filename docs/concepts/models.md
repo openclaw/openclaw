@@ -345,7 +345,8 @@ Custom providers in `models.providers` are written into `models.json` under the 
     Merge mode precedence for matching provider IDs:
 
     - Non-empty `baseUrl` already present in the agent `models.json` wins.
-    - Non-empty `apiKey` in the agent `models.json` wins only when that provider is not SecretRef-managed in current config/auth-profile context.
+    - Plaintext `apiKey` values already present in the agent `models.json` are not preserved in the prompt-facing catalog. When no current config/auth-profile context already supplies that provider credential, OpenClaw migrates the legacy key into the target agent's local `auth-profiles.json` before writing the stripped `models.json`.
+    - If the legacy `apiKey` migration cannot be durably written, OpenClaw fails closed and leaves the existing `models.json` unchanged instead of writing a stripped catalog that would lose the only credential.
     - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
     - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
     - Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
