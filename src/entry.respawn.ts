@@ -11,6 +11,7 @@ import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 const CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
 
@@ -58,6 +59,10 @@ function hasExperimentalWarningSuppressed(
   return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
 }
 
+function hasStackSizeConfigured(execArgv: string[]): boolean {
+  return execArgv.some((arg) => arg.startsWith("--stack-size"));
+}
+
 export function buildCliRespawnPlan(
   params: {
     argv?: string[];
@@ -81,13 +86,26 @@ export function buildCliRespawnPlan(
     return null;
   }
 
-  if (platform === "win32") {
-    return null;
-  }
-
   const childEnv: NodeJS.ProcessEnv = { ...env };
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
+
+  if (platform === "win32") {
+    if (!hasStackSizeConfigured(childExecArgv)) {
+      childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
+      needsRespawn = true;
+    }
+
+    if (!needsRespawn) {
+      return null;
+    }
+
+    return {
+      command: resolveCliRespawnCommand({ execPath, platform }),
+      argv: [...childExecArgv, ...argv.slice(1)],
+      env: childEnv,
+    };
+  }
 
   const autoNodeExtraCaCerts =
     params.autoNodeExtraCaCerts ??
