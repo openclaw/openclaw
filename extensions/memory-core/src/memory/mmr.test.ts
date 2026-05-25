@@ -172,8 +172,7 @@ describe("textSimilarity", () => {
     expect(textSimilarity("Привет мир", "Привет мир")).toBe(1);
     // Empty vs empty — preserve identity (both literally equal).
     expect(textSimilarity("", "")).toBe(1);
-    // Whitespace-only normalization is case-folded only, not trimmed — keep
-    // distinct strings distinct.
+    // Normalized equality is case-insensitive for non-tokenized text.
     expect(textSimilarity("Привет МИР", "привет мир")).toBe(1);
   });
 });
