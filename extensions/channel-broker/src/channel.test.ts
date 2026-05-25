@@ -1,4 +1,9 @@
 import { createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
+import {
+  verifyChannelMessageAdapterCapabilityProofs,
+  verifyChannelMessageLiveCapabilityAdapterProofs,
+  verifyChannelMessageLiveFinalizerProofs,
+} from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import channelBrokerEntry from "../index.js";
 import { channelBrokerPlugin } from "./channel.js";
@@ -18,6 +23,7 @@ describe("channel-broker plugin", () => {
     expect(channelBrokerPlugin.message?.durableFinal?.capabilities).toMatchObject({
       text: true,
       media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
@@ -39,12 +45,86 @@ describe("channel-broker plugin", () => {
       defaultAckPolicy: "after_durable_send",
       supportedAckPolicies: ["after_receive_record", "after_agent_dispatch", "after_durable_send"],
     });
-    expect(channelBrokerPlugin.message?.live).toBeUndefined();
+    expect(channelBrokerPlugin.message?.live).toMatchObject({
+      capabilities: {
+        draftPreview: true,
+        previewFinalization: true,
+        progressUpdates: true,
+      },
+      finalizer: {
+        capabilities: {
+          normalFallback: true,
+          previewReceipt: true,
+        },
+      },
+    });
   });
 
   it("exposes the bundled runtime setter declared by the channel entry", () => {
     expect(channelBrokerEntry.setChannelRuntime).toBeTypeOf("function");
     expect(() => setChannelBrokerRuntime({} as never)).not.toThrow();
+  });
+
+  it("backs declared durable final capabilities with send adapter proofs", async () => {
+    const adapter = channelBrokerPlugin.message;
+
+    await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "channelBrokerMessageAdapter",
+      adapter,
+      proofs: {
+        text: () => {
+          expect(adapter?.send?.text).toBeTypeOf("function");
+        },
+        media: () => {
+          expect(adapter?.send?.media).toBeTypeOf("function");
+        },
+        payload: () => {
+          expect(adapter?.send?.payload).toBeTypeOf("function");
+        },
+        replyTo: () => {
+          expect(adapter?.durableFinal?.capabilities?.replyTo).toBe(true);
+        },
+        thread: () => {
+          expect(adapter?.durableFinal?.capabilities?.thread).toBe(true);
+        },
+        messageSendingHooks: () => {
+          expect(adapter?.send?.text).toBeTypeOf("function");
+        },
+      },
+    });
+  });
+
+  it("backs declared live capabilities with provider-mode proofs", async () => {
+    const adapter = channelBrokerPlugin.message;
+
+    await verifyChannelMessageLiveCapabilityAdapterProofs({
+      adapterName: "channelBrokerMessageAdapter",
+      adapter,
+      proofs: {
+        draftPreview: () => {
+          expect(adapter?.receive?.defaultAckPolicy).toBe("after_durable_send");
+        },
+        previewFinalization: () => {
+          expect(adapter?.durableFinal?.capabilities?.payload).toBe(true);
+        },
+        progressUpdates: () => {
+          expect(adapter?.live?.capabilities?.draftPreview).toBe(true);
+        },
+      },
+    });
+
+    await verifyChannelMessageLiveFinalizerProofs({
+      adapterName: "channelBrokerMessageAdapter",
+      adapter,
+      proofs: {
+        normalFallback: () => {
+          expect(adapter?.send?.text).toBeTypeOf("function");
+        },
+        previewReceipt: () => {
+          expect(adapter?.live?.capabilities?.previewFinalization).toBe(true);
+        },
+      },
+    });
   });
 
   it("infers broker-prefixed platform DMs before defaulting to channel semantics", () => {
@@ -483,6 +563,75 @@ describe("channel-broker plugin", () => {
     const attachment =
       vi.mocked(sendOutboundRequest).mock.calls[0]?.[0]?.request.payloads[0]?.attachments?.[0];
     expect(attachment).not.toHaveProperty("url");
+  });
+
+  it("delivers structured payloads without dropping channelData", async () => {
+    const sendOutboundRequest = vi.fn(async ({ request }) =>
+      createBrokerReceipt({
+        requestId: request.requestId,
+        providerId: "acme",
+        platform: request.platform,
+        status: "sent",
+        messageIds: ["native-payload-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-payload-1",
+    });
+
+    const result = await channelBrokerPlugin.message?.send?.payload?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["discord"],
+                capabilities: {
+                  discord: {
+                    delivery: { text: true, payload: true, progressUpdates: true, thread: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "acme",
+      to: "discord:channel:222?threadId=333",
+      text: "tool progress",
+      payload: {
+        text: "tool progress",
+        channelData: {
+          openclaw: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            verboseLevel: "full",
+          },
+        },
+      },
+    } as never);
+
+    expect(result?.messageId).toBe("native-payload-1");
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "final",
+        requirements: expect.objectContaining({ payload: true, text: true, thread: true }),
+        payloads: [
+          {
+            text: "tool progress",
+            channelData: {
+              openclaw: {
+                sourceReplyDeliveryMode: "message_tool_only",
+                verboseLevel: "full",
+              },
+            },
+          },
+        ],
+      }),
+    });
   });
 
   it("rejects non-sent provider receipts before reporting send success", async () => {

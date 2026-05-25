@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { BROKER_PROTOCOL_VERSION } from "openclaw/plugin-sdk/channel-broker";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleChannelBrokerInboundHttpRequest,
@@ -142,6 +143,95 @@ describe("channel-broker HTTP routes", () => {
       dedupeKey: "acme:bot-main:telegram:evt-1",
       ackPolicy: "after_durable_send",
     });
+  });
+
+  it("adapts the injected plugin runtime into the real channel turn path", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "main",
+      accountId: "acme",
+      sessionKey: "agent:main:channel-broker:telegram:-100123",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session" as const,
+      matchedBy: "default" as const,
+      channel: "channel-broker",
+    }));
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute,
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "channel-broker",
+        accountId: "acme",
+        peer: { kind: "channel", id: "telegram:-100123" },
+        parentPeer: { kind: "channel", id: "telegram:-100123" },
+      }),
+    );
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "channel-broker",
+        accountId: "acme",
+        raw: expect.objectContaining({ eventId: "evt-1", platform: "telegram" }),
+      }),
+    );
+    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "channel-broker",
+        accountId: "acme",
+        surface: "telegram",
+        messageId: "101",
+        messageIdFull: "evt-1",
+        reply: expect.objectContaining({
+          to: "telegram:-100123?conversationType=thread&threadId=77",
+          originatingTo: "telegram:-100123?conversationType=thread&threadId=77",
+        }),
+        message: expect.objectContaining({
+          rawBody: "/verbose status",
+          bodyForAgent: "/verbose status",
+          commandBody: "/verbose status",
+        }),
+      }),
+    );
+    expect(pluginRuntime.channel.session.recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/sessions.json",
+        sessionKey: "agent:main:channel-broker:telegram:-100123",
+        ctx: expect.objectContaining({
+          To: "telegram:-100123?conversationType=thread&threadId=77",
+          BrokerProviderId: "acme",
+          BrokerPlatform: "telegram",
+        }),
+      }),
+    );
+    expect(
+      pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          OriginatingChannel: "channel-broker",
+          Surface: "telegram",
+        }),
+      }),
+    );
   });
 
   it("rejects inbound events with invalid signatures before runtime dispatch", async () => {

@@ -10,7 +10,11 @@ import {
   resolveChannelMessageSourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/channel-message";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendChannelBrokerText } from "./outbound.js";
+import {
+  sendChannelBrokerPreviewFinalization,
+  sendChannelBrokerPreviewUpdate,
+  sendChannelBrokerText,
+} from "./outbound.js";
 import { resetChannelBrokerRuntimeForTest, setChannelBrokerRuntime } from "./runtime.js";
 
 type ConformancePayload = {
@@ -241,7 +245,7 @@ describe("channel-broker conformance baseline", () => {
     });
   });
 
-  it("requires preview and progress behavior to flow through provider capabilities", () => {
+  it("requires preview and progress behavior to flow through provider capabilities", async () => {
     const capabilities = {
       providerId: "acme",
       platforms: [
@@ -253,27 +257,82 @@ describe("channel-broker conformance baseline", () => {
         },
       ],
     };
-    const preview = createBrokerOutboundRequest({
-      requestId: "preview-1",
-      providerId: "acme",
-      platform: "discord",
-      conversation: { id: "channel:123", type: "channel", threadId: "thread-1" },
-      mode: "preview_update",
-      payloads: [{ text: "Working..." }],
-      requirements: { text: true, progressUpdates: true },
+    const sendOutboundRequest = vi.fn(async ({ request }) =>
+      createBrokerReceipt({
+        requestId: request.requestId,
+        providerId: "acme",
+        platform: request.platform,
+        status: "sent",
+        messageIds: [`${request.mode}-native-id`],
+      }),
+    );
+    let requestIndex = 0;
+    setChannelBrokerRuntime({
+      createRequestId: () => `preview-${++requestIndex}`,
+      sendOutboundRequest,
     });
-    const finalize = createBrokerOutboundRequest({
-      requestId: "preview-2",
-      providerId: "acme",
-      platform: "discord",
-      conversation: { id: "channel:123", type: "channel", threadId: "thread-1" },
-      mode: "finalize_preview",
-      payloads: [{ text: "Done" }],
-      requirements: { text: true, previewFinalization: true },
+    const cfg = {
+      channels: {
+        "channel-broker": {
+          accounts: {
+            acme: {
+              enabled: true,
+              baseUrl: "https://broker.example.test",
+              platforms: ["discord"],
+              capabilities: {
+                discord: {
+                  delivery: {
+                    text: true,
+                    thread: true,
+                    previewFinalization: true,
+                    progressUpdates: true,
+                  },
+                  live: {
+                    draftPreview: true,
+                    progressUpdates: true,
+                    previewFinalization: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const preview = await sendChannelBrokerPreviewUpdate({
+      cfg,
+      accountId: "acme",
+      to: "discord:channel%3A123?threadId=thread-1",
+      text: "Working...",
+      payload: { text: "Working..." },
+    });
+    const finalize = await sendChannelBrokerPreviewFinalization({
+      cfg,
+      accountId: "acme",
+      to: "discord:channel%3A123?threadId=thread-1",
+      text: "Done",
+      payload: { text: "Done" },
     });
 
-    expect(preview.mode).toBe("preview_update");
-    expect(finalize.mode).toBe("finalize_preview");
+    expect(preview.receipt.parts[0]?.kind).toBe("preview");
+    expect(finalize.receipt.parts[0]?.kind).toBe("preview");
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(1, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "preview_update",
+        payloads: [{ text: "Working..." }],
+        requirements: { text: true, thread: true, progressUpdates: true },
+      }),
+    });
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(2, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "finalize_preview",
+        payloads: [{ text: "Done" }],
+        requirements: { text: true, thread: true, previewFinalization: true },
+      }),
+    });
     expect(
       brokerPlatformSupports({
         capabilities,

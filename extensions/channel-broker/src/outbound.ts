@@ -14,9 +14,11 @@ import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contrac
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveChannelBrokerAccount } from "./accounts.js";
 import { createBrokerRequestId, sendBrokerOutboundRequest } from "./runtime.js";
 import { parseChannelBrokerTarget } from "./target.js";
@@ -51,6 +53,84 @@ function normalizeMaybeString(value: string | number | null | undefined): string
   }
   const trimmed = String(value).trim();
   return trimmed || undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function listPayloadMediaUrls(params: {
+  payload: ReplyPayload;
+  mediaUrl?: string | null;
+}): string[] {
+  const urls: string[] = [];
+  const add = (value: string | null | undefined) => {
+    const normalized = normalizeMaybeString(value);
+    if (normalized) {
+      urls.push(normalized);
+    }
+  };
+  add(params.mediaUrl);
+  add(params.payload.mediaUrl);
+  for (const mediaUrl of params.payload.mediaUrls ?? []) {
+    add(mediaUrl);
+  }
+  return [...new Set(urls)];
+}
+
+function buildPayloadChannelData(payload: ReplyPayload): Record<string, unknown> | undefined {
+  const channelData = isRecord(payload.channelData) ? { ...payload.channelData } : {};
+  const openclaw = isRecord(channelData.openclaw) ? { ...channelData.openclaw } : {};
+  if (payload.presentation) {
+    openclaw.presentation = payload.presentation;
+  }
+  if (payload.interactive) {
+    openclaw.interactive = payload.interactive;
+  }
+  if (Object.keys(openclaw).length > 0) {
+    channelData.openclaw = openclaw;
+  }
+  return Object.keys(channelData).length > 0 ? channelData : undefined;
+}
+
+function buildBrokerPayloadsFromReplyPayload(params: {
+  payload: ReplyPayload;
+  text?: string | null;
+  mediaUrl?: string | null;
+  audioAsVoice?: boolean;
+}): BrokerOutboundPayload[] {
+  const text = normalizeMaybeString(params.payload.text) ?? normalizeMaybeString(params.text);
+  const mediaUrls = listPayloadMediaUrls({ payload: params.payload, mediaUrl: params.mediaUrl });
+  const attachments: BrokerMessageAttachment[] = mediaUrls.map((url) => ({
+    url,
+    mediaType: params.audioAsVoice === true ? "voice" : "media",
+  }));
+  const channelData = buildPayloadChannelData(params.payload);
+  return [
+    {
+      ...(text ? { text } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
+      ...(channelData ? { channelData } : {}),
+    },
+  ];
+}
+
+function buildPayloadDeliveryRequirements(
+  payload: BrokerOutboundPayload,
+  params: {
+    forcePayload?: boolean;
+    extra?: BrokerDeliveryRequirements;
+  } = {},
+): BrokerDeliveryRequirements {
+  const hasText = Boolean(payload.text?.trim());
+  const hasMedia = Boolean(payload.attachments?.length);
+  const hasChannelData = Boolean(payload.channelData);
+  return {
+    ...(params.forcePayload || hasChannelData ? { payload: true } : {}),
+    ...(hasText ? { text: true } : {}),
+    ...(hasMedia ? { media: true } : {}),
+    ...params.extra,
+  };
 }
 
 function assertProviderReceiptSent(receipt: BrokerReceiptV1): void {
@@ -188,7 +268,8 @@ async function sendChannelBrokerFinal(params: {
   to: string;
   payloads: BrokerOutboundPayload[];
   requirements: BrokerDeliveryRequirements;
-  receiptKind: "text" | "media" | "voice";
+  receiptKind: MessageReceiptPartKind;
+  mode?: BrokerOutboundRequestV1["mode"];
   threadId?: string | number | null;
   replyToId?: string | number | null;
   silent?: boolean;
@@ -224,7 +305,7 @@ async function sendChannelBrokerFinal(params: {
       type: target.conversationType ?? account.defaultConversationType,
       ...(threadId ? { threadId } : {}),
     },
-    mode: "final",
+    mode: params.mode ?? "final",
     payloads: params.payloads,
     ...(replyToId || params.silent
       ? {
@@ -262,6 +343,89 @@ async function sendChannelBrokerFinal(params: {
       ...(receipt.deleteToken ? { deleteToken: receipt.deleteToken } : {}),
     },
   };
+}
+
+export async function sendChannelBrokerPayload(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text?: string | null;
+  payload: ReplyPayload;
+  mediaUrl?: string | null;
+  audioAsVoice?: boolean;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payload = payloads[0] ?? {};
+  const hasMedia = Boolean(payload.attachments?.length);
+  const hasChannelData = Boolean(payload.channelData);
+  return await sendChannelBrokerFinal({
+    ...params,
+    payloads,
+    requirements: buildPayloadDeliveryRequirements(payload, { forcePayload: true }),
+    receiptKind: hasMedia
+      ? params.audioAsVoice
+        ? "voice"
+        : "media"
+      : hasChannelData
+        ? "card"
+        : "text",
+  });
+}
+
+export async function sendChannelBrokerPreviewUpdate(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text?: string | null;
+  payload: ReplyPayload;
+  mediaUrl?: string | null;
+  audioAsVoice?: boolean;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payload = payloads[0] ?? {};
+  return await sendChannelBrokerFinal({
+    ...params,
+    payloads,
+    requirements: buildPayloadDeliveryRequirements(payload, {
+      extra: { progressUpdates: true },
+    }),
+    receiptKind: "preview",
+    mode: "preview_update",
+  });
+}
+
+export async function sendChannelBrokerPreviewFinalization(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text?: string | null;
+  payload: ReplyPayload;
+  mediaUrl?: string | null;
+  audioAsVoice?: boolean;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  silent?: boolean;
+  signal?: AbortSignal;
+}): Promise<ChannelMessageSendResult> {
+  const payloads = buildBrokerPayloadsFromReplyPayload(params);
+  const payload = payloads[0] ?? {};
+  return await sendChannelBrokerFinal({
+    ...params,
+    payloads,
+    requirements: buildPayloadDeliveryRequirements(payload, {
+      extra: { previewFinalization: true },
+    }),
+    receiptKind: "preview",
+    mode: "finalize_preview",
+  });
 }
 
 export async function sendChannelBrokerText(params: {

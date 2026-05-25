@@ -17,6 +17,7 @@ import { channelBrokerPluginConfigSchema } from "./config-schema.js";
 import {
   sendChannelBrokerMedia,
   sendChannelBrokerOutboundMedia,
+  sendChannelBrokerPayload,
   sendChannelBrokerOutboundText,
   sendChannelBrokerText,
 } from "./outbound.js";
@@ -87,9 +88,23 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
+    },
+  },
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+    },
+    finalizer: {
+      capabilities: {
+        normalFallback: true,
+        previewReceipt: true,
+      },
     },
   },
   receive: {
@@ -118,6 +133,20 @@ const channelBrokerMessageAdapter = defineChannelMessageAdapter({
         mediaAccess: ctx.mediaAccess,
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+        silent: ctx.silent,
+        audioAsVoice: ctx.audioAsVoice,
+        signal: ctx.signal,
+      }),
+    payload: async (ctx) =>
+      await sendChannelBrokerPayload({
+        cfg: ctx.cfg as CoreConfig,
+        accountId: ctx.accountId,
+        to: ctx.to,
+        text: ctx.text,
+        payload: ctx.payload,
+        mediaUrl: ctx.mediaUrl,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
         silent: ctx.silent,
@@ -215,6 +244,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
       deliveryCapabilities: {
         durableFinal: {
           text: true,
+          payload: true,
           replyTo: true,
           thread: true,
           messageSendingHooks: true,
