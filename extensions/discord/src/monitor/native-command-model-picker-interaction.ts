@@ -6,6 +6,7 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import {
   Button,
   StringSelectMenu,
@@ -55,6 +56,18 @@ function resolveModelPickerSelectionValue(
   }
   const trimmed = first.trim();
   return trimmed || null;
+}
+
+function resolveModelPickerRuntimeByIndex(params: {
+  data: ModelsProviderData;
+  provider?: string;
+  runtimeIndex?: number;
+}): string | undefined {
+  if (!params.provider || typeof params.runtimeIndex !== "number") {
+    return undefined;
+  }
+  const choices = params.data.runtimeChoicesByProvider?.get(params.provider);
+  return choices?.[params.runtimeIndex - 1]?.id;
 }
 
 function buildDiscordModelPickerSelectionCommand(params: {
@@ -239,7 +252,13 @@ export async function handleDiscordModelPickerInteraction(params: {
       data: pickerData,
       quickModels,
       currentModel: currentModelRef,
-      runtime: parsed.runtime,
+      runtime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider: parsed.provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       provider: parsed.provider,
       page: parsed.page,
       providerPage: parsed.providerPage,
@@ -314,10 +333,15 @@ export async function handleDiscordModelPickerInteraction(params: {
       modelBucket: newBucket,
       currentModel: currentModelRef,
       currentRuntime,
-      // The bucket select carries the pending runtime in `parsed.runtime`
-      // so a user who picked a runtime and then changed bucket keeps that
-      // runtime as a pending choice through the re-render.
-      pendingRuntime: parsed.runtime,
+      // Bucket customIds carry pending runtime as a compact index so long
+      // provider/runtime ids stay under Discord's 100-character cap.
+      pendingRuntime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
@@ -347,7 +371,13 @@ export async function handleDiscordModelPickerInteraction(params: {
       currentRuntime,
       ...(pendingModel ? { pendingModel: `${provider}/${pendingModel}` } : {}),
       pendingModelIndex: parsed.modelIndex,
-      pendingRuntime: parsed.runtime,
+      pendingRuntime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
@@ -370,7 +400,13 @@ export async function handleDiscordModelPickerInteraction(params: {
       modelBucket: parsed.modelBucket,
       currentModel: currentModelRef,
       currentRuntime,
-      pendingRuntime: parsed.runtime,
+      pendingRuntime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
@@ -438,7 +474,13 @@ export async function handleDiscordModelPickerInteraction(params: {
       currentRuntime,
       pendingModel: modelRef,
       pendingModelIndex: modelIndex,
-      pendingRuntime: parsed.runtime,
+      pendingRuntime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       quickModels,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
@@ -532,7 +574,13 @@ export async function handleDiscordModelPickerInteraction(params: {
     const selectedRuntime = resolveDiscordModelPickerSubmissionRuntime({
       data: pickerData,
       provider: parsedModelRef.provider,
-      parsedRuntime: parsed.runtime,
+      parsedRuntime:
+        parsed.runtime ??
+        resolveModelPickerRuntimeByIndex({
+          data: pickerData,
+          provider: parsedModelRef.provider,
+          runtimeIndex: parsed.runtimeIndex,
+        }),
       currentRuntime,
     });
     const selectionCommand = buildDiscordModelPickerSelectionCommand({

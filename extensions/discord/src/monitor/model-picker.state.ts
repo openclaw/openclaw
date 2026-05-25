@@ -48,6 +48,7 @@ export type DiscordModelPickerState = {
   userId: string;
   provider?: string;
   runtime?: string;
+  runtimeIndex?: number;
   page: number;
   providerPage?: number;
   modelIndex?: number;
@@ -215,6 +216,7 @@ export function buildDiscordModelPickerCustomId(params: {
   userId: string;
   provider?: string;
   runtime?: string;
+  runtimeIndex?: number;
   page?: number;
   providerPage?: number;
   modelIndex?: number;
@@ -255,6 +257,13 @@ export function buildDiscordModelPickerCustomId(params: {
   const runtime = params.runtime?.trim();
   if (runtime) {
     parts.push(`r=${encodeCustomIdValue(runtime)}`);
+  }
+  const runtimeIndex =
+    typeof params.runtimeIndex === "number" && Number.isFinite(params.runtimeIndex)
+      ? Math.max(1, Math.floor(params.runtimeIndex))
+      : undefined;
+  if (runtimeIndex) {
+    parts.push(`ri=${String(runtimeIndex)}`);
   }
   if (providerPage) {
     parts.push(`pp=${String(providerPage)}`);
@@ -319,6 +328,7 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const userId = decodeCustomIdValue(coerceString(data.u));
   const providerRaw = decodeCustomIdValue(coerceString(data.p));
   const runtimeRaw = decodeCustomIdValue(coerceString(data.r));
+  const runtimeIndex = parseRawPositiveInt(data.ri);
   const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseRawPositiveInt(data.pp);
   const modelIndex = parseRawPositiveInt(data.mi);
@@ -345,6 +355,7 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     userId: trimmedUserId,
     provider,
     runtime,
+    ...(typeof runtimeIndex === "number" ? { runtimeIndex } : {}),
     page,
     ...(typeof providerPage === "number" ? { providerPage } : {}),
     ...(typeof modelIndex === "number" ? { modelIndex } : {}),

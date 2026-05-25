@@ -650,6 +650,58 @@ describe("Discord model picker rendering", () => {
     expect(parsed.runtime).toBeUndefined();
   });
 
+  it("model bucket select keeps long runtime state compact", () => {
+    const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
+    const data = createModelsProviderData({ "google-gemini-cli": models });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "google-gemini-cli",
+        [
+          {
+            id: "google-gemini-cli",
+            label: "Google Gemini CLI",
+            description: "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+          },
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
+        ],
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "models",
+      userId: "12345678901234567890",
+      data,
+      provider: "google-gemini-cli",
+      page: 1,
+      providerPage: 1,
+      currentRuntime: "google-gemini-cli",
+      pendingRuntime: "google-gemini-cli",
+    });
+
+    const bucketSelect = rows
+      .flatMap((row) => row.components ?? [])
+      .find((component) => {
+        const parsed = parseDiscordModelPickerCustomId(component.custom_id ?? "");
+        return parsed?.action === "bucket" && parsed.view === "models";
+      });
+    const bucketCustomId = requireValue(
+      bucketSelect?.custom_id,
+      "models view should render a bucket select",
+    );
+    const parsed = requireValue(
+      parseDiscordModelPickerCustomId(bucketCustomId),
+      "bucket select custom id should parse",
+    );
+
+    expect(bucketCustomId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+    expect(parsed.runtime).toBeUndefined();
+    expect(parsed.runtimeIndex).toBe(1);
+  });
+
   it("model pagination derives provider buckets to stay under Discord's customId limit", () => {
     const models = [
       ...Array.from({ length: 30 }, (_, i) => `a-model-${String(i + 1).padStart(2, "0")}`),
@@ -1024,11 +1076,14 @@ describe("Discord model picker rendering", () => {
     const modelSelect = rows[2]?.components?.find(
       (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
-    expect(parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "")?.runtime).toBe("pi");
+    const modelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
+    expect(modelSelectState?.runtime).toBeUndefined();
+    expect(modelSelectState?.runtimeIndex).toBe(2);
     const submitState = parseDiscordModelPickerCustomId(
       rows[3]?.components?.at(-1)?.custom_id ?? "",
     );
-    expect(submitState?.runtime).toBe("pi");
+    expect(submitState?.runtime).toBeUndefined();
+    expect(submitState?.runtimeIndex).toBe(2);
   });
 
   it("renders not-found model view with a back button", () => {
