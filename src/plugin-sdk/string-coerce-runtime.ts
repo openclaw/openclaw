@@ -33,5 +33,6 @@ export {
   normalizeSingleOrTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
 } from "../shared/string-normalization.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";
