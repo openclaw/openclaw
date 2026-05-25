@@ -48,7 +48,6 @@ import {
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -2679,8 +2678,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
       let agentUserMessagePersisted = false;
-      const beforeAgentRunHooksRegistered =
-        getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
+      let beforeAgentRunBlocked = false;
       const persistGatewayUserTurnTranscript = async () => {
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
@@ -2845,7 +2843,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         async () => {
           Object.assign(ctx, await pluginBoundMediaFieldsPromise);
           const userTurnInput = await userTurnInputPromise;
-          return await dispatchInboundMessage({
+          const dispatchResult = await dispatchInboundMessage({
             ctx,
             cfg,
             dispatcher,
@@ -2891,6 +2889,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               },
             },
           });
+          beforeAgentRunBlocked = dispatchResult.beforeAgentRunBlocked === true;
+          return dispatchResult;
         },
         {
           phase: "agent-turn",
@@ -2916,7 +2916,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentRunStarted &&
                 returnedAgentErrorPayloads.length > 0 &&
                 !agentUserMessagePersisted &&
-                !beforeAgentRunHooksRegistered
+                !beforeAgentRunBlocked
               ) {
                 await persistGatewayUserTurnTranscript();
               }
@@ -3464,7 +3464,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .catch(async (err) => {
           const emitAfterError =
-            agentUserMessagePersisted || (agentRunStarted && beforeAgentRunHooksRegistered)
+            agentUserMessagePersisted || beforeAgentRunBlocked
               ? Promise.resolve()
               : persistGatewayUserTurnTranscript();
           await emitAfterError.catch((transcriptErr) => {

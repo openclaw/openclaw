@@ -3083,7 +3083,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(userUpdates).toHaveLength(0);
   });
 
-  it("does not emit live user transcript content when before_agent_run hooks are present and the agent fails", async () => {
+  it("emits a user transcript update when hooks pass and the started agent throws before runtime persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-gate-pass-error-");
     mockState.triggerAgentRunStart = true;
     mockState.hasBeforeAgentRunHooks = true;
@@ -3099,13 +3099,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const userUpdates = mockState.emittedTranscriptUpdates.filter(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "user",
-    );
-    expect(userUpdates).toHaveLength(0);
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-gate-pass-error")?.ok).toBe(false);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("prompt allowed before model error");
+    });
   });
 
   it("prepares persisted media paths for Pi user-turn persistence", async () => {
@@ -4282,6 +4284,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.maxActiveSaveMediaCalls).toBe(1);
       expect(mockState.savedMediaCalls).toHaveLength(2);
+      expect(context.dedupe.has("chat:idem-image-serial-save")).toBe(true);
     });
   });
 
@@ -4523,6 +4526,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(userUpdate?.sessionKey).toBe("main");
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello before agent error payload");
+    });
+  });
+
+  it("emits a user transcript update when hooks pass and a started agent returns an error", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-agent-error-hook-pass-");
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-agent-error-hook-pass",
+      message: "hello before hooked agent error payload",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-agent-error-hook-pass")?.ok).toBe(false);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("hello before hooked agent error payload");
     });
   });
 });
