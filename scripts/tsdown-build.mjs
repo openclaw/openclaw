@@ -16,6 +16,7 @@ const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
+const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"];
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -170,7 +171,7 @@ function findFatalUnresolvedImport(lines) {
     const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
     if (
       !normalizedLine.includes(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      !normalizedLine.includes("node_modules/")
+      !DEPENDENCY_PATH_MARKERS.some((marker) => normalizedLine.includes(marker))
     ) {
       return normalizedLine;
     }

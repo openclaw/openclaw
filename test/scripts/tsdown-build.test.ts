@@ -250,6 +250,9 @@ describe("createTsdownOutputScanner", () => {
 
     scanner.append("[UNRESOLVED_IMPORT] extensions/telegram/src/index.ts\n");
     scanner.append("[UNRESOLVED_IMPORT] node_modules/example/index.js\n");
+    scanner.append(
+      "[UNRESOLVED_IMPORT] ../../../../tmp/openclaw-pnpm-node-modules/baileys/lib/Utils/messages-media.js\n",
+    );
 
     expect(scanner.finish().fatalUnresolvedImport).toBeNull();
   });
