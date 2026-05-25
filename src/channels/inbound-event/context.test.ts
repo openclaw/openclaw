@@ -4,7 +4,6 @@ import {
   finalizeChannelInboundContext,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
-import { resolveChannelInboundSupplementalContext } from "./supplemental-context.js";
 
 function createBaseContextParams(
   overrides: Partial<BuildChannelInboundEventContextParams> = {},
@@ -535,10 +534,41 @@ describe("finalizeChannelInboundContext", () => {
   });
 });
 
-describe("resolveChannelInboundSupplementalContext", () => {
+describe("finalizeChannelInboundContext supplemental media resolution", () => {
+  it("returns a promise whenever supplemental media resolution is requested", async () => {
+    const result = finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      resolveSupplementalMedia: true,
+      contextVisibility: "all",
+    });
+
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toMatchObject({
+      context: {
+        Body: "hello",
+      },
+    });
+  });
+
   it("suppresses self-authored quote body/media by default", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/reply.png", contentType: "image/png" }]);
-    const result = await resolveChannelInboundSupplementalContext({
+    const result = await finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      resolveSupplementalMedia: true,
       media: [{ path: "/tmp/current.png", contentType: "image/png" }],
       contextVisibility: "all",
       supplemental: {
@@ -553,12 +583,22 @@ describe("resolveChannelInboundSupplementalContext", () => {
     });
 
     expect(media).not.toHaveBeenCalled();
-    expect(result.media).toEqual([{ path: "/tmp/current.png", contentType: "image/png" }]);
+    expect(result.context.MediaPath).toBe("/tmp/current.png");
+    expect(result.context.MediaType).toBe("image/png");
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
   it("preserves self-authored quote media when only the body is suppressed", async () => {
-    const result = await resolveChannelInboundSupplementalContext({
+    const result = await finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      resolveSupplementalMedia: true,
       contextVisibility: "all",
       suppressSelfQuoteMedia: false,
       supplemental: {
@@ -572,13 +612,23 @@ describe("resolveChannelInboundSupplementalContext", () => {
       },
     });
 
-    expect(result.media).toEqual([{ path: "/tmp/self.png", contentType: "image/png" }]);
+    expect(result.context.MediaPath).toBe("/tmp/self.png");
+    expect(result.context.MediaType).toBe("image/png");
     expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
   });
 
   it("does not resolve media for hidden quotes", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/hidden.png", contentType: "image/png" }]);
-    const result = await resolveChannelInboundSupplementalContext({
+    const result = await finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      resolveSupplementalMedia: true,
       contextVisibility: "allowlist",
       supplemental: {
         quote: {

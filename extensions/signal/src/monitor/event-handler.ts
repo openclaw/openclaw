@@ -2,8 +2,8 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
+  buildChannelInboundEventContext,
   createChannelInboundDebouncer,
-  finalizeChannelInboundContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
   matchesMentionPatterns,
@@ -192,7 +192,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
-    const { context: ctxPayload } = finalizeChannelInboundContext({
+    const media =
+      entry.mediaPaths && entry.mediaPaths.length > 0
+        ? entry.mediaPaths.map((path, index) => ({
+            path,
+            url: path,
+            contentType: entry.mediaTypes?.[index],
+          }))
+        : entry.mediaPath
+          ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
+          : undefined;
+    const ctxPayload = buildChannelInboundEventContext({
+      channel: "signal",
       supplemental: {
         quote: entry.replyToBody
           ? {
@@ -202,38 +213,51 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             }
           : undefined,
       },
-      context: {
-        Body: combinedBody,
-        BodyForAgent: entry.bodyText,
-        InboundHistory: inboundHistory,
-        RawBody: entry.bodyText,
-        CommandBody: entry.commandBody,
-        BodyForCommands: entry.commandBody,
-        From: entry.isGroup
-          ? `group:${entry.groupId ?? "unknown"}`
-          : `signal:${entry.senderRecipient}`,
-        To: signalTo,
-        SessionKey: route.sessionKey,
-        AccountId: route.accountId,
-        ChatType: entry.isGroup ? "group" : "direct",
-        ConversationLabel: fromLabel,
+      messageId: entry.messageId,
+      timestamp: entry.timestamp ?? undefined,
+      from: entry.isGroup
+        ? `group:${entry.groupId ?? "unknown"}`
+        : `signal:${entry.senderRecipient}`,
+      sender: {
+        id: entry.senderDisplay,
+        name: entry.senderName,
+      },
+      conversation: {
+        kind: entry.isGroup ? "group" : "direct",
+        id: entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderRecipient,
+        label: fromLabel,
+      },
+      route: {
+        agentId: route.agentId,
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+      },
+      reply: {
+        to: signalTo,
+      },
+      message: {
+        body: combinedBody,
+        bodyForAgent: entry.bodyText,
+        inboundHistory,
+        rawBody: entry.bodyText,
+        commandBody: entry.commandBody,
+      },
+      access: {
+        ...(entry.isGroup
+          ? {
+              mentions: {
+                canDetectMention: true,
+                wasMentioned: entry.wasMentioned === true,
+              },
+            }
+          : {}),
+        commands: {
+          authorized: entry.commandAuthorized,
+        },
+      },
+      media,
+      extra: {
         GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
-        SenderName: entry.senderName,
-        SenderId: entry.senderDisplay,
-        Provider: "signal" as const,
-        Surface: "signal" as const,
-        MessageSid: entry.messageId,
-        Timestamp: entry.timestamp ?? undefined,
-        MediaPath: entry.mediaPath,
-        MediaType: entry.mediaType,
-        MediaUrl: entry.mediaPath,
-        MediaPaths: entry.mediaPaths,
-        MediaUrls: entry.mediaPaths,
-        MediaTypes: entry.mediaTypes,
-        WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
-        CommandAuthorized: entry.commandAuthorized,
-        OriginatingChannel: "signal" as const,
-        OriginatingTo: signalTo,
       },
     });
 

@@ -4,13 +4,16 @@ import {
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveChannelInboundSupplementalContext,
+  type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
+  type ChannelInboundSupplementalResolutionOptions,
+  type FinalizeChannelInboundContextAsyncParams,
   type FinalizeChannelInboundContextParams,
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-export { resolveChannelInboundSupplementalContext } from "../channels/inbound-event/supplemental-context.js";
 
 export {
   createInboundDebouncer,
@@ -73,10 +76,14 @@ export {
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveChannelInboundSupplementalContext,
 };
 export type {
+  BuildChannelInboundEventContextAsyncParams,
   BuildChannelInboundEventContextParams,
   BuiltChannelInboundEventContext,
+  ChannelInboundSupplementalResolutionOptions,
+  FinalizeChannelInboundContextAsyncParams,
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };

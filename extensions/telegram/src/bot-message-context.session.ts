@@ -1,9 +1,8 @@
 import {
-  type BuildChannelInboundEventContextParams,
+  type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
-  resolveChannelInboundSupplementalContext,
   resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
@@ -428,24 +427,6 @@ export async function buildTelegramInboundContextPayload(params: {
       : visibleReplyTarget
         ? replyMedia.map((media) => toInboundMedia(media))
         : [];
-  const supplementalProjection = await resolveChannelInboundSupplementalContext({
-    media: currentMediaFacts,
-    contextVisibility: contextVisibilityMode,
-    supplemental: {
-      quote:
-        replyHead || visibleReplyTarget
-          ? {
-              id: replyHead?.messageId ?? visibleReplyTarget?.id,
-              body: replyHead?.body ?? visibleReplyTarget?.body,
-              sender: replyHead?.sender ?? visibleReplyTarget?.sender,
-              senderAllowed: true,
-              isQuote:
-                replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
-              media: replyMediaFacts,
-            }
-          : undefined,
-    },
-  });
   const telegramFrom = isGroup
     ? buildTelegramGroupFrom(chatId, resolvedThreadId)
     : `telegram:${chatId}`;
@@ -468,8 +449,9 @@ export async function buildTelegramInboundContextPayload(params: {
     hasAbortRequest,
     commandSource,
   });
-  const ctxPayload = sessionRuntime.buildChannelInboundEventContext({
+  const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
+    resolveSupplementalMedia: true,
     accountId: route.accountId,
     messageId: options?.messageIdOverride ?? String(msg.message_id),
     timestamp: msg.date ? msg.date * 1000 : undefined,
@@ -523,9 +505,20 @@ export async function buildTelegramInboundContextPayload(params: {
               body: commandBody,
             }
           : undefined,
-    media: supplementalProjection.media,
+    media: currentMediaFacts,
     supplemental: {
-      quote: supplementalProjection.supplemental?.quote,
+      quote:
+        replyHead || visibleReplyTarget
+          ? {
+              id: replyHead?.messageId ?? visibleReplyTarget?.id,
+              body: replyHead?.body ?? visibleReplyTarget?.body,
+              sender: replyHead?.sender ?? visibleReplyTarget?.sender,
+              senderAllowed: true,
+              isQuote:
+                replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
+              media: replyMediaFacts,
+            }
+          : undefined,
       forwarded: visibleForwardOrigin
         ? {
             from: visibleForwardOrigin.from,
@@ -569,7 +562,7 @@ export async function buildTelegramInboundContextPayload(params: {
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },
-  } satisfies BuildChannelInboundEventContextParams);
+  } satisfies BuildChannelInboundEventContextAsyncParams);
   if (inboundEventKind === "room_event" && historyKey) {
     channelHistory.record({
       historyKey,
