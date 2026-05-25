@@ -215,8 +215,10 @@ export type BrokerKnownPlatformId = (typeof BROKER_KNOWN_PLATFORM_IDS)[number];
 export const BROKER_PLATFORM_ALIASES = {
   googlechat: "google-chat",
   msteams: "microsoft-teams",
+  "openclaw-weixin": "wechat",
   teams: "microsoft-teams",
   qq: "qqbot",
+  weixin: "wechat",
 } as const satisfies Record<string, BrokerKnownPlatformId>;
 
 export function normalizeBrokerPlatformId(value: string): string {

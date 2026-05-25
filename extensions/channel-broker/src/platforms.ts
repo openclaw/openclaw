@@ -3,8 +3,10 @@ import { normalizeBrokerPlatformId } from "openclaw/plugin-sdk/channel-broker";
 export const CHANNEL_BROKER_PLATFORM_ALIASES: Record<string, string> = {
   googlechat: "google-chat",
   msteams: "microsoft-teams",
+  "openclaw-weixin": "wechat",
   teams: "microsoft-teams",
   qq: "qqbot",
+  weixin: "wechat",
 };
 
 export const CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES = [
@@ -24,6 +26,8 @@ export const CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES = [
   "google-chat",
   "line",
   "wechat",
+  "weixin",
+  "openclaw-weixin",
   "qq",
   "qqbot",
   "feishu",

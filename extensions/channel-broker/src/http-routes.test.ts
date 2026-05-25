@@ -1768,6 +1768,8 @@ describe("channel-broker HTTP routes", () => {
       { alias: "teams", canonical: "microsoft-teams" },
       { alias: "googlechat", canonical: "google-chat" },
       { alias: "qq", canonical: "qqbot" },
+      { alias: "weixin", canonical: "wechat" },
+      { alias: "openclaw-weixin", canonical: "wechat" },
     ];
     const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
     setChannelBrokerRuntime({ receiveInboundEvent });

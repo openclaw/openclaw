@@ -387,6 +387,16 @@ describe("channel-broker conformance baseline", () => {
           native: { appApi: true, replyTokenWindow: true },
         },
         {
+          platform: "wechat",
+          delivery: { media: true, thread: false },
+          native: {
+            externalPlugin: true,
+            qrLogin: true,
+            privateChatsOnly: true,
+            regionalApi: true,
+          },
+        },
+        {
           platform: "feishu",
           delivery: { media: true, replyTo: true, thread: true },
           native: { appApi: true, workspaceHosted: true },
@@ -466,6 +476,23 @@ describe("channel-broker conformance baseline", () => {
       brokerPlatformSupports({
         capabilities,
         platform: "twitch",
+        requirements: { delivery: { thread: true } },
+      }),
+    ).toBe(false);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "wechat",
+        requirements: {
+          delivery: { text: true, media: true },
+          native: { externalPlugin: true, qrLogin: true, privateChatsOnly: true },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      brokerPlatformSupports({
+        capabilities,
+        platform: "wechat",
         requirements: { delivery: { thread: true } },
       }),
     ).toBe(false);

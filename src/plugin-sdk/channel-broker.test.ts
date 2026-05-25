@@ -30,6 +30,8 @@ describe("channel-broker SDK", () => {
     expect(normalizeBrokerKnownPlatformId("Google Chat")).toBe("google-chat");
     expect(normalizeBrokerKnownPlatformId("googlechat")).toBe("google-chat");
     expect(normalizeBrokerKnownPlatformId("qq")).toBe("qqbot");
+    expect(normalizeBrokerKnownPlatformId("weixin")).toBe("wechat");
+    expect(normalizeBrokerKnownPlatformId("openclaw-weixin")).toBe("wechat");
     expect(normalizeBrokerKnownPlatformId("custom-regional-chat")).toBe("custom-regional-chat");
   });
 
