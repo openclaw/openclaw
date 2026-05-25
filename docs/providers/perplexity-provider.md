@@ -59,16 +59,18 @@ The plugin auto-selects the transport based on API key prefix:
   </Tab>
 </Tabs>
 
-| Key prefix | Transport                    | Features                                         |
-| ---------- | ---------------------------- | ------------------------------------------------ |
-| `pplx-`    | Native Perplexity Search API | Structured results, domain/language/date filters |
-| `sk-or-`   | OpenRouter (Sonar)           | AI-synthesized answers with citations            |
+| Key prefix | Transport                    | Features                                                              |
+| ---------- | ---------------------------- | --------------------------------------------------------------------- |
+| `pplx-`    | Native Perplexity Search API | Structured results, domain/language/date filters                      |
+| `sk-or-`   | OpenRouter (Sonar)           | AI-synthesized answers with citations and `search_context_size` hints |
 
 ## Native API filtering
 
 <Note>
 Filtering options are only available when using the native Perplexity API
 (`pplx-` key). OpenRouter/Sonar searches do not support these parameters.
+Use the Sonar-only `search_context_size` tool parameter (`low`, `medium`, or
+`high`) when you need a larger Sonar search budget instead.
 </Note>
 
 When using the native Perplexity API, searches support the following filters:
