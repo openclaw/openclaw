@@ -1062,7 +1062,9 @@ describe("openai transport stream", () => {
     }
 
     expect(errorPayload).toMatchObject({ stopReason: "error" });
-    expect(String(errorPayload?.errorMessage)).toContain("contains no user or assistant messages");
+    expect(String(errorPayload?.errorMessage)).toContain(
+      "contains no non-empty user or assistant messages",
+    );
     expect(String(errorPayload?.errorMessage)).toContain("system/tool-only request");
   });
 

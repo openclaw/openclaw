@@ -18,6 +18,7 @@ import { listActiveProcessSessionReferences } from "../../bash-process-reference
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import { hasOpenAICompatibleConversationTurn } from "../../openai-compatible-conversation-turn.js";
 import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
@@ -242,16 +243,6 @@ export function shouldWarnOnOrphanedUserRepair(
 
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
-function hasProviderVisibleConversationTurn(messages: readonly unknown[]): boolean {
-  return messages.some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = (message as { role?: unknown }).role;
-    return role === "user" || role === "assistant";
-  });
-}
-
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -261,7 +252,7 @@ export function resolvePromptSubmissionSkipReason(params: {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }
-  return hasProviderVisibleConversationTurn(params.messages)
+  return hasOpenAICompatibleConversationTurn(params.messages)
     ? "blank_user_prompt"
     : "empty_prompt_history_images";
 }

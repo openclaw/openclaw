@@ -143,6 +143,19 @@ describe("resolvePromptSubmissionSkipReason", () => {
     ).toBe("empty_prompt_history_images");
   });
 
+  it("treats empty user and assistant placeholders as empty history", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "   ",
+        messages: [
+          { role: "user", content: "   " },
+          { role: "assistant", content: [] },
+        ],
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
+  });
+
   it("allows text or image prompt submissions", () => {
     expect(
       resolvePromptSubmissionSkipReason({
