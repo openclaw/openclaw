@@ -9,7 +9,7 @@ import {
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
 export function createAccountListHelpers(
@@ -71,7 +71,7 @@ export function createAccountListHelpers(
     if (!normalizeConfiguredAccountId) {
       return ids;
     }
-    return uniqueStrings(ids.map((id) => normalizeConfiguredAccountId(id)).filter(Boolean));
+    return normalizeUniqueStringEntries(ids.map((id) => normalizeConfiguredAccountId(id)));
   }
 
   function listAccountIds(cfg: OpenClawConfig): string[] {

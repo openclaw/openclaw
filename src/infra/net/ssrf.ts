@@ -15,6 +15,7 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -65,9 +66,7 @@ function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
   if (!values || values.length === 0) {
     return [];
   }
-  return Array.from(
-    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
-  ).toSorted();
+  return uniqueStrings(values.map((value) => normalizeHostname(value)).filter(Boolean)).toSorted();
 }
 
 function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
@@ -221,12 +220,10 @@ export function normalizeHostnameAllowlist(values?: string[]): string[] {
   if (!values || values.length === 0) {
     return [];
   }
-  return Array.from(
-    new Set(
-      values
-        .map((value) => normalizeHostname(value))
-        .filter((value) => value !== "*" && value !== "*." && value.length > 0),
-    ),
+  return uniqueStrings(
+    values
+      .map((value) => normalizeHostname(value))
+      .filter((value) => value !== "*" && value !== "*." && value.length > 0),
   );
 }
 

@@ -19,7 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -400,7 +400,7 @@ function listProviderSyntheticAuthRefs(params: {
   if (providerConfig?.api) {
     refs.push(providerConfig.api);
   }
-  return uniqueStrings(refs.map((ref) => normalizeProviderId(ref)).filter(Boolean));
+  return normalizeUniqueStringEntries(refs.map((ref) => normalizeProviderId(ref)));
 }
 
 function shouldResolvePluginSyntheticAuth(params: {

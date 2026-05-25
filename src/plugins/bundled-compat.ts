@@ -48,7 +48,7 @@ export function withBundledPluginEnablementCompat(params: {
   const allow = params.config?.plugins?.allow;
   const allowSet =
     !useCompatDiscovery && Array.isArray(allow) && allow.length > 0
-      ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
+      ? new Set(normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))))
       : undefined;
   let hasEligiblePlugin = false;
   let changed = false;
