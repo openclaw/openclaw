@@ -220,6 +220,9 @@ export async function processDiscordMessage(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const configuredTypingMode = cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  const shouldDisableCoreTypingKeepalive =
+    sourceRepliesAreToolOnly && configuredTypingMode === undefined;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -424,8 +427,9 @@ export async function processDiscordMessage(
           error: err,
         });
       },
-      // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
+      // The core reply typing controller owns typing for this path.
       maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
+      keepaliveIntervalMs: 0,
     },
   });
   const tableMode = resolveMarkdownTableMode({
@@ -800,6 +804,7 @@ export async function processDiscordMessage(
             abortSignal,
             skillFilter: channelConfig?.skills,
             sourceReplyDeliveryMode,
+            typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
             queuedDeliveryCorrelations: isRoomEvent
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,

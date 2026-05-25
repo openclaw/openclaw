@@ -19,6 +19,7 @@ export function createTypingController(params: {
   onCleanup?: () => void;
   typingIntervalSeconds?: number;
   typingTtlMs?: number;
+  keepalive?: boolean;
   silentToken?: string;
   log?: (message: string) => void;
 }): TypingController {
@@ -27,6 +28,7 @@ export function createTypingController(params: {
     onCleanup,
     typingIntervalSeconds = 6,
     typingTtlMs = 2 * 60_000,
+    keepalive = true,
     silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
@@ -186,6 +188,10 @@ export function createTypingController(params: {
     // This keeps typing alive during long tool executions.
     refreshTypingTtl();
     if (!onReplyStart) {
+      return;
+    }
+    if (!keepalive) {
+      await ensureStart();
       return;
     }
     if (typingLoop.isRunning()) {

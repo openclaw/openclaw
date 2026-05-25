@@ -16,6 +16,11 @@ const sendMocks = vi.hoisted(() => ({
     (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
   >(async () => {}),
 }));
+const typingMocks = vi.hoisted(() => ({
+  sendTyping: vi.fn<(params: { rest: unknown; channelId: string }) => Promise<void>>(
+    async () => {},
+  ),
+}));
 function createMockDraftStream() {
   let messageId: string | undefined = "preview-1";
   return {
@@ -69,6 +74,10 @@ vi.mock("../send.js", () => ({
     await sendMocks.removeReactionDiscord(channelId, messageId, emoji, opts);
     return { ok: true };
   },
+}));
+
+vi.mock("./typing.js", () => ({
+  sendTyping: (params: { rest: unknown; channelId: string }) => typingMocks.sendTyping(params),
 }));
 
 const discordTargetMocks = vi.hoisted(() => ({
@@ -140,6 +149,7 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    typingKeepalive?: boolean;
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
@@ -381,6 +391,7 @@ beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  typingMocks.sendTyping.mockClear();
   discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
@@ -650,6 +661,27 @@ function expectSinglePreviewEdit() {
   expectPreviewEditContent("Hello\nWorld");
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
+
+describe("processDiscordMessage typing", () => {
+  it("does not start a nested Discord typing keepalive from channel callbacks", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext();
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(typingMocks.sendTyping).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("processDiscordMessage ack reactions", () => {
   it("drops bot-loop-suppressed messages before Discord side effects", async () => {
@@ -1334,9 +1366,32 @@ describe("processDiscordMessage session routing", () => {
 
     expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
+      typingKeepalive: false,
       disableBlockStreaming: true,
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves core typing keepalive when message-tool guild replies configure typing mode", async () => {
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      cfg: {
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
+        session: {
+          store: "/tmp/openclaw-discord-process-test-sessions.json",
+          typingMode: "message",
+        },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getLastDispatchReplyOptions()?.typingKeepalive).toBeUndefined();
   });
 
   it("sends the configured ack while suppressing automatic status reactions for always-on guild replies", async () => {
