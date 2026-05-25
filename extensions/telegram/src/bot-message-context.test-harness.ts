@@ -149,7 +149,14 @@ let buildTelegramMessageContextLoader:
   | undefined;
 let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
 let messageContextMocksInstalled = false;
-const topicNameStoresForTest = new Map<string, Map<string, unknown>>();
+type TopicNameCacheEntry = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
+const topicNameStoresForTest = new Map<string, Map<string, TopicNameCacheEntry>>();
 
 async function loadBuildTelegramMessageContext() {
   await installMessageContextTestMocks();
