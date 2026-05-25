@@ -1,10 +1,14 @@
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type {
+  CommandQueueEnqueueOptions,
+  CommandQueueRuntimeConfig,
+} from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -94,6 +98,8 @@ type ActiveTaskWaiter = {
   resolve: (value: { drained: boolean }) => void;
   timeout?: ReturnType<typeof setTimeout>;
 };
+
+const DEFAULT_LANE_WAIT_WARN_MS = 2_000;
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
@@ -243,6 +249,11 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return Math.max(1, Math.floor(value));
 }
 
+function resolveDefaultLaneWaitWarnMs(): number {
+  const config = getRuntimeConfigSnapshot() as CommandQueueRuntimeConfig | null;
+  return config?.diagnostics?.laneWaitWarnMs ?? DEFAULT_LANE_WAIT_WARN_MS;
+}
+
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
   switch (priority) {
     case "foreground":
@@ -347,7 +358,7 @@ function drainLane(lane: string) {
             diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
           }
           diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
+            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} warnAfterMs=${entry.warnAfterMs} queueAhead=${entry.queuedAheadAtEnqueue} ` +
               `activeAhead=${entry.activeAheadAtEnqueue} activeNow=${state.activeTaskIds.size} queueBehind=${state.queue.length}`,
           );
         }
@@ -425,7 +436,7 @@ export function enqueueCommandInLane<T>(
     return Promise.reject(new GatewayDrainingError());
   }
   const cleaned = normalizeLane(lane);
-  const warnAfterMs = opts?.warnAfterMs ?? 2_000;
+  const warnAfterMs = opts?.warnAfterMs ?? resolveDefaultLaneWaitWarnMs();
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
     enqueueLaneEntry(state, {

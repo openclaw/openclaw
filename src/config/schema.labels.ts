@@ -40,6 +40,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commitments.maxPerDay": "Commitments per Day",
   "diagnostics.enabled": "Diagnostics Enabled",
   "diagnostics.flags": "Diagnostics Flags",
+  "diagnostics.laneWaitWarnMs": "Lane Wait Warning Threshold (ms)",
   "diagnostics.stuckSessionWarnMs": "Session Liveness Threshold (ms)",
   "diagnostics.stuckSessionAbortMs": "Session Abort Threshold (ms)",
   "diagnostics.memoryPressureSnapshot": "Memory Pressure Snapshot Enabled",
