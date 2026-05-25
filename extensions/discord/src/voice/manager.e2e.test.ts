@@ -2966,6 +2966,133 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("openclaw wake answer");
   });
 
+  it("accepts leading fuzzy wake names before realtime agent-proxy consults", async () => {
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const montyTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    montyTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Monty, are you with us?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(0).message).toContain("are you with us?");
+    expect(agentCommandArgsAt(0).message).not.toContain("Monty");
+
+    const motiTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    motiTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Moti, what's going on today?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(1).message).toContain("what's going on today?");
+    expect(agentCommandArgsAt(1).message).not.toContain("Moti");
+
+    const openClawTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    openClawTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Open claw can you still hear me?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(2).message).toContain("can you still hear me?");
+    expect(agentCommandArgsAt(2).message).not.toContain("Open claw");
+  });
+
+  it("rejects non-wake fuzzy leading phrases before realtime agent-proxy consults", async () => {
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const multiTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    multiTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Multi, step through the maintainer queue.", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    const ambientTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ambientTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "This is a multi-step maintainer problem.", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    const openLawTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    openLawTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Open law is not the wake phrase.", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
   it("leaves non-OpenAI agent-proxy realtime auto-response enabled when wake names are requested", async () => {
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValueOnce({
       provider: { id: "google" },
