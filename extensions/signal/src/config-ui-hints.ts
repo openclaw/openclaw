@@ -17,8 +17,8 @@ export const signalChannelConfigUiHints = {
     label: "Signal Account",
     help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
   },
-  configPath: {
-    label: "Signal CLI Config Path",
-    help: "Optional directory passed to signal-cli via --config when the service needs a non-default signal-cli data path.",
+  enableMessageSendingHook: {
+    label: "Enable Message Sending Hook",
+    help: "Allow message_sending plugin hooks (content gates, DLP filters, audit) to inspect, modify, or cancel Signal replies before delivery. Defaults to false; will default to true in a future major version.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

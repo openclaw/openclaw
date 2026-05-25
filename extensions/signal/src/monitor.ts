@@ -5,6 +5,7 @@ import {
   estimateBase64DecodedBytes,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -360,13 +361,52 @@ async function deliverReplies(params: {
   textLimit: number;
   chunkMode: "length" | "newline";
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+    cfg,
+  } = params;
+  const hookEnabled = cfg.channels?.signal?.enableMessageSendingHook ?? false;
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookEnabled && (hookRunner?.hasHooks("message_sending") ?? false);
   for (const payload of replies) {
     const reply = resolveSendableOutboundReplyParts(payload);
+    const rawContent = reply.text;
+    if (hasMessageSendingHooks && (rawContent || reply.mediaUrls.length > 0)) {
+      const hookResult = await hookRunner?.runMessageSending(
+        {
+          to: target,
+          content: rawContent,
+          metadata: {
+            channel: "signal",
+            ...(reply.mediaUrls.length > 0 ? { mediaUrls: reply.mediaUrls } : {}),
+          },
+        },
+        {
+          channelId: "signal",
+          accountId,
+          conversationId: target,
+        },
+      );
+      if (hookResult?.cancel) {
+        continue;
+      }
+      if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
+        payload.text = hookResult.content;
+      }
+    }
+    const updatedReply =
+      payload.text !== rawContent ? resolveSendableOutboundReplyParts(payload) : reply;
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text: reply.text,
+      text: updatedReply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
