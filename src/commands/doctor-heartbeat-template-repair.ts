@@ -13,6 +13,10 @@ const DIRTY_HEARTBEAT_TEMPLATE_LINES = new Set([
   "```markdown",
   "```",
   "# HEARTBEAT.md Template",
+  "# HEARTBEAT.md template",
+  "`HEARTBEAT.md` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.",
+  "The default runtime template is:",
+  "Add short tasks below the comments only when you want the agent to check something periodically. Keep heartbeat instructions small because they are read during recurring wakes.",
   "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
   "# Add tasks below when you want the agent to check something periodically.",
   "## Related",
@@ -27,6 +31,7 @@ const DIRTY_HEARTBEAT_TEMPLATE_BODY_LINES = [
 const DIRTY_HEARTBEAT_DOC_WRAPPER_LINES = new Set([
   "```markdown",
   "# HEARTBEAT.md Template",
+  "# HEARTBEAT.md template",
   "- [Heartbeat config](/gateway/config-agents)",
 ]);
 
