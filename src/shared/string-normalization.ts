@@ -17,7 +17,9 @@ export function uniqueStrings(values: Iterable<string>): string[] {
 }
 
 export function sortUniqueStrings(values: Iterable<string>): string[] {
-  return uniqueStrings(values).toSorted((left, right) => left.localeCompare(right));
+  return uniqueStrings(values).toSorted((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
 }
 
 export function normalizeUniqueStringEntries(values?: Iterable<unknown>): string[] {
