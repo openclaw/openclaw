@@ -323,6 +323,52 @@ describe("mirrorCodexAppServerTranscript", () => {
     );
   });
 
+  it("returns the persisted user message for duplicate mirror hits", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => ({
+            message: castAgentMessage({
+              ...((event as { message: unknown }).message as Record<string, unknown>),
+              content: [{ type: "text", text: "[redacted by hook]" }],
+            }),
+          }),
+        },
+      ]),
+    );
+    const sessionFile = await createTempSessionFile();
+    const sourceMessage = makeAgentUserMessage({
+      content: [{ type: "text", text: "secret prompt" }],
+      timestamp: Date.now(),
+    });
+
+    const first = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [sourceMessage],
+      idempotencyScope: "scope-1",
+    });
+    const second = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [sourceMessage],
+      idempotencyScope: "scope-1",
+    });
+
+    expect(first.userMessagesPresent[0]?.content).toEqual([
+      { type: "text", text: "[redacted by hook]" },
+    ]);
+    expect(second.userMessagesPresent[0]?.content).toEqual([
+      { type: "text", text: "[redacted by hook]" },
+    ]);
+    expect(JSON.stringify(second.userMessagesPresent)).not.toContain("secret prompt");
+    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
+      await fs.readFile(sessionFile, "utf8"),
+    );
+    expect(records.filter((record) => record.message?.role === "user")).toHaveLength(1);
+  });
+
   it("preserves the computed idempotency key when hooks rewrite message keys", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

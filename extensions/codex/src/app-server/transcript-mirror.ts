@@ -162,8 +162,9 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as AgentMessage;
       if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
-        if (transcriptMessage.role === "user") {
-          userMessagesPresent.push(transcriptMessage);
+        const persistedUserMessage = mirrorState.userMessagesByIdempotencyKey.get(idempotencyKey);
+        if (persistedUserMessage) {
+          userMessagesPresent.push(persistedUserMessage);
         }
         continue;
       }
@@ -191,6 +192,9 @@ export async function mirrorCodexAppServerTranscript(params: {
       });
       if (appendedMessage.role === "user") {
         userMessagesPresent.push(appendedMessage);
+        if (idempotencyKey) {
+          mirrorState.userMessagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
+        }
       }
       nextMessageSeq += 1;
       appendedUpdates.push({ messageId, message: appendedMessage, messageSeq: nextMessageSeq });
@@ -215,10 +219,13 @@ export async function mirrorCodexAppServerTranscript(params: {
   return { userMessagesPresent };
 }
 
-async function readTranscriptMirrorState(
-  sessionFile: string,
-): Promise<{ idempotencyKeys: Set<string>; messageCount: number }> {
+async function readTranscriptMirrorState(sessionFile: string): Promise<{
+  idempotencyKeys: Set<string>;
+  messageCount: number;
+  userMessagesByIdempotencyKey: Map<string, MirroredUserMessage>;
+}> {
   const idempotencyKeys = new Set<string>();
+  const userMessagesByIdempotencyKey = new Map<string, MirroredUserMessage>();
   let messageCount = 0;
   let raw: string;
   try {
@@ -227,23 +234,26 @@ async function readTranscriptMirrorState(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    return { idempotencyKeys, messageCount };
+    return { idempotencyKeys, messageCount, userMessagesByIdempotencyKey };
   }
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
     }
     try {
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      const parsed = JSON.parse(line) as { message?: AgentMessage & { idempotencyKey?: unknown } };
       if ((parsed as { type?: unknown }).type === "message") {
         messageCount += 1;
       }
       if (typeof parsed.message?.idempotencyKey === "string") {
         idempotencyKeys.add(parsed.message.idempotencyKey);
+        if (parsed.message.role === "user") {
+          userMessagesByIdempotencyKey.set(parsed.message.idempotencyKey, parsed.message);
+        }
       }
     } catch {
       continue;
     }
   }
-  return { idempotencyKeys, messageCount };
+  return { idempotencyKeys, messageCount, userMessagesByIdempotencyKey };
 }
