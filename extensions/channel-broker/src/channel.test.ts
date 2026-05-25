@@ -1144,6 +1144,27 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("propagates direct outbound adapter send failures", async () => {
+    await expect(
+      channelBrokerPlugin.outbound?.sendText?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+        to: "slack:C123",
+        text: "hello",
+        accountId: "acme",
+      } as never),
+    ).rejects.toThrow("missing baseUrl");
+  });
+
   it("maps broker-prefixed Telegram topics into provider thread requests", async () => {
     const sendOutboundRequest = vi.fn(async () =>
       createBrokerReceipt({

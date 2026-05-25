@@ -27,6 +27,11 @@ import { parseChannelBrokerTarget } from "./target.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const CHANNEL_ID = "channel-broker" as const;
+type ChannelBrokerOutboundDeliveryResult = {
+  channel: typeof CHANNEL_ID;
+  messageId: string;
+  receipt: ChannelMessageSendResult["receipt"];
+};
 const BROKER_RECEIPT_STATUSES = new Set<BrokerReceiptStatus>([
   "sent",
   "suppressed",
@@ -535,7 +540,7 @@ async function createInlineBrokerMediaAttachment(params: {
 
 export async function sendChannelBrokerOutboundText(
   ctx: ChannelOutboundContext,
-): Promise<{ messageId: string }> {
+): Promise<ChannelBrokerOutboundDeliveryResult> {
   const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
   const result = await sendChannelBrokerText({
     cfg: ctx.cfg as CoreConfig,
@@ -547,12 +552,12 @@ export async function sendChannelBrokerOutboundText(
     silent: ctx.silent,
     ...(signal ? { signal } : {}),
   });
-  return { messageId: result.messageId ?? "" };
+  return { channel: CHANNEL_ID, messageId: result.messageId ?? "", receipt: result.receipt };
 }
 
 export async function sendChannelBrokerOutboundMedia(
   ctx: ChannelOutboundContext,
-): Promise<{ messageId: string }> {
+): Promise<ChannelBrokerOutboundDeliveryResult> {
   const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
   if (!ctx.mediaUrl) {
     throw new Error("Channel broker outbound media send requires a media URL.");
@@ -572,5 +577,5 @@ export async function sendChannelBrokerOutboundMedia(
     audioAsVoice: ctx.audioAsVoice,
     ...(signal ? { signal } : {}),
   });
-  return { messageId: result.messageId ?? "" };
+  return { channel: CHANNEL_ID, messageId: result.messageId ?? "", receipt: result.receipt };
 }
