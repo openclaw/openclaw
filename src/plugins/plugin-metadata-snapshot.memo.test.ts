@@ -396,15 +396,20 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     });
 
     const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index, stateDir });
+    const callerRecord = index.plugins[0];
+    const snapshotRecord = snapshot.index.plugins[0];
+    if (!callerRecord || !snapshotRecord) {
+      throw new Error("expected metadata records");
+    }
 
     expect(() => {
-      index.plugins[0]!.pluginId = "caller-mutated";
-      index.plugins[0]!.startup.agentHarnesses = ["caller-mutated"];
+      callerRecord.pluginId = "caller-mutated";
+      callerRecord.startup.agentHarnesses = ["caller-mutated"];
     }).not.toThrow();
     expect(snapshot.index.plugins[0]?.pluginId).toBe("demo");
     expect(snapshot.index.plugins[0]?.startup.agentHarnesses).toEqual([]);
     expect(() => {
-      snapshot.index.plugins[0]!.pluginId = "snapshot-mutated";
+      snapshotRecord.pluginId = "snapshot-mutated";
     }).toThrow();
   });
 
