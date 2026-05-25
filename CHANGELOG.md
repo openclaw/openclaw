@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Cron: seed active scheduled and manual cron task rows with a progress summary so status surfaces do not look blank while jobs run. (#86313) Thanks @ferminquant.
 - Updater: exclude prerelease git tags from stable channel resolution so source updates do not check out newer alpha/rc/preview/canary tags. (#86260) Thanks @stevenepalmer.
 - Security/Audit: flag webhook `hooks.token` reuse of active Gateway password auth in `openclaw security audit` while keeping password-mode startup compatibility. (#84338) Thanks @coygeek.
+- QQBot: derive the outbound reply watchdog from configured agent and provider timeouts so slow local model replies are not cut off at five minutes. Fixes #85267. (#85271) Thanks @SymbolStar.
 - Agents/heartbeat: stop heartbeat turns after the first valid `heartbeat_respond` so repeated response loops do not burn tokens. (#86357) Thanks @udaymanish6.
 - Tasks: keep retained lost tasks out of default status health counts, explain their cleanup window during maintenance, and prune lost task records after 24 hours instead of the general 7-day terminal retention.
 - Memory-core: keep REM dreaming focused on live light-staged memories and mark staged entries as considered so old recall history no longer dominates fresh candidates. (#86302) Thanks @SebTardif.
