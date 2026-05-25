@@ -21,6 +21,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -96,7 +97,8 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
-const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const DEFAULT_TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const TOOL_TRANSCRIPT_TRUNCATION_NOTICE_PREFIX = "\n...(truncated:";
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "message",
   "messages",
@@ -171,13 +173,19 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
+  private readonly toolTranscriptOutputMaxChars: number;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {}
+  ) {
+    this.toolTranscriptOutputMaxChars = resolveToolTranscriptOutputMaxChars({
+      config: params.config,
+      agentId: params.agentId,
+    });
+  }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
@@ -724,7 +732,12 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta) {
       return;
     }
-    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    appendToolOutputDeltaText(
+      this.toolResultOutputTextByItem,
+      itemId,
+      delta,
+      this.toolTranscriptOutputMaxChars,
+    );
     if (!this.shouldEmitToolOutput()) {
       return;
     }
@@ -1497,7 +1510,10 @@ export class CodexAppServerEventProjector {
   }
 
   private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
-    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    const text = truncateToolTranscriptText(
+      params.text?.trim() || toolResultStatusText(params),
+      this.toolTranscriptOutputMaxChars,
+    );
     return {
       role: "toolResult",
       toolCallId: params.id,
@@ -2025,13 +2041,26 @@ function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
   itemId: string,
   delta: string,
+  maxChars = DEFAULT_TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
 ): void {
   const current = outputTextByItem.get(itemId) ?? "";
-  if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+  if (current.length >= maxChars) {
+    const originalChars =
+      readCompleteToolTranscriptTruncationOriginalChars(current, maxChars) ?? current.length;
+    outputTextByItem.set(
+      itemId,
+      `${current.slice(0, maxChars)}${formatToolTranscriptTruncationNotice(originalChars + delta.length, maxChars)}`,
+    );
     return;
   }
-  const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
-  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
+  const remaining = maxChars - current.length;
+  const originalChars = current.length + delta.length;
+  const next =
+    delta.length > remaining
+      ? current +
+        delta.slice(0, remaining) +
+        formatToolTranscriptTruncationNotice(originalChars, maxChars)
+      : current + delta;
   outputTextByItem.set(itemId, next);
 }
 
@@ -2057,15 +2086,97 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
     .join("\n");
 }
 
-function truncateToolTranscriptText(text: string): string {
-  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+function truncateToolTranscriptText(
+  text: string,
+  maxChars = DEFAULT_TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
+): string {
+  if (hasCompleteToolTranscriptTruncationNotice(text, maxChars)) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}${formatToolTranscriptTruncationNotice(text.length, maxChars)}`;
+}
+
+function hasCompleteToolTranscriptTruncationNotice(text: string, maxChars: number): boolean {
+  return readCompleteToolTranscriptTruncationOriginalChars(text, maxChars) !== undefined;
+}
+
+function readCompleteToolTranscriptTruncationOriginalChars(
+  text: string,
+  maxChars: number,
+): number | undefined {
+  if (!text.startsWith(TOOL_TRANSCRIPT_TRUNCATION_NOTICE_PREFIX, maxChars)) {
+    return undefined;
+  }
+  const notice = text.slice(maxChars);
+  const match = notice.match(
+    /^\n\.\.\.\(truncated: original ([0-9]+) chars, limit ([0-9]+); rerun with narrower tool arguments for omitted output\)\.\.\.$/,
+  );
+  if (!match || Number(match[2]) !== maxChars) {
+    return undefined;
+  }
+  return Number(match[1]);
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {
   return params.isError ? `${params.name} failed` : `${params.name} completed`;
+}
+
+function formatToolTranscriptTruncationNotice(originalChars: number, maxChars: number): string {
+  return `\n...(truncated: original ${originalChars} chars, limit ${maxChars}; rerun with narrower tool arguments for omitted output)...`;
+}
+
+function resolveToolTranscriptOutputMaxChars(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId?: string;
+}): number {
+  const configured = resolveAgentContextLimitValue({
+    config: params.config,
+    agentId: params.agentId,
+    key: "toolResultMaxChars",
+  });
+  return configured ?? DEFAULT_TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS;
+}
+
+function resolveAgentContextLimitValue(params: {
+  config: EmbeddedRunAttemptParams["config"] | undefined;
+  agentId?: string;
+  key: string;
+}): number | undefined {
+  const agents = readRecord(params.config?.agents);
+  const defaults = readRecord(readRecord(agents?.defaults)?.contextLimits);
+  const defaultValue = readPositiveInteger(defaults?.[params.key]);
+  if (!params.agentId) {
+    return defaultValue;
+  }
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return defaultValue;
+  }
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const agent = list.find((entry) => {
+    const entryId = readRecord(entry)?.id;
+    return typeof entryId === "string" && normalizeAgentId(entryId) === normalizedAgentId;
+  });
+  const agentValue = readPositiveInteger(
+    readRecord(readRecord(agent)?.contextLimits)?.[params.key],
+  );
+  return agentValue ?? defaultValue;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {

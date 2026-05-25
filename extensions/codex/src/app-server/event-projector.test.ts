@@ -1468,6 +1468,199 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
   });
 
+  it("uses configured toolResultMaxChars for streamed native tool transcript output", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 16,
+            },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "abcdefghijklmnopqrst",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      "abcdefghijklmnop\n...(truncated: original 20 chars, limit 16; rerun with narrower tool arguments for omitted output)...",
+    );
+  });
+
+  it("keeps streamed native tool transcript truncation size accurate after later chunks", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 16,
+            },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "abcdefghijklmnopqrst",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "uvwxyz",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      "abcdefghijklmnop\n...(truncated: original 26 chars, limit 16; rerun with narrower tool arguments for omitted output)...",
+    );
+  });
+
+  it("uses per-agent toolResultMaxChars for native tool transcript snapshots", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      agentId: "linkedin",
+      config: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 100,
+            },
+          },
+          list: [
+            {
+              id: "linkedin",
+              contextLimits: {
+                toolResultMaxChars: 5,
+              },
+            },
+          ],
+        },
+      },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "abcdefghijkl",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      "abcde\n...(truncated: original 12 chars, limit 5; rerun with narrower tool arguments for omitted output)...",
+    );
+  });
+
+  it("still caps raw native tool transcript snapshots containing a truncation marker", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: {
+        agents: {
+          defaults: {
+            contextLimits: {
+              toolResultMaxChars: 5,
+            },
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams);
+    const rawOutput =
+      "abcde\n...(truncated: raw tool text should not bypass the cap)..." + "x".repeat(20);
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: rawOutput,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.content).toBe(
+      `abcde\n...(truncated: original ${rawOutput.length} chars, limit 5; rerun with narrower tool arguments for omitted output)...`,
+    );
+  });
+
   it("uses streamed command output for failed native tool errors", async () => {
     const projector = await createProjector();
 
