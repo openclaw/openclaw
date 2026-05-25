@@ -4386,6 +4386,32 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("emits a user transcript update on pre-start failures even when before_agent_run hooks exist", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-hook-pre-start-");
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.dispatchError = new Error("resolver unavailable");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-error-hook-pre-start",
+      message: "hello before hooked startup failure",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-error-hook-pre-start")?.ok).toBe(false);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("hello before hooked startup failure");
+    });
+  });
+
   it("emits a user transcript update when chat.send fails after agent start but before runtime persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-error-before-runtime-persist-");
     mockState.triggerAgentRunStart = true;

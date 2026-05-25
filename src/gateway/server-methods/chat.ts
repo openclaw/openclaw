@@ -3462,7 +3462,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .catch(async (err) => {
           const emitAfterError =
-            agentUserMessagePersisted || beforeAgentRunHooksRegistered
+            agentUserMessagePersisted || (agentRunStarted && beforeAgentRunHooksRegistered)
               ? Promise.resolve()
               : persistGatewayUserTurnTranscript();
           await emitAfterError.catch((transcriptErr) => {
