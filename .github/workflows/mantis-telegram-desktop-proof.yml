@@ -492,8 +492,11 @@ jobs:
             exit 0
           fi
           status=0
-          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/session.json' -type f -print0)
+          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -name session.json -type f -print0)
           for session_file in "${session_files[@]}"; do
+            if ! sudo -u codex node -e 'const fs = require("fs"); const session = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(session.command === "telegram-user-crabbox-session" ? 0 : 1);' "$session_file"; then
+              continue
+            fi
             lease_file="${session_file%/session.json}/.session/lease.json"
             if [[ ! -f "$lease_file" ]]; then
               continue
@@ -508,8 +511,11 @@ jobs:
               status=1
             fi
           done
-          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/.session/lease.json' -type f -print0)
+          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/.session/lease.json' -type f -print0)
           for lease_file in "${lease_files[@]}"; do
+            if ! sudo -u codex node -e 'const fs = require("fs"); const lease = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(lease.kind === "telegram-user" ? 0 : 1);' "$lease_file"; then
+              continue
+            fi
             if ! sudo -u codex env \
               OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
               OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
