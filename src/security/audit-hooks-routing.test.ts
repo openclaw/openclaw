@@ -10,10 +10,7 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
-function getFinding(
-  findings: ReturnType<typeof collectHooksHardeningFindings>,
-  checkId: string,
-) {
+function getFinding(findings: ReturnType<typeof collectHooksHardeningFindings>, checkId: string) {
   return findings.find((finding) => finding.checkId === checkId);
 }
 
@@ -142,5 +139,27 @@ describe("security audit hooks ingress findings", () => {
     expect(finding?.title).toContain("Gateway password");
     expect(finding?.detail).toContain("gateway.auth password");
     expect(finding?.remediation).toContain("Gateway token/password");
+  });
+
+  it("flags hooks token reuse of trusted-proxy local password fallback as critical", () => {
+    const findings = collectHooksHardeningFindings({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+          password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
+        },
+      },
+      hooks: {
+        enabled: true,
+        token: "trusted-proxy-local-password-1234567890",
+      },
+    });
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
   });
 });
