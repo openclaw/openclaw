@@ -1,5 +1,6 @@
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
@@ -55,10 +56,6 @@ export type SecretsApplyPlan = {
 };
 
 const FORBIDDEN_PATH_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
   return SecretProviderSchema.safeParse(value).success;

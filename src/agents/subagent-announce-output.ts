@@ -70,10 +70,6 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
-function readFiniteNumber(value: number | undefined): number | undefined {
-  return asFiniteNumber(value);
-}
-
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
   timing: {
@@ -81,8 +77,8 @@ export function withSubagentOutcomeTiming(
     endedAt?: number;
   },
 ): SubagentRunOutcome {
-  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
-  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const startedAt = asFiniteNumber(timing.startedAt) ?? asFiniteNumber(outcome.startedAt);
+  const endedAt = asFiniteNumber(timing.endedAt) ?? asFiniteNumber(outcome.endedAt);
   const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
   if (typeof startedAt === "number") {
     nextTiming.startedAt = startedAt;

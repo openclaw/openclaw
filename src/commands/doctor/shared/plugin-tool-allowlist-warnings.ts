@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ToolAllowlistSource = {
@@ -41,10 +42,6 @@ type ToolPolicyConfig = {
   profile?: string;
   byProvider?: unknown;
 };
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizePluginIdMaybe(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? normalizePluginId(value) : undefined;

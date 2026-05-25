@@ -8,6 +8,7 @@ import {
   type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { pathExists } from "../../infra/fs-safe.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -154,10 +155,6 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
     }
   }
   throw new Error(`Could not find an unused export filename near ${filePath}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isSessionFileEntry(value: unknown): value is PiSessionFileEntry {

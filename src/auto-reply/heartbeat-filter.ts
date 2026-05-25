@@ -1,3 +1,5 @@
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString as readString } from "../shared/string-coerce.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -27,18 +29,11 @@ const MESSAGE_TOOL_DELIVERY_PREFIX = "Delivery: to send a message, use the `mess
 
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  const direct = readString(value);
+  if (direct) {
+    return direct;
   }
   if (!isRecord(value)) {
     return undefined;

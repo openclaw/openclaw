@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import { pathExists } from "./fs-safe.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -23,10 +24,6 @@ type HiddenProjectConfigFile = {
   originalPath: string;
   hiddenPath: string;
 } | null;
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
