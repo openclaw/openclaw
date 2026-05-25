@@ -6,7 +6,9 @@ const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
+const createOpenClawTransportStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
+const resolveTransportAwareSimpleApi = vi.fn();
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -18,7 +20,9 @@ vi.mock("./custom-api-registry.js", () => ({
 
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
+  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
@@ -43,11 +47,15 @@ describe("prepareModelForSimpleCompletion", () => {
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
+    createOpenClawTransportStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
+    resolveTransportAwareSimpleApi.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
+    createOpenClawTransportStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
+    resolveTransportAwareSimpleApi.mockReturnValue(undefined);
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
@@ -159,5 +167,37 @@ describe("prepareModelForSimpleCompletion", () => {
       ...model,
       api: "openclaw-openai-responses-transport",
     });
+  });
+
+  it("uses OpenClaw transport for OpenAI Codex simple completions without static provider credentials", () => {
+    const model: Model<"openai-codex-responses"> = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    createOpenClawTransportStreamFnForModel.mockReturnValueOnce("codex-transport-stream");
+    resolveTransportAwareSimpleApi.mockReturnValueOnce("openclaw-openai-responses-transport");
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-openai-responses-transport",
+      "codex-transport-stream",
+    );
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-openai-responses-transport",
+    });
+    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
   });
 });
