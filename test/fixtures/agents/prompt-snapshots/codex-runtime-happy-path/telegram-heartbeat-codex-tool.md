@@ -227,16 +227,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 461
   },
   "totalTextOnly": {
-    "chars": 26679,
-    "roughTokens": 6670
+    "chars": 26977,
+    "roughTokens": 6745
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67837,
-    "roughTokens": 16960
+    "chars": 68135,
+    "roughTokens": 17034
   },
   "userInputText": {
-    "chars": 1069,
-    "roughTokens": 268
+    "chars": 1367,
+    "roughTokens": 342
   }
 }
 ```
@@ -496,7 +496,7 @@ HEARTBEAT.md exists in the active agent workspace. Read it before proceeding wit
 
 ### User: Turn Input Text
 
-```text
+````text
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -513,8 +513,28 @@ The following project context files have been loaded:
 <MEMORY.md contents will be here>
 
 Current user request:
-Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+Conversation info (untrusted metadata):
+```json
+{
+  "chat_id": "user:1000001",
+  "message_id": "heartbeat-0001",
+  "sender_id": "1000001",
+  "sender": "Pash"
+}
 ```
+
+Sender (untrusted metadata):
+```json
+{
+  "label": "Pash (1000001)",
+  "id": "1000001",
+  "name": "Pash",
+  "username": "pash"
+}
+```
+
+Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+````
 
 ### Tools: Dynamic Tool Catalog
 
