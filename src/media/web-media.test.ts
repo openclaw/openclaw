@@ -759,17 +759,18 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
-  it("allows host-read HTML files when the buffer validates as text", async () => {
+  it("rejects host-read HTML files without a separate security-boundary approval", async () => {
     const htmlFile = path.join(fixtureRoot, "report.html");
     await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
-    const result = await loadWebMedia(htmlFile, {
-      maxBytes: 1024 * 1024,
-      localRoots: "any",
-      readFile: async (filePath) => await fs.readFile(filePath),
-      hostReadCapability: true,
-    });
-    expect(result.kind).toBe("document");
-    expect(result.contentType).toBe("text/html");
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(htmlFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -884,12 +885,6 @@ describe("loadWebMedia", () => {
       body: ",,,,,,,,,,\n",
     },
     {
-      label: "HTML",
-      fileName: "punctuation.html",
-      contentType: "text/html",
-      body: "<!doctype html><hr><br>\n",
-    },
-    {
       label: "Markdown",
       fileName: "punctuation.md",
       contentType: "text/markdown",
@@ -910,12 +905,6 @@ describe("loadWebMedia", () => {
       fileName: "legacy.csv",
       contentType: "text/csv",
       body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
-    },
-    {
-      label: "HTML",
-      fileName: "legacy.html",
-      contentType: "text/html",
-      body: Buffer.from("<p>caf\xe9</p>\n", "latin1"),
     },
     {
       label: "Markdown",

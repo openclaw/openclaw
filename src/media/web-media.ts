@@ -148,12 +148,15 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/x-tar",
   "application/zip",
   "text/csv",
-  "text/html",
   "text/markdown",
 ]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV,
-// HTML, and Markdown, so host-read needs an explicit text validation fallback.
-const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/html", "text/markdown"]);
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV
+// and Markdown, so host-read needs an explicit text validation fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+// HTML remains deliberately outside the host-read allowlist pending a separate
+// security-boundary review, but extension-declared .html files still need to
+// fail closed instead of falling through to binary/media sniffing.
+const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
 const MB = 1024 * 1024;
 
 function getTextStats(text: string): { printableRatio: number } {
@@ -272,13 +275,18 @@ function assertHostReadMediaAllowed(params: {
   // text validator path. Some opaque blobs can still produce bogus binary MIME
   // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
   // host-read should reject those instead of returning early on the sniff.
-  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
-    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+  if (declaredMime && HOST_READ_DECLARED_TEXT_MIMES.has(declaredMime)) {
+    if (
+      HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
+      !params.sniffedContentType &&
+      params.buffer &&
+      isValidatedHostReadText(params.buffer)
+    ) {
       return;
     }
     throw new LocalMediaAccessError(
       "path-not-allowed",
-      "hostReadCapability permits only validated plain-text CSV/HTML/Markdown documents for local reads",
+      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
     );
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
@@ -299,10 +307,10 @@ function assertHostReadMediaAllowed(params: {
   ) {
     return;
   }
-  // CSV / HTML / Markdown exception: file-type v22 returns undefined (not "text/plain") for
+  // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
   // plain-text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
-  // - The extension-derived MIME is text/csv, text/html, or text/markdown (operator intent)
+  // - The extension-derived MIME is text/csv or text/markdown (operator intent)
   // - The buffer decodes as actual text instead of opaque binary bytes
   if (
     !sniffedMime &&
@@ -325,7 +333,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, CSV, HTML, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 

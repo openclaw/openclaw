@@ -257,7 +257,7 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    const absolutePath = "/Users/peter/.openclaw/workspace/reports/report.html";
+    const absolutePath = "/Users/peter/.openclaw/workspace/reports/screenshot.png";
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
@@ -268,7 +268,9 @@ describe("createReplyMediaPathNormalizer", () => {
       mediaUrls: [absolutePath],
     });
 
-    expectMedia(result, "/tmp/outbound-media/report.html", ["/tmp/outbound-media/report.html"]);
+    expectMedia(result, "/tmp/outbound-media/screenshot.png", [
+      "/tmp/outbound-media/screenshot.png",
+    ]);
     expectOutboundAttachmentCall(0, absolutePath, 5 * 1024 * 1024);
   });
 
