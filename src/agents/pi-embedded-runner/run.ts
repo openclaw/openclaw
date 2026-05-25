@@ -433,10 +433,15 @@ export async function runEmbeddedPiAgent(
       },
       laneTaskTimeoutMs,
     );
-  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue
-      ? params.enqueue(task, withLaneTimeout(opts))
-      : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
+  const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const globalOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+    };
+    return params.enqueue
+      ? params.enqueue(task, withLaneTimeout(globalOpts))
+      : enqueueCommandInLane(globalLane, task, withLaneTimeout(globalOpts));
+  };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     return params.enqueue
