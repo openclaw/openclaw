@@ -322,7 +322,10 @@ describe("channel-broker HTTP routes", () => {
     expect(res.statusCode).toBe(202);
     expect(resolveAgentRoute).toHaveBeenCalledWith(
       expect.objectContaining({
-        peer: { kind: "channel", id: "telegram:-100123:thread:77" },
+        peer: {
+          kind: "channel",
+          id: "broker:telegram:-100123?conversationType=thread&threadId=77",
+        },
         parentPeer: { kind: "channel", id: "telegram:-100123" },
       }),
     );
@@ -551,7 +554,10 @@ describe("channel-broker HTTP routes", () => {
       expect.objectContaining({
         channel: "channel-broker",
         accountId: "acme",
-        peer: { kind: "channel", id: "telegram:-100123:thread:77" },
+        peer: {
+          kind: "channel",
+          id: "broker:telegram:-100123?conversationType=thread&threadId=77",
+        },
         parentPeer: { kind: "channel", id: "telegram:-100123" },
       }),
     );

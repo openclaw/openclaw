@@ -71,11 +71,12 @@ describe("channel-broker secret contract", () => {
     expect(context.warnings).toStrictEqual([]);
   });
 
-  it("resolves top-level SecretRefs when the implicit default provider is active", async () => {
+  it("resolves top-level SecretRefs for the implicit default provider alongside nested providers", async () => {
     const sourceConfig = {
       channels: {
         "channel-broker": {
           enabled: true,
+          defaultProviderId: "default-broker",
           baseUrl: "https://broker.example.test",
           outboundToken: { source: "env", provider: "default", id: "BROKER_DEFAULT_TOKEN" },
           signingSecret: {
