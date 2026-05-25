@@ -130,6 +130,26 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("reclaims a stale active embedded run with queued work and no forward progress (#85639)", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 10 * 60_000,
+    });
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-1");
+    expect(outcome.status).toBe("aborted");
+    expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
+  });
+
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
     mocks.abortEmbeddedPiRun.mockReturnValue(true);
