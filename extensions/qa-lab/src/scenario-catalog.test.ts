@@ -197,6 +197,10 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.md",
     );
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("EmbeddedAttemptSessionTakeoverError");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("liveTurnTimeoutMs(env, 180000)");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
