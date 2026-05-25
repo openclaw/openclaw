@@ -126,6 +126,8 @@ const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
   "--inspect-port=",
 ];
 
+const WORKER_CLOSE_GRACE_MS = 250;
+
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
   let skipNext = false;
@@ -183,9 +185,21 @@ class LocalEmbeddingWorkerClient {
     if (!child) {
       return;
     }
+    let timeout: NodeJS.Timeout | undefined;
+    const closeRequest = this.send({ type: "close" }).then(() => "closed" as const);
+    const closeTimeout = new Promise<"timeout">((resolve) => {
+      timeout = setTimeout(() => resolve("timeout"), WORKER_CLOSE_GRACE_MS);
+      timeout.unref?.();
+    });
     try {
-      await this.send({ type: "close" });
+      const result = await Promise.race([closeRequest, closeTimeout]);
+      if (result === "timeout") {
+        closeRequest.catch(() => {});
+      }
     } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       this.shutdownChild();
     }
   }

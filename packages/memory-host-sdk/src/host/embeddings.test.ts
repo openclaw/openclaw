@@ -378,6 +378,71 @@ process.on("message", (message) => {
     await expect(provider.close?.()).resolves.toBeUndefined();
   });
 
+  it("terminates the worker when close runs behind a pending request", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const embedStartedPath = path.join(tempDir, "embed-started");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+const embedStartedPath = ${JSON.stringify(embedStartedPath)};
+let busy = false;
+
+process.on("message", (message) => {
+  if (busy) {
+    return;
+  }
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  if (message.type === "embedQuery") {
+    busy = true;
+    fs.writeFileSync(embedStartedPath, "1");
+  }
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      {
+        config: {} as never,
+        provider: "local",
+        model: "",
+        fallback: "none",
+      },
+      { workerScriptPath: workerScript },
+    );
+
+    const embedPromise = provider.embedQuery("stuck");
+    const embedError = embedPromise.then(
+      () => undefined,
+      (err) => err,
+    );
+    await expect
+      .poll(async () => {
+        try {
+          await fs.access(embedStartedPath);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
+
+    const closePromise = provider.close?.() ?? Promise.resolve();
+    const closeResult = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+
+    expect(closeResult).toBe("closed");
+    await expect(embedError).resolves.toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    });
+  });
+
   it("does not pass inline-source or inspector exec args to the file-backed worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
