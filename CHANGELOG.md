@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- OpenShell/SSH: reject malformed generated exec commands before sandbox/session setup so unresolved workflow placeholders fail fast instead of reaching the remote shell. Fixes #72373. Thanks @brokemac79.
 - Installer: make Alpine apk installs cover Git, verify the Node runtime floor, try `nodejs-current`, and report Alpine version guidance when repositories only provide older Node packages.
 - Agents/media: send direct fallback for generated media still missing after an active requester wake fails. (#85489) Thanks @fuller-stack-dev.
 - Agents: derive overflow compaction budgets from provider-reported and synthetic over-budget token counts so confirmed context overflows compact before retrying. (#70473) Thanks @fuller-stack-dev.

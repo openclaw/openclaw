@@ -264,6 +264,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/tool-plugin` | Define a simple typed agent-tool plugin and expose static metadata for manifest generation |
     | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
+    | `plugin-sdk/sandbox` | Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Markdown table mode and conversion helpers |

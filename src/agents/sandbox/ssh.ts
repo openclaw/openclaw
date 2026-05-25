@@ -301,6 +301,9 @@ function readPlaceholderToken(command: string, index: number): string | null {
   if (!match) {
     return null;
   }
+  if (command[index - 1] === "=") {
+    return match[0];
+  }
   if (isLikelyGeneratedWorkflowPlaceholder(command, index)) {
     return match[0];
   }
@@ -330,6 +333,8 @@ function isLikelyGeneratedWorkflowPlaceholder(command: string, index: number): b
       prefix.lastIndexOf(";"),
       prefix.lastIndexOf("&"),
       prefix.lastIndexOf("|"),
+      prefix.lastIndexOf("("),
+      prefix.lastIndexOf("`"),
     ) + 1;
   const currentCommand = prefix.slice(segmentStart).trim();
   return /^workflow(?:\s+[A-Za-z0-9._/-]+)*$/.test(currentCommand);
