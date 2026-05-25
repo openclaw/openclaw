@@ -705,13 +705,15 @@ export function buildGoogleGenerativeAiParams(
   const params: GoogleGenerateContentRequest = {
     contents: convertGoogleMessages(model, context),
   };
-  if (typeof options?.cachedContent === "string" && options.cachedContent.trim()) {
-    params.cachedContent = options.cachedContent.trim();
+  const cachedContent =
+    typeof options?.cachedContent === "string" ? options.cachedContent.trim() : "";
+  if (cachedContent) {
+    params.cachedContent = cachedContent;
   }
   if (Object.keys(generationConfig).length > 0) {
     params.generationConfig = generationConfig;
   }
-  if (context.systemPrompt) {
+  if (!cachedContent && context.systemPrompt) {
     params.systemInstruction = {
       parts: [
         {
@@ -720,7 +722,7 @@ export function buildGoogleGenerativeAiParams(
       ],
     };
   }
-  if (context.tools?.length) {
+  if (!cachedContent && context.tools?.length) {
     params.tools = convertGoogleTools(context.tools);
     const toolChoice = mapToolChoice(options?.toolChoice);
     if (toolChoice) {
