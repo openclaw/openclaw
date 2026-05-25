@@ -130,6 +130,42 @@ describe("executePlaybookStep llm rich context injection", () => {
     );
   });
 
+  it("uses promptRegistry template for classify task_type llm step", async () => {
+    const llmComplete = vi.fn().mockResolvedValue({ text: '{"intent":"oee_query"}' });
+    const renderPromptTemplate = vi.fn((id: string, vars: Record<string, unknown>) =>
+      id === "intent_classify" ? `CLASSIFY_TEMPLATE:\n${String(vars.message)}` : null,
+    );
+
+    const ctx = makeCtx();
+    const run = makeRun();
+
+    await executePlaybookStep(
+      {
+        kind: "llm",
+        id: "llm-classify",
+        prompt: "查一下 OEE",
+        output: "intent",
+        task_type: "classify",
+      },
+      ctx,
+      run,
+      baseDeps({
+        llmComplete,
+        renderPromptTemplate,
+      }),
+    );
+
+    expect(renderPromptTemplate).toHaveBeenCalledWith(
+      "intent_classify",
+      expect.objectContaining({ message: "查一下 OEE" }),
+    );
+    expect(llmComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "CLASSIFY_TEMPLATE:\n查一下 OEE",
+      }),
+    );
+  });
+
   it("passes KB case text to subagentRun prompt in rich mode", async () => {
     const subagentRun = vi.fn().mockResolvedValue({ text: "subagent analysis" });
     const kbSearch = vi
