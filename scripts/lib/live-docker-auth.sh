@@ -206,6 +206,32 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_container_node_options() {
+  local value
+  value="$(openclaw_live_trim "${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}")"
+  if [[ -z "$value" ]]; then
+    value="--max-old-space-size=4096"
+  fi
+
+  case " $value " in
+    *" --dns-result-order="*)
+      ;;
+    *)
+      value="$value --dns-result-order=ipv4first"
+      ;;
+  esac
+
+  case " $value " in
+    *" --disable-warning=ExperimentalWarning "*)
+      ;;
+    *)
+      value="$value --disable-warning=ExperimentalWarning"
+      ;;
+  esac
+
+  printf '%s\n' "$value"
+}
+
 openclaw_live_stage_auth_into_home() {
   local dest_home="${1:?destination home directory required}"
   shift
