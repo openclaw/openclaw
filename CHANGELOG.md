@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 - WebChat: keep message-tool replies visible in the chat while still summarizing internal tool results for the model. Fixes #86347. Thanks @shakkernerd.
 - Agents/commitments: serialize commitment store load-modify-save writes so concurrent heartbeat and CLI updates no longer lose dismissal, sent, or attempt state. (#81153) Thanks @ai-hpc.
+- CLI: suppress benign self-update version-skew warnings during package post-update finalization.
 - Gateway/perf: tighten restart and startup benchmark failure handling so long profiling runs, failed probes, and fresh Linux runners no longer produce false passing or `n/a` results.
 - Checks: keep intentional Knip unused-file findings optional so full CI and sparse proof workspaces stay aligned.
 - Docker: restore writable `~/.config` in runtime images. Fixes #85968. Thanks @hkoessler and @Bartok9.
