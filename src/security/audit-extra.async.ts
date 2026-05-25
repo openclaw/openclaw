@@ -15,7 +15,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
@@ -707,7 +707,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     : [];
   const { resolveDefaultAgentId } = await loadAgentScopeModule();
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
+  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");

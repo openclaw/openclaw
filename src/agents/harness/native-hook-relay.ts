@@ -15,6 +15,7 @@ import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import { uniqueValues } from "../../shared/string-normalization.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -1685,7 +1686,7 @@ function normalizeAllowedEvents(
   if (!events?.length) {
     return NATIVE_HOOK_RELAY_EVENTS;
   }
-  return [...new Set(events)];
+  return uniqueValues(events);
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
