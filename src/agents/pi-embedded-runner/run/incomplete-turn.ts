@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -48,6 +49,7 @@ type IncompleteTurnAttempt = Pick<
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
+  | "toolMetas"
 > &
   Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
 
@@ -218,8 +220,10 @@ export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
   const hadMutatingTools = params.toolMetas.some((t) => isLikelyMutatingToolName(t.toolName));
+  const hadAsyncStartedTool = params.toolMetas.some((t) => t.asyncStarted === true);
   const hadPotentialSideEffects =
     hadMutatingTools ||
+    hadAsyncStartedTool ||
     hasMessagingToolDeliveryEvidence(params) ||
     hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0;
@@ -272,6 +276,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return null;
+  }
+
   const stopReason = params.attempt.lastAssistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
@@ -308,6 +316,10 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
+}
+
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
 function isToolResultRole(role: string): boolean {
@@ -719,28 +731,18 @@ export function resolveAckExecutionFastPathInstruction(params: {
 }
 
 function extractPlanningOnlySteps(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const bulletLines = lines
-    .map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "").trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
+  const bulletLines = normalizeStringEntries(
+    lines.map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "")),
+  );
   if (bulletLines.length >= 2) {
     return bulletLines.slice(0, 4);
   }
-  return text
-    .split(/(?<=[.!?])\s+/u)
-    .map((step) => step.trim())
-    .filter(Boolean)
-    .slice(0, 4);
+  return normalizeStringEntries(text.split(/(?<=[.!?])\s+/u)).slice(0, 4);
 }
 
 function hasStructuredPlanningOnlyFormat(text: string): boolean {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
   if (lines.length === 0) {
     return false;
   }

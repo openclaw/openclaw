@@ -5,9 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
-const probePath = path.resolve(
-  "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs",
-);
+const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
 const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
 );
@@ -61,6 +59,21 @@ function runProbe(root: string, env: Record<string, string | undefined> = {}) {
   }
   childEnv.OPENCLAW_ENTRY = path.join(root, "dist", "index.js");
   return spawnSync(process.execPath, [probePath, "select"], {
+    cwd: root,
+    encoding: "utf8",
+    env: childEnv as NodeJS.ProcessEnv,
+  });
+}
+
+function runProbeCommand(root: string, args: string[], env: Record<string, string | undefined>) {
+  const childEnv = { ...process.env, ...env };
+  for (const [key, value] of Object.entries(childEnv)) {
+    if (value === undefined) {
+      delete childEnv[key];
+    }
+  }
+  childEnv.OPENCLAW_ENTRY = path.join(root, "dist", "index.js");
+  return spawnSync(process.execPath, [probePath, ...args], {
     cwd: root,
     encoding: "utf8",
     env: childEnv as NodeJS.ProcessEnv,
@@ -168,5 +181,65 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stdout).toContain(
       "Global-disable TTS smoke skipped for runtime-only: no speech provider contract",
     );
+  });
+
+  it("accepts native Windows bundled source paths when asserting install state", () => {
+    const root = makePackageRoot();
+    const stateDir = path.join(root, "state");
+    const windowsSourcePath = "C:\\crabbox\\qa-windows\\dist\\extensions\\nostr";
+    fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ plugins: { entries: { nostr: { enabled: true } } } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "plugins", "installs.json"),
+      JSON.stringify({
+        installRecords: {
+          nostr: {
+            source: "path",
+            sourcePath: windowsSourcePath,
+            installPath: windowsSourcePath,
+          },
+        },
+      }),
+      "utf8",
+    );
+    writePluginsList(root, []);
+
+    const result = runProbeCommand(root, ["assert-installed", "nostr", "nostr", "0"], {
+      HOME: undefined,
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("detects native Windows bundled load paths after uninstall", () => {
+    const root = makePackageRoot();
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(path.join(stateDir, "plugins"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        plugins: { load: { paths: ["C:\\crabbox\\qa-windows\\dist\\extensions\\nostr"] } },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(stateDir, "plugins", "installs.json"),
+      JSON.stringify({ installRecords: {} }),
+      "utf8",
+    );
+    writePluginsList(root, []);
+
+    const result = runProbeCommand(root, ["assert-uninstalled", "nostr", "nostr"], {
+      HOME: undefined,
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("load path still present after uninstall for nostr");
   });
 });
