@@ -434,7 +434,7 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
   });
 
-  it("still treats an error payload as failed when the status flag is false", () => {
+  it("respects an explicit success flag even when the payload looks like an error", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -451,10 +451,10 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(container.textContent).toContain("Web Search");
+    expect(container.textContent).not.toContain("Tool error");
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
   it("does not render View with a checkmark for sidebar cards whose output is an error JSON", () => {

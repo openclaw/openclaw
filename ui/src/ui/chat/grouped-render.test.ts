@@ -1079,7 +1079,7 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("marks collapsed standalone tool-result summaries as errors", () => {
+  it("respects explicit success on collapsed standalone tool-result summaries", () => {
     const container = document.createElement("div");
     renderMessageGroups(
       container,
@@ -1106,14 +1106,14 @@ describe("grouped chat rendering", () => {
     );
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("web_search");
-    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
   });
 
-  it("marks MCP-style standalone tool-result summaries as errors", () => {
+  it("respects explicit success on MCP-style standalone tool-result summaries", () => {
     const container = document.createElement("div");
     renderMessageGroups(
       container,
@@ -1140,12 +1140,12 @@ describe("grouped chat rendering", () => {
     );
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
-    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool output");
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "memory_forget",
     );
-    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
   it("collapses an inline tool call while keeping matching tool output visible", () => {
