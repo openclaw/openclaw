@@ -29,6 +29,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 export type ApprovedCwdSnapshot = {
   cwd: string;
   stat: fs.Stats;
+  allowSymlinkPath?: boolean;
 };
 
 const MUTABLE_ARGV1_INTERPRETER_PATTERNS = [
@@ -1159,12 +1160,13 @@ function resolveCanonicalApprovalCwdSync(
     snapshot: {
       cwd: cwdReal,
       stat: cwdStat,
+      allowSymlinkPath,
     },
   };
 }
 
 export function revalidateApprovedCwdSnapshot(params: { snapshot: ApprovedCwdSnapshot }): boolean {
-  const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd);
+  const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd, params.snapshot.allowSymlinkPath);
   if (!current.ok) {
     return false;
   }
