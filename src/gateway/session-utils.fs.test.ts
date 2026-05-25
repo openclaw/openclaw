@@ -2015,7 +2015,7 @@ describe("oversized transcript line guards", () => {
     const oversized = out[1] as Record<string, unknown>;
     expect(oversized.role).toBe("assistant");
     // id is preserved in __openclaw transcript metadata
-    const meta = (oversized as Record<string, Record<string, unknown>>).__openclaw;
+    const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.
