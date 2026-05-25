@@ -420,9 +420,7 @@ function wrapPlainTextToolCallStream(
  * Provider stream wrapper for local/proxy providers that sometimes emit a
  * standalone textual tool-call block even when native tool calling is enabled.
  */
-export function createPlainTextToolCallPromotionWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const maybeStream = underlying(model, context, options);
