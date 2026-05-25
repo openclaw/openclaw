@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Docker E2E: dedupe scheduler lane resources so npm/service package lanes are not over-counted and serialized unnecessarily.
 - Crabbox: bootstrap Git metadata for sparse remote changed gates so raw synced workspaces can run `pnpm check:changed` from the intended diff.
 - xAI/LM Studio: avoid buffering ordinary bracketed or `final` prose until stream completion while watching for plain-text tool-call fallbacks.
+- Doctor: warn and continue when the cron job store exists but cannot be read (e.g. owned by another user with `0600` mode inside Docker) so later health checks still run. (#86102)
 - Discord: suppress a bot's previous reply body and referenced media from prompt context when a user replies to that bot message, while keeping reply metadata for routing. (#86238) Thanks @fuller-stack-dev.
 - Docker E2E: avoid rebuilding the Control UI twice while preparing the shared OpenClaw package tarball for package-backed scenario runs.
 - Tests: avoid rebuilding the Control UI twice during the installer Docker smoke now that `pnpm build` includes `ui:build`.
