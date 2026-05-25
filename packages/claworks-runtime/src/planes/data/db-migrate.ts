@@ -48,6 +48,19 @@ export function migrateClaworksSchema(db: CwDatabase): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_cw_audit_log_type ON cw_audit_log(event_type);`);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS cw_evolution_pending_promotions (
+      promotion_id TEXT PRIMARY KEY,
+      pack_json TEXT NOT NULL,
+      playbook_ids TEXT NOT NULL,
+      simulation_results TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      registered_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cw_evolution_pending_status
+      ON cw_evolution_pending_promotions(status);
+  `);
+
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_playbook ON cw_playbook_runs(playbook_id);
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_status ON cw_playbook_runs(status);
     CREATE INDEX IF NOT EXISTS idx_cw_playbook_runs_started ON cw_playbook_runs(started_at DESC);

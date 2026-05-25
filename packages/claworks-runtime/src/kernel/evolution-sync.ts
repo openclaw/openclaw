@@ -24,6 +24,11 @@ import { createHash } from "node:crypto";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { parsePlaybookYaml } from "../pack-loader/yaml-parsers.js";
 import type { CbrCase } from "../planes/data/cbr-store.js";
+import {
+  deletePendingSandboxPromotion,
+  loadPendingSandboxPromotions,
+  savePendingSandboxPromotion,
+} from "./evolution-pending-store.js";
 
 // ── 导出数据结构 ───────────────────────────────────────────────────────────
 
@@ -173,7 +178,22 @@ export class EvolutionSyncManager {
   /** 沙盒回归通过后待 HITL 晋升的进化包（重启后丢失） */
   private pendingSandboxPromotions = new Map<string, PendingSandboxPromotion>();
 
-  constructor(private readonly runtime: ClaworksRuntime) {}
+  constructor(private readonly runtime: ClaworksRuntime) {
+    this.loadPendingPromotionsFromDb();
+  }
+
+  /** 从 SQLite 恢复待 HITL 晋升的沙盒包（重启后调用） */
+  loadPendingPromotionsFromDb(): void {
+    try {
+      const rows = loadPendingSandboxPromotions(this.runtime.db);
+      this.pendingSandboxPromotions.clear();
+      for (const row of rows) {
+        this.pendingSandboxPromotions.set(row.promotion_id, row);
+      }
+    } catch {
+      // DB 不可用时保持内存为空，不阻断运行时
+    }
+  }
 
   /**
    * 导出进化数据包（可安全传输到互联网机器，不含敏感原文）。
@@ -411,6 +431,14 @@ export class EvolutionSyncManager {
         simulation_results,
         registered_at: new Date().toISOString(),
       });
+      try {
+        savePendingSandboxPromotion(
+          this.runtime.db,
+          this.pendingSandboxPromotions.get(promotion_id)!,
+        );
+      } catch {
+        // 持久化失败不阻断沙盒导入
+      }
 
       await this.runtime.kernel
         .publish("evolution.sandbox_ready_for_promotion", "evolution-sync", {
@@ -542,6 +570,11 @@ export class EvolutionSyncManager {
 
     const importResult = await this.importEvolutionPackProduction(pending.pack);
     this.pendingSandboxPromotions.delete(opts.promotion_id);
+    try {
+      deletePendingSandboxPromotion(this.runtime.db, opts.promotion_id);
+    } catch {
+      // 内存已删除；DB 清理失败不阻断晋升结果
+    }
 
     if (importResult.success) {
       await this.runtime.kernel

@@ -463,7 +463,6 @@ export async function createClaworksRuntime(
     _stopDraftReview();
   });
 
-  // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
   runtime.evolutionSync = new EvolutionSyncManager(runtime);
   runtime.autonomyEngine = createAutonomyEngine(runtime);
 
@@ -580,6 +579,7 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
   const { syncRbacFromObjectStore, syncIngressFromObjectStore } = await import("./rbac-sync.js");
   await syncRbacFromObjectStore(runtime);
   await syncIngressFromObjectStore(runtime);
+  runtime.evolutionSync?.loadPendingPromotionsFromDb();
   const connectorEntries = runtime.config.connectors ?? {};
   const connectors = resolveConnectorConfigs(connectorEntries);
   for (const [id, cfg] of Object.entries(connectors)) {
@@ -646,6 +646,10 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
   });
 
   registerPackProfileEventHandler(runtime);
+
+  const { wireEvolutionSimulationRegressionChain } =
+    await import("../kernel/evolution-regression-chain.js");
+  wireEvolutionSimulationRegressionChain(runtime);
 
   runtime.kernel.bus.subscribe("autonomy.learn_opportunity", async (event) => {
     try {

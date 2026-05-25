@@ -1935,6 +1935,20 @@ function makeEvolveListDescriptor(runtime: ClaworksRuntime): CapabilityDescripto
   };
 }
 
+function makeEvolveListDraftsDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  return {
+    id: "evolve.list_drafts",
+    verb: "query",
+    description: "列出 KB evolution_drafts 命名空间中待 HITL 审核的 Playbook 草稿",
+    owner: { kind: "core" },
+    handler: async () => {
+      const engine = getOrCreateEvolveEngine(runtime);
+      const drafts = await engine.listDrafts();
+      return { drafts, count: drafts.length };
+    },
+  };
+}
+
 function makeEvolveRemoveDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
   return {
     id: "evolve.remove",
@@ -2730,6 +2744,7 @@ export function createCoreCapabilityRegistry(runtime: ClaworksRuntime): Capabili
     makeEvolveVerifyDescriptor(runtime),
     makeEvolveLearnDescriptor(runtime),
     makeEvolveListDescriptor(runtime),
+    makeEvolveListDraftsDescriptor(runtime),
     makeEvolveRemoveDescriptor(runtime),
     makeEvolveFullCycleDescriptor(runtime),
 

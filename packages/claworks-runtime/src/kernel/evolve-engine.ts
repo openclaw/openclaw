@@ -88,6 +88,7 @@ import { mkdir, writeFile, unlink, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { parsePlaybookYaml } from "../pack-loader/yaml-parsers.js";
+import { isDocumentKnowledgeBase } from "../planes/data/kb-types.js";
 import { BRIDGE_LLM } from "./bridge-registry.js";
 import { CW_EVENTS } from "./event-names.js";
 import type { OutputSchema } from "./structured-output.js";
@@ -186,6 +187,19 @@ export interface EvolveEngine {
   learn(result: EvolveResult, feedback?: string): Promise<string | undefined>;
   /** 列出用户通过对话生成的所有 Playbook */
   listEvolved(): Promise<Array<{ id: string; title: string; deployedAt: Date }>>;
+  /** 列出 KB evolution_drafts 中待审核的 Playbook 草稿 */
+  listDrafts(): Promise<
+    Array<{
+      proposal_id: string;
+      title: string;
+      status: string;
+      confidence?: number;
+      signal?: string;
+      source?: string;
+      created_at: string;
+      updated_at: string;
+    }>
+  >;
   /** 移除一个进化的 Playbook */
   remove(playbookId: string): Promise<void>;
   /**
@@ -727,6 +741,36 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       } catch {
         return [];
       }
+    },
+
+    // ── listDrafts ─────────────────────────────────────────────────────────
+    async listDrafts() {
+      if (!isDocumentKnowledgeBase(runtime.kb)) {
+        return [];
+      }
+      const docs = await runtime.kb.listDocuments({
+        namespace: EVOLUTION_DRAFTS_NAMESPACE,
+        limit: 100,
+      });
+      return docs.map((doc) => {
+        const meta = doc.metadata ?? {};
+        const proposalId =
+          typeof meta.proposal_id === "string"
+            ? meta.proposal_id
+            : typeof doc.source === "string"
+              ? doc.source
+              : doc.id;
+        return {
+          proposal_id: proposalId,
+          title: doc.title,
+          status: typeof meta.status === "string" ? meta.status : doc.status,
+          confidence: typeof meta.confidence === "number" ? meta.confidence : undefined,
+          signal: typeof meta.signal === "string" ? meta.signal : undefined,
+          source: doc.source,
+          created_at: new Date(doc.created_at).toISOString(),
+          updated_at: new Date(doc.updated_at).toISOString(),
+        };
+      });
     },
 
     // ── remove ─────────────────────────────────────────────────────────────

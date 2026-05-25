@@ -84,6 +84,7 @@ describe("handleAutonomyLearnOpportunity", () => {
     expect(cbrCases.length).toBe(1);
     expect(result.actions_taken).toContain("evolution_simulation_requested");
     expect(published.some((e) => e.type === "evolution.simulation_requested")).toBe(true);
+    expect(published.some((e) => e.type === "evolution.regression_requested")).toBe(false);
     expect(published.some((e) => e.type === "autonomy.learn_handled")).toBe(true);
   });
 

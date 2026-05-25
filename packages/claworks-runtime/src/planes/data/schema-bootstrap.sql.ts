@@ -157,6 +157,15 @@ CREATE TABLE IF NOT EXISTS cw_memory (
   expires_at TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS cw_evolution_pending_promotions (
+  promotion_id TEXT PRIMARY KEY,
+  pack_json TEXT NOT NULL,
+  playbook_ids TEXT NOT NULL,
+  simulation_results TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  registered_at BIGINT NOT NULL
+);
 `;
 
 export const CW_SCHEMA_INDEX_SQL = `
@@ -177,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_cw_cbr_cases_outcome ON cw_cbr_cases(outcome);
 CREATE INDEX IF NOT EXISTS idx_cw_cbr_cases_use_count ON cw_cbr_cases(use_count DESC);
 CREATE INDEX IF NOT EXISTS idx_cw_notify_bindings_subject_type ON cw_notify_bindings(subject_type);
 CREATE INDEX IF NOT EXISTS idx_cw_memory_expires ON cw_memory(expires_at);
+CREATE INDEX IF NOT EXISTS idx_cw_evolution_pending_status ON cw_evolution_pending_promotions(status);
 `;
 
 export function execSchemaBootstrap(db: { exec: (sql: string) => void }): void {

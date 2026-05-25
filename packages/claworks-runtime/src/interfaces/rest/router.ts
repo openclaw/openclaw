@@ -1046,6 +1046,21 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // GET /v1/evolve/drafts — 列出待审核的进化草稿（KB evolution_drafts）
+      if (method === "GET" && parts[1] === "evolve" && parts[2] === "drafts") {
+        if (!(await requireRead())) {
+          return true;
+        }
+        const engine = runtime.evolveEngine;
+        if (!engine?.listDrafts) {
+          sendJson(res, 503, { error: "evolveEngine 未初始化" });
+          return true;
+        }
+        const drafts = await engine.listDrafts();
+        sendJson(res, 200, { status: "ok", drafts, count: drafts.length });
+        return true;
+      }
+
       // POST /v1/evolve/promote-draft — KB 草稿 HITL 晋升
       if (method === "POST" && parts[1] === "evolve" && parts[2] === "promote-draft") {
         if (!(await requireWrite("evolve:promote_draft"))) {
