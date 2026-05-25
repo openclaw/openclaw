@@ -202,7 +202,7 @@ export function enableConsoleCapture(): void {
           // service restarted and closed the journal pipe). Exit cleanly instead
           // of spinning in a tight loop where every log attempt re-triggers EPIPE.
           const exitCode = process.exitCode;
-          process.exit(typeof exitCode === "number" && exitCode !== 0 ? exitCode : 0);
+          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
           return;
         }
         throw err;
