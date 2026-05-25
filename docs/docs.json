@@ -61,14 +61,6 @@
       "destination": "/channels/matrix-migration"
     },
     {
-      "source": "/help/gpt54-codex-agentic-parity",
-      "destination": "/help/gpt55-codex-agentic-parity"
-    },
-    {
-      "source": "/help/gpt54-codex-agentic-parity-maintainers",
-      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
-    },
-    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -1787,9 +1779,7 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone",
-                  "help/gpt55-codex-agentic-parity",
-                  "help/gpt55-codex-agentic-parity-maintainers"
+                  "concepts/timezone"
                 ]
               },
               {
