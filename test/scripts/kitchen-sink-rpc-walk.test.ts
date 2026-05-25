@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  appendBoundedOutput,
   assertResourceCeiling,
   cleanupKitchenSinkEnv,
   extractPluginCommandNames,
@@ -25,6 +26,16 @@ describe("kitchen-sink RPC isolated state", () => {
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
     expect(existsSync(root)).toBe(false);
+  });
+});
+
+describe("kitchen-sink RPC command output capture", () => {
+  it("keeps a bounded tail and tracks truncated output", () => {
+    const first = appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
+    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
+
+    const second = appendBoundedOutput(first, "ghij", 5);
+    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 });
 
