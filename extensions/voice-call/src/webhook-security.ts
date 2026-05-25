@@ -230,6 +230,24 @@ function extractHostnameFromHeader(headerValue: string): string | null {
   return extractHostname(first);
 }
 
+function normalizeProxyIp(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const unwrapped =
+    trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+  const normalized = unwrapped.toLowerCase();
+  const mappedIpv4Prefix = "::ffff:";
+  if (normalized.startsWith(mappedIpv4Prefix)) {
+    const mappedIpv4 = normalized.slice(mappedIpv4Prefix.length);
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(mappedIpv4)) {
+      return mappedIpv4;
+    }
+  }
+  return normalized;
+}
+
 function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
   if (!allowedHosts || allowedHosts.length === 0) {
     return null;
@@ -275,8 +293,13 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
   const trustedProxyIPs = options?.trustedProxyIPs?.filter(Boolean) ?? [];
   const hasTrustedProxyIPs = trustedProxyIPs.length > 0;
   const remoteIP = options?.remoteIP ?? ctx.remoteAddress;
+  const normalizedTrustedProxyIps = new Set(
+    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
+  );
+  const normalizedRemoteIp = normalizeProxyIp(remoteIP);
   const fromTrustedProxy =
-    !hasTrustedProxyIPs || (remoteIP ? trustedProxyIPs.includes(remoteIP) : false);
+    !hasTrustedProxyIPs ||
+    (normalizedRemoteIp ? normalizedTrustedProxyIps.has(normalizedRemoteIp) : false);
 
   // Only trust forwarding headers if: (has whitelist OR explicitly trusted) AND from trusted proxy
   const shouldTrustForwardingHeaders = (hasAllowedHosts || explicitlyTrusted) && fromTrustedProxy;
