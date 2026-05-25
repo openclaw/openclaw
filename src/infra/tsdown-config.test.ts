@@ -105,6 +105,7 @@ describe("tsdown config", () => {
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
+      "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
       "plugin-sdk/compat",
       "plugin-sdk/index",
@@ -146,6 +147,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
       "src/plugins/hook-runner-global.ts",
+    );
+  });
+
+  it("keeps synthetic auth refs behind one stable runtime dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
+      "src/plugins/synthetic-auth.runtime.ts",
     );
   });
 
