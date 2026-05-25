@@ -18,6 +18,15 @@ describe("channel-broker plugin", () => {
       thread: true,
       messageSendingHooks: true,
     });
+    expect(channelBrokerPlugin.capabilities).toMatchObject({
+      media: true,
+      reply: true,
+      threads: true,
+    });
+    expect(channelBrokerPlugin.capabilities).not.toMatchObject({
+      reactions: true,
+      edit: true,
+    });
     expect(channelBrokerPlugin.message?.durableFinal?.capabilities).not.toMatchObject({
       reconcileUnknownSend: true,
       afterCommit: true,

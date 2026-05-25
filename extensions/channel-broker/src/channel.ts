@@ -128,8 +128,6 @@ export const channelBrokerPlugin = createChatChannelPlugin({
       media: true,
       reply: true,
       threads: true,
-      reactions: true,
-      edit: true,
     },
     reload: { configPrefixes: ["channels.channel-broker"] },
     configSchema: channelBrokerPluginConfigSchema,
