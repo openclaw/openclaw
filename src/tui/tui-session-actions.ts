@@ -381,6 +381,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -419,6 +420,11 @@ export function createSessionActions(context: SessionActionContext) {
         runId,
       });
       state.pendingChatRunId = null;
+      // Also clear stale optimistic submit state — otherwise tui-command-handlers
+      // continues to treat the TUI as busy and blocks the next normal prompt
+      // with 'agent is busy — press Esc to abort before sending a new message',
+      // while a second Esc reports 'no active run'. See #86199.
+      state.pendingOptimisticUserMessage = false;
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);
