@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { GatewayServiceCommand } from "../../daemon/service.ts";
-import type { NodeHostConfig } from "../../node-host/config.ts";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
+
+type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHostConfig;
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -21,7 +22,9 @@ const mocks = vi.hoisted(() => {
     stop: vi.fn(),
     restart: vi.fn(),
     isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn<() => Promise<GatewayServiceCommand | null>>(async () => null),
+    readCommand: vi.fn<(env: NodeJS.ProcessEnv) => Promise<GatewayServiceCommandConfig | null>>(
+      async () => null,
+    ),
     readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "running" })),
   };
   return {
@@ -32,7 +35,7 @@ const mocks = vi.hoisted(() => {
       environmentValueSources: {},
       description: "OpenClaw node host",
     })),
-    loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
+    loadNodeHostConfig: vi.fn<LoadNodeHostConfig>(async () => null),
     installDaemonServiceAndEmit: vi.fn(async (_params?: unknown) => {}),
     runtime: {
       log: vi.fn<(line: string) => void>(),
