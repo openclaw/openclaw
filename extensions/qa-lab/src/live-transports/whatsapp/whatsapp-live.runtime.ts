@@ -657,7 +657,7 @@ async function runWhatsAppScenario(params: {
         finalMatchedReplyRttMs: rttMs,
         requestStartedAt: requestStartedAt.toISOString(),
         responseObservedAt: responseObservedAt.toISOString(),
-        source: "request-to-observed-message",
+        source: "request-to-observed-message" as const,
       },
     };
   } catch (error) {
