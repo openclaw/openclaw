@@ -1848,7 +1848,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("honors forced tool-summary suppression while verbose is enabled during the run", async () => {
+  it("honors forced progress suppression while verbose is enabled during the run", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
@@ -1862,17 +1862,24 @@ describe("dispatchReplyFromConfig", () => {
       From: "telegram:group:-100123",
       SessionKey: "agent:main:telegram:group:-100123",
     });
+    const onPlanUpdate = vi.fn();
+    const onApprovalEvent = vi.fn();
+    const onPatchSummary = vi.fn();
+    const onToolResult = vi.fn();
 
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => {
-      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      const handleToolResult = requireToolResultHandler(opts?.onToolResult);
       sessionStoreMocks.currentEntry = {
         verboseLevel: "on",
       };
-      await onToolResult({ text: "🔧 exec: leaked" });
+      await opts?.onPlanUpdate?.({ phase: "update", steps: ["Run command"] });
+      await opts?.onApprovalEvent?.({ phase: "requested", command: "pnpm test" });
+      await opts?.onPatchSummary?.({ phase: "end", summary: "1 modified" });
+      await handleToolResult({ text: "🔧 exec: leaked" });
       return { text: "hi" } satisfies ReplyPayload;
     };
 
@@ -1884,9 +1891,17 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: {
         suppressDefaultToolProgressMessages: true,
         forceSuppressDefaultToolProgressMessages: true,
+        onPlanUpdate,
+        onApprovalEvent,
+        onPatchSummary,
+        onToolResult,
       },
     });
 
+    expect(onPlanUpdate).not.toHaveBeenCalled();
+    expect(onApprovalEvent).not.toHaveBeenCalled();
+    expect(onPatchSummary).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
