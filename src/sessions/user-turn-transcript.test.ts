@@ -1,12 +1,44 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendUserTurnTranscriptMessage,
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMediaFields,
   buildPersistedUserTurnMessage,
+  persistUserTurnTranscript,
   resolvePersistedUserTurnText,
 } from "./user-turn-transcript.js";
 
 describe("user turn transcript persistence", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function createTempDir(prefix: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  function readTranscriptMessages(transcriptPath: string): Array<Record<string, unknown>> {
+    return fs
+      .readFileSync(transcriptPath, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { message?: unknown })
+      .map((entry) => entry.message)
+      .filter(
+        (message): message is Record<string, unknown> =>
+          typeof message === "object" && message !== null,
+      );
+  }
+
   describe("buildPersistedUserTurnMediaInputsFromFields", () => {
     it("builds media inputs from structured context media fields", () => {
       expect(
@@ -227,6 +259,77 @@ describe("user turn transcript persistence", () => {
           { hasMedia: false },
         ),
       ).toBe("<media:image> (2 images)");
+    });
+  });
+
+  describe("appendUserTurnTranscriptMessage", () => {
+    it("appends a structured user turn through the shared transcript writer", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "What is in this image?",
+          media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+          timestamp: 123,
+        },
+        updateMode: "none",
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "What is in this image?",
+        MediaPath: "/tmp/image.png",
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "What is in this image?",
+          MediaPath: "/tmp/image.png",
+          MediaType: "image/png",
+        }),
+      ]);
+    });
+  });
+
+  describe("persistUserTurnTranscript", () => {
+    it("resolves the session file and persists the user turn", async () => {
+      const dir = createTempDir("openclaw-user-turn-persist-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const sessionStore = {
+        main: {
+          sessionId: "session-1",
+          sessionFile: transcriptPath,
+          updatedAt: 1,
+        },
+      };
+
+      const persisted = await persistUserTurnTranscript({
+        sessionId: "session-1",
+        sessionKey: "main",
+        sessionEntry: sessionStore.main,
+        sessionStore,
+        storePath: path.join(dir, "sessions.json"),
+        agentId: "agent",
+        cwd: dir,
+        input: {
+          text: "hello",
+          timestamp: 123,
+        },
+        updateMode: "none",
+      });
+
+      expect(persisted?.sessionFile).toContain("session-1.jsonl");
+      expect(readTranscriptMessages(persisted?.sessionFile ?? "")).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello",
+        }),
+      ]);
     });
   });
 });

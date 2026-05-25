@@ -1,4 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
 export type PersistedUserTurnMediaInput = {
   path?: string | null;
@@ -25,6 +30,34 @@ export type UserTurnInput = {
 };
 
 export type BuildPersistedUserTurnMessageParams = UserTurnInput;
+
+export type UserTurnTranscriptUpdateMode = "inline" | "file-only" | "none";
+
+export type AppendUserTurnTranscriptMessageParams = {
+  transcriptPath: string;
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  sessionId?: string;
+  sessionKey?: string;
+  cwd?: string;
+  config?: OpenClawConfig;
+  updateMode?: UserTurnTranscriptUpdateMode;
+};
+
+export type PersistUserTurnTranscriptParams = {
+  input?: UserTurnInput;
+  message?: PersistedUserTurnMessage;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  agentId: string;
+  threadId?: string | number;
+  cwd?: string;
+  config?: OpenClawConfig;
+  updateMode?: UserTurnTranscriptUpdateMode;
+};
 
 export type PersistedUserTurnTextFieldSource = {
   Transcript?: string | null;
@@ -195,4 +228,108 @@ export function buildPersistedUserTurnMessage(
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...mediaFields,
   } as PersistedUserTurnMessage;
+}
+
+function resolvePersistedUserTurnMessage(
+  params: Pick<AppendUserTurnTranscriptMessageParams, "input" | "message">,
+): PersistedUserTurnMessage | undefined {
+  if (params.message) {
+    return params.message;
+  }
+  if (!params.input) {
+    return undefined;
+  }
+  return buildPersistedUserTurnMessage(params.input);
+}
+
+export async function appendUserTurnTranscriptMessage(
+  params: AppendUserTurnTranscriptMessageParams,
+): Promise<
+  | {
+      sessionFile: string;
+      messageId: string;
+      message: PersistedUserTurnMessage;
+    }
+  | undefined
+> {
+  const message = resolvePersistedUserTurnMessage(params);
+  if (!message) {
+    return undefined;
+  }
+
+  const appended = await appendSessionTranscriptMessage({
+    transcriptPath: params.transcriptPath,
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.config ? { config: params.config } : {}),
+    message,
+  });
+
+  switch (params.updateMode ?? "inline") {
+    case "inline":
+      emitSessionTranscriptUpdate({
+        sessionFile: params.transcriptPath,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        message: appended.message,
+        messageId: appended.messageId,
+      });
+      break;
+    case "file-only":
+      emitSessionTranscriptUpdate({
+        sessionFile: params.transcriptPath,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      });
+      break;
+    case "none":
+      break;
+  }
+
+  return {
+    sessionFile: params.transcriptPath,
+    messageId: appended.messageId,
+    message: appended.message,
+  };
+}
+
+export async function persistUserTurnTranscript(params: PersistUserTurnTranscriptParams): Promise<
+  | {
+      sessionFile: string;
+      sessionEntry: SessionEntry | undefined;
+      messageId: string;
+      message: PersistedUserTurnMessage;
+    }
+  | undefined
+> {
+  const message = resolvePersistedUserTurnMessage(params);
+  if (!message) {
+    return undefined;
+  }
+
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    ...(params.sessionStore ? { sessionStore: params.sessionStore } : {}),
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+    agentId: params.agentId,
+    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+  });
+
+  const appended = await appendUserTurnTranscriptMessage({
+    transcriptPath: sessionFile,
+    message,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.updateMode ? { updateMode: params.updateMode } : {}),
+  });
+  if (!appended) {
+    return undefined;
+  }
+
+  return {
+    ...appended,
+    sessionEntry,
+  };
 }
