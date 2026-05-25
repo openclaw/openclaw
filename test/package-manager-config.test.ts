@@ -69,12 +69,7 @@ describe("package manager build policy", () => {
     ) as WorkspaceDependencyPolicy;
     const shrinkwrap = readJson("npm-shrinkwrap.json") as NpmShrinkwrap;
 
-    for (const packageName of [
-      "@anthropic-ai/sdk",
-      "hono",
-      "@aws-sdk/client-bedrock-runtime",
-      "protobufjs",
-    ]) {
+    for (const packageName of ["@anthropic-ai/sdk", "hono", "protobufjs"]) {
       expect(shrinkwrap.packages?.[`node_modules/${packageName}`]?.version).toBe(
         String(workspace.overrides?.[packageName]),
       );

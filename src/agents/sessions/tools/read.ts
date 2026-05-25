@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
@@ -18,14 +18,9 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  type TruncationResult,
-  truncateHead,
-} from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -34,12 +29,7 @@ const readSchema = Type.Object({
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
 });
-
-export type ReadToolInput = Static<typeof readSchema>;
-
-export interface ReadToolDetails {
-  truncation?: TruncationResult;
-}
+export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";

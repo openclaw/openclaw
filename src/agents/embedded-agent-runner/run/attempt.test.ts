@@ -1,5 +1,5 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { streamSimple } from "../../../llm/stream.js";
 
 vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),

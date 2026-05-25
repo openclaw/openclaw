@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("provider-local-service");

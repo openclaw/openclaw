@@ -298,6 +298,8 @@ describe("provider-runtime", () => {
         resolveExternalAuthProfileProviderPluginIdsMock(params as never),
       resolveOwningPluginIdsForProvider: (params: unknown) =>
         resolveOwningPluginIdsForProviderMock(params as never),
+      resolveOwningPluginIdsForProviderRef: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
@@ -415,6 +417,92 @@ describe("provider-runtime", () => {
     expectProviderRuntimePluginLoad({
       provider: "claude-cli",
       expectedPluginId: "anthropic",
+    });
+  });
+
+  it("passes model refs for cli-backend runtime hook lookup", () => {
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
+        auth: [],
+      },
+    ]);
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "claude-cli",
+      modelId: "claude-sonnet-4-6",
+    });
+
+    expect(plugin?.id).toBe("anthropic");
+    expectRecordFields(getLastResolvePluginProvidersParams(), {
+      providerRefs: ["claude-cli"],
+      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
+    });
+  });
+
+  it("derives model refs from runtime hook contexts", () => {
+    const createStreamFn = vi.fn();
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
+        auth: [],
+        createStreamFn,
+      },
+    ]);
+
+    resolveProviderStreamFn({
+      provider: "claude-cli",
+      context: {
+        config: undefined,
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        model: MODEL,
+      },
+    });
+
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expectRecordFields(getLastResolvePluginProvidersParams(), {
+      providerRefs: ["claude-cli"],
+      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
+    });
+  });
+
+  it("retries empty runtime handles with context model refs", () => {
+    const resolveSystemPromptContribution = vi.fn(() => ({
+      stablePrefix: "anthropic cli prompt",
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
+        auth: [],
+        resolveSystemPromptContribution,
+      },
+    ]);
+
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "claude-cli",
+      runtimeHandle: {
+        provider: "claude-cli",
+        plugin: undefined,
+      },
+      context: {
+        provider: "claude-cli",
+        modelId: "claude-sonnet-4-6",
+        promptMode: "full",
+      },
+    });
+
+    expect(contribution?.stablePrefix).toBe("anthropic cli prompt");
+    expect(resolveSystemPromptContribution).toHaveBeenCalledOnce();
+    expectRecordFields(getLastResolvePluginProvidersParams(), {
+      providerRefs: ["claude-cli"],
+      modelRefs: ["claude-cli/claude-sonnet-4-6", "claude-sonnet-4-6"],
     });
   });
 

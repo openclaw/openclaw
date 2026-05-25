@@ -3,7 +3,7 @@ import { getApiProvider } from "./api-registry.js";
 import type {
   Api,
   AssistantMessage,
-  AssistantMessageEventStream,
+  AssistantMessageEventStreamContract,
   Context,
   Model,
   ProviderStreamOptions,
@@ -25,7 +25,7 @@ export function stream<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: ProviderStreamOptions,
-): AssistantMessageEventStream {
+): AssistantMessageEventStreamContract {
   const provider = resolveApiProvider(model.api);
   return provider.stream(model, context, options as StreamOptions);
 }
@@ -43,7 +43,7 @@ export function streamSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: SimpleStreamOptions,
-): AssistantMessageEventStream {
+): AssistantMessageEventStreamContract {
   const provider = resolveApiProvider(model.api);
   return provider.streamSimple(model, context, options);
 }

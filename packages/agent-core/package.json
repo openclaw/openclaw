@@ -53,6 +53,10 @@
       "types": "./dist/harness/messages.d.ts",
       "default": "./dist/harness/messages.js"
     },
+    "./harness/env/kill-tree": {
+      "types": "./dist/harness/env/kill-tree.d.ts",
+      "default": "./dist/harness/env/kill-tree.js"
+    },
     "./harness/session": {
       "types": "./dist/harness/session.d.ts",
       "default": "./dist/harness/session.js"

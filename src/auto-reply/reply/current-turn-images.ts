@@ -1,7 +1,7 @@
-import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ImageContent } from "../../llm/types.js";
 import { mimeTypeFromFilePath } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";

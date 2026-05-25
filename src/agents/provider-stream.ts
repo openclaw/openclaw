@@ -1,5 +1,5 @@
-import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";

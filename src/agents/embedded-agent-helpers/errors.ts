@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,

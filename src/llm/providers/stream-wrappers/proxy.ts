@@ -1,4 +1,3 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { resolveProviderRequestPolicy } from "../../../agents/provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
@@ -7,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "../../../shared/string-coerce.js";
+import { streamSimple } from "../../stream.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";

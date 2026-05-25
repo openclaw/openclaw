@@ -1,4 +1,4 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "../../llm/types.js";
 
 type AgentModelWithOptionalContextTokens = Model & {
   contextTokens?: number;

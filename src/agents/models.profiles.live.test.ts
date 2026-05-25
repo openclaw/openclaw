@@ -1,12 +1,5 @@
 import { writeSync } from "node:fs";
-import {
-  type Api,
-  completeSimple,
-  getModels,
-  getProviders,
-  type KnownProvider,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -25,7 +18,6 @@ import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isHighSignalLiveModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
@@ -100,45 +92,6 @@ function parseModelFilter(raw?: string): Set<string> | null {
 
 function logProgress(message: string): void {
   writeSync(2, `[live] ${message}\n`);
-}
-
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
-
-function loadPrioritizedHighSignalModels(): Model[] {
-  const idsByProvider = new Map<string, Set<string>>();
-  for (const ref of listPrioritizedHighSignalLiveModelRefs()) {
-    const bucket = idsByProvider.get(ref.provider);
-    if (bucket) {
-      bucket.add(ref.id);
-    } else {
-      idsByProvider.set(ref.provider, new Set([ref.id]));
-    }
-  }
-
-  const models: Model[] = [];
-  const seen = new Set<string>();
-  for (const [provider, ids] of idsByProvider) {
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
-      const id = model.id.toLowerCase();
-      if (!ids.has(id)) {
-        continue;
-      }
-      const key = `${provider}/${id}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push(model);
-    }
-  }
-  return models;
 }
 
 function formatElapsedSeconds(ms: number): string {
@@ -782,8 +735,7 @@ describeLive("live models (profile keys)", () => {
       const allowNotFoundSkip = useModern;
       const models = await (async () => {
         if (useDefaultPriorityOnly) {
-          logProgress("[live-models] loading prioritized model refs");
-          return loadPrioritizedHighSignalModels();
+          logProgress("[live-models] loading configured prioritized model refs");
         }
         logProgress("[live-models] loading auth storage");
         const authStorage = await withLiveStageTimeout(

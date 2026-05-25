@@ -1,17 +1,17 @@
-import {
-  streamSimple,
-  type AssistantMessageEvent,
-  type ImageContent,
-  type Message,
-  type Model,
-  type TextContent,
-} from "openclaw/plugin-sdk/llm";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import { streamSimple } from "../llm/stream.js";
+import {
+  type AssistantMessageEvent,
+  type ImageContent,
+  type Message,
+  type Model,
+  type TextContent,
+} from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
@@ -22,6 +22,7 @@ import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./bt
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
+import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
 import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,

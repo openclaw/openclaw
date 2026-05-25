@@ -1,4 +1,4 @@
-import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Api, Context, Model } from "../llm/types.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([

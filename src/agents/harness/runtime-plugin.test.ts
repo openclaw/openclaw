@@ -16,6 +16,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveActivatableProviderOwnerPluginIds: mocks.resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds: mocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: mocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: mocks.resolveOwningPluginIdsForProvider,
 }));
 
 describe("ensureSelectedAgentHarnessPlugin", () => {

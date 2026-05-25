@@ -580,7 +580,7 @@ describe("resolveModel", () => {
       authStorage: { mocked: true } as never,
       modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
       runtimeHooks: createRuntimeHooks(),
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
     });
 
     expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({

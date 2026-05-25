@@ -86,7 +86,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
   model: Model<"openai-responses">,
   context: Context,
   options?: OpenAIResponsesOptions,
-): AssistantMessageEventStream => {
+) => {
   const stream = new AssistantMessageEventStream();
 
   // Start async processing
@@ -169,11 +169,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 export const streamSimpleOpenAIResponses: StreamFunction<
   "openai-responses",
   SimpleStreamOptions
-> = (
-  model: Model<"openai-responses">,
-  context: Context,
-  options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+> = (model: Model<"openai-responses">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);

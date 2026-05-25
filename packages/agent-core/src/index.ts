@@ -5,6 +5,7 @@ export * from "./runtime-deps.js";
 export * from "./types.js";
 export * from "./validation.js";
 export * from "./harness/agent-harness.js";
+export * from "./harness/env/kill-tree.js";
 export * from "./harness/messages.js";
 export * from "./harness/prompt-templates.js";
 export * from "./harness/skills.js";

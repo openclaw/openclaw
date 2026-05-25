@@ -1,5 +1,5 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { StreamFn } from "../../../agents/runtime/index.js";
+import { streamSimple } from "../../stream.js";
 
 const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
   ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],

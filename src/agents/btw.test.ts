@@ -25,9 +25,8 @@ const registerProviderStreamForModelMock = vi.fn();
 const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/llm", async () => {
-  const original =
-    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
+vi.mock("../llm/stream.js", async () => {
+  const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -41,7 +40,7 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
+vi.mock("./sessions/session-manager.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   generateSummary: vi.fn(async () => "summary"),
   migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
@@ -89,7 +88,7 @@ vi.mock("./provider-stream.js", () => ({
     registerProviderStreamForModelMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/stream-resolution.js", () => ({
+vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
   resolveEmbeddedAgentStreamFn: (...args: unknown[]) => resolveEmbeddedAgentStreamFnMock(...args),
 }));
 

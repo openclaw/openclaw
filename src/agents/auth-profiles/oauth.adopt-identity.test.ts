@@ -45,7 +45,7 @@ function expectPersistedOpenAICodexProfile(
 // sub-agent store. Unit tests cover policy variants; this suite proves each
 // production branch refuses a mismatched accountId.
 
-vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
 }));

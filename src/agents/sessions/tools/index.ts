@@ -1,20 +1,31 @@
 export {
-  type BashOperations,
   type BashSpawnContext,
   type BashSpawnHook,
-  type BashToolDetails,
-  type BashToolInput,
   type BashToolOptions,
   createBashTool,
   createBashToolDefinition,
   createLocalBashOperations,
 } from "./bash.js";
+export type { BashOperations } from "./bash-operations.js";
+export type {
+  BashToolDetails,
+  BashToolInput,
+  EditToolDetails,
+  EditToolInput,
+  FindToolDetails,
+  FindToolInput,
+  GrepToolDetails,
+  GrepToolInput,
+  LsToolDetails,
+  LsToolInput,
+  ReadToolDetails,
+  ReadToolInput,
+  WriteToolInput,
+} from "./tool-contracts.js";
 export {
   createEditTool,
   createEditToolDefinition,
   type EditOperations,
-  type EditToolDetails,
-  type EditToolInput,
   type EditToolOptions,
 } from "./edit.js";
 export { withFileMutationQueue } from "./file-mutation-queue.js";
@@ -22,32 +33,24 @@ export {
   createFindTool,
   createFindToolDefinition,
   type FindOperations,
-  type FindToolDetails,
-  type FindToolInput,
   type FindToolOptions,
 } from "./find.js";
 export {
   createGrepTool,
   createGrepToolDefinition,
   type GrepOperations,
-  type GrepToolDetails,
-  type GrepToolInput,
   type GrepToolOptions,
 } from "./grep.js";
 export {
   createLsTool,
   createLsToolDefinition,
   type LsOperations,
-  type LsToolDetails,
-  type LsToolInput,
   type LsToolOptions,
 } from "./ls.js";
 export {
   createReadTool,
   createReadToolDefinition,
   type ReadOperations,
-  type ReadToolDetails,
-  type ReadToolInput,
   type ReadToolOptions,
 } from "./read.js";
 export {
@@ -64,7 +67,6 @@ export {
   createWriteTool,
   createWriteToolDefinition,
   type WriteOperations,
-  type WriteToolInput,
   type WriteToolOptions,
 } from "./write.js";
 

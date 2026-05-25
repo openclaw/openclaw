@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Context, Model } from "../llm/types.js";
 
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
 

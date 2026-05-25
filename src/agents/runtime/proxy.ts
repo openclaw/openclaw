@@ -8,13 +8,13 @@ import {
   type AssistantMessage,
   type AssistantMessageEvent,
   type Context,
-  EventStream,
   type Model,
-  parseStreamingJson,
   type SimpleStreamOptions,
   type StopReason,
   type ToolCall,
-} from "openclaw/plugin-sdk/llm";
+} from "../../llm/types.js";
+import { EventStream } from "../../llm/utils/event-stream.js";
+import { parseStreamingJson } from "../../llm/utils/json-parse.js";
 
 type StreamingToolCall = ToolCall & { partialJson?: string };
 

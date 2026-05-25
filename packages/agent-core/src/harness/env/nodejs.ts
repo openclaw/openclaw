@@ -27,6 +27,7 @@ import {
   type Result,
   toError,
 } from "../types.js";
+import { killProcessTree } from "./kill-tree.js";
 
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
@@ -139,7 +140,7 @@ async function runCommand(
     }
     const timeout = setTimeout(() => {
       if (child.pid) {
-        killProcessTree(child.pid);
+        killProcessTree(child.pid, { force: true });
       }
     }, timeoutMs);
     child.stdout?.setEncoding("utf8");
@@ -223,31 +224,6 @@ function getShellEnv(
   };
 }
 
-function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        detached: true,
-        windowsHide: true,
-      });
-    } catch {
-      // Ignore errors.
-    }
-    return;
-  }
-
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Process already dead.
-    }
-  }
-}
-
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;
@@ -299,7 +275,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
 
       const onAbort = () => {
         if (child?.pid) {
-          killProcessTree(child.pid);
+          killProcessTree(child.pid, { force: true });
         }
       };
 
@@ -338,7 +314,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           ? setTimeout(() => {
               timedOut = true;
               if (child?.pid) {
-                killProcessTree(child.pid);
+                killProcessTree(child.pid, { force: true });
               }
             }, options.timeout * 1000)
           : undefined;

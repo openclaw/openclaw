@@ -19,6 +19,18 @@ vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
   ),
 }));
 
+vi.mock("../src/llm/oauth.js", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+  loginOpenAICodex: vi.fn(),
+  refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
+    (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
+      ...args,
+    ),
+  ),
+  resetOAuthProviders: vi.fn(),
+}));
+
 vi.mock("@mariozechner/clipboard", () => ({
   availableFormats: () => [],
   getText: async () => "",

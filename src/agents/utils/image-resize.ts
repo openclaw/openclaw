@@ -1,4 +1,4 @@
-import type { ImageContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent } from "../../llm/types.js";
 import { applyExifOrientation } from "./exif-orientation.js";
 import { loadPhoton } from "./photon.js";
 

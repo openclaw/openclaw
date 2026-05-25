@@ -1,14 +1,15 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import type { LsToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 const lsSchema = Type.Object({
   path: Type.Optional(
@@ -18,15 +19,9 @@ const lsSchema = Type.Object({
     Type.Number({ description: "Maximum number of entries to return (default: 500)" }),
   ),
 });
-
-export type LsToolInput = Static<typeof lsSchema>;
+export type { LsToolDetails, LsToolInput } from "./tool-contracts.js";
 
 const DEFAULT_LIMIT = 500;
-
-export interface LsToolDetails {
-  truncation?: TruncationResult;
-  entryLimitReached?: number;
-}
 
 /**
  * Pluggable operations for the ls tool.

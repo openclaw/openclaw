@@ -3,19 +3,19 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import type { GrepToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
   GREP_MAX_LINE_LENGTH,
-  type TruncationResult,
   truncateHead,
   truncateLine,
 } from "./truncate.js";
@@ -45,15 +45,8 @@ const grepSchema = Type.Object({
     Type.Number({ description: "Maximum number of matches to return (default: 100)" }),
   ),
 });
-
-export type GrepToolInput = Static<typeof grepSchema>;
+export type { GrepToolDetails, GrepToolInput } from "./tool-contracts.js";
 const DEFAULT_LIMIT = 100;
-
-export interface GrepToolDetails {
-  truncation?: TruncationResult;
-  matchLimitReached?: number;
-  linesTruncated?: boolean;
-}
 
 /**
  * Pluggable operations for the grep tool.

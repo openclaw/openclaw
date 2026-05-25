@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";

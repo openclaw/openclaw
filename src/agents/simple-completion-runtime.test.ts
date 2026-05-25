@@ -1,6 +1,6 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -14,7 +14,7 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/llm", () => ({
+vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 

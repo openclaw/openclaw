@@ -36,8 +36,6 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   }
 }
 
-import type { KnownProvider } from "./types.js";
-
 let procEnvCache: Map<string, string> | null = null;
 
 function getProcessEnv(): NodeJS.ProcessEnv | undefined {
@@ -172,8 +170,6 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
  * credential sources such as AWS profiles, AWS IAM credentials, and Google
  * Application Default Credentials.
  */
-export function findEnvKeys(provider: KnownProvider): string[] | undefined;
-export function findEnvKeys(provider: string): string[] | undefined;
 export function findEnvKeys(provider: string): string[] | undefined {
   const envVars = getApiKeyEnvVars(provider);
   if (!envVars) {
@@ -189,8 +185,6 @@ export function findEnvKeys(provider: string): string[] | undefined {
  *
  * Will not return API keys for providers that require OAuth tokens.
  */
-export function getEnvApiKey(provider: KnownProvider): string | undefined;
-export function getEnvApiKey(provider: string): string | undefined;
 export function getEnvApiKey(provider: string): string | undefined {
   const envKeys = findEnvKeys(provider);
   if (envKeys?.[0]) {

@@ -1,3 +1,4 @@
+import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
@@ -17,7 +18,7 @@ export function buildOpenClawToolFallbackText(params: {
   execToolName: string;
   processToolName: string;
 }): string {
-  if (params.surface === "openclaw_main" || params.surface === "pi_main") {
+  if (isOpenClawMainPromptSurface(params.surface)) {
     return [
       "OpenClaw lists the standard tools above. This runtime enables:",
       "- grep: search file contents for patterns",
@@ -47,7 +48,7 @@ export function shouldRenderOpenClawToolWorkflowHints(params: {
   surface: AgentPromptSurfaceKind;
   hasToolList: boolean;
 }): boolean {
-  return params.surface === "openclaw_main" || params.surface === "pi_main";
+  return isOpenClawMainPromptSurface(params.surface);
 }
 
 export function resolveAgentPromptSurfaceForSessionKey(

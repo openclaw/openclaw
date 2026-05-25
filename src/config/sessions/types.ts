@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Skill } from "../../agents/sessions/index.js";
+import type { Skill } from "../../agents/skills/skill-contract.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";

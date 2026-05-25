@@ -7,7 +7,7 @@
 
 import type { Server } from "node:http";
 import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generatePKCE } from "./pkce.js";
+import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
@@ -263,7 +263,8 @@ export async function loginAnthropic(options: {
   onManualCodeInput?: () => Promise<string>;
 }): Promise<OAuthCredentials> {
   const { verifier, challenge } = await generatePKCE();
-  const server = await startCallbackServer(verifier);
+  const expectedState = generateOAuthState();
+  const server = await startCallbackServer(expectedState);
 
   let code: string | undefined;
   let state: string | undefined;
@@ -278,7 +279,7 @@ export async function loginAnthropic(options: {
       scope: SCOPES,
       code_challenge: challenge,
       code_challenge_method: "S256",
-      state: verifier,
+      state: expectedState,
     });
 
     options.onAuth({
@@ -313,11 +314,11 @@ export async function loginAnthropic(options: {
         redirectUriForExchange = REDIRECT_URI;
       } else if (manualInput) {
         const parsed = parseAuthorizationInput(manualInput);
-        if (parsed.state && parsed.state !== verifier) {
+        if (parsed.state && parsed.state !== expectedState) {
           throw new Error("OAuth state mismatch");
         }
         code = parsed.code;
-        state = parsed.state ?? verifier;
+        state = parsed.state ?? expectedState;
       }
 
       if (!code) {
@@ -327,11 +328,11 @@ export async function loginAnthropic(options: {
         }
         if (manualInput) {
           const parsed = parseAuthorizationInput(manualInput);
-          if (parsed.state && parsed.state !== verifier) {
+          if (parsed.state && parsed.state !== expectedState) {
             throw new Error("OAuth state mismatch");
           }
           code = parsed.code;
-          state = parsed.state ?? verifier;
+          state = parsed.state ?? expectedState;
         }
       }
     } else {
@@ -349,11 +350,11 @@ export async function loginAnthropic(options: {
         placeholder: REDIRECT_URI,
       });
       const parsed = parseAuthorizationInput(input);
-      if (parsed.state && parsed.state !== verifier) {
+      if (parsed.state && parsed.state !== expectedState) {
         throw new Error("OAuth state mismatch");
       }
       code = parsed.code;
-      state = parsed.state ?? verifier;
+      state = parsed.state ?? expectedState;
     }
 
     if (!code) {

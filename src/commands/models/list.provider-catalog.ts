@@ -1,4 +1,3 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
   createProviderApiKeyResolver,
@@ -8,6 +7,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../../plugins/provider-discovery.js";
 import {
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { sortUniqueStrings } from "../../shared/string-normalization.js";
@@ -126,7 +126,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   if (installedIndexPluginIds) {
     return installedIndexPluginIds;
   }
-  const manifestPluginIds = resolveOwningPluginIdsForProvider({
+  const manifestPluginIds = resolveOwningPluginIdsForProviderRef({
     provider: providerFilter,
     config: params.cfg,
     env: params.env,

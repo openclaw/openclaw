@@ -14,6 +14,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 
 const TOOLS_DIR = getBinDir();
@@ -118,35 +119,51 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 
 // Fetch latest release version from GitHub
 async function getLatestVersion(repo: string): Promise<string> {
-  const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-    headers: { "User-Agent": `${APP_NAME}-coding-agent` },
-    signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+  const guarded = await fetchWithSsrFGuard({
+    url: `https://api.github.com/repos/${repo}/releases/latest`,
+    timeoutMs: NETWORK_TIMEOUT_MS,
+    auditContext: "tools-manager-release-check",
+    init: {
+      headers: { "User-Agent": `${APP_NAME}-coding-agent` },
+    },
   });
+  const { response } = guarded;
 
-  if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status}`);
+  try {
+    if (!response.ok) {
+      throw new Error(`GitHub API error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as { tag_name: string };
+    return data.tag_name.replace(/^v/, "");
+  } finally {
+    await guarded.release();
   }
-
-  const data = (await response.json()) as { tag_name: string };
-  return data.tag_name.replace(/^v/, "");
 }
 
 // Download a file from URL
 async function downloadFile(url: string, dest: string): Promise<void> {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+  const guarded = await fetchWithSsrFGuard({
+    url,
+    timeoutMs: DOWNLOAD_TIMEOUT_MS,
+    auditContext: "tools-manager-download",
   });
+  const { response } = guarded;
 
-  if (!response.ok) {
-    throw new Error(`Failed to download: ${response.status}`);
+  try {
+    if (!response.ok) {
+      throw new Error(`Failed to download: ${response.status}`);
+    }
+
+    if (!response.body) {
+      throw new Error("No response body");
+    }
+
+    const fileStream = createWriteStream(dest);
+    await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+  } finally {
+    await guarded.release();
   }
-
-  if (!response.body) {
-    throw new Error("No response body");
-  }
-
-  const fileStream = createWriteStream(dest);
-  await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
 }
 
 function findBinaryRecursively(rootDir: string, binaryFileName: string): string | null {

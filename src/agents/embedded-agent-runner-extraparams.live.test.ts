@@ -1,5 +1,5 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { getModel, streamSimple } from "openclaw/plugin-sdk/llm";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
@@ -16,7 +16,18 @@ const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : descr
 
 describeLive("embedded agent extra params (live)", () => {
   it("applies config max_completion_tokens alias to openai streamFn", async () => {
-    const model = getModel("openai", "gpt-5.4") as unknown as Model<"openai-completions">;
+    const model: Model<"openai-responses"> = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    };
 
     const cfg: OpenClawConfig = {
       agents: {

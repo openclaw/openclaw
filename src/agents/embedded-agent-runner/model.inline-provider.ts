@@ -1,6 +1,6 @@
-import type { Api } from "openclaw/plugin-sdk/llm";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
+import type { Api } from "../../llm/types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";

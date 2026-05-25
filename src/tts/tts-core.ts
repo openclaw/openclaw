@@ -1,4 +1,3 @@
-import { completeSimple, type TextContent } from "openclaw/plugin-sdk/llm";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -9,6 +8,8 @@ import {
 } from "../agents/model-selection.js";
 import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { completeSimple } from "../llm/stream.js";
+import type { TextContent } from "../llm/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {

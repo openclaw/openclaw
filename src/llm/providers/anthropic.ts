@@ -434,7 +434,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   model: Model<"anthropic-messages">,
   context: Context,
   options?: AnthropicOptions,
-): AssistantMessageEventStream => {
+) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -765,7 +765,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   model: Model<"anthropic-messages">,
   context: Context,
   options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);

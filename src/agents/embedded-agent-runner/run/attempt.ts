@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
@@ -35,6 +34,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
@@ -1178,7 +1178,7 @@ function sessionMessagesContainIdempotencyKey(
 }
 
 function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
+  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
 }
 
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
@@ -1242,7 +1242,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     }>;
     byId?: Map<string, unknown>;
     leafId?: string | null;
-    _rewriteFile?: () => void;
+    rewriteFile?: () => void;
   };
   const lastEntry = mutableSessionManager.fileEntries?.at(-1);
   if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
@@ -1253,7 +1253,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     }
     return;
   }
-  if (typeof mutableSessionManager["_rewriteFile"] !== "function") {
+  if (typeof mutableSessionManager.rewriteFile !== "function") {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
     );
@@ -1264,7 +1264,7 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     mutableSessionManager.byId?.delete(lastEntry.id);
   }
   mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager["_rewriteFile"]();
+  mutableSessionManager.rewriteFile();
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {

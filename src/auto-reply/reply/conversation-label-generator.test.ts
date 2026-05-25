@@ -8,9 +8,9 @@ const resolveDefaultModelForAgent = vi.hoisted(() => vi.fn());
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const prepareModelForSimpleCompletion = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/llm", async () => {
+vi.mock("../../llm/stream.js", async () => {
   const original =
-    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
+    await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
   return {
     ...original,
     completeSimple,

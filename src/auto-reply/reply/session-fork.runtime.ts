@@ -7,7 +7,7 @@ import {
   type FileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-} from "../../agents/sessions/index.js";
+} from "../../agents/sessions/session-manager.js";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
   resolveSessionFilePath,

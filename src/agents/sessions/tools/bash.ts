@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
@@ -15,15 +15,12 @@ import {
   untrackDetachedChildPid,
 } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
+import type { BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import {
-  DEFAULT_MAX_BYTES,
-  DEFAULT_MAX_LINES,
-  formatSize,
-  type TruncationResult,
-} from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
@@ -31,37 +28,9 @@ const bashSchema = Type.Object({
     Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
   ),
 });
+export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
 
-export type BashToolInput = Static<typeof bashSchema>;
-
-export interface BashToolDetails {
-  truncation?: TruncationResult;
-  fullOutputPath?: string;
-}
-
-/**
- * Pluggable operations for the bash tool.
- * Override these to delegate command execution to remote systems (for example SSH).
- */
-export interface BashOperations {
-  /**
-   * Execute a command and stream output.
-   * @param command The command to execute
-   * @param cwd Working directory
-   * @param options Execution options
-   * @returns Promise resolving to exit code (null if killed)
-   */
-  exec: (
-    command: string,
-    cwd: string,
-    options: {
-      onData: (data: Buffer) => void;
-      signal?: AbortSignal;
-      timeout?: number;
-      env?: NodeJS.ProcessEnv;
-    },
-  ) => Promise<{ exitCode: number | null }>;
-}
+export type { BashOperations } from "./bash-operations.js";
 
 /**
  * Create bash operations using OpenClaw runtime's built-in local shell execution backend.

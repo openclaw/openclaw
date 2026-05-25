@@ -1,11 +1,8 @@
-import {
-  completeSimple,
-  type Model,
-  type ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "openclaw/plugin-sdk/llm";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { completeSimple } from "../llm/stream.js";
+import type { Model, ThinkingLevel as SimpleCompletionThinkingLevel } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";

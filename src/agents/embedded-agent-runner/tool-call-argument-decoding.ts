@@ -1,4 +1,4 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import { streamSimple } from "../../llm/stream.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";

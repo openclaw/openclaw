@@ -1,6 +1,10 @@
+import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   PluginLruCache,
@@ -31,6 +35,7 @@ const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
 
 export type ProviderRuntimePluginLookupParams = {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -71,6 +76,7 @@ function resolveProviderRuntimePluginCacheKey(
 ): string {
   return JSON.stringify({
     provider: normalizeLowercaseStringOrEmpty(params.provider),
+    modelId: resolveProviderRuntimeLookupModelId(params) ?? null,
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
@@ -90,6 +96,37 @@ function resolveProviderRuntimePluginCacheKey(
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(providerId);
   return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
+}
+
+function resolveProviderRuntimeLookupModelId(
+  params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
+): string | undefined {
+  return normalizeOptionalString(
+    params.modelId ??
+      (typeof params.context?.modelId === "string" ? params.context.modelId : undefined),
+  );
+}
+
+function resolveProviderRuntimeLookupScope(
+  params: ProviderRuntimePluginLookupParams,
+  apiOwnerHint?: string,
+): {
+  providerRefs: string[];
+  modelRefs?: string[];
+} {
+  const providerRefs = apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider];
+  const modelId = resolveProviderRuntimeLookupModelId(params);
+  if (!modelId) {
+    return { providerRefs };
+  }
+  return {
+    providerRefs,
+    modelRefs: resolveModelCatalogScope({
+      cfg: params.config,
+      provider: params.provider,
+      model: modelId,
+    }).modelRefs,
+  };
 }
 
 function findProviderRuntimePluginInLoadedRegistries(params: {
@@ -154,6 +191,7 @@ export function resolveProviderPluginsForHooks(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
@@ -221,12 +259,14 @@ export function resolveProviderRuntimePlugin(
   const registryState = getPluginRegistryState();
   const cacheKey = resolveProviderRuntimePluginCacheKey(lookup, registryState);
   const load = () => {
+    const lookupScope = resolveProviderRuntimeLookupScope(params, apiOwnerHint);
     return (
       resolveProviderPluginsForHooks({
         config: params.config,
         workspaceDir,
         env,
-        providerRefs,
+        providerRefs: lookupScope.providerRefs,
+        modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
         bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
         bundledProviderVitestCompat: params.bundledProviderVitestCompat,
@@ -313,7 +353,23 @@ export function resolveProviderRuntimePluginHandle(
 export function ensureProviderRuntimePluginHandle(
   params: ProviderRuntimePluginHandleParams,
 ): ProviderRuntimePluginHandle {
-  return params.runtimeHandle ?? resolveProviderRuntimePluginHandle(params);
+  const modelId = resolveProviderRuntimeLookupModelId(params);
+  if (
+    !params.runtimeHandle ||
+    (modelId && !params.runtimeHandle.plugin && params.runtimeHandle.modelId !== modelId)
+  ) {
+    return resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId,
+      config: params.config ?? params.runtimeHandle?.config,
+      workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
+      env: params.env ?? params.runtimeHandle?.env,
+      applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
+      bundledProviderAllowlistCompat: params.runtimeHandle?.bundledProviderAllowlistCompat,
+      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
+    });
+  }
+  return params.runtimeHandle;
 }
 
 export function prepareProviderExtraParams(params: {

@@ -1,4 +1,4 @@
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "../llm/types.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import type { StreamFn } from "./runtime/index.js";
 

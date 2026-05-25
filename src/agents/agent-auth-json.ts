@@ -42,8 +42,7 @@ async function readAuthJson(rootDir: string, filePath: string): Promise<AuthJson
  *
  * OpenClaw stores credentials in auth-profiles.json instead. This helper
  * bridges all credentials into agentDir/auth.json so session runtime can
- * (a) consider providers authenticated and (b) include built-in models in its
- * registry/catalog output.
+ * consider provider-owned configured models authenticated.
  *
  * Syncs all credential types: api_key, token (as api_key), and oauth.
  *

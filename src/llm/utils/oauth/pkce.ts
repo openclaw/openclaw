@@ -32,3 +32,9 @@ export async function generatePKCE(): Promise<{ verifier: string; challenge: str
 
   return { verifier, challenge };
 }
+
+export function generateOAuthState(): string {
+  const stateBytes = new Uint8Array(32);
+  crypto.getRandomValues(stateBytes);
+  return base64urlEncode(stateBytes);
+}

@@ -522,21 +522,69 @@ export function resolveOwningPluginIdsForProvider(params: {
     }).manifestRegistry;
 
   const pluginIds = manifestRegistry.plugins
-    .filter(
-      (plugin) =>
-        plugin.providers.some(
-          (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-        ) ||
-        plugin.cliBackends.some(
-          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
-        ) ||
-        (plugin.setup?.cliBackends ?? []).some(
-          (backendId) => normalizeProviderId(backendId) === normalizedProvider,
-        ),
+    .filter((plugin) =>
+      plugin.providers.some(
+        (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+      ),
     )
     .map((plugin) => plugin.id);
 
   return pluginIds.length > 0 ? pluginIds : undefined;
+}
+
+function resolveOwningPluginIdsForCliBackend(params: {
+  backend: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+}): string[] | undefined {
+  const normalizedBackend = normalizeProviderId(params.backend);
+  if (!normalizedBackend) {
+    return undefined;
+  }
+
+  const manifestRegistry =
+    params.manifestRegistry ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env ?? process.env,
+    }).manifestRegistry;
+
+  const pluginIds = manifestRegistry.plugins
+    .filter(
+      (plugin) =>
+        plugin.cliBackends.some(
+          (backendId) => normalizeProviderId(backendId) === normalizedBackend,
+        ) ||
+        (plugin.setup?.cliBackends ?? []).some(
+          (backendId) => normalizeProviderId(backendId) === normalizedBackend,
+        ),
+    )
+    .map((plugin) => plugin.id);
+
+  const deduped = dedupeSortedPluginIds(pluginIds);
+  return deduped.length > 0 ? deduped : undefined;
+}
+
+export function resolveOwningPluginIdsForProviderRef(params: {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+}): string[] | undefined {
+  return (
+    resolveOwningPluginIdsForProvider(params) ??
+    resolveOwningPluginIdsForCliBackend({
+      backend: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      manifestRegistry: params.manifestRegistry,
+    })
+  );
 }
 
 export function resolveOwningPluginIdsForModelRef(params: {
@@ -553,13 +601,23 @@ export function resolveOwningPluginIdsForModelRef(params: {
   }
 
   if (parsed.provider) {
-    return resolveOwningPluginIdsForProvider({
+    const providerOwners = resolveOwningPluginIdsForProvider({
       provider: parsed.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
       manifestRegistry: params.manifestRegistry,
     });
+    return (
+      providerOwners ??
+      resolveOwningPluginIdsForCliBackend({
+        backend: parsed.provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        manifestRegistry: params.manifestRegistry,
+      })
+    );
   }
 
   const manifestRegistry = resolveManifestRegistry({

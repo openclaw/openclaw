@@ -32,6 +32,7 @@ const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+let resolveOwningPluginIdsForProviderRef: typeof import("./providers.js").resolveOwningPluginIdsForProviderRef;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
@@ -511,6 +512,7 @@ describe("resolvePluginProviders", () => {
     ({
       resolveActivatableProviderOwnerPluginIds,
       resolveOwningPluginIdsForProvider,
+      resolveOwningPluginIdsForProviderRef,
       resolveOwningPluginIdsForModelRef,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
@@ -523,14 +525,14 @@ describe("resolvePluginProviders", () => {
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
-  it("maps cli backend ids to owning plugin ids via manifests", () => {
+  it("does not treat cli backend ids as provider owners", () => {
     setOwningProviderManifestPlugins();
 
-    expectOwningPluginIds("claude-cli", ["anthropic"]);
+    expectOwningPluginIds("claude-cli");
     expectOwningPluginIds("codex-cli");
   });
 
-  it("maps setup-only cli backend ids to owning plugin ids via manifests", () => {
+  it("maps setup-only cli backend ids to explicit provider refs via manifests", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "setup-only-backend-owner",
@@ -539,7 +541,22 @@ describe("resolvePluginProviders", () => {
       }),
     ]);
 
-    expectOwningPluginIds("setup-only-cli", ["setup-only-backend-owner"]);
+    expectOwningPluginIds("setup-only-cli");
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "setup-only-cli" })).toEqual([
+      "setup-only-backend-owner",
+    ]);
+  });
+
+  it("maps explicit provider refs to provider or cli-backend owners", () => {
+    setOwningProviderManifestPlugins();
+
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+  });
+
+  it("maps explicit cli-backend model refs to owning plugin ids", () => {
+    setOwningProviderManifestPlugins();
+
+    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
   });
 
   it("reflects provider ownership manifest changes on the next lookup", () => {
@@ -1595,7 +1612,7 @@ describe("resolvePluginProviders", () => {
     ).toStrictEqual([]);
   });
 
-  it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {
+  it("scopes cli-backend provider refs to their owning plugin", () => {
     setOwningProviderManifestPlugins();
 
     resolvePluginProviders({

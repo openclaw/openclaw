@@ -64,7 +64,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
   model: Model<"google-vertex">,
   context: Context,
   options?: GoogleVertexOptions,
-): AssistantMessageEventStream => {
+) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -308,7 +308,7 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
   model: Model<"google-vertex">,
   context: Context,
   options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+) => {
   const base = buildBaseOptions(model, options, undefined);
   if (!options?.reasoning) {
     return streamGoogleVertex(model, context, {

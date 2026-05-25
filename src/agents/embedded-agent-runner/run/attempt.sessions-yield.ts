@@ -184,7 +184,7 @@ export function stripSessionsYieldArtifacts(activeSession: {
         }>;
         byId?: Map<string, { id: string }>;
         leafId?: string | null;
-        _rewriteFile?: () => void;
+        rewriteFile?: () => void;
       }
     | undefined;
   const fileEntries = sessionManager?.fileEntries;
@@ -216,6 +216,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
     changed = true;
   }
   if (changed) {
-    sessionManager["_rewriteFile"]?.();
+    sessionManager.rewriteFile?.();
   }
 }

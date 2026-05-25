@@ -1,12 +1,7 @@
-import {
-  completeSimple,
-  getModel,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { completeSimple } from "../llm/stream.js";
+import { type Api, type AssistantMessage, type Model } from "../llm/types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
@@ -172,17 +167,35 @@ export async function resolveLiveDirectModelPool(params: {
   envVar: string;
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModelPool> {
-  const liveKeys = collectProviderApiKeys(params.provider);
+  const cfg = getRuntimeConfig();
+  await ensureOpenClawModelsJson(cfg);
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const authStorage = discoverAuthStorage(agentDir);
+  const models = discoverModels(authStorage, agentDir).getAll();
+  const candidates = models.filter(
+    (model) => normalizeProviderId(model.provider) === params.provider && model.api === params.api,
+  );
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
   const requestedModelId =
     parsed && normalizeProviderId(parsed.provider) === params.provider ? parsed.model : rawModel;
+  const selectModel = (): Model | undefined => {
+    if (parsed) {
+      return candidates.find(
+        (model) =>
+          normalizeProviderId(model.provider) === parsed.provider && model.id === parsed.model,
+      );
+    }
+    if (requestedModelId) {
+      return candidates.find((model) => model.id === requestedModelId);
+    }
+    return params.preferredModelIds
+      .map((id) => candidates.find((model) => model.id === id))
+      .find(Boolean);
+  };
+  const liveKeys = collectProviderApiKeys(params.provider);
   if (liveKeys.length > 0) {
-    const selectedModel = requestedModelId
-      ? getModel(params.provider, requestedModelId as never)
-      : params.preferredModelIds
-          .map((id) => getModel(params.provider, id as never))
-          .find((model) => model?.api === params.api);
+    const selectedModel = selectModel();
     if (!selectedModel || selectedModel.api !== params.api) {
       throw new Error(
         requestedModelId
@@ -201,28 +214,7 @@ export async function resolveLiveDirectModelPool(params: {
   }
 
   logLiveCache(`resolving ${params.provider} model from configured auth storage`);
-  const cfg = getRuntimeConfig();
-  await ensureOpenClawModelsJson(cfg);
-  const agentDir = resolveDefaultAgentDir(cfg);
-  const authStorage = discoverAuthStorage(agentDir);
-  const models = discoverModels(authStorage, agentDir).getAll();
-
-  const candidates = models.filter(
-    (model) => normalizeProviderId(model.provider) === params.provider && model.api === params.api,
-  );
-
-  let resolvedModel: Model | undefined;
-  if (parsed) {
-    resolvedModel = candidates.find(
-      (model) =>
-        normalizeProviderId(model.provider) === parsed.provider && model.id === parsed.model,
-    );
-  }
-  if (!resolvedModel) {
-    resolvedModel = params.preferredModelIds
-      .map((id) => candidates.find((model) => model.id === id))
-      .find(Boolean);
-  }
+  const resolvedModel = selectModel();
   if (!resolvedModel) {
     throw new Error(
       rawModel

@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getModel, type Api, type Model } from "openclaw/plugin-sdk/llm";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
@@ -32,45 +32,21 @@ const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
 
-function findOpenAIModel(modelId: string): Model | null {
-  return (getModel("openai", modelId as never) as Model | undefined) ?? null;
-}
-
-function resolveTemplateModelId(modelId: string) {
-  switch (modelId) {
-    case "gpt-5.5":
-      return "gpt-5.4";
-    case "gpt-5.4":
-      return "gpt-5.2";
-    case "gpt-5.4-mini":
-      return "gpt-5-mini";
-    case "gpt-5.4-nano":
-      return "gpt-5-nano";
-    default:
-      throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
-  }
-}
-
 function createLiveModelRegistry(modelId: string): ModelRegistry {
   const registry = new ModelRegistryCtor(AuthStorage.inMemory());
-  const template = findOpenAIModel(modelId) ?? findOpenAIModel(resolveTemplateModelId(modelId));
-  if (!template) {
-    throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
-  }
   registry.registerProvider("openai", {
     apiKey: "test",
-    baseUrl: template.baseUrl,
+    baseUrl: "https://api.openai.com/v1",
     models: [
       {
-        id: template.id,
-        name: template.name,
-        api: template.api,
-        reasoning: template.reasoning,
-        input: template.input,
-        cost: template.cost,
-        contextWindow: template.contextWindow,
-        maxTokens: template.maxTokens,
-        ...(template.compat ? { compat: template.compat } : {}),
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
       },
     ],
   });

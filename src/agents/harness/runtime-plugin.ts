@@ -3,7 +3,7 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -40,7 +40,7 @@ function resolveCodexHarnessPluginIds(params: {
     return ["codex"];
   }
   const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProvider({
+    resolveOwningPluginIdsForProviderRef({
       provider: params.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,

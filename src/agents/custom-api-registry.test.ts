@@ -1,13 +1,15 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearApiProviders,
-  createAssistantMessageEventStream,
   getApiProvider,
-  registerBuiltInApiProviders,
   registerApiProvider,
-  resetApiProviders,
   unregisterApiProviders,
-} from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+} from "../llm/api-registry.js";
+import {
+  registerBuiltInApiProviders,
+  resetApiProviders,
+} from "../llm/providers/register-builtins.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 
 function getRegisteredTestProvider() {

@@ -1,5 +1,5 @@
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
 

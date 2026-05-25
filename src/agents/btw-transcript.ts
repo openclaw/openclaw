@@ -10,7 +10,7 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
   type SessionEntry as AgentSessionEntry,
-} from "./sessions/index.js";
+} from "./sessions/session-manager.js";
 
 export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;

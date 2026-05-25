@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
   api: string;

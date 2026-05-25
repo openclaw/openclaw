@@ -1,4 +1,4 @@
-import type { Context } from "openclaw/plugin-sdk/llm";
+import type { Context } from "../llm/types.js";
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_VERSION = "vscode/1.107.0";

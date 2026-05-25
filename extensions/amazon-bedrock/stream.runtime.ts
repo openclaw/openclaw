@@ -55,7 +55,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options: BedrockOptions = {},
-): AssistantMessageEventStream => {
+) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -271,7 +271,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+) => {
   const base = buildBaseOptions(model, options, undefined);
   if (!options?.reasoning) {
     return streamBedrock(model, context, {

@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -73,11 +74,6 @@ function getReservedCommands(): Set<string> {
 function getAgentPromptSurfaces(): Set<string> {
   agentPromptSurfaces ??= new Set(AGENT_PROMPT_SURFACE_KINDS);
   return agentPromptSurfaces;
-}
-
-function normalizeAgentPromptSurface(value: string): AgentPromptSurfaceKind {
-  const surface = value.trim();
-  return (surface === "pi_main" ? "openclaw_main" : surface) as AgentPromptSurfaceKind;
 }
 
 export type CommandRegistrationResult = {
@@ -268,7 +264,9 @@ function normalizeAgentPromptGuidance(
       text: entry.text.trim(),
     };
     if (entry.surfaces) {
-      normalized.surfaces = entry.surfaces.map(normalizeAgentPromptSurface);
+      normalized.surfaces = entry.surfaces.map((surface) =>
+        normalizeAgentPromptSurfaceKind(surface.trim() as AgentPromptSurfaceKind),
+      );
     }
     return normalized;
   });

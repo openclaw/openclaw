@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
+import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 
 type SubscribeEmbeddedAgentSession = typeof subscribeEmbeddedAgentSession;

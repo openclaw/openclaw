@@ -303,6 +303,7 @@ export function resolveTranscriptPolicy(params: {
     (provider
       ? resolveProviderRuntimePlugin({
           provider,
+          modelId: params.modelId,
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,

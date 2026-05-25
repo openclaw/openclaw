@@ -3,15 +3,16 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
+import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function toPosixPath(value: string): string {
   return value.split(path.sep).join("/");
@@ -26,15 +27,9 @@ const findSchema = Type.Object({
   ),
   limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
 });
-
-export type FindToolInput = Static<typeof findSchema>;
+export type { FindToolDetails, FindToolInput } from "./tool-contracts.js";
 
 const DEFAULT_LIMIT = 1000;
-
-export interface FindToolDetails {
-  truncation?: TruncationResult;
-  resultLimitReached?: number;
-}
 
 /**
  * Pluggable operations for the find tool.

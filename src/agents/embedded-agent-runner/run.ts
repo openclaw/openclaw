@@ -1077,7 +1077,7 @@ export async function runEmbeddedAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let lastCompactionTokensAfter: number | undefined;
-      let lastContextBudgetStatus: EmbeddedPiAgentMeta["contextBudgetStatus"];
+      let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
       let planningOnlyRetryAttempts = 0;

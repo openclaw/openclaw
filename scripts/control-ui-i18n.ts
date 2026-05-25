@@ -9,10 +9,8 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 import {
   completeSimple,
   getModel,
-  getProviders,
   type Api,
   type AssistantMessage,
-  type KnownProvider,
   type Model,
 } from "../src/llm/index.ts";
 
@@ -113,6 +111,31 @@ const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
 const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
+
+type TranslationProvider = "openai" | "anthropic";
+
+const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
+  openai: {
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_000,
+  },
+  anthropic: {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+  },
+};
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -272,12 +295,12 @@ function hasTranslationProvider(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
 }
 
-function resolveKnownTranslationProvider(): KnownProvider {
+function resolveKnownTranslationProvider(): TranslationProvider {
   const provider = resolveConfiguredProvider();
-  if (getProviders().includes(provider as KnownProvider)) {
-    return provider as KnownProvider;
+  if (provider === "openai" || provider === "anthropic") {
+    return provider;
   }
-  throw new Error(`Unknown built-in provider: ${provider}`);
+  throw new Error(`Unsupported translation provider: ${provider}`);
 }
 
 function normalizeText(text: string): string {
@@ -1065,11 +1088,13 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
 export function resolveTranslationModel(): Model {
   const provider = resolveKnownTranslationProvider();
   const modelId = resolveConfiguredModel();
-  const model = getModel(provider, modelId as never);
-  if (!model) {
-    throw new Error(`Unknown built-in model: ${provider}/${modelId}`);
-  }
-  return model as Model;
+  return (
+    getModel(provider, modelId) ?? {
+      ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+      id: modelId,
+      name: modelId,
+    }
+  );
 }
 
 class TranslationClient {

@@ -1,7 +1,6 @@
 import { registerApiProvider, unregisterApiProviders } from "../api-registry.js";
 import type {
   AssistantMessage,
-  AssistantMessageEventStream,
   Context,
   ImageContent,
   Message,
@@ -15,7 +14,10 @@ import type {
   ToolResultMessage,
   Usage,
 } from "../types.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
+} from "../utils/event-stream.js";
 
 const DEFAULT_API = "faux";
 const DEFAULT_PROVIDER = "faux";

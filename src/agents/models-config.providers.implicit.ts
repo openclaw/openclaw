@@ -9,7 +9,7 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -136,7 +136,7 @@ function resolveProviderPluginScopeFromProviderIds(params: {
   for (const id of params.providerIds) {
     const owners =
       params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProvider({
+      resolveOwningPluginIdsForProviderRef({
         provider: id,
         config: params.config,
         workspaceDir: params.workspaceDir,

@@ -169,10 +169,10 @@ function getAttributionHeaders(
  * // Minimal - uses defaults
  * const { session } = await createAgentSession();
  *
- * // With explicit model
- * import { getModel } from 'openclaw/plugin-sdk/llm';
+ * // With explicit model from the configured registry
+ * const model = ModelRegistry.create(AuthStorage.load()).find('anthropic', 'claude-opus-4-5');
  * const { session } = await createAgentSession({
- *   model: getModel('anthropic', 'claude-opus-4-5'),
+ *   model,
  *   thinkingLevel: 'high',
  * });
  *

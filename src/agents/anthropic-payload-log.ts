@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveStateDir } from "../config/paths.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";

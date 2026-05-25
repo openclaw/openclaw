@@ -7,9 +7,6 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
-  getModels,
-  getProviders,
-  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
@@ -1846,11 +1843,6 @@ type LiveModelRegistry = {
   getAll(): Array<Model>;
 };
 
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
-
 function toGatewayLiveModel(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -1927,39 +1919,11 @@ async function loadProviderScopedConfiguredModels(params: {
   return models;
 }
 
-function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model> {
-  const models: Array<Model> = [];
-  const seen = new Set<string>();
-  for (const rawProvider of providerList) {
-    const provider = normalizeProviderId(rawProvider);
-    if (!provider) {
-      continue;
-    }
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
-      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push(model);
-    }
-  }
-  return models;
-}
-
 async function loadProviderScopedModels(params: {
   agentDir: string;
   providerList: readonly string[];
 }): Promise<Array<Model>> {
-  const configured = await loadProviderScopedConfiguredModels(params);
-  if (configured.length > 0) {
-    return configured;
-  }
-  return loadProviderScopedBuiltInModels(params.providerList);
+  return await loadProviderScopedConfiguredModels(params);
 }
 
 function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry {

@@ -235,6 +235,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({

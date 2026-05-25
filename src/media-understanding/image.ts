@@ -1,10 +1,3 @@
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  ProviderStreamOptions,
-} from "openclaw/plugin-sdk/llm";
-import { complete } from "openclaw/plugin-sdk/llm";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -21,6 +14,8 @@ import {
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { complete } from "../llm/stream.js";
+import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import {
   buildCopilotIdeHeaders,
   COPILOT_INTEGRATION_ID,

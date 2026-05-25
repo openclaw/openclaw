@@ -32,7 +32,7 @@ import { SessionManager } from "./sessions/index.js";
 const log = createSubsystemLogger("agents/cli-runner");
 
 function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
+  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {

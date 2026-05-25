@@ -5,7 +5,7 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -25,6 +25,7 @@ import {
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
+import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
@@ -54,22 +55,13 @@ const editSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+export type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 
-export type EditToolInput = Static<typeof editSchema>;
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;
   oldText?: unknown;
   newText?: unknown;
 };
-
-export interface EditToolDetails {
-  /** Display-oriented diff of the changes made */
-  diff: string;
-  /** Standard unified patch of the changes made */
-  patch: string;
-  /** Line number of the first change in the new file (for editor navigation) */
-  firstChangedLine?: number;
-}
 
 /**
  * Pluggable operations for the edit tool.
@@ -114,7 +106,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const legacy = args as LegacyEditToolInput;
   if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
-    return args as EditToolInput;
+    return args as unknown as EditToolInput;
   }
 
   const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];

@@ -1,5 +1,3 @@
-import type { SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -28,6 +26,8 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "../../../shared/string-coerce.js";
+import { streamSimple } from "../../stream.js";
+import type { SimpleStreamOptions } from "../../types.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 

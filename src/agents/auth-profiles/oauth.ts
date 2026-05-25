@@ -1,13 +1,13 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getOAuthApiKey,
   getOAuthProviders,
   type OAuthCredentials,
   type OAuthProvider,
-} from "openclaw/plugin-sdk/llm-oauth";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+} from "../../llm/oauth.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,

@@ -1,11 +1,5 @@
 // Public usage fetch helpers for provider plugins.
 
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
-
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -27,39 +21,19 @@ export {
 } from "../infra/provider-usage.fetch.shared.js";
 
 /**
- * @deprecated Compatibility for external provider plugins that still bridge
- * credentials from the retired Pi auth store. Core OpenClaw runtime paths no
- * longer read this file; use auth profiles, config, or provider-owned auth.
+ * @deprecated Compatibility stub for external provider plugins that imported
+ * the retired Pi auth bridge. OpenClaw no longer reads Pi auth state; provider
+ * plugins should use auth profiles, config, or provider-owned auth.
  */
 export function resolveLegacyAgentAccessToken(
-  env: NodeJS.ProcessEnv,
-  providerIds: string[],
-): string | undefined {
-  try {
-    const authPath = path.join(
-      resolveRequiredHomeDir(env, os.homedir),
-      ".pi",
-      "agent",
-      "auth.json",
-    );
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const parsed = tryReadJsonSync<Record<string, { access?: string }>>(authPath);
-    for (const providerId of providerIds) {
-      const token = parsed?.[providerId]?.access;
-      if (typeof token === "string" && token.trim()) {
-        return token;
-      }
-    }
-  } catch {
-    return undefined;
-  }
+  _env: NodeJS.ProcessEnv,
+  _providerIds: string[],
+): undefined {
   return undefined;
 }
 
 /**
- * @deprecated Use `resolveLegacyAgentAccessToken`. Kept only for external
- * provider plugins that still import the retired Pi-named SDK helper.
+ * @deprecated Use provider-owned auth. Kept only so old provider plugins still
+ * link while the Pi auth bridge stays retired.
  */
 export const resolveLegacyPiAgentAccessToken = resolveLegacyAgentAccessToken;

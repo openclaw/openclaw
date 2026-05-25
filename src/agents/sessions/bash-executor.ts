@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../utils/ansi.js";
 import { sanitizeBinaryOutput } from "../utils/shell.js";
-import type { BashOperations } from "./tools/bash.js";
+import type { BashOperations } from "./tools/bash-operations.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.js";
 
 // ============================================================================

@@ -1,6 +1,6 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import type { Model } from "../../../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,

@@ -1,7 +1,4 @@
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
-import type { AssistantMessageEventStream } from "./utils/event-stream.js";
-
-export type { AssistantMessageEventStream } from "./utils/event-stream.js";
 
 export type KnownApi =
   | "openai-completions"
@@ -208,7 +205,11 @@ export interface SimpleStreamOptions extends StreamOptions {
 export type StreamFunction<
   TApi extends Api = Api,
   TOptions extends StreamOptions = StreamOptions,
-> = (model: Model<TApi>, context: Context, options?: TOptions) => AssistantMessageEventStream;
+> = (
+  model: Model<TApi>,
+  context: Context,
+  options?: TOptions,
+) => AssistantMessageEventStreamContract;
 
 export type ImagesFunction<
   TApi extends ImagesApi = ImagesApi,
@@ -365,6 +366,12 @@ export type AssistantMessageEvent =
       message: AssistantMessage;
     }
   | { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
+
+export interface AssistantMessageEventStreamContract extends AsyncIterable<AssistantMessageEvent> {
+  push(event: AssistantMessageEvent): void;
+  end(result?: AssistantMessage): void;
+  result(): Promise<AssistantMessage>;
+}
 
 /**
  * Compatibility settings for OpenAI-compatible completions APIs.

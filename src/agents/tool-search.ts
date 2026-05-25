@@ -527,10 +527,6 @@ function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   return false;
 }
 
-function dropToolSearchControlTools(tools: AnyAgentTool[]): AnyAgentTool[] {
-  return tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name));
-}
-
 function readMessageToolResultId(message: AgentMessage): string | undefined {
   const record = message as unknown as Record<string, unknown>;
   const role = typeof record.role === "string" ? record.role : "";
@@ -694,54 +690,13 @@ export function applyToolSearchCatalog(params: {
   catalogRegistered: boolean;
 } {
   const config = resolveToolSearchConfig(params.config);
-  if (!config.enabled) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogRegistered: false };
-  }
-  const hasControlTool = params.tools.some(
-    (tool) =>
+  return applyToolCatalogCompaction({
+    ...params,
+    enabled: config.enabled,
+    isVisibleControlTool: (tool) =>
       TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) &&
       shouldExposeControlTool(tool.name, config.mode),
-  );
-  const key = sessionCatalogKey(params);
-  if (!hasControlTool || (!key && !params.catalogRef)) {
-    return {
-      tools: dropToolSearchControlTools(params.tools),
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-    };
-  }
-
-  const visible: AnyAgentTool[] = [];
-  const catalog: ToolSearchCatalogEntry[] = [];
-  for (const tool of params.tools) {
-    if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
-      if (shouldExposeControlTool(tool.name, config.mode)) {
-        visible.push(tool);
-      }
-      continue;
-    }
-    if (shouldCatalogTool(tool)) {
-      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      continue;
-    }
-    visible.push(tool);
-  }
-  registerToolSearchCatalog({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    catalogRef: params.catalogRef,
-    entries: catalog,
-    append: false,
   });
-  return {
-    tools: visible,
-    compacted: catalog.length > 0,
-    catalogToolCount: catalog.length,
-    catalogRegistered: true,
-  };
 }
 
 export function addClientToolsToToolSearchCatalog(params: {
@@ -753,25 +708,10 @@ export function addClientToolsToToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  const key = sessionCatalogKey(params);
-  if (!config.enabled || (!key && !params.catalogRef)) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  const existing = params.catalogRef?.current ?? (key ? sessionCatalogs.get(key) : undefined);
-  if (!existing) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  registerToolSearchCatalog({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    catalogRef: params.catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
-    append: true,
+  return addClientToolsToToolCatalog({
+    ...params,
+    enabled: resolveToolSearchConfig(params.config).enabled,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
 }
 
 export function registerToolSearchCatalog(params: {
@@ -1098,6 +1038,9 @@ export function applyToolCatalogCompaction(params: {
   for (const tool of params.tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(tool);
+      continue;
+    }
+    if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
     if (shouldCatalog(tool)) {

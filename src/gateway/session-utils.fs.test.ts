@@ -85,6 +85,18 @@ function appendBlockedUserMessageWithSessionManager(params: {
   idempotencyKey?: string;
 }): string {
   const sessionManager = SessionManager.open(params.sessionFile, path.dirname(params.sessionFile));
+  return appendBlockedUserMessage(sessionManager, params);
+}
+
+function appendBlockedUserMessage(
+  sessionManager: SessionManager,
+  params: {
+    originalText?: string;
+    redactedText: string;
+    pluginId: string;
+    idempotencyKey?: string;
+  },
+): string {
   const messageId = sessionManager.appendMessage({
     role: "user",
     content: [{ type: "text", text: params.redactedText }],
@@ -97,7 +109,7 @@ function appendBlockedUserMessageWithSessionManager(params: {
       },
     },
   } as Parameters<typeof sessionManager.appendMessage>[0]);
-  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
+  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
   return messageId;
 }
 
@@ -1247,14 +1259,12 @@ describe("readSessionMessages", () => {
       "utf-8",
     );
 
-    appendBlockedUserMessageWithSessionManager({
-      sessionFile,
+    appendBlockedUserMessage(sessionManager, {
       originalText: "[hitl:block] first",
       redactedText: "Blocked by HITL test hook.",
       pluginId: "hitl-test-hooks",
     });
-    appendBlockedUserMessageWithSessionManager({
-      sessionFile,
+    appendBlockedUserMessage(sessionManager, {
       originalText: "[hitl:block] second",
       redactedText: "Blocked again by HITL test hook.",
       pluginId: "hitl-test-hooks",

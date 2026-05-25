@@ -1,4 +1,5 @@
-import { getApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
+import { getApiProvider } from "../../llm/api-registry.js";
+import { streamSimple } from "../../llm/stream.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import type { StreamFn } from "../runtime/index.js";

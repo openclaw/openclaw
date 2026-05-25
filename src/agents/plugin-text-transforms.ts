@@ -1,4 +1,4 @@
-import type { AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessageEvent } from "../llm/types.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";

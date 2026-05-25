@@ -117,11 +117,7 @@ function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention 
 export const streamOpenAICompletions: StreamFunction<
   "openai-completions",
   OpenAICompletionsOptions
-> = (
-  model: Model<"openai-completions">,
-  context: Context,
-  options?: OpenAICompletionsOptions,
-): AssistantMessageEventStream => {
+> = (model: Model<"openai-completions">, context: Context, options?: OpenAICompletionsOptions) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -461,11 +457,7 @@ export const streamOpenAICompletions: StreamFunction<
 export const streamSimpleOpenAICompletions: StreamFunction<
   "openai-completions",
   SimpleStreamOptions
-> = (
-  model: Model<"openai-completions">,
-  context: Context,
-  options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+> = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);

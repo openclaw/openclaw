@@ -80,9 +80,9 @@ Provider-owned runner behavior lives on explicit provider hooks such as replay p
   </Accordion>
 </AccordionGroup>
 
-## Built-in providers
+## Official provider plugins
 
-OpenClaw ships with a built-in model catalog. These providers require **no** `models.providers` config; just set auth + pick a model.
+Official provider plugins publish their own model catalog rows. These providers require **no** `models.providers` model entries; enable the provider plugin, set auth, and pick a model. Use `models.providers` only for explicit custom providers or narrow request settings such as timeouts.
 
 ### OpenAI
 

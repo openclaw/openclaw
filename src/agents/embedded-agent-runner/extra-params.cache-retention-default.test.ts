@@ -39,7 +39,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/llm", () => createLlmStreamSimpleMock());
+vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({

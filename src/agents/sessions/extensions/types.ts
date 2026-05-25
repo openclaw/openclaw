@@ -22,7 +22,7 @@ import type {
 import type {
   Api,
   AssistantMessageEvent,
-  AssistantMessageEventStream,
+  AssistantMessageEventStreamContract,
   Context,
   ImageContent,
   Model,
@@ -59,11 +59,11 @@ import type {
 import type { SlashCommandInfo } from "../slash-commands.js";
 import type { SourceInfo } from "../source-info.js";
 import type { BuildSystemPromptOptions } from "../system-prompt.js";
-import type { BashOperations } from "../tools/bash.js";
-import type { EditToolDetails } from "../tools/edit.js";
+import type { BashOperations } from "../tools/bash-operations.js";
 import type {
   BashToolDetails,
   BashToolInput,
+  EditToolDetails,
   EditToolInput,
   FindToolDetails,
   FindToolInput,
@@ -74,7 +74,7 @@ import type {
   ReadToolDetails,
   ReadToolInput,
   WriteToolInput,
-} from "../tools/index.js";
+} from "../tools/tool-contracts.js";
 
 export type { ExecOptions, ExecResult } from "../exec.js";
 export type { BuildSystemPromptOptions } from "../system-prompt.js";
@@ -1315,10 +1315,9 @@ export interface ExtensionAPI {
   // =========================================================================
 
   /**
-   * Register or override a model provider.
+   * Register a model provider.
    *
    * If `models` is provided: replaces all existing models for this provider.
-   * If only `baseUrl` is provided: overrides the URL for existing models.
    * If `oauth` is provided: registers OAuth provider for /login support.
    * If `streamSimple` is provided: registers a custom API stream handler.
    *
@@ -1371,9 +1370,8 @@ export interface ExtensionAPI {
   /**
    * Unregister a previously registered provider.
    *
-   * Removes all models belonging to the named provider and restores unknown
-   * built-in models that were overridden by it. Has no effect if the provider
-   * is not currently registered.
+   * Removes all models belonging to the named provider and reloads the configured
+   * model registry. Has no effect if the provider is not currently registered.
    *
    * Like `registerProvider`, this takes effect immediately when called after
    * the initial load phase.
@@ -1406,7 +1404,7 @@ export interface ProviderConfig {
     model: Model,
     context: Context,
     options?: SimpleStreamOptions,
-  ) => AssistantMessageEventStream;
+  ) => AssistantMessageEventStreamContract;
   /** Custom headers to include in requests. */
   headers?: Record<string, string>;
   /** If true, adds Authorization: Bearer header with the resolved API key. */

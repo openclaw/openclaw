@@ -55,7 +55,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
   model: Model<"mistral-conversations">,
   context: Context,
   options?: MistralOptions,
-): AssistantMessageEventStream => {
+) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -119,7 +119,7 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
   model: Model<"mistral-conversations">,
   context: Context,
   options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);

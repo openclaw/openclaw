@@ -45,9 +45,10 @@ export function findCapabilityProviderById<T extends CapabilityModelProviderCand
   });
 }
 
-export function resolveCapabilityProviderModelOnlyRef<
-  T extends CapabilityModelProviderCandidate,
->(params: { providers: readonly T[]; raw?: string }): CapabilityModelRef | null {
+export function resolveCapabilityProviderModelOnlyRef(params: {
+  providers: readonly CapabilityModelProviderCandidate[];
+  raw?: string;
+}): CapabilityModelRef | null {
   const model = normalizeOptionalString(params.raw);
   if (!model) {
     return null;
@@ -59,10 +60,8 @@ export function resolveCapabilityProviderModelOnlyRef<
   return provider ? { provider: provider.id, model } : null;
 }
 
-export function resolveCapabilityModelRefForProviders<
-  T extends CapabilityModelProviderCandidate,
->(params: {
-  providers: readonly T[];
+export function resolveCapabilityModelRefForProviders(params: {
+  providers: readonly CapabilityModelProviderCandidate[];
   raw?: string;
   parseModelRef: (raw: string | undefined) => CapabilityModelRef | null;
   normalizeProviderId?: ProviderIdNormalizer;

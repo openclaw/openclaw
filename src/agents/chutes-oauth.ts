@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { OAuthCredentials } from "openclaw/plugin-sdk/llm";
+import type { OAuthCredentials } from "../llm/oauth.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";

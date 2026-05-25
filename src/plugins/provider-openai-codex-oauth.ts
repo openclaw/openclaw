@@ -1,6 +1,6 @@
-import { loginOpenAICodex, type OAuthCredentials } from "openclaw/plugin-sdk/llm-oauth";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { loginOpenAICodex, type OAuthCredentials } from "../llm/oauth.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { OAuthPrompt } from "./provider-oauth-flow.js";

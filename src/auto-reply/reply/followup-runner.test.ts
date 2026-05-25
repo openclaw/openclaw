@@ -1591,7 +1591,7 @@ describe("createFollowupRunner progress forwarding", () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         onToolResult?: (payload: { text: string }) => Promise<void>;
@@ -1638,7 +1638,7 @@ describe("createFollowupRunner progress forwarding", () => {
   it("does not reuse dispatch-scoped tool-error suppression across queued follow-ups", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock
+    runEmbeddedAgentMock
       .mockImplementationOnce(
         async (args: {
           onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
@@ -1699,7 +1699,7 @@ describe("createFollowupRunner progress forwarding", () => {
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
@@ -1741,7 +1741,7 @@ describe("createFollowupRunner progress forwarding", () => {
   });
 
   it("keeps queued tool-error fallbacks when failed progress has no callback", async () => {
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
@@ -1788,7 +1788,7 @@ describe("createFollowupRunner progress forwarding", () => {
     const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
     const onToolStart = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
+    runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
         shouldEmitToolResult?: () => boolean;
@@ -2516,7 +2516,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "internal announce complete" }],
       meta: {
         agentMeta: {

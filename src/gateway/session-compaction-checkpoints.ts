@@ -5,7 +5,7 @@ import {
   migrateSessionEntries,
   SessionManager,
   type FileEntry as SessionFileEntry,
-} from "../agents/sessions/index.js";
+} from "../agents/sessions/session-manager.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,

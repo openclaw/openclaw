@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
