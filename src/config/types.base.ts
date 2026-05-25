@@ -253,13 +253,6 @@ export type SessionMaintenanceConfig = {
    * Default: 80% of maxDiskBytes.
    */
   highWaterBytes?: number | string;
-  /**
-   * Per-session disk budget for retained compaction checkpoint snapshots
-   * (e.g. "128mb"). The newest snapshot is always retained; older snapshots are
-   * evicted oldest-first once the total retained bytes for a session exceed
-   * this budget. Default: 128mb.
-   */
-  compactionCheckpointMaxBytes?: number | string;
 };
 
 export type LoggingConfig = {

@@ -1657,8 +1657,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
   "session.maintenance.highWaterBytes":
     "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
-  "session.maintenance.compactionCheckpointMaxBytes":
-    "Per-session disk budget for retained compaction checkpoint snapshots (for example `128mb`). The newest snapshot is always kept; older snapshots are evicted oldest-first once total retained bytes for a session exceed this budget. Defaults to `128mb`.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
