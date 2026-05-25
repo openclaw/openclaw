@@ -40,6 +40,7 @@ import {
   resolveModelSseDebugMode,
 } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
@@ -2295,21 +2296,11 @@ function assertOpenAICompletionsPayloadHasConversationTurn(
   model: Model<Api>,
 ): void {
   const messages = params.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-  const hasConversationTurn = messages.some((message) => {
-    if (!message || typeof message !== "object") {
-      return false;
-    }
-    const role = (message as { role?: unknown }).role;
-    return role === "user" || role === "assistant";
-  });
-  if (hasConversationTurn) {
+  if (!Array.isArray(messages) || hasOpenAICompatibleConversationTurn(messages)) {
     return;
   }
   throw new Error(
-    `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
+    `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no non-empty user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
   );
 }
 
