@@ -473,7 +473,6 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     }
     return merged;
   }
-
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
