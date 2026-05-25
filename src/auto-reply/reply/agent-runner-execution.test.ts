@@ -875,6 +875,33 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
+  it("does not use stale heartbeat bleed hints for different explicit runtime refs", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {

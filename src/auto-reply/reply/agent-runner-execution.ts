@@ -1000,16 +1000,21 @@ export function buildContextOverflowRecoveryText(params: {
     agentId: params.agentId,
     activeSessionEntry: params.activeSessionEntry,
   });
-  return (
-    prefix +
-    (resolveHeartbeatBleedHint({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-      activeSessionEntry: params.activeSessionEntry,
-    }) ?? buildContextOverflowResetHint(primaryContextWindow))
-  );
+  const explicitRuntimeMatchesSession =
+    !params.runtimeProvider ||
+    !params.runtimeModel ||
+    (params.runtimeProvider === params.activeSessionEntry?.modelProvider &&
+      params.runtimeModel === params.activeSessionEntry?.model);
+  const heartbeatBleedHint = explicitRuntimeMatchesSession
+    ? resolveHeartbeatBleedHint({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        primaryProvider: params.primaryProvider,
+        primaryModel: params.primaryModel,
+        activeSessionEntry: params.activeSessionEntry,
+      })
+    : undefined;
+  return prefix + (heartbeatBleedHint ?? buildContextOverflowResetHint(primaryContextWindow));
 }
 
 function buildRestartLifecycleReplyText(): string {
