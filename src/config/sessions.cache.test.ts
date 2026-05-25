@@ -235,7 +235,7 @@ describe("Session Store Cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("does not parse serialized stores when writing the cache", () => {
+  it("does not parse serialized stores when writing or reading object-cache hits", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -252,9 +252,24 @@ describe("Session Store Cache", () => {
     const cached = readSessionStoreCache({ storePath });
 
     expect(cached?.["session:1"].origin?.provider).toBe("openai");
-    expect(parseSpy).toHaveBeenCalledTimes(1);
+    expect(parseSpy).not.toHaveBeenCalled();
 
     parseSpy.mockRestore();
+  });
+
+  it("clones cached session records without invoking prototype setters", () => {
+    const testStore = JSON.parse(
+      `{"session:1":{"sessionId":"id-1","updatedAt":${Date.now()},"displayName":"Test Session 1","__proto__":{"polluted":true}}}`,
+    ) as Record<string, SessionEntry>;
+
+    writeSessionStoreCache({ storePath, store: testStore });
+    const cached = readSessionStoreCache({ storePath });
+    const entry = cached?.["session:1"] as (SessionEntry & { polluted?: boolean }) | undefined;
+
+    expect(entry).toBeDefined();
+    expect(entry?.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(entry, "__proto__")).toBe(true);
+    expect(Object.prototype).not.toHaveProperty("polluted");
   });
 
   it("clones disk-loaded stores from the raw serialized JSON", () => {

@@ -179,7 +179,10 @@ export function cloneSessionStoreRecord(
   store: Record<string, SessionEntry>,
   serialized?: string,
 ): Record<string, SessionEntry> {
-  const cloned = JSON.parse(serialized ?? JSON.stringify(store)) as Record<string, SessionEntry>;
+  const cloned =
+    serialized === undefined
+      ? cloneJsonLikeValue(store)
+      : (JSON.parse(serialized) as Record<string, SessionEntry>);
   internSessionStoreLargeStrings(cloned);
   return cloned;
 }
@@ -193,7 +196,12 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    cloned[key] = cloneJsonLikeValue(child);
+    Object.defineProperty(cloned, key, {
+      value: cloneJsonLikeValue(child),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return cloned as T;
 }
@@ -342,7 +350,7 @@ export function readSessionStoreCache(params: {
   if (params.clone === false) {
     return cached.store;
   }
-  return cloneSessionStoreRecord(cached.store, cached.serialized);
+  return cloneSessionStoreRecord(cached.store);
 }
 
 export function takeMutableSessionStoreCache(params: {
@@ -369,11 +377,7 @@ export function writeSessionStoreCache(params: {
   sizeBytes?: number;
   serialized?: string;
 }): void {
-  const store =
-    params.serialized === undefined ? cloneSessionStoreRecord(params.store) : params.store;
-  if (params.serialized !== undefined) {
-    internSessionStoreLargeStrings(store);
-  }
+  const store = cloneSessionStoreRecord(params.store);
   SESSION_STORE_CACHE.set(params.storePath, {
     store,
     mtimeMs: params.mtimeMs,
