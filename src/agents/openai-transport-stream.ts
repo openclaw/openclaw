@@ -799,13 +799,31 @@ function stripResponsesRequestEncryptedContent(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
   const stripped = stripEncryptedContentFields(params.input);
-  if (!stripped.changed) {
+  const hadInputChanges = stripped.changed;
+  
+  // Also remove reasoning.encrypted_content from include array to prevent
+  // the server from trying to encrypt reasoning content that will fail decryption
+  let hadIncludeChanges = false;
+  let newInclude = params.include;
+  if (Array.isArray(params.include)) {
+    newInclude = params.include.filter((item) => item !== "reasoning.encrypted_content");
+    hadIncludeChanges = newInclude.length !== params.include.length;
+  }
+  
+  if (!hadInputChanges && !hadIncludeChanges) {
     return params;
   }
-  return {
+  
+  const result: OpenAIResponsesRequestParams = {
     ...params,
     input: stripped.value as ResponseInput,
   };
+  
+  if (hadIncludeChanges) {
+    result.include = newInclude.length > 0 ? newInclude : undefined;
+  }
+  
+  return result;
 }
 
 function hashOptionalReplayContextValue(value: string | undefined): string | undefined {
