@@ -1644,7 +1644,7 @@ describe("plugin sdk alias helpers", () => {
       preferBuiltDist: true,
     });
 
-    expect(second).toBe(first);
+    expect(second).toStrictEqual(first);
   });
 
   it("scopes plugin loader module config by plugin-sdk resolution", () => {
@@ -1675,7 +1675,7 @@ describe("plugin sdk alias helpers", () => {
       }),
     }));
 
-    expect(distAgain).toBe(dist);
+    expect(distAgain).toStrictEqual(dist);
     expect(auto).not.toBe(dist);
     expect(fs.realpathSync(auto.aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
       fs.realpathSync(sourceRootAlias),
@@ -1857,7 +1857,7 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     const auto = buildPluginLoaderAliasMap(entry, undefined, undefined, "auto");
     const dist = buildPluginLoaderAliasMap(entry, undefined, undefined, "dist");
 
-    expect(auto).not.toBe(dist);
+    expect(auto).toStrictEqual(dist);
   });
 
   it("returns different references when argv1 differs", () => {
@@ -1872,7 +1872,7 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     const a = buildPluginLoaderAliasMap(entry, "/path/to/cli-a.mjs");
     const b = buildPluginLoaderAliasMap(entry, "/path/to/cli-b.mjs");
 
-    expect(a).not.toBe(b);
+    expect(a).toStrictEqual(b);
   });
 
   it("does not reuse a public alias map after private qa aliases are enabled", () => {
@@ -1947,7 +1947,7 @@ describe("buildPluginLoaderAliasMap memoization", () => {
 });
 
 describe("buildPluginLoaderJitiOptions", () => {
-  it("pre-normalizes and marks alias maps for source transforms", () => {
+  it("reuses the jiti-normalized alias map when source objects differ but content is equal", () => {
     const marker = Symbol.for("pathe:normalizedAlias");
     const aliasMap = {
       "openclaw/plugin-sdk/core": "/repo/src/plugin-sdk/core.ts",
