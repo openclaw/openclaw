@@ -124,35 +124,35 @@ const codexApi = loadBundledPluginPublicSurfaceSourceSync({
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "MEMORY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "MEMORY.md"),
     content: "<MEMORY.md contents will be here>",
   },
 ] as const;
 
 const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
+    path: path.posix.join(WORKSPACE_DIR, "TOOLS.md"),
     content: "<TOOLS.md contents will be here>",
   },
 ] as const;
 
 const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "SOUL.md"),
+    path: path.posix.join(WORKSPACE_DIR, "SOUL.md"),
     content: "<SOUL.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "USER.md"),
+    path: path.posix.join(WORKSPACE_DIR, "USER.md"),
     content: "<USER.md contents will be here>",
   },
 ] as const;
 
 const CODEX_HEARTBEAT_CONTEXT_FILE = {
-  path: path.join(WORKSPACE_DIR, "HEARTBEAT.md"),
+  path: path.posix.join(WORKSPACE_DIR, "HEARTBEAT.md"),
   content: "<HEARTBEAT.md contents will be here>",
 } as const;
 
