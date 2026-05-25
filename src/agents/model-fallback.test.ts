@@ -1373,6 +1373,29 @@ describe("runWithModelFallback", () => {
     expect(errorCall.error).toBe(unknownError);
   });
 
+  it("rethrows embedded session takeover errors instead of walking model fallbacks", async () => {
+    const cfg = makeCfg();
+    const takeoverError = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
+    );
+    const run = vi.fn().mockRejectedValue(takeoverError);
+    const onError = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+        onError,
+      }),
+    ).rejects.toBe(takeoverError);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
   it("throws unrecognized error on last candidate", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("something weird"));
