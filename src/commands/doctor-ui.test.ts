@@ -25,8 +25,8 @@ async function createOpenClawRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-"));
   tempRoots.push(root);
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-  await fs.mkdir(path.join(root, "src/gateway/protocol"), { recursive: true });
-  await fs.writeFile(path.join(root, "src/gateway/protocol/schema.ts"), "export {};\n");
+  await fs.mkdir(path.join(root, "packages/gateway-protocol/src"), { recursive: true });
+  await fs.writeFile(path.join(root, "packages/gateway-protocol/src/schema.ts"), "export {};\n");
   return root;
 }
 
@@ -89,7 +89,7 @@ describe("UI protocol freshness health mapping", () => {
 
   it("does not report stale assets when git finds no schema changes", async () => {
     const root = await createOpenClawRoot();
-    const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+    const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
     await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
@@ -106,7 +106,7 @@ describe("UI protocol freshness health mapping", () => {
 
   it("reports stale assets when git history is unavailable", async () => {
     const root = await createOpenClawRoot();
-    const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+    const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
     await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
