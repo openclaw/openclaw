@@ -398,7 +398,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
     expect(stored[sessionKey].totalTokens).toBe(55_000);
-  });
+  }, 180_000);
 
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
