@@ -302,7 +302,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       return result;
     },
   ) as unknown as PluginRuntime["channel"]["turn"]["run"];
-  const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
+  const buildChannelInboundEventContextMock = vi.fn(async (params: BuildContextParams) => {
     const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
     return {
       Body: params.message.body ?? params.message.rawBody,
@@ -340,7 +340,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         : false,
       ...params.extra,
       UntrustedStructuredContext: untrustedStructuredContext,
-    } as BuildContextResult;
+    } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
   const base: PluginRuntime = {
     version: "1.0.0-test",

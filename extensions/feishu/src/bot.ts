@@ -1,5 +1,8 @@
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  toInboundMediaFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -31,7 +34,6 @@ import {
   resolveFeishuMediaList,
 } from "./bot-content.js";
 import {
-  buildAgentMediaPayload,
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
   resolveChannelContextVisibilityMode,
@@ -927,7 +929,6 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const mediaPayload = buildAgentMediaPayload(mediaList);
     const audioTranscript = await resolveFeishuAudioPreflightTranscript({
       cfg: effectiveCfg,
       mediaList,
@@ -939,6 +940,9 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? -1
         : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+    const inboundMedia = toInboundMediaFacts(mediaList, {
+      transcribed: (_media, index) => index === preflightAudioIndex,
+    });
     const agentFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
       audioTranscript === undefined
@@ -1270,7 +1274,8 @@ export async function handleFeishuMessage(params: {
     ) => {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
-      const { context } = finalizeChannelInboundContext({
+      return buildChannelInboundEventContext({
+        channel: "feishu",
         finalize: core.channel.reply.finalizeInboundContext,
         supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
@@ -1283,41 +1288,52 @@ export async function handleFeishuMessage(params: {
             ? normalizeOptionalString(groupConfig?.systemPrompt)
             : undefined,
         },
-        context: {
-          Body: combinedBody,
-          BodyForAgent: messageBody,
-          InboundHistory: inboundHistory,
+        media: inboundMedia,
+        messageId: ctx.messageId,
+        timestamp: messageCreateTimeMs,
+        from: feishuFrom,
+        sender: {
+          id: ctx.senderOpenId,
+          name: ctx.senderName ?? ctx.senderOpenId,
+        },
+        conversation: {
+          kind: isGroup ? "group" : "direct",
+          id: ctx.chatId,
+          label: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
+          threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+        },
+        route: {
+          agentId,
+          accountId: agentAccountId,
+          routeSessionKey: agentSessionKey,
+        },
+        reply: {
+          to: feishuTo,
+          replyToId: ctx.parentId,
+          messageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+        },
+        message: {
+          body: combinedBody,
+          bodyForAgent: messageBody,
+          inboundHistory,
+          rawBody: agentFacingContent,
+          commandBody: agentFacingContent,
+        },
+        access: {
+          mentions: {
+            canDetectMention: isGroup,
+            wasMentioned,
+          },
+          commands: {
+            authorized: commandAuthorized,
+          },
+        },
+        extra: {
           RootMessageId: ctx.rootId,
-          RawBody: agentFacingContent,
-          CommandBody: agentFacingContent,
           Transcript: audioTranscript,
-          From: feishuFrom,
-          To: feishuTo,
-          SessionKey: agentSessionKey,
-          AccountId: agentAccountId,
-          ChatType: isGroup ? "group" : "direct",
           GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
-          ConversationLabel:
-            isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
-          SenderName: ctx.senderName ?? ctx.senderOpenId,
-          SenderId: ctx.senderOpenId,
-          Provider: "feishu" as const,
-          Surface: "feishu" as const,
-          MessageSid: ctx.messageId,
-          ReplyToId: ctx.parentId,
-          // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
-          // ID and would produce invalid reply targets downstream.
-          MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
-          Timestamp: messageCreateTimeMs,
-          WasMentioned: wasMentioned,
-          CommandAuthorized: commandAuthorized,
-          OriginatingChannel: "feishu" as const,
-          OriginatingTo: feishuTo,
-          ...mediaPayload,
-          ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
         },
       });
-      return context;
     };
 
     // Determine reply target based on group session mode:

@@ -86,12 +86,12 @@ export async function dispatchSynologyChatInboundEvent(params: {
         textForCommands: msg.body,
         raw: msg,
       }),
-      resolveTurn: (input) => {
+      resolveTurn: async (input) => {
         const chatKind =
           params.msg.chatType === "group" || params.msg.chatType === "channel"
             ? params.msg.chatType
             : "direct";
-        const msgCtx = resolved.rt.channel.turn.buildContext({
+        const msgCtx = await resolved.rt.channel.turn.buildContext({
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           timestamp: input.timestamp,

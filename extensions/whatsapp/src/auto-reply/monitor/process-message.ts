@@ -110,7 +110,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
 }
 
 function emitWhatsAppMessageReceivedHooks(params: {
-  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
   sessionKey: string;
 }): void {
   const canonical = deriveInboundMessageHookContext(params.ctx);
@@ -145,7 +145,7 @@ function emitWhatsAppMessageReceivedHooks(params: {
 
 function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
   cfg: ReturnType<LoadConfigFn>;
-  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  ctx: Awaited<ReturnType<typeof buildWhatsAppInboundContext>>;
   accountId?: string;
   sessionKey: string;
 }): void {
@@ -460,7 +460,7 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? params.msg.from,
         });
 
-  const ctxPayload = buildWhatsAppInboundContext({
+  const ctxPayload = await buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.body,
     combinedBody,
     commandBody: params.msg.body,

@@ -3,8 +3,9 @@ import {
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  finalizeChannelInboundContext,
+  buildChannelInboundEventContext,
   type CommandTurnContext,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
@@ -275,7 +276,7 @@ export function resolveWhatsAppResponsePrefix(params: {
   );
 }
 
-export function buildWhatsAppInboundContext(params: {
+export async function buildWhatsAppInboundContext(params: {
   bodyForAgent?: string;
   combinedBody: string;
   commandBody?: string;
@@ -294,7 +295,7 @@ export function buildWhatsAppInboundContext(params: {
   mediaTranscribedIndexes?: number[];
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
-}) {
+}): Promise<FinalizedMsgContext> {
   const inboundHistory =
     params.msg.chatType === "group"
       ? buildInboundHistoryFromEntries({
@@ -308,7 +309,20 @@ export function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
-  const { context: result } = finalizeChannelInboundContext({
+  const media = toInboundMediaFacts(
+    params.msg.mediaPath || params.msg.mediaUrl
+      ? [
+          {
+            path: params.msg.mediaPath,
+            url: params.msg.mediaUrl ?? params.msg.mediaPath,
+            contentType: params.msg.mediaType,
+          },
+        ]
+      : undefined,
+    { transcribed: (_entry, index) => params.mediaTranscribedIndexes?.includes(index) === true },
+  );
+  return buildChannelInboundEventContext({
+    channel: "whatsapp",
     finalize: finalizeInboundContext,
     supplemental: {
       quote: params.visibleReplyTo
@@ -321,51 +335,67 @@ export function buildWhatsAppInboundContext(params: {
       groupSystemPrompt: params.groupSystemPrompt,
       untrustedContext: params.msg.untrustedStructuredContext,
     },
-    context: {
-      Body: params.combinedBody,
-      BodyForAgent: params.bodyForAgent ?? params.msg.body,
-      InboundHistory: inboundHistory,
-      RawBody: params.rawBody ?? params.msg.body,
-      CommandBody: params.commandBody ?? params.msg.body,
+    media,
+    messageId: params.msg.id,
+    timestamp: params.msg.timestamp,
+    from: params.msg.from,
+    sender: {
+      id: params.sender.id ?? params.sender.e164,
+      name: params.sender.name,
+    },
+    conversation: {
+      kind: params.msg.chatType,
+      id: params.conversationId,
+      label: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
+    },
+    route: {
+      agentId: params.route.agentId,
+      accountId: params.route.accountId,
+      routeSessionKey: params.route.sessionKey,
+    },
+    reply: {
+      to: params.msg.to,
+      originatingTo: params.msg.from,
+    },
+    message: {
+      body: params.combinedBody,
+      bodyForAgent: params.bodyForAgent ?? params.msg.body,
+      inboundHistory,
+      rawBody: params.rawBody ?? params.msg.body,
+      commandBody: params.commandBody ?? params.msg.body,
+    },
+    access: {
+      ...(params.msg.wasMentioned !== undefined
+        ? {
+            mentions: {
+              canDetectMention: params.msg.chatType === "group",
+              wasMentioned: params.msg.wasMentioned,
+            },
+          }
+        : {}),
+      commands: {
+        authorized: params.commandAuthorized,
+      },
+    },
+    commandTurn: params.commandTurn,
+    extra: {
       Transcript: params.transcript,
-      From: params.msg.from,
-      To: params.msg.to,
-      SessionKey: params.route.sessionKey,
-      AccountId: params.route.accountId,
-      MessageSid: params.msg.id,
-      MediaPath: params.msg.mediaPath,
-      MediaUrl: params.msg.mediaUrl,
-      MediaType: params.msg.mediaType,
-      MediaTranscribedIndexes: params.mediaTranscribedIndexes,
-      ChatType: params.msg.chatType,
-      Timestamp: params.msg.timestamp,
-      ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
       GroupSubject: params.msg.groupSubject,
       GroupMembers: formatGroupMembers({
         participants: params.msg.groupParticipants,
         roster: params.groupMemberRoster,
         fallbackE164: params.sender.e164,
       }),
-      SenderName: params.sender.name,
-      SenderId: params.sender.id ?? params.sender.e164,
       SenderE164: params.sender.e164,
-      CommandAuthorized: params.commandAuthorized,
-      CommandTurn: params.commandTurn,
       CommandSource:
         params.commandSource ??
         (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
           ? params.commandTurn.source
           : undefined),
       ReplyThreading: params.replyThreading,
-      WasMentioned: params.msg.wasMentioned,
       ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: params.msg.from,
     },
   });
-  return result;
 }
 
 function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | undefined {

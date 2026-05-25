@@ -101,7 +101,7 @@ export async function dispatchOutbound(
   const sendErrorMessage = (errorText: string) => sendErrorToTarget(replyCtx, errorText);
 
   // ---- Build ctxPayload ----
-  const ctxPayload = buildCtxPayload(inbound, runtime, cfg);
+  const ctxPayload = await buildCtxPayload(inbound, runtime, cfg);
 
   // ---- Deliver state ----
   let hasResponse = false;
@@ -535,11 +535,11 @@ function resolveCommandSource(
   return "text";
 }
 
-function buildCtxPayload(
+async function buildCtxPayload(
   inbound: InboundContext,
   runtime: GatewayPluginRuntime,
   cfg: unknown,
-): FinalizedMsgContext {
+): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
   const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
@@ -621,5 +621,5 @@ function buildCtxPayload(
         ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
         : {}),
     },
-  }) as FinalizedMsgContext;
+  });
 }

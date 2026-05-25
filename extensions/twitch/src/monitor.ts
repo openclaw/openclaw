@@ -63,7 +63,7 @@ async function processTwitchMessage(params: {
         textForCommands: incoming.message,
         raw: incoming,
       }),
-      resolveTurn: (input) => {
+      resolveTurn: async (input) => {
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "twitch",
@@ -82,7 +82,7 @@ async function processTwitchMessage(params: {
           envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
-        const ctxPayload = core.channel.turn.buildContext({
+        const ctxPayload = await core.channel.turn.buildContext({
           channel: "twitch",
           accountId,
           messageId: input.id,

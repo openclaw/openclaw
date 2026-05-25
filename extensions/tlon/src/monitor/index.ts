@@ -510,7 +510,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
     const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
-    const ctxPayload = core.channel.turn.buildContext({
+    const ctxPayload = await core.channel.turn.buildContext({
       channel: "tlon",
       accountId: route.accountId,
       messageId,

@@ -312,8 +312,8 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("builds a finalized inbound context payload", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("builds a finalized inbound context payload", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "Alice: hi",
       conversationId: "123@g.us",
       groupHistory: [],
@@ -349,8 +349,8 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("keeps agent and command bodies independently overridable", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("keeps agent and command bodies independently overridable", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       bodyForAgent: "spoken transcript",
       combinedBody: "spoken transcript",
       commandBody: "<media:audio>",
@@ -378,8 +378,30 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("marks authorized text slash commands as text command turns", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("preserves remote-only inbound media URLs", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "<image>",
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "<image>",
+        mediaUrl: "https://media.example/image.jpg",
+        mediaType: "image/jpeg",
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expectRecordFields(requireRecord(ctx, "remote media inbound context"), {
+      MediaUrl: "https://media.example/image.jpg",
+      MediaUrls: ["https://media.example/image.jpg"],
+      MediaType: "image/jpeg",
+    });
+  });
+
+  it("marks authorized text slash commands as text command turns", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "/status",
       commandBody: "/status",
       commandAuthorized: true,
@@ -421,8 +443,8 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("falls back SenderId to SenderE164 when sender id is missing", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("falls back SenderId to SenderE164 when sender id is missing", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "+1000",
       msg: makeMsg({
@@ -440,8 +462,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.To).toBe("+2000");
   });
 
-  it("passes groupSystemPrompt into GroupSystemPrompt for group chats", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("passes groupSystemPrompt into GroupSystemPrompt for group chats", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "123@g.us",
       groupSystemPrompt: "Specific group prompt",
@@ -453,8 +475,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.GroupSystemPrompt).toBe("Specific group prompt");
   });
 
-  it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "+1555",
       groupSystemPrompt: "Specific direct prompt",
@@ -466,8 +488,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.GroupSystemPrompt).toBe("Specific direct prompt");
   });
 
-  it("omits GroupSystemPrompt when groupSystemPrompt is not provided", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("omits GroupSystemPrompt when groupSystemPrompt is not provided", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "123@g.us",
       msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
@@ -478,8 +500,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.GroupSystemPrompt).toBeUndefined();
   });
 
-  it("preserves reply threading policy in the inbound context", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("preserves reply threading policy in the inbound context", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "hi",
       conversationId: "+1000",
       msg: makeMsg(),
@@ -493,8 +515,8 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
   });
 
-  it("passes WhatsApp structured objects into untrusted structured context", () => {
-    const ctx = buildWhatsAppInboundContext({
+  it("passes WhatsApp structured objects into untrusted structured context", async () => {
+    const ctx = await buildWhatsAppInboundContext({
       combinedBody: "<contact>",
       conversationId: "+1000",
       msg: makeMsg({
@@ -524,7 +546,7 @@ describe("whatsapp inbound dispatch", () => {
     ]);
   });
 
-  it("defaults responsePrefix to identity name in self-chats when unset", () => {
+  it("defaults responsePrefix to identity name in self-chats when unset", async () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {
         agents: {
@@ -545,7 +567,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(responsePrefix).toBe("[Mainbot]");
   });
 
-  it("does not force a response prefix in self-chats when identity is unset", () => {
+  it("does not force a response prefix in self-chats when identity is unset", async () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: { messages: {} } as never,
       agentId: "main",
@@ -1344,7 +1366,7 @@ describe("whatsapp inbound dispatch", () => {
     );
   });
 
-  it("updates main last route for DM when session key matches main session key", () => {
+  it("updates main last route for DM when session key matches main session key", async () => {
     const updateLastRoute = vi.fn();
 
     updateWhatsAppMainLastRoute({
@@ -1361,7 +1383,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(updateLastRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("does not update main last route for isolated DM scope sessions", () => {
+  it("does not update main last route for isolated DM scope sessions", async () => {
     const updateLastRoute = vi.fn();
 
     updateWhatsAppMainLastRoute({
@@ -1381,7 +1403,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(updateLastRoute).not.toHaveBeenCalled();
   });
 
-  it("does not update main last route for non-owner sender when main DM scope is pinned", () => {
+  it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
     const updateLastRoute = vi.fn();
 
     updateWhatsAppMainLastRoute({
@@ -1401,7 +1423,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(updateLastRoute).not.toHaveBeenCalled();
   });
 
-  it("updates main last route for owner sender when main DM scope is pinned", () => {
+  it("updates main last route for owner sender when main DM scope is pinned", async () => {
     const updateLastRoute = vi.fn();
 
     updateWhatsAppMainLastRoute({
@@ -1421,7 +1443,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(updateLastRoute).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves DM route targets from the sender first and the chat JID second", () => {
+  it("resolves DM route targets from the sender first and the chat JID second", async () => {
     expect(
       resolveWhatsAppDmRouteTarget({
         msg: makeMsg({ from: "15550003333@s.whatsapp.net" }),

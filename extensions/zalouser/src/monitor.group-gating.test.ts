@@ -177,7 +177,7 @@ function installRuntime(params: {
     };
   });
   const buildContext = vi.fn(
-    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
         BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -200,7 +200,7 @@ function installRuntime(params: {
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
-      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
+      }) as Awaited<ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>>,
   );
   const buildAgentSessionKey = vi.fn(
     (input: {

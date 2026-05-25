@@ -764,7 +764,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
     const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
-    const ctxPayload = buildChannelInboundEventContext({
+    const ctxPayload = await buildChannelInboundEventContext({
       channel: "msteams",
       finalize: core.channel.reply.finalizeInboundContext,
       contextVisibility: contextVisibilityMode,

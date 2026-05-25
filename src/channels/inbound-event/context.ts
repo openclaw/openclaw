@@ -72,6 +72,10 @@ export type BuildChannelInboundEventContextParams = {
   finalizeOptions?: FinalizeInboundContextOptions;
   extra?: Record<string, unknown>;
 };
+/**
+ * @deprecated Prefer `BuildChannelInboundEventContextParams` with
+ * `resolveSupplementalMedia: true` at call sites that need lazy quote media.
+ */
 export type BuildChannelInboundEventContextAsyncParams = BuildChannelInboundEventContextParams &
   ChannelInboundSupplementalResolutionOptions;
 
@@ -106,8 +110,15 @@ export type FinalizeChannelInboundContextParams<T extends Record<string, unknown
   finalize?: FinalizeInboundContextFn;
   finalizeOptions?: FinalizeInboundContextOptions;
 };
+/**
+ * @deprecated Prefer `FinalizeChannelInboundContextParams<T>` with
+ * `resolveSupplementalMedia: true` when lazy quote media must be resolved.
+ */
 export type FinalizeChannelInboundContextAsyncParams<T extends Record<string, unknown>> =
-  FinalizeChannelInboundContextParams<T> & ChannelInboundSupplementalResolutionOptions;
+  FinalizeChannelInboundContextParams<T> & { resolveSupplementalMedia: true } & Pick<
+      ChannelInboundSupplementalResolutionOptions,
+      "suppressSelfQuoteBody" | "suppressSelfQuoteMedia"
+    >;
 
 export type FinalizeChannelInboundContextResult<T extends Record<string, unknown>> = {
   context: T & FinalizedMsgContext;
@@ -261,7 +272,8 @@ function resolveChannelInboundSupplementalForFinalizer(params: {
 }
 
 /**
- * @deprecated Prefer `finalizeChannelInboundContext({ resolveSupplementalMedia: true })`.
+ * @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`
+ * for channel inbound payloads.
  */
 export async function resolveChannelInboundSupplementalContext(params: {
   supplemental?: ChannelInboundSupplementalFacts;
@@ -322,6 +334,10 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   };
 }
 
+/**
+ * @deprecated Public compatibility for callers that already prepared legacy
+ * prompt fields. New channel code should use `buildChannelInboundEventContext`.
+ */
 export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
   params: FinalizeChannelInboundContextAsyncParams<T>,
 ): Promise<FinalizeChannelInboundContextResult<T>>;

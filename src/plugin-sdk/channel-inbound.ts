@@ -15,6 +15,8 @@ import {
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 
+type MaybePromise<T> = T | Promise<T>;
+
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -73,9 +75,11 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   buildChannelInboundEventContext,
+  // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
   resolveChannelInboundSupplementalContext,
 };
 export type {
@@ -99,10 +103,28 @@ export type BuildChannelTurnContextParams = Omit<
 export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
   InboundTurnKind: InboundEventKind;
 };
+export type BuildChannelTurnContextAsyncParams = Omit<
+  BuildChannelInboundEventContextAsyncParams,
+  "message"
+> & {
+  message: BuildChannelInboundEventContextAsyncParams["message"] & {
+    inboundTurnKind?: InboundEventKind;
+  };
+};
+
+function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
+  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
+}
 
 export function buildChannelTurnContext(
+  params: BuildChannelTurnContextAsyncParams,
+): Promise<BuiltChannelTurnContext>;
+export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
-): BuiltChannelTurnContext {
+): BuiltChannelTurnContext;
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextParams | BuildChannelTurnContextAsyncParams,
+): MaybePromise<BuiltChannelTurnContext> {
   const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
   const ctx = buildChannelInboundEventContext({
     ...params,
@@ -111,10 +133,11 @@ export function buildChannelTurnContext(
       ...(inboundEventKind ? { inboundEventKind } : {}),
     },
   });
-  return {
-    ...ctx,
-    InboundTurnKind: ctx.InboundEventKind,
-  };
+  const finish = (built: BuiltChannelInboundEventContext): BuiltChannelTurnContext => ({
+    ...built,
+    InboundTurnKind: built.InboundEventKind,
+  });
+  return isPromiseLike(ctx) ? ctx.then(finish) : finish(ctx);
 }
 
 /**

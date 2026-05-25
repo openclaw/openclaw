@@ -1234,7 +1234,7 @@ export async function prepareSlackMessage(params: {
   const effectiveMessageThreadId =
     assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = (await buildChannelInboundEventContext({
     channel: "slack",
     accountId: route.accountId,
     messageId: message.ts,
@@ -1326,7 +1326,7 @@ export async function prepareSlackMessage(params: {
         mentionSource,
       }),
     },
-  }) satisfies FinalizedMsgContext;
+  })) satisfies FinalizedMsgContext;
 
   if (isRoomish && !shouldRequireMention) {
     channelHistory.record({

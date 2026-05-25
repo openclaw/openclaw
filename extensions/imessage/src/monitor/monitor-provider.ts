@@ -651,7 +651,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
-    const { ctxPayload, chatTarget } = buildIMessageInboundContext({
+    const { ctxPayload, chatTarget } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,

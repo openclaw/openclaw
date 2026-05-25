@@ -1,4 +1,7 @@
-import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  toInboundMediaFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
@@ -1333,7 +1336,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         body: textWithId,
       });
       const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
-      const { context: ctxPayload, quoteHidden } = finalizeChannelInboundContext({
+      const quoteHidden = Boolean(
+        replyContext &&
+        !evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind: "quote",
+          senderAllowed: replySenderAllowed,
+        }).include,
+      );
+      const ctxPayload = await buildChannelInboundEventContext({
+        channel: "matrix",
         finalize: core.channel.reply.finalizeInboundContext,
         contextVisibility: contextVisibilityMode,
         supplemental: {
@@ -1351,42 +1363,64 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
           groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         },
-        context: {
-          Body: body,
-          RawBody: bodyText,
-          CommandBody: commandBodyText,
-          BodyForAgent: bodyText,
-          BodyForCommands: commandBodyText,
-          InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
-          From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
-          To: `room:${roomId}`,
-          SessionKey: _route.sessionKey,
-          AccountId: _route.accountId,
-          ChatType: isDirectMessage ? "direct" : "channel",
-          ConversationLabel: envelopeFrom,
-          SenderName: senderName,
-          SenderId: senderId,
-          SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+        media: toInboundMediaFacts(
+          media
+            ? [{ path: media.path, url: media.path, contentType: media.contentType }]
+            : undefined,
+        ),
+        messageId,
+        timestamp: eventTs ?? undefined,
+        from: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
+        sender: {
+          id: senderId,
+          name: senderName,
+          username: senderId.split(":")[0]?.replace(/^@/, ""),
+        },
+        conversation: {
+          kind: isDirectMessage ? "direct" : "channel",
+          id: roomId,
+          label: envelopeFrom,
+          nativeChannelId: roomId,
+          threadId: threadTarget,
+        },
+        route: {
+          agentId: _route.agentId,
+          accountId: _route.accountId,
+          routeSessionKey: _route.sessionKey,
+        },
+        reply: {
+          to: `room:${roomId}`,
+          replyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+          messageThreadId: threadTarget,
+          nativeChannelId: roomId,
+        },
+        message: {
+          body,
+          rawBody: bodyText,
+          commandBody: commandBodyText,
+          bodyForAgent: bodyText,
+          inboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
+        },
+        access: {
+          ...(isRoom
+            ? {
+                mentions: {
+                  canDetectMention: true,
+                  wasMentioned,
+                },
+              }
+            : {}),
+          commands: {
+            authorized: commandAuthorized,
+          },
+        },
+        extra: {
           GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
           GroupId: isRoom ? roomId : undefined,
           GroupChannel: isRoom ? roomId : undefined,
-          Provider: "matrix" as const,
-          Surface: "matrix" as const,
-          WasMentioned: isRoom ? wasMentioned : undefined,
-          MessageSid: messageId,
-          ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
-          MessageThreadId: threadTarget,
-          Timestamp: eventTs ?? undefined,
-          MediaPath: media?.path,
-          MediaType: media?.contentType,
-          MediaUrl: media?.path,
           ...locationPayload?.context,
-          CommandAuthorized: commandAuthorized,
           CommandSource: "text" as const,
-          NativeChannelId: roomId,
           NativeDirectUserId: isDirectMessage ? senderId : undefined,
-          OriginatingChannel: "matrix" as const,
-          OriginatingTo: `room:${roomId}`,
         },
       });
       if (quoteHidden) {

@@ -29,8 +29,8 @@ function createLegacyTurnParams(
 }
 
 describe("channel-inbound public compatibility helpers", () => {
-  it("maps legacy buildChannelTurnContext inboundTurnKind into inbound event context", () => {
-    const ctx = buildChannelTurnContext(createLegacyTurnParams());
+  it("maps legacy buildChannelTurnContext inboundTurnKind into inbound event context", async () => {
+    const ctx = await buildChannelTurnContext(createLegacyTurnParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
     expect(ctx.InboundTurnKind).toBe("room_event");

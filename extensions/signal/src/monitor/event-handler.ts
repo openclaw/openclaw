@@ -202,7 +202,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : entry.mediaPath
           ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
           : undefined;
-    const ctxPayload = buildChannelInboundEventContext({
+    const ctxPayload = await buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {
         quote: entry.replyToBody
