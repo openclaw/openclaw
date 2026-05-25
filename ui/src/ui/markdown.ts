@@ -76,6 +76,13 @@ const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
   ADD_DATA_URI_TAGS: ["img"],
+  // Allow the http/https/mailto baseline plus the custom productivity-app
+  // schemes whitelisted in ALLOWED_CUSTOM_LINK_SCHEMES (see #86334). The
+  // afterSanitizeAttributes hook still validates each href against the
+  // explicit allowlist; this regex only prevents DOMPurify from stripping
+  // the href before our hook runs.
+  ALLOWED_URI_REGEXP:
+    /^(?:(?:https?|mailto|obsidian|things|fantastical|shortcuts|craftdocs|notion|bear|ulysses|drafts|hook|x-apple-reminderkit|calshow):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
 };
 
 let hooksInstalled = false;
@@ -86,6 +93,30 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+
+// Custom URI schemes that are commonly used by note-taking and productivity
+// apps (Obsidian, Things, Fantastical, Shortcuts, etc). These are rendered
+// as clickable anchors when used inside explicit markdown link syntax
+// `[text](scheme://...)`. The OS routes them to the registered app.
+//
+// DOMPurify strips most non-http schemes by default, so we keep the anchor
+// `href` instead of clearing it. Schemes not in this list (or in the
+// http/https/mailto baseline) are stripped — defense in depth against
+// `javascript:`, `data:`, `vbscript:`, etc.
+const ALLOWED_CUSTOM_LINK_SCHEMES = new Set([
+  "obsidian:",
+  "things:",
+  "fantastical:",
+  "shortcuts:",
+  "craftdocs:",
+  "notion:",
+  "bear:",
+  "ulysses:",
+  "drafts:",
+  "hook:",
+  "x-apple-reminderkit:",
+  "calshow:",
+]);
 
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
@@ -133,7 +164,12 @@ function installHooks() {
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
       const url = new URL(href, window.location.href);
-      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
+      const safe =
+        url.protocol === "http:" ||
+        url.protocol === "https:" ||
+        url.protocol === "mailto:" ||
+        ALLOWED_CUSTOM_LINK_SCHEMES.has(url.protocol);
+      if (!safe) {
         node.removeAttribute("href");
         return;
       }

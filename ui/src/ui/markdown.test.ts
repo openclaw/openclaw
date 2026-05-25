@@ -537,6 +537,25 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
       expect(html).toBe("<p><a>click</a></p>\n");
     });
+
+    it("keeps href for allowlisted custom productivity-app schemes (#86334)", () => {
+      const obsidian = toSanitizedMarkdownHtml(
+        "[note](obsidian://open?vault=Personal%20Vault&file=Plans%2FTest)",
+      );
+      expect(obsidian).toContain('href="obsidian://');
+      expect(obsidian).toContain('rel="noreferrer noopener"');
+
+      const things = toSanitizedMarkdownHtml("[t](things:///add?title=hi)");
+      expect(things).toContain('href="things://');
+
+      const shortcuts = toSanitizedMarkdownHtml("[s](shortcuts://run-shortcut?name=foo)");
+      expect(shortcuts).toContain('href="shortcuts://');
+    });
+
+    it("still strips href for non-allowlisted custom schemes", () => {
+      const html = toSanitizedMarkdownHtml("[x](weirdscheme://payload)");
+      expect(html).toBe("<p><a>x</a></p>\n");
+    });
   });
 
   describe("ReDoS protection", () => {
