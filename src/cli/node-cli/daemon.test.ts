@@ -385,7 +385,7 @@ describe("runNodeDaemonStatus", () => {
     expect(typeof detail === "string" ? detail : "").toContain("permission denied");
   });
 
-  it("emits a service-unit-not-found error path when runtime missingUnit is true", async () => {
+  it("emits a service-unit-not-found error to stderr while keeping recovery hints on stdout", async () => {
     const svc = createService();
     svc.isLoaded = vi.fn(async () => true);
     svc.readCommand = vi.fn(async () => null);
@@ -397,10 +397,23 @@ describe("runNodeDaemonStatus", () => {
 
     await runNodeDaemonStatus({ json: false });
 
+    // Diagnostic line goes to stderr only (defaultRuntime.error), never stdout.
     expect(runtimeErrors.some((line) => line.includes("Service unit not found"))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("Service unit not found"))).toBe(false);
+    // Recovery hints (log/restart instructions) must go to stdout (defaultRuntime.log)
+    // and must not also appear on stderr, so operators piping stderr to /dev/null still
+    // see actionable guidance.
+    const hintPatterns = [/journalctl/i, /Launchd stdout/i, /Restart attempts/i, /schtasks/i];
+    const stdoutText = runtimeLogs.join("\n");
+    const stderrText = runtimeErrors.join("\n");
+    const matchedHint = hintPatterns.find((rx) => rx.test(stdoutText));
+    expect(matchedHint).toBeTruthy();
+    if (matchedHint) {
+      expect(matchedHint.test(stderrText)).toBe(false);
+    }
   });
 
-  it("emits a stopped-runtime error path when runtime status is stopped", async () => {
+  it("emits a stopped-runtime error to stderr while keeping recovery hints on stdout", async () => {
     const svc = createService();
     svc.isLoaded = vi.fn(async () => true);
     svc.readCommand = vi.fn(async () => null);
@@ -411,5 +424,14 @@ describe("runNodeDaemonStatus", () => {
     await runNodeDaemonStatus({ json: false });
 
     expect(runtimeErrors.some((line) => line.includes("not running"))).toBe(true);
+    expect(runtimeLogs.some((line) => line.includes("not running"))).toBe(false);
+    const hintPatterns = [/journalctl/i, /Launchd stdout/i, /Restart attempts/i, /schtasks/i];
+    const stdoutText = runtimeLogs.join("\n");
+    const stderrText = runtimeErrors.join("\n");
+    const matchedHint = hintPatterns.find((rx) => rx.test(stdoutText));
+    expect(matchedHint).toBeTruthy();
+    if (matchedHint) {
+      expect(matchedHint.test(stderrText)).toBe(false);
+    }
   });
 });
