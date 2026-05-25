@@ -1,5 +1,5 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
@@ -12,21 +12,31 @@ vi.mock("./provider-transport-stream.js", () => ({
   createTransportAwareStreamFnForModel: vi.fn(() => undefined),
 }));
 
-const googleModel = {
+const googleGenerativeModel = {
   api: "google-generative-ai",
+  provider: "google",
+  id: "gemini-3.5-flash",
+} as never;
+
+const googleModelResolvedThroughMismatchedProvider = {
+  api: "openai-responses",
   provider: "google",
   id: "gemini-3.5-flash",
 } as never;
 
 const streamFn = (() => undefined) as unknown as StreamFn;
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("registerProviderStreamForModel", () => {
-  it("preserves env-only Google Generative AI routing when models.providers.google is missing", () => {
+  it("preserves env-only Google Gemini routing when models.providers.google is missing", () => {
     vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
 
     expect(() =>
       registerProviderStreamForModel({
-        model: googleModel,
+        model: googleGenerativeModel,
         cfg: {
           models: {
             providers: {
@@ -42,8 +52,9 @@ describe("registerProviderStreamForModel", () => {
         } as NodeJS.ProcessEnv,
       }),
     ).not.toThrow();
+
     expect(createTransportAwareStreamFnForModel).toHaveBeenCalledWith(
-      googleModel,
+      googleGenerativeModel,
       expect.objectContaining({
         env: expect.objectContaining({
           GEMINI_API_KEY: "google-env-key",
@@ -52,10 +63,10 @@ describe("registerProviderStreamForModel", () => {
     );
   });
 
-  it("fails closed when models.providers.google is configured with a non-Google API", () => {
+  it("fails closed when a Google provider config explicitly points at a non-Google API", () => {
     expect(() =>
       registerProviderStreamForModel({
-        model: googleModel,
+        model: googleModelResolvedThroughMismatchedProvider,
         cfg: {
           models: {
             providers: {
@@ -75,7 +86,7 @@ describe("registerProviderStreamForModel", () => {
 
     try {
       registerProviderStreamForModel({
-        model: googleModel,
+        model: googleModelResolvedThroughMismatchedProvider,
         cfg: {
           models: {
             providers: {
@@ -94,12 +105,12 @@ describe("registerProviderStreamForModel", () => {
     }
   });
 
-  it("allows Google Generative AI models when the Google provider is explicitly configured", () => {
+  it("allows Google Gemini routing when the Google provider is explicitly configured with the Google API", () => {
     vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
 
     expect(() =>
       registerProviderStreamForModel({
-        model: googleModel,
+        model: googleGenerativeModel,
         cfg: {
           models: {
             providers: {

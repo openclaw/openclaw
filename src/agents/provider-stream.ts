@@ -15,22 +15,21 @@ function resolveConfiguredProvider(params: {
   return findNormalizedProviderValue(params.cfg?.models?.providers, params.provider);
 }
 
-function isGoogleGenerativeModel<TApi extends Api>(model: Model<TApi>): boolean {
-  return model.api === "google-generative-ai" && normalizeProviderId(model.provider) === "google";
-}
-
 function assertProviderConfigMatchesModel<TApi extends Api>(params: {
   model: Model<TApi>;
   cfg?: OpenClawConfig;
 }): void {
-  if (!isGoogleGenerativeModel(params.model)) {
+  if (normalizeProviderId(params.model.provider) !== "google") {
     return;
   }
+
   const googleProviderConfig = resolveConfiguredProvider({ cfg: params.cfg, provider: "google" });
   const configuredApi = normalizeOptionalString(googleProviderConfig?.api);
+
   if (!configuredApi || configuredApi === "google-generative-ai") {
     return;
   }
+
   throw new Error(
     `Google model "google/${params.model.id}" cannot use models.providers.google api "${configuredApi}". Expected api "google-generative-ai". Configure the Google provider correctly or remove the mismatched provider config.`,
   );
@@ -68,9 +67,11 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
+
   if (!streamFn) {
     return undefined;
   }
+
   ensureCustomApiRegistered(params.model.api, streamFn);
   return streamFn;
 }
