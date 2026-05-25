@@ -627,8 +627,6 @@ function buildModelRows(params: {
         action: "reset",
         view: "models",
         provider: params.modelPage.provider,
-        runtime: compactRuntime,
-        runtimeIndex: compactRuntimeIndex,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,

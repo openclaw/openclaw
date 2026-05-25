@@ -1084,6 +1084,10 @@ describe("Discord model picker rendering", () => {
     );
     expect(submitState?.runtime).toBeUndefined();
     expect(submitState?.runtimeIndex).toBe(2);
+    const resetState = parseDiscordModelPickerCustomId(rows[3]?.components?.[2]?.custom_id ?? "");
+    expect(resetState?.action).toBe("reset");
+    expect(resetState?.runtime).toBeUndefined();
+    expect(resetState?.runtimeIndex).toBeUndefined();
   });
 
   it("renders not-found model view with a back button", () => {
