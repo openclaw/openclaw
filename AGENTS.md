@@ -80,7 +80,6 @@ Skills own workflows; root owns hard policy and routing.
 - Runtime: Node 22.19+; Node 24 recommended. Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
-- Sharp/Homebrew libvips source-build fail: `SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install`.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
 - Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
 - Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
