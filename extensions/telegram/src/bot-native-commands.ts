@@ -1166,7 +1166,7 @@ export const registerTelegramNativeCommands = ({
         if (isForum && resolvedThreadId != null) {
           try {
             const storePath = resolveStorePath(executionCfg.session?.store, {
-              agentId: route.agentId,
+              agentId: route.accountId,
             });
             const scope = resolveTopicNameCacheScope(storePath);
             topicName = await getTopicName(chatId, resolvedThreadId, scope);

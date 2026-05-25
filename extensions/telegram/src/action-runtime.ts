@@ -16,7 +16,12 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
-import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  createTelegramActionGate,
+  resolveDefaultTelegramAccountId,
+  resolveTelegramPollActionGateState,
+} from "./accounts.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
 import {
@@ -40,7 +45,7 @@ import {
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
-import { updateTopicName } from "./topic-name-cache.js";
+import { resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 export const telegramActionRuntime = {
   createForumTopicTelegram,
@@ -115,6 +120,13 @@ function readTelegramThreadId(params: Record<string, unknown>) {
     readNumberParam(params, "messageThreadId", { integer: true }) ??
     readNumberParam(params, "threadId", { integer: true })
   );
+}
+
+function resolveActionTopicNameCacheScope(cfg: OpenClawConfig, accountId?: string | null): string {
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: accountId ?? resolveDefaultTelegramAccountId(cfg),
+  });
+  return resolveTopicNameCacheScope(storePath);
 }
 
 function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
@@ -727,12 +739,17 @@ export async function handleTelegramAction(
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
     });
-    if (result.topicId != null && chatId) {
-      await updateTopicName(chatId, result.topicId, {
-        name,
-        ...(iconColor != null ? { iconColor } : {}),
-        ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
-      }).catch(() => {});
+    if (result.topicId != null && result.chatId) {
+      await updateTopicName(
+        result.chatId,
+        result.topicId,
+        {
+          name,
+          ...(iconColor != null ? { iconColor } : {}),
+          ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
+        },
+        resolveActionTopicNameCacheScope(cfg, accountId),
+      ).catch(() => {});
     }
     return jsonResult({
       ok: true,
@@ -771,7 +788,7 @@ export async function handleTelegramAction(
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
-    if (chatId) {
+    if (result.chatId) {
       const patch: { name?: string; iconCustomEmojiId?: string } = {};
       if (name) {
         patch.name = name;
@@ -780,7 +797,12 @@ export async function handleTelegramAction(
         patch.iconCustomEmojiId = iconCustomEmojiId;
       }
       if (Object.keys(patch).length > 0) {
-        await updateTopicName(chatId, messageThreadId, patch).catch(() => {});
+        await updateTopicName(
+          result.chatId,
+          result.messageThreadId,
+          patch,
+          resolveActionTopicNameCacheScope(cfg, accountId),
+        ).catch(() => {});
       }
     }
     return jsonResult(result);
