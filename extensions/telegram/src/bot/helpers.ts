@@ -29,12 +29,12 @@ import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
+  renderTelegramTextEntities,
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
@@ -46,12 +46,12 @@ export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helper
 export {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
+  renderTelegramTextEntities,
   resolveTelegramMediaPlaceholder,
 };
 
