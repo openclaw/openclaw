@@ -397,6 +397,20 @@ describe("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, shellScript);
   });
 
+  it("bootstraps raw AWS macOS shell scripts with absolute time-prefixed JavaScript commands", () => {
+    const shellScript = "/usr/bin/time -l pnpm --version";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(remoteCommand, shellScript);
+  });
+
   it("bootstraps raw AWS macOS shell scripts with JavaScript control conditions", () => {
     const shellScript = "if node -e 'process.exit(0)'; then echo ok; fi";
     const result = runWrapper(
@@ -625,6 +639,27 @@ describe("scripts/crabbox-wrapper", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--target", "macos", "--shell", "--", "command -v pnpm"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
+  });
+
+  it("does not bootstrap raw AWS macOS shell scripts for timed command lookup checks", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "/usr/bin/time -l command -v pnpm",
+      ],
     );
 
     const output = parseFakeCrabboxOutput(result);
@@ -1013,6 +1048,27 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preserves sparse changed-gate Git bootstrap for command-prefixed shell commands", () => {
     const shellScript = "command pnpm check:changed";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for absolute time-prefixed shell commands", () => {
+    const shellScript = "/usr/bin/time -l pnpm check:changed";
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--shell", "--", shellScript],

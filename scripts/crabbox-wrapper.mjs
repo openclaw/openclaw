@@ -596,24 +596,29 @@ function normalizedShellSegmentWords(segment) {
 function stripShellExecutionPrefixes(words) {
   words = [...words];
   for (;;) {
-    if (shellCommandExecutionPrefixes.has(words[0])) {
+    const first = shellWordBasename(words[0]);
+    if (shellCommandExecutionPrefixes.has(first)) {
       words.shift();
       continue;
     }
-    if (words[0] === "command") {
+    if (first === "command") {
       words.shift();
       if (!stripCommandBuiltinOptions(words)) {
         return words;
       }
       continue;
     }
-    if (words[0] === "time") {
+    if (first === "time") {
       words.shift();
       stripTimeOptions(words);
       continue;
     }
     return words;
   }
+}
+
+function shellWordBasename(word) {
+  return (word ?? "").split("/").pop() ?? "";
 }
 
 function stripCommandBuiltinOptions(words) {
