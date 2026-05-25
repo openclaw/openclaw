@@ -14,7 +14,10 @@ type InlineReasoningVisibleTextResolution =
 
 export function isOllamaCloudKimiModelRef(modelId: string): boolean {
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
+  const slashIndex = normalizedModelId.indexOf("/");
+  const normalizedWireModelId =
+    slashIndex === -1 ? normalizedModelId : normalizedModelId.slice(slashIndex + 1);
+  return normalizedWireModelId.startsWith("kimi-k") && normalizedWireModelId.includes(":cloud");
 }
 
 function resolveInlineReasoningVisibleText(params: {
