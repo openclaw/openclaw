@@ -965,6 +965,25 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
   });
 
+  it("strips inline reasoning for provider-qualified Kimi cloud refs", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️Final answer only.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "ollama/kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
+  });
+
   it("strips inline reasoning when the Kimi boundary is followed by whitespace", () => {
     const response = {
       model: "kimi-k2.6:cloud",
