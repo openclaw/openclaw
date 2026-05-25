@@ -1956,6 +1956,42 @@ describe("createOllamaStreamFn streaming events", () => {
     }
   });
 
+  it("keeps Kimi deltas append-only after the bounded sanitizer window is bypassed", async () => {
+    const longPrefix = "This Kimi cloud output has streamed past the sanitizer window. ".repeat(10);
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: longPrefix },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: " ️ OK." },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const deltas = events.filter((event) => event.type === "text_delta");
+        expect(deltas.map((event) => event.delta)).toEqual([longPrefix, " ️ OK."]);
+
+        const rawText = `${longPrefix} ️ OK.`;
+        const textEnd = events.find((event) => event.type === "text_end");
+        expect(textEnd?.content).toBe(rawText);
+        const doneEvent = events.find((event) => event.type === "done");
+        expect(doneEvent?.message.content).toEqual([{ type: "text", text: rawText }]);
+      },
+    );
+  });
+
   it("does not reject punctuation-heavy text from unrelated Ollama models", async () => {
     const punctuationHeavy =
       '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +
