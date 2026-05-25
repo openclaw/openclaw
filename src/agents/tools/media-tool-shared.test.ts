@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
+  resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
@@ -57,7 +58,7 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
 
-  it("adds channel inbound attachment roots only for the current channel context", () => {
+  it("keeps channel inbound attachment roots separate from local roots", () => {
     const accountRoot = path.join("/tmp", "openclaw-imessage-work");
     const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
     const cfg = {
@@ -76,15 +77,22 @@ describe("resolveMediaToolLocalRoots", () => {
     const withoutChannel = resolveMediaToolLocalRoots(undefined, { cfg });
     expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
     expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
 
     const withImessage = resolveMediaToolLocalRoots(undefined, {
       cfg,
       channelId: "imessage",
       accountId: "work",
     });
-    const normalizedRoots = withImessage.map(normalizeHostPath);
-    expect(normalizedRoots).toContain(normalizeHostPath(accountRoot));
-    expect(normalizedRoots).toContain(normalizeHostPath(sharedRoot));
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(
+      resolveMediaToolInboundRoots({
+        cfg,
+        channelId: "imessage",
+        accountId: "work",
+      }),
+    ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
   });
 });
 

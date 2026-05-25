@@ -57,6 +57,8 @@ type WebMediaOptions = {
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
+  /** Channel inbound attachment root patterns checked with inbound path policy semantics. */
+  inboundRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
@@ -773,6 +775,7 @@ async function loadWebMediaInternal(
     trustExplicitProxyDns,
     workspaceDir,
     localRoots,
+    inboundRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
@@ -968,7 +971,7 @@ async function loadWebMediaInternal(
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
   if (!(sandboxValidated || localRoots === "any")) {
-    await assertLocalMediaAllowed(mediaUrl, localRoots);
+    await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
   // Local path
