@@ -183,7 +183,7 @@ describe("applyConfigSnapshot", () => {
     expect(state.configDraftBaseHash).toBe("hash-remote");
   });
 
-  it("forces form mode when the snapshot does not include raw text", () => {
+  it("keeps raw mode when editable config can be serialized without raw text", () => {
     const state = createState();
     state.configFormMode = "raw";
 
@@ -195,7 +195,7 @@ describe("applyConfigSnapshot", () => {
       raw: null,
     });
 
-    expect(state.configFormMode).toBe("form");
+    expect(state.configFormMode).toBe("raw");
     expect(state.configRaw).toBe('{\n  "gateway": {\n    "mode": "local"\n  }\n}\n');
   });
 });
