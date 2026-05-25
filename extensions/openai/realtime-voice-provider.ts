@@ -1286,7 +1286,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private buildResponseInstructions(instructions?: string): string {
     const responseInstructions = instructions?.trim() || "Greet the meeting.";
     const baseInstructions = this.config.instructions?.trim();
-    if (!baseInstructions || responseInstructions.includes(baseInstructions)) {
+    if (
+      !baseInstructions ||
+      responseInstructions === baseInstructions ||
+      responseInstructions.startsWith(`${baseInstructions}\n\n`)
+    ) {
       return responseInstructions;
     }
     return `${baseInstructions}\n\n${responseInstructions}`;

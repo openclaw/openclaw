@@ -1582,6 +1582,37 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     ]);
   });
 
+  it("prepends configured instructions when manual speech only contains them as text", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      instructions: "Stay concise.",
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.triggerGreeting?.('Say exactly: "Stay concise."');
+
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "response.create",
+        response: {
+          instructions: 'Stay concise.\n\nSay exactly: "Stay concise."',
+        },
+      },
+    ]);
+  });
+
   it("defers manual response.create while a realtime response is active", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
