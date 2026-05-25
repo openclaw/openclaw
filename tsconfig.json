@@ -21,7 +21,7 @@
     "strict": true,
     "target": "es2023",
     "types": ["node"],
-    "useDefineForClassFields": true,
+    "useDefineForClassFields": false,
     "verbatimModuleSyntax": true,
     "paths": {
       "openclaw/extension-api": ["./src/extensionAPI.ts"],
