@@ -31,7 +31,10 @@ export async function detectUiProtocolFreshnessIssues(
     readonly root?: string;
     readonly argv1?: string;
     readonly cwd?: string;
-    readonly collectChangesSinceBuild?: (root: string, uiMtime: Date) => Promise<readonly string[]>;
+    readonly collectChangesSinceBuild?: (
+      root: string,
+      uiMtime: Date,
+    ) => Promise<readonly string[] | null>;
   } = {},
 ): Promise<readonly UiProtocolFreshnessIssue[]> {
   const root =
@@ -72,13 +75,15 @@ export async function detectUiProtocolFreshnessIssues(
     const changesSinceBuild = await (
       opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
     )(root, uiStats.mtime);
-
+    if (changesSinceBuild !== null && changesSinceBuild.length === 0) {
+      return [];
+    }
     return [
       {
         kind: "stale-assets",
         root,
         uiIndexPath,
-        changesSinceBuild,
+        changesSinceBuild: changesSinceBuild ?? [],
         canBuild,
       },
     ];
@@ -90,7 +95,7 @@ export async function detectUiProtocolFreshnessIssues(
 async function collectProtocolSchemaChangesSince(
   root: string,
   uiMtime: Date,
-): Promise<readonly string[]> {
+): Promise<readonly string[] | null> {
   const gitLog = await runCommandWithTimeout(
     [
       "git",
@@ -103,7 +108,10 @@ async function collectProtocolSchemaChangesSince(
     ],
     { timeoutMs: 5000 },
   ).catch(() => null);
-  if (!gitLog || gitLog.code !== 0 || !gitLog.stdout.trim()) {
+  if (!gitLog || gitLog.code !== 0) {
+    return null;
+  }
+  if (!gitLog.stdout.trim()) {
     return [];
   }
   return gitLog.stdout.trim().split("\n");
@@ -191,15 +199,15 @@ export async function maybeRepairUiProtocolFreshness(
     }
 
     note(formatUiProtocolFreshnessIssue(issue), "UI Freshness");
+    if (!issue.canBuild) {
+      note("Skipping UI rebuild: ui/ sources not present.", "UI");
+      continue;
+    }
     const shouldRepair = await prompter.confirmAggressiveAutoFix({
       message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
       initialValue: true,
     });
     if (shouldRepair) {
-      if (!issue.canBuild) {
-        note("Skipping UI rebuild: ui/ sources not present.", "UI");
-        continue;
-      }
       note("Rebuilding stale UI assets... (this may take a moment)", "UI");
       const uiScriptPath = path.join(issue.root, "scripts/ui.js");
       const buildResult = await runCommandWithTimeout([process.execPath, uiScriptPath, "build"], {

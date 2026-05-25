@@ -87,7 +87,7 @@ describe("UI protocol freshness health mapping", () => {
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);
   });
 
-  it("reports stale assets even when git history is unavailable", async () => {
+  it("does not report stale assets when git finds no schema changes", async () => {
     const root = await createOpenClawRoot();
     const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
@@ -99,6 +99,23 @@ describe("UI protocol freshness health mapping", () => {
         root,
         async collectChangesSinceBuild() {
           return [];
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("reports stale assets when git history is unavailable", async () => {
+    const root = await createOpenClawRoot();
+    const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
+    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
+    await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
+    await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
+
+    await expect(
+      detectUiProtocolFreshnessIssues({
+        root,
+        async collectChangesSinceBuild() {
+          return null;
         },
       }),
     ).resolves.toEqual([
