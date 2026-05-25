@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
+import { streamSimpleOpenAIResponses } from "openclaw/plugin-sdk/llm-openai-responses";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
@@ -309,7 +309,7 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("keeps native xAI Responses thinking efforts before pi-ai dispatches payloads", async () => {
+  it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 
     expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });

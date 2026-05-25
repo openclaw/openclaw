@@ -8,6 +8,7 @@ import type {
   RuntimeParityDrift,
   RuntimeParityResult,
 } from "./runtime-parity.js";
+import { openclawRuntimeParityCell } from "./runtime-parity.js";
 import {
   readScenarioRuntimeToolCoverageMetadata,
   type QaRuntimeCapabilityLayer,
@@ -43,10 +44,10 @@ export type QaToolCoverageRow = {
   fixtureCount: number;
   scenarios: string[];
   sourcePaths: string[];
-  pi: QaToolCoverageStatus;
+  openclaw: QaToolCoverageStatus;
   codex: QaToolCoverageStatus;
   drift: QaToolCoverageDrift;
-  piToolCalls: number;
+  openclawToolCalls: number;
   codexToolCalls: number;
   tracking?: string;
   codexDefaultImpact?: string;
@@ -87,7 +88,7 @@ function normalizeRuntimePair(
   if (pair?.[0] && pair?.[1]) {
     return pair;
   }
-  return ["pi", "codex"];
+  return ["openclaw", "codex"];
 }
 
 function cellStatus(cell: RuntimeParityCell | undefined): QaToolCoverageStatus {
@@ -191,7 +192,9 @@ function countRuntimeToolCalls(
   if (!result || !toolName) {
     return 0;
   }
-  return result.cells[runtime].toolCalls.filter((call) => call.tool === toolName).length;
+  const cell =
+    runtime === "openclaw" ? openclawRuntimeParityCell(result.cells) : result.cells.codex;
+  return cell.toolCalls.filter((call) => call.tool === toolName).length;
 }
 
 function buildRow(params: {
@@ -216,10 +219,10 @@ function buildRow(params: {
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
     sourcePaths: params.group.scenarios.map((scenario) => scenario.sourcePath),
-    pi: result ? cellStatus(result.cells.pi) : "not-run",
+    openclaw: result ? cellStatus(openclawRuntimeParityCell(result.cells)) : "not-run",
     codex: result ? cellStatus(result.cells.codex) : "not-run",
     drift: result?.drift ?? "not-run",
-    piToolCalls: countRuntimeToolCalls(result, "pi", runtimeToolName),
+    openclawToolCalls: countRuntimeToolCalls(result, "openclaw", runtimeToolName),
     codexToolCalls: countRuntimeToolCalls(result, "codex", runtimeToolName),
     ...(tracking ? { tracking } : {}),
     ...(rowMetadata.codexDefaultImpact
@@ -238,14 +241,14 @@ function coverageFailureForRow(row: QaToolCoverageRow): string | undefined {
   if (row.drift === "not-run") {
     return `${row.tool} drift=not-run`;
   }
-  if (row.pi !== "pass" || row.codex !== "pass") {
-    return `${row.tool} status pi=${row.pi} codex=${row.codex}`;
+  if (row.openclaw !== "pass" || row.codex !== "pass") {
+    return `${row.tool} status openclaw=${row.openclaw} codex=${row.codex}`;
   }
   if (row.drift === "failure-mode") {
     return `${row.tool} drift=failure-mode${row.details ? ` (${row.details})` : ""}`;
   }
-  if (row.runtimeToolName && row.piToolCalls === 0) {
-    return `${row.tool} missing pi tool call ${row.runtimeToolName}`;
+  if (row.runtimeToolName && row.openclawToolCalls === 0) {
+    return `${row.tool} missing openclaw tool call ${row.runtimeToolName}`;
   }
   if (row.runtimeToolName && row.codexToolCalls === 0) {
     return `${row.tool} missing codex tool call ${row.runtimeToolName}`;
@@ -290,7 +293,7 @@ export function buildQaToolCoverageReport(params: {
           (row) =>
             row.required &&
             !row.tracking &&
-            row.pi === "pass" &&
+            row.openclaw === "pass" &&
             row.codex === "pass" &&
             (isPassingToolCoverageDrift(row.drift, true) || !coverageFailureForRow(row)),
         ).length
@@ -320,13 +323,13 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Failing tools: ${report.failingTools}`,
     `- Verdict: ${report.pass ? "pass" : "fail"}`,
     "",
-    "| Tool | Bucket | Expected layer | Capability layer | Required | Fixtures | Pi | Codex | Drift | Codex default impact | QA impact | Action | Tracking |",
+    "| Tool | Bucket | Expected layer | Capability layer | Required | Fixtures | OpenClaw | Codex | Drift | Codex default impact | QA impact | Action | Tracking |",
     "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
   ];
 
   for (const row of report.rows) {
     lines.push(
-      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.capabilityLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
+      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.capabilityLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.openclaw} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
     );
   }
 

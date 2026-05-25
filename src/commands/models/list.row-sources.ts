@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry } from "../../agents/sessions/index.js";
 import {
   appendCatalogSupplementRows,
   appendAuthenticatedCatalogRows,

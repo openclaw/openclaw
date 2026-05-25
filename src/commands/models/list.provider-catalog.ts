@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
   createProviderApiKeyResolver,
@@ -194,7 +194,7 @@ function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
   model: ModelProviderConfig["models"][number];
-}): Model<Api> {
+}): Model {
   return {
     id: params.model.id,
     name: params.model.name || params.model.id,
@@ -209,7 +209,7 @@ function modelFromProviderCatalog(params: {
     maxTokens: params.model.maxTokens,
     headers: params.model.headers,
     compat: params.model.compat,
-  } as Model<Api>;
+  } as Model;
 }
 
 export async function loadProviderCatalogModelsForList(params: {
@@ -220,7 +220,7 @@ export async function loadProviderCatalogModelsForList(params: {
   staticOnly?: boolean;
   registryIndex?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<Model<Api>[]> {
+}): Promise<Model[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
   const onlyPluginIds = providerFilter
@@ -264,7 +264,7 @@ export async function loadProviderCatalogModelsForList(params: {
       typeof provider.pluginId === "string" && bundledPluginIdSet.has(provider.pluginId),
   );
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
-  const rows: Model<Api>[] = [];
+  const rows: Model[] = [];
   const seen = new Set<string>();
 
   for (const order of DISCOVERY_ORDERS) {
