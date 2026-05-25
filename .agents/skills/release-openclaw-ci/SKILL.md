@@ -1,11 +1,11 @@
 ---
-name: openclaw-release-ci
+name: release-openclaw-ci
 description: "Run, watch, debug, and summarize OpenClaw full release CI, release checks, live provider gates, install/update proofs, and release-secret preflights."
 ---
 
 # OpenClaw Release CI
 
-Use this with `$openclaw-release-maintainer` and `$openclaw-testing` when a release candidate needs full validation, install/update proof, live provider checks, or CI recovery.
+Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a release candidate needs full validation, install/update proof, live provider checks, or CI recovery.
 
 ## Guardrails
 
@@ -22,7 +22,7 @@ Use this with `$openclaw-release-maintainer` and `$openclaw-testing` when a rele
 Before full release validation:
 
 ```bash
-node .agents/skills/openclaw-release-ci/scripts/verify-provider-secrets.mjs --required openai,anthropic,fireworks
+node .agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs --required openai,anthropic,fireworks
 gh api rate_limit --jq '.resources.core'
 git status --short --branch
 git rev-parse HEAD
@@ -79,7 +79,7 @@ Use `release_profile=stable` unless the operator explicitly asks for the broad a
 Use the summary helper instead of repeated raw polling:
 
 ```bash
-node .agents/skills/openclaw-release-ci/scripts/release-ci-summary.mjs <full-release-run-id>
+node .agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs <full-release-run-id>
 ```
 
 Then watch only when useful:

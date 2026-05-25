@@ -1,5 +1,5 @@
 ---
-name: openclaw-release-maintainer
+name: release-openclaw-maintainer
 description: Prepare or verify OpenClaw stable/beta releases, changelogs, release notes, publish commands, and artifacts.
 ---
 

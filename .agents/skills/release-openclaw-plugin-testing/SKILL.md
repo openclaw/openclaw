@@ -1,5 +1,5 @@
 ---
-name: openclaw-pre-release-plugin-testing
+name: release-openclaw-plugin-testing
 description: Plan and run pre-release OpenClaw plugin validation across bundled plugins, package artifacts, lifecycle commands, doctor/fix, config round-trip, gateway startup, SDK compatibility, Docker E2E, Package Acceptance, and Testbox proof.
 ---
 

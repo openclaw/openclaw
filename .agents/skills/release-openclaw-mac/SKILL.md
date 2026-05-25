@@ -1,11 +1,11 @@
 ---
-name: openclaw-mac-release
+name: release-openclaw-mac
 description: "Run or recover OpenClaw macOS release signing, notarization, appcast, and asset promotion."
 ---
 
 # OpenClaw Mac Release
 
-Use with `$openclaw-release-maintainer`, `$openclaw-release-ci`, and `$one-password` when stable macOS assets, private mac preflight, notarization, appcast promotion, or mac release recovery is involved.
+Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, and `$one-password` when stable macOS assets, private mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 ## Credentials
 
