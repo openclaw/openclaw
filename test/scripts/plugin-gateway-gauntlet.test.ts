@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  createGauntletPrebuildCommand,
   parseTimedMetrics,
   runMeasuredCommand,
 } from "../../scripts/check-plugin-gateway-gauntlet.mjs";
@@ -265,6 +266,13 @@ describe("plugin gateway gauntlet helpers", () => {
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
+  });
+
+  it("prebuilds only the CLI startup runtime needed by the gauntlet", () => {
+    expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
+      command: process.execPath,
+      args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+    });
   });
 
   it("parses macOS time -l metrics from strict trailing lines", () => {

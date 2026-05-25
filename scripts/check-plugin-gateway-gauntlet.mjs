@@ -15,7 +15,6 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -238,13 +237,11 @@ function parsePositiveNumber(raw, label) {
   return value;
 }
 
-function pnpmCommand(args, { cwd, env }) {
-  return createPnpmRunnerSpawnSpec({
-    cwd,
-    env,
-    pnpmArgs: args,
-    stdio: "pipe",
-  });
+export function createGauntletPrebuildCommand(repoRoot) {
+  return {
+    command: process.execPath,
+    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+  };
 }
 
 function openclawCommand(repoRoot, args) {
@@ -565,7 +562,7 @@ async function main() {
     if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
       process.stderr.write("[plugin-gauntlet] prebuild\n");
       const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
-      const prebuildCommand = pnpmCommand(["build"], { cwd: repoRoot, env: prebuildEnv });
+      const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
       rows.push(
         runMeasuredCommand({
           cwd: repoRoot,
@@ -573,7 +570,6 @@ async function main() {
           logDir: path.join(options.outputDir, "logs", "prebuild"),
           command: prebuildCommand.command,
           args: prebuildCommand.args,
-          spawnOptions: prebuildCommand.options,
           label: "prebuild",
           phase: "prebuild",
           timeoutMs: options.buildTimeoutMs,
