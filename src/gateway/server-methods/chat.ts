@@ -48,6 +48,7 @@ import {
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -2676,6 +2677,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
+      let agentUserMessagePersisted = false;
+      const beforeAgentRunHooksRegistered =
+        getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
       const persistGatewayUserTurnTranscript = async () => {
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
@@ -2869,6 +2873,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }
                   }
                 }
+              },
+              onUserMessagePersisted: () => {
+                agentUserMessagePersisted = true;
               },
               onModelSelected: (modelSelection) => {
                 updateChatRunProvider(context.chatAbortControllers, {
@@ -3446,9 +3453,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err) => {
-          const emitAfterError = agentRunStarted
-            ? Promise.resolve()
-            : persistGatewayUserTurnTranscript();
+          const emitAfterError =
+            agentUserMessagePersisted || beforeAgentRunHooksRegistered
+              ? Promise.resolve()
+              : persistGatewayUserTurnTranscript();
           await emitAfterError.catch((transcriptErr) => {
             context.logGateway.warn(
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,

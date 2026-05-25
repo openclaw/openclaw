@@ -56,6 +56,7 @@ const mockState = vi.hoisted(() => ({
   dispatchError: null as Error | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
   triggerAgentRunStart: false,
+  triggerUserMessagePersisted: false,
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -192,6 +193,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       };
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
+        onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -207,6 +209,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
         mockState.onAfterAgentRunStart?.();
+      }
+      if (mockState.triggerUserMessagePersisted) {
+        params.replyOptions?.onUserMessagePersisted?.({
+          role: "user",
+          content: "persisted by runtime",
+        });
       }
       if (mockState.dispatchErrorAfterAgentRunStart) {
         throw mockState.dispatchErrorAfterAgentRunStart;
@@ -700,6 +708,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
+    mockState.triggerUserMessagePersisted = false;
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
@@ -4374,6 +4383,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             (candidate as { role?: unknown }).role === "user",
         );
       expect(persistedUser?.content).toBe("hello from failed dispatch");
+    });
+  });
+
+  it("emits a user transcript update when chat.send fails after agent start but before runtime persistence", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-before-runtime-persist-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchErrorAfterAgentRunStart = new Error("cli backend unavailable");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-error-before-runtime-persist",
+      message: "hello before cli startup failure",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-error-before-runtime-persist")?.ok).toBe(
+        false,
+      );
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("hello before cli startup failure");
+      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
+        .map((entry) => entry.message)
+        .find(
+          (candidate): candidate is Record<string, unknown> =>
+            typeof candidate === "object" &&
+            candidate !== null &&
+            (candidate as { role?: unknown }).role === "user",
+        );
+      expect(persistedUser?.content).toBe("hello before cli startup failure");
     });
   });
 });

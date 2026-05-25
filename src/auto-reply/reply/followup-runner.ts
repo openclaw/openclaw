@@ -693,6 +693,12 @@ export function createFollowupRunner(params: {
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
+            const notifyUserMessagePersisted = async (
+              message: Parameters<NonNullable<GetReplyOptions["onUserMessagePersisted"]>>[0],
+            ) => {
+              queuedUserMessagePersistedAcrossFallback = true;
+              await opts?.onUserMessagePersisted?.(message);
+            };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
                 const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
@@ -727,9 +733,7 @@ export function createFollowupRunner(params: {
                       ? { message: effectiveQueued.userMessageForPersistence }
                       : { text: effectiveQueued.transcriptPrompt ?? effectiveQueued.prompt },
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    onUserMessagePersisted: () => {
-                      queuedUserMessagePersistedAcrossFallback = true;
-                    },
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundContext: queued.currentInboundContext,
                     inputProvenance: run.inputProvenance,
@@ -828,9 +832,7 @@ export function createFollowupRunner(params: {
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                onUserMessagePersisted: () => {
-                  queuedUserMessagePersistedAcrossFallback = true;
-                },
+                onUserMessagePersisted: notifyUserMessagePersisted,
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
                 suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
