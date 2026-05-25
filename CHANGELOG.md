@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Terminal/progress: sanitize OSC progress labels with one precompiled regex pass instead of multiple string scans while preserving the existing OSC terminator cleanup behavior.
+
 ### Fixes
 
 - Gateway/perf: tighten restart and startup benchmark failure handling so long profiling runs, failed probes, and fresh Linux runners no longer produce false passing or `n/a` results.
