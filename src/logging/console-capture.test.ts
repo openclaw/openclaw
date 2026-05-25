@@ -198,6 +198,24 @@ describe("enableConsoleCapture", () => {
     }
   });
 
+  it("preserves an existing nonzero exit code on async EPIPE", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as typeof process.exit);
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = 2;
+      setLoggerOverride({ level: "info", file: tempLogPath() });
+      loggingState.streamErrorHandlersInstalled = false;
+      enableConsoleCapture();
+      const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+      epipe.code = "EPIPE";
+      process.stderr.emit("error", epipe);
+      expect(exitSpy).toHaveBeenCalledWith(2);
+    } finally {
+      process.exitCode = originalExitCode;
+      exitSpy.mockRestore();
+    }
+  });
+
   it("rethrows non-EPIPE errors on stdout", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     enableConsoleCapture();
