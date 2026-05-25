@@ -51,9 +51,8 @@ import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-bi
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  buildPersistedUserTurnMessage,
+  persistUserTurnTranscript,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
@@ -2677,14 +2676,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
-      const emitGatewayUserTranscriptUpdate = async () => {
+      const persistGatewayUserTurnTranscript = async () => {
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
           return;
         }
         userTranscriptUpdatePromise = (async () => {
           await measureDiagnosticsTimelineSpan(
-            "gateway.chat_send.emit_user_transcript",
+            "gateway.chat_send.persist_user_transcript",
             async () => {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
@@ -2692,27 +2691,21 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (!resolvedSessionId) {
                 return;
               }
-              const transcriptPath = resolveTranscriptPath({
-                sessionId: resolvedSessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
-                agentId,
-              });
-              if (!transcriptPath) {
-                return;
-              }
               const persistedImages = await getPersistedMediaForTranscript();
               const userTurnInput = await userTurnInputPromise;
-              emitSessionTranscriptUpdate({
-                sessionFile: transcriptPath,
+              await persistUserTurnTranscript({
+                sessionId: resolvedSessionId,
                 sessionKey,
-                message: buildPersistedUserTurnMessage(
-                  userTurnInput ?? {
-                    text: parsedMessage,
-                    media: persistedImages,
-                    timestamp: now,
-                  },
-                ),
+                sessionEntry: latestEntry ?? entry,
+                storePath: latestStorePath,
+                agentId,
+                config: cfg,
+                input: userTurnInput ?? {
+                  text: parsedMessage,
+                  media: persistedImages,
+                  timestamp: now,
+                },
+                updateMode: "inline",
               });
             },
             {
@@ -2919,7 +2912,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               // assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
               if (!agentRunStarted) {
-                await emitGatewayUserTranscriptUpdate();
+                await persistGatewayUserTurnTranscript();
                 const btwReplies = deliveredReplies
                   .map((entry) => entry.payload)
                   .filter(isBtwReplyPayload);
@@ -3456,7 +3449,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         .catch(async (err) => {
           const emitAfterError = agentRunStarted
             ? Promise.resolve()
-            : emitGatewayUserTranscriptUpdate();
+            : persistGatewayUserTurnTranscript();
           await emitAfterError.catch((transcriptErr) => {
             context.logGateway.warn(
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,

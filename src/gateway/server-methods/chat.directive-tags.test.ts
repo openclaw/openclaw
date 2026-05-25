@@ -4331,6 +4331,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("user");
     expect(message?.content).toBe("quick command");
     expect(typeof message?.timestamp).toBe("number");
+    const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
+      .map((entry) => entry.message)
+      .find(
+        (candidate): candidate is Record<string, unknown> =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { role?: unknown }).role === "user",
+      );
+    expect(persistedUser?.content).toBe("quick command");
   });
 
   it("emits a user transcript update when chat.send fails before an agent run starts", async () => {
@@ -4356,6 +4365,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello from failed dispatch");
       expect(typeof message?.timestamp).toBe("number");
+      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
+        .map((entry) => entry.message)
+        .find(
+          (candidate): candidate is Record<string, unknown> =>
+            typeof candidate === "object" &&
+            candidate !== null &&
+            (candidate as { role?: unknown }).role === "user",
+        );
+      expect(persistedUser?.content).toBe("hello from failed dispatch");
     });
   });
 });
