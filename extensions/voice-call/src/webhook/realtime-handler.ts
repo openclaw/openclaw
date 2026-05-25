@@ -240,22 +240,13 @@ type CallRegistration = {
 
 function shouldTriggerInitialGreetingOnReady(params: {
   initialGreetingInstructions?: string;
-  providerId: string;
 }): boolean {
-  if (!params.initialGreetingInstructions) {
-    return false;
-  }
-  return params.providerId !== "openai";
+  return Boolean(params.initialGreetingInstructions);
 }
 
 function resolveRealtimeSessionInstructions(params: {
   baseInstructions?: string;
-  initialGreetingInstructions?: string;
-  providerId: string;
 }): string | undefined {
-  if (params.providerId === "openai" && params.initialGreetingInstructions) {
-    return params.initialGreetingInstructions;
-  }
   return params.baseInstructions;
 }
 
@@ -676,14 +667,11 @@ export class RealtimeCallHandler {
       providerConfig: this.providerConfig,
       instructions: resolveRealtimeSessionInstructions({
         baseInstructions: this.config.instructions,
-        initialGreetingInstructions,
-        providerId: this.realtimeProvider.id,
       }),
       tools: this.config.tools,
       initialGreetingInstructions,
       triggerGreetingOnReady: shouldTriggerInitialGreetingOnReady({
         initialGreetingInstructions,
-        providerId: this.realtimeProvider.id,
       }),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,

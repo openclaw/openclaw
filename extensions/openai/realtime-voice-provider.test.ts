@@ -1516,7 +1516,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
-  it("creates an explicit user item and response for manual speech", async () => {
+  it("creates an instructed response for manual speech without injecting a user item", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onEvent = vi.fn();
     const bridge = provider.createBridge({
@@ -1538,26 +1538,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
 
-    expect(parseSent(socket).slice(-2)).toEqual([
-      {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Say exactly: hello from explicit speech.",
-            },
-          ],
-        },
-      },
+    expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "response.create",
+        response: {
+          instructions: "Say exactly: hello from explicit speech.",
+        },
       },
     ]);
     expect(JSON.stringify(parseSent(socket).at(-1))).not.toContain("output_modalities");
-    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
   });
 
