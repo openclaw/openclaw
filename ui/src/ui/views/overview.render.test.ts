@@ -286,7 +286,7 @@ describe("overview view rendering", () => {
     expect(compactText(container.querySelector(".ov-usage-windows"))).toBe(
       "Codex · Week 28% left Codex · 3h 82% left",
     );
-    expect(compactText(container.querySelector(".ov-usage-note"))).toBe("Codex · Week quota.");
+    expect(container.querySelector(".ov-usage-note")).toBeNull();
   });
 
   it("labels provider-specific quota shapes without assuming time windows", async () => {
@@ -351,9 +351,7 @@ describe("overview view rendering", () => {
     expect(compactText(container.querySelector(".ov-usage-windows"))).toContain(
       "OpenRouter · Credits $12.34 left",
     );
-    expect(compactText(container.querySelector(".ov-usage-note"))).toBe("OpenRouter · Credits.");
-    expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("window");
-    expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("quota");
+    expect(container.querySelector(".ov-usage-note")).toBeNull();
   });
 
   it("does not call provider quota unavailable while auth status is still loading", async () => {

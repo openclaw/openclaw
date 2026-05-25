@@ -450,40 +450,8 @@ export function renderOverview(props: OverviewProps) {
     0,
     props.attentionItems.length - visibleAttentionItems.length,
   );
-  const primaryQuotaNeedsSuffix = primaryQuota
-    ? quotaLabelNeedsQuotaSuffix(primaryQuota.label)
-    : false;
   const quotaStatusNote = primaryQuota
-    ? primaryQuota.label
-      ? primaryQuotaReset
-        ? primaryQuotaNeedsSuffix
-          ? t("overview.operator.usageQuotaResets", {
-              provider: primaryQuota.displayName,
-              window: primaryQuota.label,
-              time: primaryQuotaReset,
-            })
-          : t("overview.operator.usageQuotaLabelResets", {
-              provider: primaryQuota.displayName,
-              label: primaryQuota.label,
-              time: primaryQuotaReset,
-            })
-        : primaryQuotaNeedsSuffix
-          ? t("overview.operator.usageQuotaWindow", {
-              provider: primaryQuota.displayName,
-              window: primaryQuota.label,
-            })
-          : t("overview.operator.usageQuotaLabel", {
-              provider: primaryQuota.displayName,
-              label: primaryQuota.label,
-            })
-      : primaryQuotaReset
-        ? t("overview.operator.usageProviderQuotaResets", {
-            provider: primaryQuota.displayName,
-            time: primaryQuotaReset,
-          })
-        : t("overview.operator.usageProviderQuota", {
-            provider: primaryQuota.displayName,
-          })
+    ? null
     : props.modelAuthStatus === null
       ? t("overview.operator.usageQuotaLoading")
       : authProviders.length > 0
@@ -973,7 +941,9 @@ export function renderOverview(props: OverviewProps) {
                     })}
                   </div>`
                 : nothing}
-              <div class="ov-usage-note">${quotaStatusNote}</div>
+              ${quotaStatusNote
+                ? html`<div class="ov-usage-note">${quotaStatusNote}</div>`
+                : nothing}
             </div>
           </section>
 
