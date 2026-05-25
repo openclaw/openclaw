@@ -14,7 +14,9 @@ import {
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
-const listRuntimeExternalAuthProfilesMock = vi.hoisted(() => vi.fn(() => []));
+const listRuntimeExternalAuthProfilesMock = vi.hoisted(() =>
+  vi.fn<(_params: unknown) => unknown[]>(() => []),
+);
 
 vi.mock("./auth-profiles/external-auth.js", () => ({
   listRuntimeExternalAuthProfiles: listRuntimeExternalAuthProfilesMock,
