@@ -1,6 +1,7 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -473,7 +474,7 @@ function resolveModelSupportMatchKind(
 }
 
 function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 function resolvePreferredManifestPluginIds(
@@ -662,8 +663,6 @@ export function resolveCatalogHookProviderPluginIds(params: {
     ...params,
     manifestRegistry,
   }).filter((pluginId) => runtimeAugmentPluginIds.has(pluginId));
-  return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  return dedupeSortedPluginIds([...enabledProviderPluginIds, ...bundledCompatPluginIds]);
 }
 export { testing as __testing };

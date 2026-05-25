@@ -10,6 +10,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -955,9 +956,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     declaredPluginIds,
     manifestRegistry,
   });
-  const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const pluginIds = sortUniqueStrings([...externalAuthPluginIds, ...fallbackPluginIds]);
   if (pluginIds.length === 0) {
     return [];
   }

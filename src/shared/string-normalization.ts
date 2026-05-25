@@ -8,6 +8,14 @@ export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
   return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
 }
 
+export function sortUniqueStrings(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
+  return sortUniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
+}
+
 export function normalizeTrimmedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];

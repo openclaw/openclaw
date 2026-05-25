@@ -1,3 +1,4 @@
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -17,9 +18,7 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
   if (ids === undefined) {
     return undefined;
   }
-  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return normalizeSortedUniqueStringEntries(ids);
 }
 
 export function registryContainsRuntimePluginIds(

@@ -1,4 +1,5 @@
 import { isRecord } from "../shared/record-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   loadBundledPluginPublicArtifactModuleSync,
   resolveBundledPluginPublicArtifactPath,
@@ -101,7 +102,7 @@ function tryLoadBundledPublicArtifactModule(params: {
 }
 
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
-  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {

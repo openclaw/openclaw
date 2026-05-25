@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -117,14 +118,12 @@ export function resolvePluginConfigContractsById(params: {
   discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
-  const pluginIds = [
-    ...new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean)),
-  ];
+  const pluginIds = normalizeSortedUniqueStringEntries(params.pluginIds);
   if (pluginIds.length === 0) {
     return matches;
   }
   const fallbackBundledPluginIds = new Set(
-    (params.fallbackBundledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    normalizeSortedUniqueStringEntries(params.fallbackBundledPluginIds),
   );
   const bundledContractFallbacks = new Map<string, PluginManifestConfigContracts | undefined>();
   const findBundledConfigContracts = (

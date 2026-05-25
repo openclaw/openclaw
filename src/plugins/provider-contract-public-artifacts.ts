@@ -1,4 +1,5 @@
 import { isRecord } from "../shared/record-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -61,9 +62,7 @@ export function resolveBundledExplicitProviderContractsFromPublicArtifacts(param
   onlyPluginIds: readonly string[];
 }): ProviderContractEntry[] | null {
   const providers: ProviderContractEntry[] = [];
-  for (const pluginId of [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
-    left.localeCompare(right),
-  )) {
+  for (const pluginId of sortUniqueStrings(params.onlyPluginIds)) {
     const mod = tryLoadProviderContractApi(pluginId);
     if (!mod) {
       return null;

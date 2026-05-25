@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
+  normalizeSortedUniqueStringEntries,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  sortUniqueStrings,
 } from "./string-normalization.js";
 
 describe("shared/string-normalization", () => {
@@ -19,6 +21,14 @@ describe("shared/string-normalization", () => {
 
   it("normalizes mixed allow-list entries to lowercase", () => {
     expect(normalizeStringEntriesLower([" A ", "MiXeD", 7])).toEqual(["a", "mixed", "7"]);
+  });
+
+  it("sorts unique string values", () => {
+    expect(sortUniqueStrings(["b", "a", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("normalizes sorted unique string entries", () => {
+    expect(normalizeSortedUniqueStringEntries([" b ", "a", "b", "", 4])).toEqual(["4", "a", "b"]);
   });
 
   it("normalizes slug-like labels while preserving supported symbols", () => {
