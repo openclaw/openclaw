@@ -17,6 +17,7 @@ Best-effort local-only provenance for OpenClaw PR/issue bodies. Use during agent
 - Fail closed on unresolved secrets, private keys, browser/session/cookie details, or auth URLs.
 - Drop system/developer prompts, raw tool outputs, reasoning, env, cookies, tokens, and broad local paths.
 - Keep user prompts, assistant visible decisions, terse tool summaries, and test/proof outcomes.
+- Remove session turns unrelated to the PR/issue work. Use the PR/issue title, branch name, changed files, and stated goal as scope; omit earlier/later unrelated tasks even when they are in the same session log.
 - Best effort only: PR/issue creation must continue if no safe transcript is found.
 - Use a collapsed `<details>` section and update existing markers instead of duplicating sections.
 
@@ -34,6 +35,8 @@ Find a likely local session:
   --cwd "$PWD" \
   --since-days 14
 ```
+
+`find` scans the newest 400 matching local JSONL logs by default. Use `--max-files N` for a wider local search.
 
 Render a PR/issue body section:
 
@@ -68,9 +71,10 @@ Append/update a body file before `gh pr create --body-file` or connector PR crea
 3. If a high-confidence session is found, ask:
    `Include a redacted agent transcript? It helps reviewers and can make the PR easier to prioritize. I can open a local preview first.`
 4. If the user wants preview, run `preview`, open the HTML with `open`, and wait for confirmation.
-5. If the user approves, run `append-body`.
-6. Use the enriched body file for creation/update.
-7. If no safe session is found, say nothing and continue without transcript. If the user declines, continue without transcript.
+5. Before insertion, trim unrelated session turns from the generated section. Keep only turns that explain this PR/issue's goal, implementation choices, files, tests, proof, blockers, and final outcome.
+6. If the user approves, run `append-body`.
+7. Use the enriched body file for creation/update.
+8. If no safe session is found, say nothing and continue without transcript. If the user declines, continue without transcript.
 
 ## Review Artifacts
 

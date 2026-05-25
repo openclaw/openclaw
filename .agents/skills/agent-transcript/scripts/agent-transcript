@@ -11,7 +11,7 @@ const DEFAULT_ENTRY_MAX_CHARS = 6000;
 
 function usage() {
   console.log(`Usage:
-  agent-transcript find --query TEXT [--cwd PATH] [--since-days N] [--root PATH...]
+  agent-transcript find --query TEXT [--cwd PATH] [--since-days N] [--max-files N] [--root PATH...]
   agent-transcript render --session FILE [--out FILE] [--max-chars N] [--entry-max-chars N] [--title TEXT] [--url URL]
   agent-transcript preview --session FILE [--out FILE] [--max-chars N] [--entry-max-chars N] [--title TEXT] [--url URL]
   agent-transcript append-body --body FILE --session FILE [--out FILE] [--max-chars N] [--entry-max-chars N]
@@ -425,17 +425,14 @@ function readBoundedText(file, maxBytes = 220000) {
   }
 }
 
-function sessionScanRecord(file) {
+function sessionScanRecord(file, maxBytes) {
   const stat = fs.statSync(file);
-  let agent = "agent";
-  try {
-    agent = detectAgent(file, readJsonl(file, 50));
-  } catch {}
+  const agent = detectAgent(file, []);
   return {
     file,
     agent,
     mtime: new Date(stat.mtimeMs).toISOString(),
-    haystack: `${file}\n${readBoundedText(file)}`.toLowerCase(),
+    haystack: `${file}\n${readBoundedText(file, maxBytes)}`.toLowerCase(),
   };
 }
 
@@ -461,6 +458,25 @@ function scoreScanRecord(record, terms, cwd) {
   return { file: record.file, score, reasons, mtime: record.mtime, agent: record.agent };
 }
 
+function recentFiles(files, maxFiles) {
+  return files
+    .map((file) => {
+      try {
+        return { file, mtimeMs: fs.statSync(file).mtimeMs };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, maxFiles)
+    .map((entry) => entry.file);
+}
+
+function candidateFiles(roots, terms, sinceMs, options = {}) {
+  return recentFiles(roots.flatMap((root) => walkJsonl(root, sinceMs)), Number(options["max-files"] || 400));
+}
+
 function findSessions(options) {
   const sinceDays = Number(options["since-days"] || 14);
   const sinceMs = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
@@ -470,9 +486,10 @@ function findSessions(options) {
     .split(/\s+/)
     .concat(query.match(/https?:\/\/\S+/g) || [])
     .filter(Boolean);
-  const files = roots.flatMap((root) => walkJsonl(root, sinceMs));
+  const files = candidateFiles(roots, terms, sinceMs, options);
+  const scanBytes = Number(options["scan-bytes"] || 60000);
   const results = files
-    .map((file) => scoreScanRecord(sessionScanRecord(file), terms, options.cwd))
+    .map((file) => scoreScanRecord(sessionScanRecord(file, scanBytes), terms, options.cwd))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || b.mtime.localeCompare(a.mtime))
     .slice(0, Number(options.limit || 10));
@@ -487,7 +504,7 @@ function sessionScanRecords(options) {
   return roots
     .flatMap((root) => walkJsonl(root, sinceMs))
     .filter((file) => !excluded.has(path.resolve(file)))
-    .map(sessionScanRecord);
+    .map((file) => sessionScanRecord(file, Number(options["scan-bytes"] || 90000)));
 }
 
 function replaceSection(body, section) {
