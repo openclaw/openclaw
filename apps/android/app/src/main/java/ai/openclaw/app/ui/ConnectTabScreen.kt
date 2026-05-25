@@ -544,3 +544,4 @@ private fun outlinedColors() =
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,
   )
+

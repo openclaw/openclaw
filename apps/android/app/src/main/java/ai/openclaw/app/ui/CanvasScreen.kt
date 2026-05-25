@@ -148,3 +148,4 @@ private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
     const val interfaceName: String = "openclawCanvasA2UIAction"
   }
 }
+

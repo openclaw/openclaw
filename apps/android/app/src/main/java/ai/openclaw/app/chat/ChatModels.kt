@@ -42,3 +42,4 @@ data class OutgoingAttachment(
   val fileName: String,
   val base64: String,
 )
+

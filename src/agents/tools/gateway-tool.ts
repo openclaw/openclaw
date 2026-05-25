@@ -83,7 +83,9 @@ export function createGatewayTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
         if (!isRestartEnabled(opts?.config)) {
-          throw new Error("Gateway restart is disabled (commands.restart=false).");
+          throw new Error(
+            "Gateway restart is disabled (commands.restart=false).",
+          );
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -98,7 +100,9 @@ export function createGatewayTool(opts?: {
             ? params.reason.trim().slice(0, 200)
             : undefined;
         const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+          typeof params.note === "string" && params.note.trim()
+            ? params.note.trim()
+            : undefined;
         // Extract channel + threadId for routing after restart
         // Supports both :thread: (most channels) and :topic: (Telegram)
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -143,9 +147,12 @@ export function createGatewayTool(opts?: {
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+          typeof params.note === "string" && params.note.trim()
+            ? params.note.trim()
+            : undefined;
         const restartDelayMs =
-          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
+          typeof params.restartDelayMs === "number" &&
+          Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
         return { sessionKey, note, restartDelayMs };
@@ -179,7 +186,11 @@ export function createGatewayTool(opts?: {
           required: true,
           label: "path",
         });
-        const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+        const result = await callGatewayTool(
+          "config.schema.lookup",
+          gatewayOpts,
+          { path },
+        );
         return jsonResult({ ok: true, result });
       }
       if (action === "config.apply") {
@@ -208,7 +219,8 @@ export function createGatewayTool(opts?: {
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
-        const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
+        const updateTimeoutMs =
+          gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
           timeoutMs: updateTimeoutMs,

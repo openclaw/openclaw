@@ -1,7 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   ackDelivery,
   computeBackoffMs,
@@ -62,7 +70,9 @@ describe("delivery-queue", () => {
       expect(files).toHaveLength(1);
       expect(files[0]).toBe(`${id}.json`);
 
-      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, files[0]), "utf-8"));
+      const entry = JSON.parse(
+        fs.readFileSync(path.join(queueDir, files[0]), "utf-8"),
+      );
       expect(entry).toMatchObject({
         id,
         channel: "whatsapp",
@@ -80,12 +90,16 @@ describe("delivery-queue", () => {
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir);
-      const remaining = fs.readdirSync(queueDir).filter((f) => f.endsWith(".json"));
+      const remaining = fs
+        .readdirSync(queueDir)
+        .filter((f) => f.endsWith(".json"));
       expect(remaining).toHaveLength(0);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
-      await expect(ackDelivery("nonexistent-id", tmpDir)).resolves.toBeUndefined();
+      await expect(
+        ackDelivery("nonexistent-id", tmpDir),
+      ).resolves.toBeUndefined();
     });
 
     it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
@@ -95,7 +109,10 @@ describe("delivery-queue", () => {
       );
       const queueDir = path.join(tmpDir, "delivery-queue");
 
-      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      fs.renameSync(
+        path.join(queueDir, `${id}.json`),
+        path.join(queueDir, `${id}.delivered`),
+      );
       await expect(ackDelivery(id, tmpDir)).resolves.toBeUndefined();
 
       expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
@@ -121,7 +138,10 @@ describe("delivery-queue", () => {
       );
       const queueDir = path.join(tmpDir, "delivery-queue");
 
-      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      fs.renameSync(
+        path.join(queueDir, `${id}.json`),
+        path.join(queueDir, `${id}.delivered`),
+      );
 
       const entries = await loadPendingDeliveries(tmpDir);
 
@@ -144,7 +164,9 @@ describe("delivery-queue", () => {
       await failDelivery(id, "connection refused", tmpDir);
 
       const queueDir = path.join(tmpDir, "delivery-queue");
-      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
+      const entry = JSON.parse(
+        fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"),
+      );
       expect(entry.retryCount).toBe(1);
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect(entry.lastAttemptAt).toBeGreaterThan(0);
@@ -204,8 +226,14 @@ describe("delivery-queue", () => {
     });
 
     it("loads multiple entries", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      await enqueueDelivery(
+        { channel: "telegram", to: "2", payloads: [{ text: "b" }] },
+        tmpDir,
+      );
 
       const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(2);
@@ -243,9 +271,10 @@ describe("delivery-queue", () => {
       ] as const;
 
       for (const testCase of cases) {
-        expect(computeBackoffMs(testCase.retryCount), String(testCase.retryCount)).toBe(
-          testCase.expected,
-        );
+        expect(
+          computeBackoffMs(testCase.retryCount),
+          String(testCase.retryCount),
+        ).toBe(testCase.expected);
       }
     });
   });
@@ -293,12 +322,22 @@ describe("delivery-queue", () => {
     const baseCfg = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
     const enqueueCrashRecoveryEntries = async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
-      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      await enqueueDelivery(
+        { channel: "telegram", to: "2", payloads: [{ text: "b" }] },
+        tmpDir,
+      );
     };
     const setEntryState = (
       id: string,
-      state: { retryCount: number; lastAttemptAt?: number; enqueuedAt?: number },
+      state: {
+        retryCount: number;
+        lastAttemptAt?: number;
+        enqueuedAt?: number;
+      },
     ) => {
       const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
       const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
@@ -366,7 +405,10 @@ describe("delivery-queue", () => {
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
-      await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir);
+      await enqueueDelivery(
+        { channel: "slack", to: "#ch", payloads: [{ text: "x" }] },
+        tmpDir,
+      );
 
       const deliver = vi.fn().mockRejectedValue(new Error("network down"));
       const { result } = await runRecovery({ deliver });
@@ -387,7 +429,9 @@ describe("delivery-queue", () => {
       );
       const deliver = vi
         .fn()
-        .mockRejectedValue(new Error("No conversation reference found for user:abc"));
+        .mockRejectedValue(
+          new Error("No conversation reference found for user:abc"),
+        );
       const log = createLog();
       const { result } = await runRecovery({ deliver, log });
 
@@ -397,16 +441,23 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(0);
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("permanent error"),
+      );
     });
 
     it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       await runRecovery({ deliver });
 
-      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ skipQueue: true }),
+      );
     });
 
     it("replays stored delivery options during recovery", async () => {
@@ -446,7 +497,10 @@ describe("delivery-queue", () => {
 
     it("respects maxRecoveryMs time budget", async () => {
       await enqueueCrashRecoveryEntries();
-      await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir);
+      await enqueueDelivery(
+        { channel: "slack", to: "#c", payloads: [{ text: "c" }] },
+        tmpDir,
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { result, log } = await runRecovery({
@@ -463,7 +517,9 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(3);
 
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("deferred to next restart"),
+      );
     });
 
     it("defers entries until backoff becomes eligible", async () => {
@@ -490,7 +546,9 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
-      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining("not ready for retry yet"),
+      );
     });
 
     it("continues past high-backoff entries and recovers ready entries behind them", async () => {
@@ -504,7 +562,11 @@ describe("delivery-queue", () => {
         tmpDir,
       );
 
-      setEntryState(blockedId, { retryCount: 3, lastAttemptAt: now, enqueuedAt: now - 30_000 });
+      setEntryState(blockedId, {
+        retryCount: 3,
+        lastAttemptAt: now,
+        enqueuedAt: now - 30_000,
+      });
       setEntryState(readyId, { retryCount: 0, enqueuedAt: now - 10_000 });
 
       const deliver = vi.fn().mockResolvedValue([]);
@@ -518,7 +580,11 @@ describe("delivery-queue", () => {
       });
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
+        expect.objectContaining({
+          channel: "telegram",
+          to: "2",
+          skipQueue: true,
+        }),
       );
 
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -538,7 +604,10 @@ describe("delivery-queue", () => {
       setEntryState(id, { retryCount: 3, lastAttemptAt: start.getTime() });
 
       const firstDeliver = vi.fn().mockResolvedValue([]);
-      const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
+      const firstRun = await runRecovery({
+        deliver: firstDeliver,
+        maxRecoveryMs: 60_000,
+      });
       expect(firstRun.result).toEqual({
         recovered: 0,
         failed: 0,
@@ -549,7 +618,10 @@ describe("delivery-queue", () => {
 
       vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
       const secondDeliver = vi.fn().mockResolvedValue([]);
-      const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
+      const secondRun = await runRecovery({
+        deliver: secondDeliver,
+        maxRecoveryMs: 60_000,
+      });
       expect(secondRun.result).toEqual({
         recovered: 1,
         failed: 0,

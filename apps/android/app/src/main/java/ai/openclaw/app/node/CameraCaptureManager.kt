@@ -417,3 +417,4 @@ private suspend fun ImageCapture.takeJpegWithExif(executor: Executor): Pair<Byte
       },
     )
   }
+

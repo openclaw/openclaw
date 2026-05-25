@@ -14,8 +14,14 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
-import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} from "../../infra/restart.js";
+import {
+  loadCostUsageSummary,
+  loadSessionCostSummary,
+} from "../../infra/session-cost-usage.js";
 import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
@@ -23,15 +29,32 @@ import {
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
-import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
-import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
+import {
+  normalizeFastMode,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../thinking.js";
+import {
+  isDiscordSurface,
+  isTelegramSurface,
+  resolveChannelAccountId,
+} from "./channel-context.js";
+import {
+  handleAbortTrigger,
+  handleStopCommand,
+} from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
-const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
+const SESSION_DURATION_OFF_VALUES = new Set([
+  "off",
+  "disable",
+  "disabled",
+  "none",
+  "0",
+]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
 
@@ -73,7 +96,9 @@ function resolveTelegramBindingDurationMs(
   return Math.max(0, Math.floor(raw));
 }
 
-function resolveTelegramBindingLastActivityAt(binding: SessionBindingRecord): number {
+function resolveTelegramBindingLastActivityAt(
+  binding: SessionBindingRecord,
+): number {
   const raw = binding.metadata?.lastActivityAt;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return binding.boundAt;
@@ -101,17 +126,21 @@ function resolveUpdatedBindingExpiry(params: {
     .map((binding) => {
       if (params.action === SESSION_ACTION_IDLE) {
         const idleTimeoutMs =
-          typeof binding.idleTimeoutMs === "number" && Number.isFinite(binding.idleTimeoutMs)
+          typeof binding.idleTimeoutMs === "number" &&
+          Number.isFinite(binding.idleTimeoutMs)
             ? Math.max(0, Math.floor(binding.idleTimeoutMs))
             : 0;
         if (idleTimeoutMs <= 0) {
           return undefined;
         }
-        return Math.max(binding.lastActivityAt, binding.boundAt) + idleTimeoutMs;
+        return (
+          Math.max(binding.lastActivityAt, binding.boundAt) + idleTimeoutMs
+        );
       }
 
       const maxAgeMs =
-        typeof binding.maxAgeMs === "number" && Number.isFinite(binding.maxAgeMs)
+        typeof binding.maxAgeMs === "number" &&
+        Number.isFinite(binding.maxAgeMs)
           ? Math.max(0, Math.floor(binding.maxAgeMs))
           : 0;
       if (maxAgeMs <= 0) {
@@ -127,11 +156,16 @@ function resolveUpdatedBindingExpiry(params: {
   return Math.min(...expiries);
 }
 
-export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleActivationCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
-  const activationCommand = parseActivationCommand(params.command.commandBodyNormalized);
+  const activationCommand = parseActivationCommand(
+    params.command.commandBodyNormalized,
+  );
   if (!activationCommand.hasCommand) {
     return null;
   }
@@ -166,11 +200,16 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
   };
 };
 
-export const handleSendPolicyCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleSendPolicyCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
-  const sendPolicyCommand = parseSendPolicyCommand(params.command.commandBodyNormalized);
+  const sendPolicyCommand = parseSendPolicyCommand(
+    params.command.commandBodyNormalized,
+  );
   if (!sendPolicyCommand.hasCommand) {
     return null;
   }
@@ -206,7 +245,10 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   };
 };
 
-export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleUsageCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -221,7 +263,8 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     return { shouldContinue: false };
   }
 
-  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const rawArgs =
+    normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (rawArgs.toLowerCase().startsWith("cost")) {
     const sessionSummary = await loadSessionCostSummary({
@@ -231,7 +274,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: params.agentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      days: 30,
+      config: params.cfg,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -258,7 +304,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
     return {
       shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+      reply: {
+        text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`,
+      },
     };
   }
 
@@ -271,9 +319,13 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const currentRaw =
     params.sessionEntry?.responseUsage ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
+    (params.sessionKey
+      ? params.sessionStore?.[params.sessionKey]?.responseUsage
+      : undefined);
   const current = resolveResponseUsageMode(currentRaw);
-  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+  const next =
+    requested ??
+    (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
     if (next === "off") {
@@ -292,7 +344,10 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
-export const handleFastCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleFastCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -307,7 +362,8 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
+  const rawArgs =
+    normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
   const rawMode = rawArgs.toLowerCase();
   if (!rawMode || rawMode === "status") {
     const state = resolveFastModeState({
@@ -317,10 +373,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       sessionEntry: params.sessionEntry,
     });
     const suffix =
-      state.source === "config" ? " (config)" : state.source === "default" ? " (default)" : "";
+      state.source === "config"
+        ? " (config)"
+        : state.source === "default"
+          ? " (default)"
+          : "";
     return {
       shouldContinue: false,
-      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+      reply: {
+        text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.`,
+      },
     };
   }
 
@@ -343,7 +405,10 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   };
 };
 
-export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleSessionCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -382,14 +447,20 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const accountId = resolveChannelAccountId(params);
   const sessionBindingService = getSessionBindingService();
   const threadId =
-    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
-  const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
+    params.ctx.MessageThreadId != null
+      ? String(params.ctx.MessageThreadId).trim()
+      : "";
+  const telegramConversationId = onTelegram
+    ? resolveTelegramConversationId(params)
+    : undefined;
 
   const discordManager = onDiscord ? getThreadBindingManager(accountId) : null;
   if (onDiscord && !discordManager) {
     return {
       shouldContinue: false,
-      reply: { text: "⚠️ Discord thread bindings are unavailable for this account." },
+      reply: {
+        text: "⚠️ Discord thread bindings are unavailable for this account.",
+      },
     };
   }
 
@@ -437,7 +508,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
-    : resolveTelegramBindingDurationMs(telegramBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
+    : resolveTelegramBindingDurationMs(
+        telegramBinding!,
+        "idleTimeoutMs",
+        24 * 60 * 60 * 1000,
+      );
   const idleExpiresAt = onDiscord
     ? resolveThreadBindingInactivityExpiresAt({
         record: discordBinding!,
@@ -478,7 +553,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       }
       return {
         shouldContinue: false,
-        reply: { text: "ℹ️ Idle timeout is currently disabled for this focused session." },
+        reply: {
+          text: "ℹ️ Idle timeout is currently disabled for this focused session.",
+        },
       };
     }
 
@@ -496,7 +573,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     }
     return {
       shouldContinue: false,
-      reply: { text: "ℹ️ Max age is currently disabled for this focused session." },
+      reply: {
+        text: "ℹ️ Max age is currently disabled for this focused session.",
+      },
     };
   }
 
@@ -594,7 +673,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     },
   };
 };
-export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
+export const handleRestartCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
   if (!allowTextCommands) {
     return null;
   }
@@ -627,7 +709,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
+    const detail = restartMethod.detail
+      ? ` Details: ${restartMethod.detail}`
+      : "";
     return {
       shouldContinue: false,
       reply: {
