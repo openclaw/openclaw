@@ -917,10 +917,12 @@ async function sendSubagentAnnounceDirectly(params: {
       if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
-      return {
-        delivered: true,
-        path: "none",
-      };
+      if (!agentMediatedCompletion) {
+        return {
+          delivered: true,
+          path: "none",
+        };
+      }
     }
     if (params.signal?.aborted) {
       return {
