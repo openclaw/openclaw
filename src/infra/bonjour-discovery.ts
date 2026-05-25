@@ -1,6 +1,6 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
@@ -111,10 +111,7 @@ function decodeDnsSdEscapes(value: string): string {
 }
 
 function parseDigShortLines(stdout: string): string[] {
-  return stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(stdout.split("\n"));
 }
 
 function parseDigTxt(stdout: string): string[] {
@@ -587,10 +584,9 @@ export async function discoverGatewayBeacons(
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
-  const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
-    .map((d) => d.trim())
-    .filter(Boolean)
-    .map((d) => (d.endsWith(".") ? d : `${d}.`));
+  const domains = normalizeStringEntries(domainsRaw.length > 0 ? domainsRaw : defaultDomains).map(
+    (d) => (d.endsWith(".") ? d : `${d}.`),
+  );
 
   try {
     if (platform === "darwin") {

@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -40,9 +41,9 @@ export function collectGatewayConfigFindings(
     env,
   });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    cfg.gateway?.controlUi?.allowedOrigins ?? [],
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)

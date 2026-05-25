@@ -338,11 +338,7 @@ async function listSandboxBrowserContainers(params: {
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
   } catch (err) {
     if (isDockerProbeTimeoutError(err)) {
       params.onTimeout?.();
@@ -425,11 +421,7 @@ async function readSandboxBrowserPortMappings(params: {
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
   } catch (err) {
     if (isDockerProbeTimeoutError(err)) {
       params.onTimeout?.();

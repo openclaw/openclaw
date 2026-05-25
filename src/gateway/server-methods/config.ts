@@ -26,6 +26,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
 import { isRecord } from "../../shared/record-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -317,9 +318,9 @@ function parseValidateConfigFromRawOrRespond(
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
-  const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(
+    formatConfigIssueLines(trimmed, "", { normalizeRoot: true }),
+  );
   if (lines.length === 0) {
     return "invalid config";
   }
