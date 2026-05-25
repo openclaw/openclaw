@@ -63,6 +63,11 @@ export type LlmContextBuilderDeps = {
    * 接受领域名称，返回补充说明文本（最多 512 tokens 建议）。
    */
   fetchDomainKnowledge?: (domain: string) => Promise<string | null>;
+  /**
+   * 提示词模板渲染（可选，通常来自 promptRegistry）。
+   * classify / fast 模式优先尝试 intent_classify 或 task_type 模板。
+   */
+  renderPromptTemplate?: (id: string, vars: Record<string, unknown>) => string | null;
 };
 
 // ──────────────────────────────────────────────────────────────
@@ -70,16 +75,44 @@ export type LlmContextBuilderDeps = {
 // ──────────────────────────────────────────────────────────────
 
 function inferContextLevel(input: LlmContextInput): ContextLevel {
-  if (input.context_level) return input.context_level;
-  if (input.task_type === "classify") return "fast";
-  if (input.task_type === "analyze" || input.task_type === "generate") return "rich";
+  if (input.context_level) {
+    return input.context_level;
+  }
+  if (input.task_type === "classify") {
+    return "fast";
+  }
+  if (input.task_type === "analyze" || input.task_type === "generate") {
+    return "rich";
+  }
   return "standard";
 }
 
 function buildEntitySummary(packet: ContextPacket): string | null {
-  if (!packet.entities?.length) return null;
+  if (!packet.entities?.length) {
+    return null;
+  }
   const parts = packet.entities.slice(0, 5).map((e) => `${e.type}:${e.name ?? e.id}`);
   return `关联实体: ${parts.join(", ")}`;
+}
+
+function resolveTemplatePrompt(input: LlmContextInput, deps: LlmContextBuilderDeps): string | null {
+  if (!deps.renderPromptTemplate) {
+    return null;
+  }
+  const vars = { message: input.prompt, prompt: input.prompt };
+  if (input.task_type === "classify") {
+    const rendered = deps.renderPromptTemplate("intent_classify", vars);
+    if (rendered?.trim()) {
+      return rendered;
+    }
+  }
+  if (input.task_type) {
+    const rendered = deps.renderPromptTemplate(input.task_type, vars);
+    if (rendered?.trim()) {
+      return rendered;
+    }
+  }
+  return null;
 }
 
 function buildMetaStatusSummary(meta: Record<string, unknown>): string | null {
@@ -89,12 +122,20 @@ function buildMetaStatusSummary(meta: Record<string, unknown>): string | null {
   const hasPending = typeof pendingRuns === "number";
   const hasPlaybooks = typeof playbookCount === "number";
   const hasRobot = typeof robotId === "string" && robotId;
-  if (!hasPending && !hasPlaybooks && !hasRobot) return null;
+  if (!hasPending && !hasPlaybooks && !hasRobot) {
+    return null;
+  }
 
   const parts: string[] = [];
-  if (hasRobot) parts.push(`机器人 ${robotId}`);
-  if (hasPending) parts.push(`运行中 Playbook ${pendingRuns} 个`);
-  if (hasPlaybooks) parts.push(`共 ${playbookCount} 个 Playbook`);
+  if (hasRobot) {
+    parts.push(`机器人 ${robotId}`);
+  }
+  if (hasPending) {
+    parts.push(`运行中 Playbook ${pendingRuns} 个`);
+  }
+  if (hasPlaybooks) {
+    parts.push(`共 ${playbookCount} 个 Playbook`);
+  }
   return `系统状态: ${parts.join(", ")}`;
 }
 
@@ -115,11 +156,14 @@ export async function buildLlmContext(
   const contextLevel = inferContextLevel(input);
   const domain = input.domain ?? input.event_context?.inferred_domain;
 
-  // fast 模式：不注入任何上下文，直接返回
+  // fast 模式：优先 promptRegistry 模板，否则透传
   if (contextLevel === "fast") {
-    deps.logger?.(`[llm-ctx] fast mode, no injection. domain=${domain ?? "none"}`);
+    const templatePrompt = resolveTemplatePrompt(input, deps);
+    deps.logger?.(
+      `[llm-ctx] fast mode, template=${templatePrompt ? "yes" : "no"}. domain=${domain ?? "none"}`,
+    );
     return {
-      enriched_prompt: input.prompt,
+      enriched_prompt: templatePrompt ?? input.prompt,
       injected_cases: 0,
       recommended_model_tier: "fast",
       effective_context_level: "fast",
@@ -133,20 +177,26 @@ export async function buildLlmContext(
     injectedParts.push(`事件摘要: ${input.event_context.pre_summary}`);
   } else if (contextLevel === "rich" && input.event_context?.meta) {
     const metaSummary = buildMetaStatusSummary(input.event_context.meta);
-    if (metaSummary) injectedParts.push(metaSummary);
+    if (metaSummary) {
+      injectedParts.push(metaSummary);
+    }
   }
 
   // 2. 关联实体
   if (input.event_context) {
     const entitySummary = buildEntitySummary(input.event_context);
-    if (entitySummary) injectedParts.push(entitySummary);
+    if (entitySummary) {
+      injectedParts.push(entitySummary);
+    }
   }
 
   // 3. 领域知识（rich 模式 + 有 fetchDomainKnowledge）
   if (contextLevel === "rich" && domain && deps.fetchDomainKnowledge) {
     try {
       const knowledge = await deps.fetchDomainKnowledge(domain);
-      if (knowledge) injectedParts.push(`领域知识 [${domain}]: ${knowledge}`);
+      if (knowledge) {
+        injectedParts.push(`领域知识 [${domain}]: ${knowledge}`);
+      }
     } catch {
       deps.logger?.(`[llm-ctx] fetchDomainKnowledge failed, skipping.`);
     }

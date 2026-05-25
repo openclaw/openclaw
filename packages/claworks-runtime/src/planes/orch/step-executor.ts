@@ -135,6 +135,8 @@ export type StepExecutorDeps = {
   productionMode?: boolean;
   /** 发布异常事件（供 Playbook 响应），由 runtime 注入 */
   publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
+  /** promptRegistry 模板渲染，classify/fast LLM 步骤优先使用 */
+  renderPromptTemplate?: (id: string, vars: Record<string, unknown>) => string | null;
 };
 
 function recordStepResult(
@@ -347,6 +349,7 @@ export async function executePlaybookStep(
         },
         {
           logger: deps.logger,
+          renderPromptTemplate: deps.renderPromptTemplate,
           fetchCases: async (query, limit) => {
             const results = await deps.kb.search(query, { limit });
             return results.map((r) => (r.title ? `[${r.title}] ${r.text}` : r.text));
@@ -356,7 +359,9 @@ export async function executePlaybookStep(
               limit: 3,
               namespace: "domain",
             });
-            if (!results.length) return null;
+            if (!results.length) {
+              return null;
+            }
             return results.map((r) => r.text).join("\n---\n");
           },
         },
@@ -465,6 +470,7 @@ export async function executePlaybookStep(
         },
         {
           logger: deps.logger,
+          renderPromptTemplate: deps.renderPromptTemplate,
           fetchCases: async (query, limit) => {
             const results = await deps.kb.search(query, { limit });
             return results.map((r) => (r.title ? `[${r.title}] ${r.text}` : r.text));
@@ -474,7 +480,9 @@ export async function executePlaybookStep(
               limit: 3,
               namespace: "domain",
             });
-            if (!results.length) return null;
+            if (!results.length) {
+              return null;
+            }
             return results.map((r) => r.text).join("\n---\n");
           },
         },
@@ -527,7 +535,7 @@ export async function executePlaybookStep(
         try {
           const localResult = await deps.scriptRun({ scriptId: skillId, input });
           skillOutput = {
-            ...(localResult ?? {}),
+            ...localResult,
             source: "local",
             skill_id: skillId,
           };
@@ -545,7 +553,7 @@ export async function executePlaybookStep(
         if (deps.skillRun) {
           const harnessResult = await deps.skillRun({ skillId, input });
           skillOutput = {
-            ...(harnessResult ?? {}),
+            ...harnessResult,
             source: "harness",
             skill_id: skillId,
           };
@@ -742,7 +750,7 @@ export async function executePlaybookStep(
             // Non-serializable values (e.g. functions) — fall back to shallow + steps copy.
             isolatedVars = {
               ...ctx.variables,
-              steps: { ...((ctx.variables.steps as Record<string, unknown>) ?? {}) },
+              steps: { ...(ctx.variables.steps as Record<string, unknown>) },
             };
           }
           const branchCtx = { ...ctx, variables: isolatedVars };
@@ -916,7 +924,7 @@ async function executeActionStep(
           "playbook-action",
           { ...created },
           ctx.triggerEvent?.correlationId,
-          run.traceparent ?? ctx.traceparent ?? ctx.triggerEvent?.traceparent,
+          ctx.traceparent ?? ctx.triggerEvent?.traceparent,
         );
       }
     }
@@ -975,7 +983,9 @@ async function executeActionStep(
       return { ok: false, reason: "lint_document requires DocumentKnowledgeBase" };
     }
     const id = String(params.document_id ?? params.id ?? "");
-    if (!id) return { ok: false, reason: "document_id required" };
+    if (!id) {
+      return { ok: false, reason: "document_id required" };
+    }
     const result = ctx.kb.lintDocument(id);
     return result;
   }
@@ -1062,15 +1072,29 @@ function stepResultField(
 /** 解析 Jinja 表达式中的字面量值（用于过滤器管道中的 default 参数和 get() 默认值）。 */
 function parseLiteralExpr(expr: string): unknown {
   const s = expr.trim();
-  if (s === "null" || s === "None") return null;
-  if (s === "[]") return [];
-  if (s === "{}") return {};
-  if (s === "true" || s === "True") return true;
-  if (s === "false" || s === "False") return false;
+  if (s === "null" || s === "None") {
+    return null;
+  }
+  if (s === "[]") {
+    return [];
+  }
+  if (s === "{}") {
+    return {};
+  }
+  if (s === "true" || s === "True") {
+    return true;
+  }
+  if (s === "false" || s === "False") {
+    return false;
+  }
   const strMatch = s.match(/^(['"])(.*)\1$/s);
-  if (strMatch) return strMatch[2];
+  if (strMatch) {
+    return strMatch[2];
+  }
   const n = Number(s);
-  if (!Number.isNaN(n) && s !== "") return n;
+  if (!Number.isNaN(n) && s !== "") {
+    return n;
+  }
   return undefined;
 }
 
@@ -1108,7 +1132,9 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
           break;
         case "default": {
           const dflt = argStr?.replace(/^['"]|['"]$/g, "") ?? "";
-          if (result == null || result === "" || result === false) result = dflt;
+          if (result == null || result === "" || result === false) {
+            result = dflt;
+          }
           break;
         }
         case "tojson":
@@ -1126,20 +1152,21 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
           }
           break;
         case "int":
-          result = parseInt(String(result ?? "0"), 10) || 0;
+          result = Number.parseInt(String(result ?? "0"), 10) || 0;
           break;
         case "float":
-          result = parseFloat(String(result ?? "0")) || 0;
+          result = Number.parseFloat(String(result ?? "0")) || 0;
           break;
         case "string":
           result = String(result ?? "");
           break;
         case "replace": {
           const parts = argStr?.match(/['"]([^'"]*)['"]\s*,\s*['"]([^'"]*)['"]/);
-          if (parts)
+          if (parts) {
             result = String(result ?? "")
               .split(parts[1])
               .join(parts[2]);
+          }
           break;
         }
         case "join": {
@@ -1188,14 +1215,14 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
           result = Array.isArray(result) ? [...new Set(result)] : result;
           break;
         case "sort":
-          result = Array.isArray(result) ? [...result].sort() : result;
+          result = Array.isArray(result) ? [...result].toSorted() : result;
           break;
         case "reverse":
           result = Array.isArray(result)
-            ? [...result].reverse()
+            ? [...result].toReversed()
             : String(result ?? "")
                 .split("")
-                .reverse()
+                .toReversed()
                 .join("");
           break;
         // 忽略未知过滤器，保持原值
@@ -1231,7 +1258,9 @@ export function interpolate(template: string, vars: Record<string, unknown>): st
       }
       // payload.get('key') 支持
       const pgm = trimmedExpr.match(/^payload\.get\(\s*['"](\w+)['"]\s*(?:,\s*[^)]+)?\s*\)$/);
-      if (pgm) baseValue = payload[pgm[1]];
+      if (pgm) {
+        baseValue = payload[pgm[1]];
+      }
 
       // steps['x']['result'].get('field', default) 在过滤器管道中的支持
       if (baseValue === undefined) {

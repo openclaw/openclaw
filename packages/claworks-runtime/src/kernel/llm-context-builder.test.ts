@@ -46,4 +46,46 @@ describe("buildLlmContext", () => {
     });
     expect(result.enriched_prompt).toBe("hello");
   });
+
+  it("classify fast mode prefers intent_classify template from renderPromptTemplate", async () => {
+    const result = await buildLlmContext(
+      {
+        prompt: "查一下 OEE",
+        task_type: "classify",
+      },
+      {
+        renderPromptTemplate: (id, vars) =>
+          id === "intent_classify" ? `CLASSIFY:\n${String(vars.message)}` : null,
+      },
+    );
+    expect(result.enriched_prompt).toBe("CLASSIFY:\n查一下 OEE");
+    expect(result.effective_context_level).toBe("fast");
+  });
+
+  it("fast mode falls back to raw prompt when template render is empty", async () => {
+    const result = await buildLlmContext(
+      {
+        prompt: "quick task",
+        context_level: "fast",
+      },
+      {
+        renderPromptTemplate: () => "",
+      },
+    );
+    expect(result.enriched_prompt).toBe("quick task");
+  });
+
+  it("classify fast mode falls back to task_type template when intent_classify missing", async () => {
+    const result = await buildLlmContext(
+      {
+        prompt: "route me",
+        task_type: "classify",
+      },
+      {
+        renderPromptTemplate: (id, vars) =>
+          id === "classify" ? `TASK:${String(vars.message)}` : null,
+      },
+    );
+    expect(result.enriched_prompt).toBe("TASK:route me");
+  });
 });

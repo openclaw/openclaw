@@ -66,6 +66,9 @@ export interface PlaybookEngine {
   setNotify(fn: NotifyFn | undefined): void;
   setConnectorInvoke(fn: ConnectorInvokeFn | undefined): void;
   setPublishAnomaly(fn: ((payload: Record<string, unknown>) => Promise<void>) | undefined): void;
+  setRenderPromptTemplate(
+    fn: ((id: string, vars: Record<string, unknown>) => string | null) | undefined,
+  ): void;
   setContextEngine(
     engine: import("../../kernel/context-engine.js").ContextEngine | undefined,
   ): void;
@@ -107,6 +110,8 @@ export type PlaybookEngineDeps = {
   productionMode?: boolean;
   /** 发布异常事件 */
   publishAnomaly?: (payload: Record<string, unknown>) => Promise<void>;
+  /** promptRegistry 模板渲染，classify/fast LLM 步骤优先使用 */
+  renderPromptTemplate?: (id: string, vars: Record<string, unknown>) => string | null;
   /**
    * 对话上下文引擎（可选）。
    * 提供后，Playbook 启动时自动将最近 N 轮对话历史注入为 _session 变量，
@@ -164,6 +169,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
   let scriptRun = deps.scriptRun;
   const productionMode = deps.productionMode ?? false;
   let publishAnomaly = deps.publishAnomaly;
+  let renderPromptTemplate = deps.renderPromptTemplate;
 
   const upsertRun = db.prepare(`
     INSERT INTO cw_playbook_runs (id, playbook_id, status, input, output, error, steps, started_at, completed_at)
@@ -494,6 +500,7 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
       logger: deps.logger,
       productionMode,
       publishAnomaly,
+      renderPromptTemplate,
     };
   }
 
@@ -563,6 +570,10 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     setPublishAnomaly(fn) {
       publishAnomaly = fn;
+    },
+
+    setRenderPromptTemplate(fn) {
+      renderPromptTemplate = fn;
     },
 
     setContextEngine(engine) {
