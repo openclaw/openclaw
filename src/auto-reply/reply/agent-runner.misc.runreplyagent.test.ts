@@ -190,6 +190,14 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   markSubagentRunTerminated: () => 0,
 }));
 
+// #85714: keep the real stranded-reply decision but spy the WARN emitter so we
+// can assert it fires through the real runReplyAgent suppression branch.
+const warnStrandedSpy = vi.hoisted(() => vi.fn());
+vi.mock("./stranded-source-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./stranded-source-reply.js")>();
+  return { ...actual, warnStrandedMessageToolReply: warnStrandedSpy };
+});
+
 import { runReplyAgent } from "./agent-runner.js";
 
 type RunWithModelFallbackParams = {
@@ -244,6 +252,7 @@ beforeEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedAgentMock.mockClear();
+  warnStrandedSpy.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
@@ -2982,5 +2991,96 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       "media-only retry-limit payload",
     );
     expect(payload?.text).toBeUndefined();
+  });
+});
+
+describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
+  async function runStrandedCase(params: { messagingToolSentTargets?: unknown[] }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "stranded";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 1_000 };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "Here is the answer the user asked for." }],
+      meta: { agentMeta: {} },
+      ...(params.messagingToolSentTargets
+        ? { messagingToolSentTargets: params.messagingToolSentTargets }
+        : {}),
+    });
+
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+      ChatType: "direct",
+    } as unknown as TemplateContext;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tmp,
+        // Direct chat + visibleReplies=message_tool resolves to message_tool_only,
+        // so the final text is kept private (no automatic delivery).
+        config: { messages: { visibleReplies: "message_tool" } },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        reasoningLevel: "on",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: createMockTypingController(),
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("warns when a real final reply is stranded (model never called the message tool)", async () => {
+    await runStrandedCase({});
+    expect(warnStrandedSpy).toHaveBeenCalledTimes(1);
+    expect(warnStrandedSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+  });
+
+  it("does not warn when the message tool delivered this turn", async () => {
+    await runStrandedCase({
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+    });
+    expect(warnStrandedSpy).not.toHaveBeenCalled();
   });
 });
