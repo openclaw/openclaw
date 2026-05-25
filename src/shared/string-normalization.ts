@@ -42,6 +42,10 @@ export function normalizeUniqueTrimmedStringList(value: unknown): string[] {
   return uniqueStrings(normalizeTrimmedStringList(value));
 }
 
+export function normalizeSortedUniqueTrimmedStringList(value: unknown): string[] {
+  return sortUniqueStrings(normalizeTrimmedStringList(value));
+}
+
 export function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
   const normalized = normalizeTrimmedStringList(value);
   return normalized.length > 0 ? normalized : undefined;

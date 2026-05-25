@@ -31,6 +31,7 @@ export {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
   normalizeSingleOrTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,

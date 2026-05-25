@@ -3,6 +3,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
+  normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
@@ -134,7 +135,7 @@ function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
+  const deduped = new Set(normalizeStringEntriesLower(entries));
   if (deduped.size !== entries.length) {
     return null;
   }

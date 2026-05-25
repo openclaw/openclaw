@@ -147,10 +147,6 @@ function listNormalizedEnvEntries(
   return entries;
 }
 
-function sortUnique(values: Iterable<string>): string[] {
-  return sortUniqueStrings(values);
-}
-
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -199,8 +195,8 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
 
   return {
     acceptedOverrides,
-    rejectedOverrideBlockedKeys: sortUnique(rejectedBlocked),
-    rejectedOverrideInvalidKeys: sortUnique(rejectedInvalid),
+    rejectedOverrideBlockedKeys: sortUniqueStrings(rejectedBlocked),
+    rejectedOverrideInvalidKeys: sortUniqueStrings(rejectedInvalid),
   };
 }
 

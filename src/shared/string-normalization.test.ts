@@ -3,6 +3,7 @@ import {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeSortedUniqueStringEntries,
+  normalizeSortedUniqueTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
   normalizeUniqueSingleOrTrimmedStringList,
@@ -46,6 +47,14 @@ describe("shared/string-normalization", () => {
   it("normalizes unique trimmed string lists", () => {
     expect(normalizeUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["b", "a"]);
     expect(normalizeUniqueTrimmedStringList("b")).toEqual([]);
+  });
+
+  it("normalizes sorted unique trimmed string lists", () => {
+    expect(normalizeSortedUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["a", "b"]);
+    expect(normalizeSortedUniqueTrimmedStringList(["z", 1, " a "] as unknown[])).toEqual([
+      "a",
+      "z",
+    ]);
   });
 
   it("normalizes unique single-or-list string values", () => {
