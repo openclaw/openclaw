@@ -16,6 +16,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/media: hydrate current-turn image attachments from filename-derived MIME types so active vision can see generated or forwarded images whose source omitted an image content type. (#84812) Thanks @marchpure.
+- Agents/fs: point workspace-only scratch-path guidance at in-workspace temp directories while keeping host-root writes rejected by the tool guard. (#86501) Thanks @tianxiaochannel-oss88.
+- Agents/media: keep async cron media completions scoped to their run session while preserving direct delivery for stale generated-media success and failure notifications. (#86529) Thanks @ai-hpc.
 - Gateway: emit plugin `session_end`/`session_start` hooks when `agent.send` rotates or replaces a session id, keeping hook lifecycle state aligned with `sessions.changed` notifications. Fixes #83507. (#85875) Thanks @brokemac79.
 - OpenShell/SSH: reject malformed generated exec commands before sandbox/session setup so unresolved workflow placeholders fail fast instead of reaching the remote shell. Fixes #72373. Thanks @brokemac79.
 - Installer: make Alpine apk installs cover Git, verify the Node runtime floor, try `nodejs-current`, and report Alpine version guidance when repositories only provide older Node packages.
