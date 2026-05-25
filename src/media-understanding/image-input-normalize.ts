@@ -1,11 +1,11 @@
-import { extractImageContentFromSource } from "../media/input-files.js";
+import { extractImageContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 
 function isHeicInput(params: { mime?: string; fileName?: string }): boolean {
-  const mime = params.mime?.trim();
+  const mime = normalizeMimeType(params.mime);
   if (mime && HEIC_MIME_RE.test(mime)) {
     return true;
   }
@@ -22,7 +22,7 @@ export async function normalizeImageDescriptionInput(params: {
   if (!isHeicInput(params)) {
     return { buffer: params.buffer, mime: params.mime };
   }
-  const sourceMime = params.mime?.trim() || "image/heic";
+  const sourceMime = normalizeMimeType(params.mime) ?? "image/heic";
   const image = await extractImageContentFromSource(
     {
       type: "base64",

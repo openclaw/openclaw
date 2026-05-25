@@ -476,8 +476,8 @@ describe("media-understanding runtime", () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
 
     await describeImageFileWithModel({
-      filePath: "/tmp/sample.heic",
-      mime: "image/heic",
+      filePath: "/tmp/sample.bin",
+      mime: "image/heic; charset=binary",
       provider: "zai",
       model: "glm-4.6v",
       prompt: "Describe it",
@@ -489,7 +489,7 @@ describe("media-understanding runtime", () => {
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({
         buffer: Buffer.from("jpeg-normalized"),
-        fileName: "sample.heic",
+        fileName: "sample.bin",
         mime: "image/jpeg",
       }),
     );
