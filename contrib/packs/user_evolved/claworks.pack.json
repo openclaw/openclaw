@@ -1,0 +1,12 @@
+{
+  "id": "user_evolved",
+  "name": "用户进化 Pack",
+  "version": "1.0.0",
+  "description": "用户通过对话自动生成的 Playbook",
+  "license": "proprietary",
+  "provides": {
+    "objectTypes": [],
+    "playbooks": [],
+    "actionTypes": []
+  }
+}

@@ -1,7 +1,7 @@
 # ClaWorks Release Checklist
 
 **用途**：客户交付 / 生产签收前的验收清单。  
-**更新**：2026-05-24  
+**更新**：2026-05-25（P0 #7–#10 本地验证）  
 **相关文档**：[`OPERATOR-CHECKLIST.md`](OPERATOR-CHECKLIST.md)、[`DEPLOYMENT.md`](../DEPLOYMENT.md)、[`PRODUCTION-READINESS.md`](design/PRODUCTION-READINESS.md)、[`QUICKSTART.md`](../QUICKSTART.md)
 
 ---
@@ -23,18 +23,27 @@
 
 ## 2. P0 签收前检查（必须通过）
 
-| #   | 检查项            | 命令 / 证据                                                               | 状态 |
-| --- | ----------------- | ------------------------------------------------------------------------- | ---- |
-| 1   | Runtime 单元测试  | `pnpm claworks:runtime:test` → 全绿                                       | ☐    |
-| 2   | 产品烟测          | `pnpm claworks:smoke` → 全绿                                              | ☐    |
-| 3   | Robot 插件契约    | `pnpm test extensions/claworks-robot` → 17/17                             | ☐    |
-| 4   | Runtime lint/类型 | `pnpm lint:core -- packages/claworks-runtime` → 0 error                   | ☐    |
-| 5   | Doctor 可运行     | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor` → 无 `ERR_MODULE_NOT_FOUND` | ☐    |
-| 6   | 生产 Compose 有效 | `docker compose -f docker-compose.prod.yml config`                        | ☐    |
-| 7   | 健康端点          | `curl -s http://127.0.0.1:18800/v1/health` → `"status":"ok"`              | ☐    |
-| 8   | 生产模式          | `claworks.json` 中 `production_mode: true` 或 `CLAWORKS_PRODUCTION=1`     | ☐    |
-| 9   | Gateway 令牌      | `OPENCLAW_GATEWAY_TOKEN` 已设置（非文档占位符）                           | ☐    |
-| 10  | Release 干净      | `git status` 无未提交阻塞项；已打 tag                                     | ☐    |
+| #   | 检查项            | 命令 / 证据                                                                        | 状态 |
+| --- | ----------------- | ---------------------------------------------------------------------------------- | ---- |
+| 1   | Runtime 单元测试  | `pnpm claworks:runtime:test` → 全绿                                                | ✅   |
+| 2   | 产品烟测          | `pnpm claworks:smoke` → 全绿                                                       | ✅   |
+| 3   | Robot 插件契约    | `pnpm test extensions/claworks-robot` → 17/17                                      | ✅   |
+| 4   | Runtime lint/类型 | `pnpm lint:core -- packages/claworks-runtime` → 0 error                            | ✅   |
+| 5   | Doctor 可运行     | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor` → 无阻塞 Invalid config              | ✅   |
+| 6   | 生产 Compose 有效 | `docker compose -f docker-compose.prod.yml config`                                 | ✅   |
+| 7   | 健康端点          | `curl -s http://127.0.0.1:18800/v1/health` → 可达；`planes.*=ok`；无 `error` check | ⚠️   |
+| 8   | 生产模式          | `production_mode: true` fail-closed（单测 + repair）；本地 dev 未启用              | ⚠️   |
+| 9   | Gateway 令牌      | `CLAWORKS_INIT_SECURE=1` 写入 api_key + gateway token；REST 401/200 验证           | ⚠️   |
+| 10  | Release 干净      | `git status` 无未提交阻塞项；已打 tag                                              | ☐    |
+
+### P0 备注（2026-05-25）
+
+- **#4 lint**：`pnpm lint:core -- packages/claworks-runtime` 经 `--` 收窄至 runtime 包；plugin-sdk boundary dts + oxlint 风格规则 0 error。全仓 `src ui packages` 无 `--` 收窄时仍有历史 type-aware 债务（非 P0 阻塞）。
+- **#5 doctor**：`filesystem-kb` 已加入 robot 插件 schema enum 与 `presets.ts` resolver；需 `pnpm build` 刷新 `dist/extensions/claworks-robot/openclaw.plugin.json` 后 doctor 才读新 schema。
+- **#7 健康（2026-05-25）**：本地 Gateway `:18800` 已运行。`GET /v1/health` → `200`，`status=degraded`（仅 `packs_source: warn`，`planes.kernel/data/orch=ok`）；`GET /v1/metrics` → Prometheus 文本 `200`；`POST /v1/doctor` → `200` JSON checks。`pnpm claworks:smoke` 27/27 通过。生产签收期望 `status=ok`（需 `CLAWORKS_PACKS_DIR` 指向有效 pack 仓）。
+- **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。本地 `~/.claworks/claworks.json` 仍为 dev（`production_mode` 未设）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
+- **#9 令牌（2026-05-25）**：临时目录 `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 生成 api_key + `gateway.auth.token`；in-process REST：`/v1/health` 无 Bearer → `200`；`/v1/identity` 无/错 Bearer → `401`；正确 Bearer → `200`。修复 `matchesKey` 对 32 字符 plaintext key 的误判。本地长期 Gateway 仍无 api_key（dev 开放）— 签收前需 secure init。MCP RBAC 单测：`mcp-auth.test.ts` 5/5。
+- **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；最新 tag `v2026.5.19-beta.2`；工作区 **~75** 未提交文件（见下方 release 报告），**不可打 tag**。
 
 ---
 
@@ -49,7 +58,7 @@
 | 5   | 备份策略       | `ecosystem-backup.sh` + `claworks-data` 卷定期备份         | ☐    |
 | 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                 | ☐    |
 | 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过 | ☐    |
-| 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；CI 见下方说明）  | ☐    |
+| 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；CI 见下方说明）  | ✅   |
 
 ### Gateway E2E 与 CI
 
@@ -66,6 +75,7 @@ cd claworks
 
 # 构建 runtime dist（doctor / 运行时 import 依赖）
 pnpm claworks:runtime:build
+pnpm build   # 刷新 bundled plugin schema（含 filesystem-kb preset）
 
 # 质量门
 pnpm lint:core -- packages/claworks-runtime
@@ -99,12 +109,13 @@ pnpm test extensions/claworks/canonical-surface.contract.test.ts
 
 ## 5. 已知非阻塞项（P2 / 后续版本）
 
-| 项                  | 说明                                                                      |
-| ------------------- | ------------------------------------------------------------------------- |
-| npm 公开发布        | `@claworks/runtime` 暂缓公开发布；见 `docs/design/REBRAND-TO-CLAWORKS.md` |
-| Studio React 编辑器 | 静态 `/studio` 已有；全功能编辑器未做                                     |
-| Extension 物理裁剪  | 138→核心扩展；非阻塞                                                      |
-| Drizzle 全量 ORM    | 见 `docs/design/POSTGRES-MIGRATION-PATH.md`                               |
+| 项                        | 说明                                                                               |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| 全仓 core type-aware lint | `pnpm lint:core`（无 `--` 收窄）仍有 ~800+ 历史 typescript/\* 告警；runtime 包已清 |
+| npm 公开发布              | `@claworks/runtime` 暂缓公开发布；见 `docs/design/REBRAND-TO-CLAWORKS.md`          |
+| Studio React 编辑器       | 静态 `/studio` 已有；全功能编辑器未做                                              |
+| Extension 物理裁剪        | 138→核心扩展；非阻塞                                                               |
+| Drizzle 全量 ORM          | 见 `docs/design/POSTGRES-MIGRATION-PATH.md`                                        |
 
 ---
 

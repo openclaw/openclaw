@@ -64,9 +64,9 @@ pnpm test packages/claworks-runtime          # 运行测试
 
 ## 测试
 
-358 个单元测试，83 个测试文件，全部通过。覆盖 EventKernel、PlaybookEngine、StepExecutor、CapabilityRegistry、ObjectStore、KnowledgeBase、A2A、RuleEngine、ScaffoldEngine、进化流水线、init CLI、Pack Profile 热切换、LOG_LEVEL 可观测性等核心模块。
+395 个单元测试，89 个测试文件，全部通过。覆盖 EventKernel、PlaybookEngine、StepExecutor、CapabilityRegistry、ObjectStore、KnowledgeBase、A2A、RuleEngine、ScaffoldEngine、进化流水线、init CLI、Pack Profile 热切换、W3C traceparent、弱模型回归 CI 等核心模块。
 
-（签收快照 2026-05-24：**368** 测试 / **86** 文件，见 `docs/SIGNOFF-SNAPSHOT.md`。）
+（签收快照见 `docs/SIGNOFF-SNAPSHOT.md`。）
 
 ---
 
@@ -78,10 +78,10 @@ pnpm test packages/claworks-runtime          # 运行测试
 | 交流       | 4/5  | comms.send / notify.dispatch 多渠道通知，HITL 人机协同步骤完备                      |
 | 记忆       | 4/5  | ObjectStore + KB + CBR + memory_read/write 步骤，用户画像持久化                     |
 | 学习       | 4/5  | 进化流水线（evolve.\*）、CBR 摄取、weak_model_regression 自测闭环                   |
-| 执行       | 5/5  | 215+ 能力 + 12+ 步骤类型 + Pack Profile 热切换，358 测试全绿                        |
+| 执行       | 5/5  | 215+ 能力 + 12+ 步骤类型 + Pack Profile 热切换，395 测试全绿                        |
 | 自主       | 4/5  | AutonomyEngine 心跳/空闲/缺口检测，ScaffoldEngine 弱模型照单执行                    |
 | 安全       | 4/5  | RBAC、HITL 门禁、production_mode fail-closed、审计日志                              |
-| 可观测性   | 4/5  | LOG_LEVEL 分级日志 + claworks_playbook_runs_total 指标，分布式 trace 仍待加强       |
+| 可观测性   | 4/5  | LOG_LEVEL + metrics + W3C traceparent 贯通；OTEL 导出器仍待加强                     |
 | 弱模型补偿 | 5/5  | RuleEngine + Scaffold + StructuredOutput 投票 + CBR few-shot 四层补偿               |
 | 生态扩展   | 4/5  | Pack 热加载 + scriptLibrary + OpenClaw skill bridge 双轨 skill 池                   |
 
@@ -89,8 +89,8 @@ pnpm test packages/claworks-runtime          # 运行测试
 
 ### 建议后续演进（非 bug）
 
-1. **pack.load_profile_requested 运行时处理器**：当前 Playbook 已发布事件，需 PackLoader 侧 profile 切换原子实现
-2. **分布式可观测性**：OpenTelemetry trace 贯通 EventKernel → PlaybookRun → StepLog
-3. **弱模型回归 CI 门禁**：将 weak_model_regression_suite 接入 CI nightly，失败率 >30% 自动 block merge
-4. **行业 Profile 一键 UI**：Setup Wizard / 管理台可视化切换 industrial / enterprise / daily-report
-5. **多 trigger Playbook 语法**：YAML parser 支持 `triggers: [...]` 数组，减少 manual 副本 Playbook
+1. **OTEL 导出器**：traceparent 已贯通，接 collector / diagnostics-otel 插件
+2. **弱模型 PR 门禁**：nightly CI 已有；PR merge block 待接
+3. **行业 Profile 一键 UI**：Setup Wizard / 管理台可视化切换 industrial / enterprise / daily-report
+4. **多 trigger Playbook 语法**：YAML parser 支持 `triggers: [...]` 数组
+5. **Studio React 编辑器**：静态 `/studio` 已有，全功能编辑器未做
