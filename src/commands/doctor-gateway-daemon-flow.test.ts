@@ -557,17 +557,17 @@ describe("maybeRepairGatewayDaemon", () => {
     vi.setSystemTime(40_000);
     setPlatform("linux");
     const handoff = {
-      kind: "gateway-supervisor-restart-handoff",
-      version: 1,
+      kind: "gateway-supervisor-restart-handoff" as const,
+      version: 1 as const,
       intentId: "intent-healthy",
       pid: 99_999,
       createdAt: 35_000,
       expiresAt: 95_000,
       reason: "update.run",
-      source: "gateway-update",
-      restartKind: "update-process",
-      supervisorMode: "systemd",
-    };
+      source: "gateway-update" as const,
+      restartKind: "update-process" as const,
+      supervisorMode: "systemd" as const,
+    } satisfies GatewayRestartHandoff;
     readGatewayRestartHandoffSync.mockReturnValue(handoff);
 
     await maybeRepairGatewayDaemon({
@@ -593,17 +593,17 @@ describe("maybeRepairGatewayDaemon", () => {
     vi.setSystemTime(40_000);
     setPlatform("linux");
     const handoff = {
-      kind: "gateway-supervisor-restart-handoff",
-      version: 1,
+      kind: "gateway-supervisor-restart-handoff" as const,
+      version: 1 as const,
       intentId: "intent-unhealthy",
       pid: 88_888,
       createdAt: 35_000,
       expiresAt: 95_000,
       reason: "gateway.restart",
-      source: "operator-restart",
-      restartKind: "full-process",
-      supervisorMode: "systemd",
-    };
+      source: "operator-restart" as const,
+      restartKind: "full-process" as const,
+      supervisorMode: "systemd" as const,
+    } satisfies GatewayRestartHandoff;
     readGatewayRestartHandoffSync.mockReturnValue(handoff);
     healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
 
