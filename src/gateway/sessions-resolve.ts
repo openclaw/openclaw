@@ -18,7 +18,21 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
-export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
+export type SessionsResolveLineage = {
+  familyKey: string;
+  currentSessionId: string;
+  sessionIds: string[];
+  predecessorSessionId?: string;
+  successorSessionId?: string;
+};
+
+export type SessionsResolveSuccess = {
+  ok: true;
+  key: string;
+  lineage?: SessionsResolveLineage;
+};
+
+export type SessionsResolveResult = SessionsResolveSuccess | { ok: false; error: ErrorShape };
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
   return {
@@ -90,6 +104,69 @@ function findVisibleSessionIdMatches(params: {
   );
 }
 
+function uniqueNonEmptyStrings(values: Iterable<unknown>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeOptionalString(value) ?? "";
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function resolveSessionLineage(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+}): SessionsResolveLineage | undefined {
+  const currentSessionId = normalizeOptionalString(params.entry?.sessionId);
+  if (!currentSessionId) {
+    return undefined;
+  }
+
+  const sessionIds = uniqueNonEmptyStrings([
+    ...(Array.isArray(params.entry?.usageFamilySessionIds)
+      ? params.entry.usageFamilySessionIds
+      : []),
+    currentSessionId,
+  ]);
+  const currentIndex = sessionIds.indexOf(currentSessionId);
+  const familyKey = normalizeOptionalString(params.entry?.usageFamilyKey) ?? params.key;
+  return {
+    familyKey,
+    currentSessionId,
+    sessionIds,
+    predecessorSessionId: currentIndex > 0 ? sessionIds[currentIndex - 1] : undefined,
+    successorSessionId:
+      currentIndex >= 0 && currentIndex < sessionIds.length - 1
+        ? sessionIds[currentIndex + 1]
+        : undefined,
+  };
+}
+
+function successResult(params: {
+  p: SessionsResolveParams;
+  key: string;
+  entry?: SessionEntry;
+}): SessionsResolveSuccess {
+  if (params.p.includeLineage !== true) {
+    return { ok: true, key: params.key };
+  }
+  const lineage = resolveSessionLineage({ key: params.key, entry: params.entry });
+  return lineage ? { ok: true, key: params.key, lineage } : { ok: true, key: params.key };
+}
+
+export function serializeSessionsResolveSuccess(result: SessionsResolveSuccess) {
+  return {
+    ok: true,
+    key: result.key,
+    ...(result.lineage ? { lineage: result.lineage } : {}),
+  };
+}
+
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
@@ -137,7 +214,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       if (agentCheck) {
         return agentCheck;
       }
-      return { ok: true, key: target.canonicalKey };
+      return successResult({ p, key: target.canonicalKey, entry: store[target.canonicalKey] });
     }
     const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
     if (!legacyKey) {
@@ -149,12 +226,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
+    const migratedStore = loadSessionStore(target.storePath);
     if (
       !isResolvedSessionKeyVisible({
         cfg,
         p,
         storePath: target.storePath,
-        store: loadSessionStore(target.storePath),
+        store: migratedStore,
         key: target.canonicalKey,
       })
     ) {
@@ -164,7 +242,11 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (agentCheckLegacy) {
       return agentCheckLegacy;
     }
-    return { ok: true, key: target.canonicalKey };
+    return successResult({
+      p,
+      key: target.canonicalKey,
+      entry: migratedStore[target.canonicalKey] ?? migratedStore[legacyKey],
+    });
   }
 
   if (hasSessionId) {
@@ -191,7 +273,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
-    return { ok: true, key: selection.sessionKey };
+    return successResult({ p, key: selection.sessionKey, entry: store[selection.sessionKey] });
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -240,5 +322,5 @@ export async function resolveSessionKeyFromResolveParams(params: {
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
-  return { ok: true, key: list.sessions[0].key };
+  return successResult({ p, key: list.sessions[0].key, entry: store[list.sessions[0].key] });
 }

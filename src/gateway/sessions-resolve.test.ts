@@ -251,6 +251,58 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it("can include durable lineage metadata for companion consumers", async () => {
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: {
+        "agent:main:current": {
+          sessionId: "sess-current",
+          updatedAt: 3,
+          usageFamilyKey: "agent:main:family",
+          usageFamilySessionIds: ["sess-old", "sess-current", "sess-next"],
+        },
+      },
+    });
+
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { sessionId: "sess-current", includeLineage: true },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      key: "agent:main:current",
+      lineage: {
+        familyKey: "agent:main:family",
+        currentSessionId: "sess-current",
+        sessionIds: ["sess-old", "sess-current", "sess-next"],
+        predecessorSessionId: "sess-old",
+        successorSessionId: "sess-next",
+      },
+    });
+  });
+
+  it("returns a single-session lineage fallback when no family fields exist", async () => {
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      [canonicalKey]: { sessionId: "sess-single", updatedAt: 1 },
+    });
+
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: { key: canonicalKey, includeLineage: true },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      key: canonicalKey,
+      lineage: {
+        familyKey: canonicalKey,
+        currentSessionId: "sess-single",
+        sessionIds: ["sess-single"],
+      },
+    });
+  });
+
   it("rejects sessions belonging to a deleted agent (label-based lookup)", async () => {
     const deletedAgentKey = "agent:deleted-agent:main";
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({

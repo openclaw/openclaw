@@ -4,6 +4,9 @@ import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveSessionKeyFromResolveParams: vi.fn(),
+  serializeSessionsResolveSuccess: vi.fn(
+    (result: { ok: true; key: string; lineage?: unknown }) => result,
+  ),
   resolveSessionAgentId: vi.fn(() => "main"),
   loadSessionEntry: vi.fn(() => ({
     cfg: {},
@@ -33,6 +36,7 @@ describe("embedded gateway stub", () => {
   beforeEach(() => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
+    runtime.serializeSessionsResolveSuccess.mockClear();
     runtime.projectRecentChatDisplayMessages.mockClear();
     runtime.readSessionMessagesAsync.mockClear();
   });

@@ -224,6 +224,50 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
 });
 
+test("sessions.resolve can return session lineage metadata", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": {
+        sessionId: "sess-current",
+        updatedAt: now,
+        usageFamilyKey: "agent:main:main",
+        usageFamilySessionIds: ["sess-previous", "sess-current"],
+      },
+    },
+  });
+
+  const { ws } = await openClient();
+  const resolved = await rpcReq<{
+    ok: true;
+    key: string;
+    lineage: {
+      familyKey: string;
+      currentSessionId: string;
+      sessionIds: string[];
+      predecessorSessionId?: string;
+    };
+  }>(ws, "sessions.resolve", {
+    sessionId: "sess-current",
+    includeLineage: true,
+  });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toMatchObject({
+    ok: true,
+    key: "agent:main:main",
+    lineage: {
+      familyKey: "agent:main:main",
+      currentSessionId: "sess-current",
+      sessionIds: ["sess-previous", "sess-current"],
+      predecessorSessionId: "sess-previous",
+    },
+  });
+
+  ws.close();
+});
+
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
   await createSessionStoreDir();
   const now = Date.now();

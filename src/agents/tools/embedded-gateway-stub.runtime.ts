@@ -20,5 +20,8 @@ export {
   readSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../../gateway/session-utils.js";
-export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";
+export {
+  resolveSessionKeyFromResolveParams,
+  serializeSessionsResolveSuccess,
+} from "../../gateway/sessions-resolve.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

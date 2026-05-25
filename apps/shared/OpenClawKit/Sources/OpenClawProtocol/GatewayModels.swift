@@ -1732,6 +1732,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
     public let sessionid: String?
     public let label: String?
+    public let includelineage: Bool?
     public let agentid: String?
     public let spawnedby: String?
     public let includeglobal: Bool?
@@ -1741,6 +1742,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         key: String?,
         sessionid: String?,
         label: String?,
+        includelineage: Bool?,
         agentid: String?,
         spawnedby: String?,
         includeglobal: Bool?,
@@ -1749,6 +1751,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         self.key = key
         self.sessionid = sessionid
         self.label = label
+        self.includelineage = includelineage
         self.agentid = agentid
         self.spawnedby = spawnedby
         self.includeglobal = includeglobal
@@ -1759,6 +1762,7 @@ public struct SessionsResolveParams: Codable, Sendable {
         case key
         case sessionid = "sessionId"
         case label
+        case includelineage = "includeLineage"
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
         case includeglobal = "includeGlobal"

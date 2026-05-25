@@ -428,7 +428,10 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one Gateway session row for an exact session key.
-    - `sessions.resolve` resolves or canonicalizes a session target.
+    - `sessions.resolve` resolves or canonicalizes a session target. Pass
+      `includeLineage: true` to also return the current `sessionId`, stable
+      family key, known family `sessionIds`, and immediate predecessor/successor
+      ids when the session row has rotation lineage metadata.
     - `sessions.create` creates a new session entry.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.

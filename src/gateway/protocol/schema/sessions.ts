@@ -118,6 +118,7 @@ export const SessionsResolveParamsSchema = Type.Object(
     key: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
     label: Type.Optional(SessionLabelString),
+    includeLineage: Type.Optional(Type.Boolean()),
     agentId: Type.Optional(NonEmptyString),
     spawnedBy: Type.Optional(NonEmptyString),
     includeGlobal: Type.Optional(Type.Boolean()),

@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/sessions: let `sessions.resolve` return canonical session lineage with `includeLineage` so companion clients can discover rotated session families without parsing raw session rows. Fixes #79902. Thanks @100yenadmin.
+
 ### Fixes
 
 - Scripts: give each gateway restart benchmark phase its own timeout budget so long restart-count profiling does not fail itself on the total sample wall clock.
