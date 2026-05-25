@@ -1,66 +1,73 @@
 #!/usr/bin/env node
 /**
- * OT connector dry-run — start mqtt-simulate + opcua-simulate via ConnectorManager (no real devices).
+ * OT connector dry-run — start mqtt-simulate + opcua-simulate via ConnectorManager (no live OT).
  *
  * Usage:
  *   pnpm claworks:ot-dry-run
+ *
+ * Env:
+ *   CLAWORKS_ROOT — repo root (default: parent of scripts/)
  */
-import path from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+process.env.CLAWORKS_ROOT = process.env.CLAWORKS_ROOT?.trim() || root;
 
 function log(msg) {
   console.log(`[ot-dry-run] ${msg}`);
 }
 
-function assert(cond, msg) {
-  if (!cond) throw new Error(msg);
-}
-
 function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitReady(manager, id, attempts = 40) {
-  for (let i = 0; i < attempts; i++) {
-    const row = manager.list().find((c) => c.id === id);
-    if (row?.ready) return row;
+async function waitForReady(manager, ids, deadlineMs = 15_000) {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    const statuses = manager.list();
+    if (ids.every((id) => statuses.find((s) => s.id === id)?.ready)) {
+      return statuses;
+    }
     await sleep(100);
   }
-  throw new Error(`connector ${id} did not become ready`);
+  throw new Error(`connectors not ready within ${deadlineMs}ms: ${JSON.stringify(manager.list())}`);
 }
 
 async function main() {
-  const { ConnectorManager, resolveConnectorConfigs } =
-    await import("../packages/claworks-runtime/src/index.ts");
+  const { ConnectorManager } =
+    await import("../packages/claworks-runtime/src/interfaces/connectors/connector-manager.ts");
+  const { resolveConnectorConfigs } =
+    await import("../packages/claworks-runtime/src/interfaces/connectors/presets.ts");
 
-  const configs = resolveConnectorConfigs(
-    {
-      plant_mqtt: { preset: "mqtt", simulate: true, enabled: true },
-      plant_opcua: { preset: "opcua", simulate: true, enabled: true },
-    },
-    root,
-  );
-
-  const manager = new ConnectorManager({
-    logger: (m) => log(m),
+  const configs = resolveConnectorConfigs({
+    mqtt: { preset: "mqtt", simulate: true, enabled: true },
+    opcua: { preset: "opcua", simulate: true, enabled: true },
   });
 
+  const manager = new ConnectorManager({ logger: (msg) => log(msg) });
+  const ids = Object.keys(configs);
+
   try {
-    for (const [id, config] of Object.entries(configs)) {
-      log(`starting ${id} (${config.command} ${(config.args ?? []).join(" ")})`);
-      await manager.start(id, config);
-      const status = await waitReady(manager, id);
-      log(`${id} ready (${status.command})`);
+    for (const [id, cfg] of Object.entries(configs)) {
+      await manager.start(id, cfg);
+      log(`started ${id}`);
     }
 
-    const listed = manager.list();
-    assert(listed.length === 2, `expected 2 connectors, got ${listed.length}`);
-    assert(
-      listed.every((c) => c.ready),
-      "all simulate connectors must be ready",
-    );
+    const statuses = await waitForReady(manager, ids);
+    log(`ready: ${statuses.map((s) => `${s.id}=ok`).join(", ")}`);
+
+    const mqttStart = await manager.invoke("mqtt", "start", { simulate: true });
+    log(`mqtt start → ${JSON.stringify(mqttStart)}`);
+
+    const opcuaConnect = await manager.invoke("opcua", "connect");
+    log(`opcua connect → ${JSON.stringify(opcuaConnect)}`);
+
+    const opcuaAlarm = await manager.invoke("opcua", "simulate_alarm");
+    log(`opcua simulate_alarm → ${JSON.stringify(opcuaAlarm)}`);
+
+    const mqttMsg = await manager.invoke("mqtt", "simulate_message");
+    log(`mqtt simulate_message → ${JSON.stringify(mqttMsg)}`);
 
     log("ALL OT DRY-RUN CHECKS PASSED");
   } finally {
@@ -69,6 +76,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(`[ot-dry-run] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+  console.error("[ot-dry-run] FAILED", err);
   process.exit(1);
 });

@@ -16,29 +16,31 @@
 
 ### Onboarding / configure / doctor（2026-05-24 审计）
 
-| 路径                             | 状态 | 说明                                                                                                               |
-| -------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
-| `claworks.mjs`                   | ✅   | `CLAWORKS_PRODUCT=1`，`~/.claworks`，port 18800                                                                    |
-| `wizardT` + `product-copy`       | ✅   | intro/outro/端口/CLI 名经 `applyClaworksWizardCopy` 重写                                                           |
-| `formatCliCommand("openclaw …")` | ✅   | 运行时替换为 `claworks`（含 setup.finalize next steps）                                                            |
-| `configure` intro                | ✅   | `resolveProductConfigureIntro`                                                                                     |
-| `doctor` intro                   | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                                          |
-| `onboard-remote` 默认 WS         | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                                         |
-| `pnpm claworks:setup`            | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start` + ClaWorks next steps（OT simulate / personal_work 警告） |
-| `setup.finalize` ClaWorks 专项   | ✅   | `collectClaworksInitWarnings` + next steps（start/doctor/configure/repair）                                        |
-| `mergeClaworksProductDefaults`   | ✅   | 交互/非交互 onboard 写配置前合并 18800 / claworks-robot / plugins.allow                                            |
-| `doctor-core-checks` fixHint     | ✅   | `doctorFixHint` → `productizeUserCopy`（configure/doctor 命令产品化）                                              |
-| `config config set/patch/schema` | ✅   | `--dry-run` / `schema` 描述与 invalid-config 错误经 `productizeUserCopy`                                           |
-| `--dev` profile 状态目录         | ✅   | `CLAWORKS_PRODUCT=1` → `~/.claworks-dev` + `claworks.json`（port 19001）                                           |
-| non-interactive onboard 恢复提示 | ✅   | `local/output.ts` recovery hints 经 `formatCliCommand`                                                             |
-| init OT simulate 提示            | ✅   | `collectClaworksInitWarnings`：echo/simulate 非生产误导 + personal_work repair 指引                                |
-| wizard.finalize whatNow/outro    | ✅   | 产品化 override → docs.claworks.ai/showcase                                                                        |
-| 遗留（有意保留）                 | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装                     |
+| 路径                                    | 状态 | 说明                                                                                                               |
+| --------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
+| `claworks.mjs`                          | ✅   | `CLAWORKS_PRODUCT=1`，`~/.claworks`，port 18800                                                                    |
+| `wizardT` + `product-copy`              | ✅   | intro/outro/端口/CLI 名经 `applyClaworksWizardCopy` 重写                                                           |
+| `formatCliCommand("openclaw …")`        | ✅   | 运行时替换为 `claworks`（含 setup.finalize next steps）                                                            |
+| `configure` intro                       | ✅   | `resolveProductConfigureIntro`                                                                                     |
+| `doctor` intro                          | ✅   | `resolveProductDoctorIntro` + ClaWorks 专项 health checks                                                          |
+| `onboard-remote` 默认 WS                | ✅   | `resolveProductLocalGatewayWsUrl`（18800）                                                                         |
+| `pnpm claworks:setup`                   | ✅   | doctor --fix → init → onboard，收尾提示 `claworks:start` + ClaWorks next steps（OT simulate / personal_work 警告） |
+| `setup.finalize` ClaWorks 专项          | ✅   | `collectClaworksInitWarnings` + next steps（start/doctor/configure/repair）                                        |
+| `mergeClaworksProductDefaults`          | ✅   | 交互/非交互 onboard 写配置前合并 18800 / claworks-robot / plugins.allow                                            |
+| `doctor-core-checks` fixHint            | ✅   | `doctorFixHint` → `productizeUserCopy`（configure/doctor 命令产品化）                                              |
+| `config config set/patch/schema`        | ✅   | `--dry-run` / `schema` 描述与 invalid-config 错误经 `productizeUserCopy`                                           |
+| `dns-cli` / `hooks-cli` / `devices-cli` | ✅   | DNS-SD 提示、deprecated hooks 描述/警告、设备 re-approval 说明经 `productizeUserCopy` / `formatCliCommand`         |
+| `--dev` profile 状态目录                | ✅   | `CLAWORKS_PRODUCT=1` → `~/.claworks-dev` + `claworks.json`（port 19001）                                           |
+| non-interactive onboard 恢复提示        | ✅   | `local/output.ts` recovery hints 经 `formatCliCommand`                                                             |
+| init OT simulate 提示                   | ✅   | `collectClaworksInitWarnings`：echo/simulate 非生产误导 + personal_work repair 指引                                |
+| wizard.finalize whatNow/outro           | ✅   | 产品化 override → docs.claworks.ai/showcase                                                                        |
+| 遗留（有意保留）                        | ⚠️   | 内部类型名 `OpenClawConfig`、`openclaw/plugin-sdk` import；harness-sync 检测并存 OpenClaw 安装                     |
 
 ## 阶段 B — 发布面
 
 - [ ] `@claworks/runtime` 取消 `publishConfig` 暂缓，发布 beta
-- [ ] 安装文档：`npm i -g claworks`
+- [x] 安装文档（源码 + 共存）：[`docs/claworks/install.md`](../claworks/install.md)
+- [ ] 根包 `npm i -g claworks`（`npm pack --dry-run` 验证 tarball）
 - [ ] Docker/CI 镜像名 `claworks`
 
 ## 阶段 C — 代码引用（高成本）

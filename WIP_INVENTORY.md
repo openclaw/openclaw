@@ -5,15 +5,16 @@
 
 ## 已合入（近期批次）
 
-| 批次                | 内容                                                           |
-| ------------------- | -------------------------------------------------------------- |
-| profile 原子切换    | `pack.load_profile_requested` → PackLoader 串行重载            |
-| W3C traceparent     | EventKernel → PlaybookRun → StepLog                            |
-| 弱模型 CI           | nightly + **PR pull_request** 触发                             |
-| evolve HITL         | 草稿 → 沙盒 → `evolution.promote_sandbox`                      |
-| auto_promote（dev） | `evolution.auto_promote_sandbox`（production_mode 强制 false） |
-| 可观测性文档        | `docs/OBSERVABILITY.md`                                        |
-| npm dry-run         | `pnpm claworks:runtime:publish:dry-run`                        |
+| 批次                | 内容                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| profile 原子切换    | `pack.load_profile_requested` → PackLoader 串行重载                                          |
+| W3C traceparent     | EventKernel → PlaybookRun → StepLog                                                          |
+| 弱模型 CI           | nightly + **PR pull_request** 触发                                                           |
+| evolve HITL         | 草稿 → 沙盒 → `evolution.promote_sandbox`                                                    |
+| auto_promote（dev） | `evolution.auto_promote_sandbox`（production_mode 强制 false）                               |
+| 可观测性文档        | `docs/OBSERVABILITY.md`                                                                      |
+| npm dry-run         | `pnpm claworks:publish:dry-run` + `pnpm claworks:runtime:publish:dry-run`                    |
+| 发布前收尾          | runtime-store 加固、gateway e2e 全绿、`docs/claworks/install.md`、`pnpm claworks:ot-dry-run` |
 
 ## B 类 — 明确不提交
 
@@ -35,5 +36,5 @@
 
 ## 当前状态
 
-- **测试**：`pnpm test packages/claworks-runtime`
+- **测试**：`pnpm claworks:smoke` + `pnpm claworks:gateway:e2e` + `pnpm test extensions/claworks-robot` → 全绿（2026-05-25）
 - **可观测性**：见 [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)

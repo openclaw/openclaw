@@ -52,18 +52,23 @@ pnpm install
 
 ## 第三步：初始化配置
 
-**推荐首次路径（doctor → init → repair → onboard 一条龙）：**
+**推荐首次路径（与 `pnpm claworks:setup` 一致）：**
 
 ```bash
 pnpm claworks:setup
+# 等价流水线：doctor --fix → init（若缺配置）→ repair → onboard
 ```
 
-**或仅写入配置骨架（不含交互 onboard）：**
+**或分步执行：**
 
 ```bash
-pnpm claworks:init
-# 对齐 product-config-repair：pnpm claworks:repair
+pnpm claworks:init          # 写入 ~/.claworks/claworks.json 骨架
+pnpm claworks:repair        # product-config-repair 对齐
+pnpm claworks:doctor        # 双层 health
+node claworks.mjs onboard --mode local   # 交互 onboard（setup 会自动跑）
 ```
+
+> 安装与 OpenClaw 共存：[`docs/claworks/install.md`](docs/claworks/install.md)
 
 执行后会生成 `~/.claworks/claworks.json`，输出类似：
 
@@ -163,11 +168,17 @@ Pack symlinks: base, process-industry, enterprise-general, enterprise-commercial
 
 ## 第四步：启动网关
 
-**开发模式（无需预编译，修改代码立即生效）：**
+**推荐（含 bootstrap / repair）：**
+
+```bash
+pnpm claworks:start
+# 等价：CLAWORKS_PRODUCT=1 node claworks.mjs start → Gateway 18800
+```
+
+**开发热重载（修改 TS 立即生效）：**
 
 ```bash
 pnpm claworks:gateway
-# 或等价：pnpm claworks:start（经 claworks.mjs，自动 CLAWORKS_PRODUCT=1 + bootstrap）
 ```
 
 **生产模式（编译后，启动更快）：**
@@ -184,6 +195,7 @@ node claworks.mjs gateway run --port 18800 --bind loopback
 ## 第五步：验证运行成功
 
 ```bash
+pnpm claworks:doctor    # CLI 双层健康（网关 + 产品面）
 curl http://127.0.0.1:18800/v1/health
 ```
 
@@ -233,15 +245,21 @@ openclaw plugins install @claworks/openclaw-extension
 
 ## 常用命令速查
 
-| 命令                                        | 作用                                  |
-| ------------------------------------------- | ------------------------------------- |
-| `pnpm claworks:init`                        | 生成/修复 `~/.claworks/claworks.json` |
-| `pnpm claworks:gateway`                     | 启动开发网关（端口 18800）            |
-| `curl .../v1/health`                        | 验证网关健康状态                      |
-| `curl -X POST .../v1/packs/reload`          | 热重载 Pack（无需重启）               |
-| `curl -X POST .../v1/doctor/run`            | 运行健康自检                          |
-| `pnpm claworks:smoke`                       | 跑完整冒烟测试                        |
-| `CLAWORKS_INIT_REPAIR=1 pnpm claworks:init` | 修复配置但不覆盖数据                  |
+| 命令                                        | 作用                                         |
+| ------------------------------------------- | -------------------------------------------- |
+| `pnpm claworks:setup`                       | 首次一条龙：doctor → init → repair → onboard |
+| `pnpm claworks:init`                        | 生成/修复 `~/.claworks/claworks.json`        |
+| `pnpm claworks:start`                       | 启动 Gateway（18800，含 bootstrap）          |
+| `pnpm claworks:gateway`                     | 开发热重载网关                               |
+| `pnpm claworks:doctor`                      | CLI 健康检查                                 |
+| `pnpm claworks:doctor:fix`                  | 非交互修复（同 repair 真源）                 |
+| `curl .../v1/health`                        | 验证网关健康状态                             |
+| `curl -X POST .../v1/packs/reload`          | 热重载 Pack（无需重启）                      |
+| `curl -X POST .../v1/doctor/run`            | 运行健康自检                                 |
+| `pnpm claworks:smoke`                       | 跑完整冒烟测试                               |
+| `pnpm claworks:gateway:e2e`                 | 真实 Gateway 闭环 E2E                        |
+| `pnpm claworks:ot-dry-run`                  | OT 模拟连接器（mqtt/opcua，无实机）          |
+| `CLAWORKS_INIT_REPAIR=1 pnpm claworks:init` | 修复配置但不覆盖数据                         |
 
 ---
 
@@ -334,6 +352,16 @@ CLAWORKS_PACKS_DIR=/path/to/claworks-packs pnpm claworks:init
 CLAWORKS_INIT_REPAIR=1 pnpm claworks:init
 ```
 
+## OT 连接器实机验证（预生产）
+
+签收前在现场或 Testbox 完成（与 `docs/RELEASE-CHECKLIST.md` P1 #2 对应）：
+
+1. 设 `production_mode=true`，运行 `claworks doctor --fix`，确认无 `connectors_simulate` / `connectors_echo_demo` 错误。
+2. 编辑 `plugins.entries.claworks-robot.config.connectors.*`：`simulate: false`，填写 mqtt / opcua / modbus 真实 endpoint 与凭证。
+3. 重启 Gateway（`pnpm claworks:gateway` 或 macOS `ai.claworks.gateway` LaunchAgent）。
+4. `curl -s http://127.0.0.1:18800/v1/connectors` — 连接器状态为 healthy。
+5. 触发 OT 事件或等待 poll，确认 `process-industry` Playbook 匹配与工单创建。
+
 **全量健康自检：**
 
 ```bash
@@ -345,6 +373,7 @@ curl -X POST http://127.0.0.1:18800/v1/doctor/run?fix=true
 ## 下一步
 
 - 📖 [设计文档](docs/design/ARCHITECTURE.md) — 三平面架构（Twin / Ops / Nexus）
+- 📦 [安装与共存](docs/claworks/install.md) — fork 安装、npm 准备、与 OpenClaw 并存
 - 🧩 [Pack 开发指南](../claworks-packs/HOW-TO-CREATE-A-PACK.md) — 创建自定义 Pack
 - 🔌 [桥接插件](../openclaw-claworks-extension/README.md) — 从 OpenClaw 连接 ClaWorks
 - 📊 [日报系统](../daily-report-system/README.md) — Excel 日报→飞书卡片

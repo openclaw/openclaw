@@ -37,9 +37,9 @@ ClaWorks 在 core `src/` 中通过 `CLAWORKS_PRODUCT=1` 与 `src/cli/product-sur
 
 ### Phase A — 清单与 lint（小 diff，1–2 天）
 
-- [ ] 生成「用户可见字符串」清单：`scripts/audit-product-copy.mjs` grep `openclaw` / `~/.openclaw` / `18789` in `src/cli`, `src/commands`, `src/flows`, bundled extension doctor-contract。
+- [x] 生成「用户可见字符串」清单：`scripts/audit-product-copy.mjs` grep `openclaw` / `~/.openclaw` / `18789` in `src/cli`, `src/commands`, `src/flows`, bundled extension doctor-contract。
 - [ ] 在 `pnpm check:changed` 增加 optional lane：`audit:product-copy`（仅 ClaWorks CI / local）。
-- [ ] 文档化豁免：`schema.help.ts` 静态源、内部 tui/progress 日志、CHANGELOG。
+- [x] 文档化豁免：`schema.help.ts` 静态源、内部 tui/progress 日志、CHANGELOG。
 
 ### Phase B — Health / Doctor 统一 metadata（中 diff，3–5 天）
 
