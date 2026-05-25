@@ -758,6 +758,19 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("allows host-read SubRip subtitle files", async () => {
+    const srtFile = path.join(fixtureRoot, "captions.srt");
+    await fs.writeFile(srtFile, "1\n00:00:00,000 --> 00:00:01,500\nHello from captions.\n", "utf8");
+    const result = await loadWebMedia(srtFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/x-subrip");
+  });
+
   it.each([
     {
       label: "ZIP",
@@ -819,6 +832,7 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
     { label: "Markdown", fileName: "opaque.md" },
+    { label: "SubRip", fileName: "opaque.srt" },
   ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     const opaqueBinary = Buffer.alloc(9000);
@@ -840,6 +854,7 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "prefix-tail.csv" },
     { label: "Markdown", fileName: "prefix-tail.md" },
+    { label: "SubRip", fileName: "prefix-tail.srt" },
   ])(
     "rejects %s files with a text prefix and binary tail after the old sample window",
     async ({ fileName }) => {
@@ -873,6 +888,12 @@ describe("loadWebMedia", () => {
       contentType: "text/markdown",
       body: "---\n***\n> > >\n",
     },
+    {
+      label: "SubRip",
+      fileName: "punctuation.srt",
+      contentType: "application/x-subrip",
+      body: "1\n00:00:00,000 --> 00:00:01,000\n---\n",
+    },
   ])(
     "loads valid punctuation-heavy %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
@@ -895,6 +916,12 @@ describe("loadWebMedia", () => {
       contentType: "text/markdown",
       body: Buffer.from("R\xe9sum\xe9\nni\xf1o\n", "latin1"),
     },
+    {
+      label: "SubRip",
+      fileName: "legacy.srt",
+      contentType: "application/x-subrip",
+      body: Buffer.from("1\n00:00:00,000 --> 00:00:01,000\ncaf\xe9\n", "latin1"),
+    },
   ])(
     "loads valid single-byte encoded %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
@@ -907,6 +934,7 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "nul-padded.csv" },
     { label: "Markdown", fileName: "nul-padded.md" },
+    { label: "SubRip", fileName: "nul-padded.srt" },
   ])("rejects NUL-padded binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     // Alternating 0x00/0xFF — UTF-8 decode fails (0xFF is invalid UTF-8), then
@@ -930,6 +958,7 @@ describe("loadWebMedia", () => {
   it.each([
     { label: "CSV", fileName: "bom-binary.csv" },
     { label: "Markdown", fileName: "bom-binary.md" },
+    { label: "SubRip", fileName: "bom-binary.srt" },
   ])("rejects UTF-16 BOM-prefixed binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     // UTF-16LE BOM + repeating 0xFF bytes: if UTF-16 decoding were attempted,
