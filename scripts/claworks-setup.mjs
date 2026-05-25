@@ -22,6 +22,7 @@ const env = {
   OPENCLAW_STATE_DIR: stateDir,
   OPENCLAW_CONFIG_PATH: configPath,
   CLAWORKS_PRODUCT_PROFILE: process.env.CLAWORKS_PRODUCT_PROFILE?.trim() || "extended",
+  CLAWORKS_INIT_PROFILE: process.env.CLAWORKS_INIT_PROFILE?.trim() || "enterprise",
 };
 
 function run(args, label) {
@@ -47,6 +48,10 @@ run(
 
 if (!existsSync(configPath)) {
   run([path.join(root, "scripts/claworks-init.mjs")], "Initialize ClaWorks config");
+  run(
+    ["--import", "tsx", path.join(root, "scripts/claworks-repair.ts")],
+    "Align config (product-config-repair)",
+  );
 }
 
 run(onboardArgs, "Interactive setup (onboard)");

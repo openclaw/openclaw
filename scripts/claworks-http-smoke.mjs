@@ -222,6 +222,17 @@ async function main() {
   assert(Array.isArray(mcpList.result?.tools), "MCP JSON-RPC tools/list missing tools");
   log(`MCP JSON-RPC tools/list OK (${mcpList.result.tools.length} tools)`);
 
+  const doctorGet = await jfetch("/v1/doctor");
+  assert(Array.isArray(doctorGet.checks), "doctor GET missing checks");
+  log(`GET /v1/doctor OK (${doctorGet.checks.length} checks)`);
+
+  const doctorFix = await jfetch("/v1/doctor?fix=true", { method: "POST", body: "{}" });
+  assert(Array.isArray(doctorFix.checks), "doctor POST fix missing checks");
+  assert(doctorFix.fix && typeof doctorFix.fix === "object", "doctor POST fix missing fix payload");
+  log(
+    `POST /v1/doctor?fix=true OK applied=${doctorFix.fix.applied?.length ?? 0} checks=${doctorFix.checks.length}`,
+  );
+
   await stopClaworksRuntime(runtime);
   server.close();
   log("ALL HTTP SMOKE CHECKS PASSED");
