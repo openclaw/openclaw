@@ -33,6 +33,7 @@ export {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallPromotionWrapper,
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
   defaultToolStreamExtraParams,

@@ -1,13 +1,27 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
+  createPlainTextToolCallPromotionWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
+
+function createEventStream(events: unknown[]): ReturnType<StreamFn> {
+  const output = createAssistantMessageEventStream();
+  const stream = output as unknown as { push(event: unknown): void; end(): void };
+  queueMicrotask(() => {
+    for (const event of events) {
+      stream.push(event);
+    }
+    stream.end();
+  });
+  return output as ReturnType<StreamFn>;
+}
 
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
@@ -136,6 +150,80 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+describe("createPlainTextToolCallPromotionWrapper", () => {
+  it("promotes standalone text tool calls into tool-call stream events", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_start", content: "" },
+        { type: "text_delta", delta: '[tool:read] {"path":"/tmp/file.txt"}' },
+        { type: "text_end" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: '[tool:read] {"path":"/tmp/file.txt"}',
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallPromotionWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
+  });
+
+  it("passes through bracketed text when no configured tool names match", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", delta: "[note] keep streaming" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: "[note] keep streaming",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallPromotionWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "text_delta",
+      "done",
+    ]);
   });
 });
 

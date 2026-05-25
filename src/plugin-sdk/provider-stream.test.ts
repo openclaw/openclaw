@@ -4,12 +4,14 @@ import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
+  createPlainTextToolCallPromotionWrapper as createPlainTextToolCallPromotionWrapperShared,
   createToolStreamWrapper as createToolStreamWrapperShared,
 } from "./provider-stream-shared.js";
 import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallPromotionWrapper,
   createToolStreamWrapper,
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
@@ -65,6 +67,9 @@ describe("composeProviderStreamWrappers", () => {
 
   it("re-exports shared helper wrappers", () => {
     expect(createMoonshotThinkingWrapper).toBe(createMoonshotThinkingWrapperShared);
+    expect(createPlainTextToolCallPromotionWrapper).toBe(
+      createPlainTextToolCallPromotionWrapperShared,
+    );
     expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });
 
