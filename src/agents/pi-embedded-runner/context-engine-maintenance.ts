@@ -28,6 +28,7 @@ import {
   findTaskByRunIdForOwner,
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
+import { markTaskLostById } from "../../tasks/task-registry.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
@@ -47,6 +48,9 @@ const TURN_MAINTENANCE_CLI_EXIT_DRAIN_MS = 1_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
+const DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY = Symbol.for(
+  "openclaw.contextEngineTurnMaintenanceCliExitHook",
+);
 type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
   sessionId: string;
@@ -64,6 +68,7 @@ type DeferredTurnMaintenanceRunState = {
   latestParams: DeferredTurnMaintenanceScheduleParams;
   taskId: string;
   runId: string;
+  isWorkerStarted: () => boolean;
 };
 
 const activeDeferredTurnMaintenanceRuns = new Map<string, DeferredTurnMaintenanceRunState>();
@@ -79,6 +84,12 @@ type DeferredTurnMaintenanceAbortState = {
   registered: boolean;
   controllers: Set<AbortController>;
   cleanupHandlers: Map<DeferredTurnMaintenanceSignal, () => void>;
+};
+type DeferredTurnMaintenanceCliExitHookState = {
+  cancelForCliExit?: (params?: { drainMs?: number }) => Promise<void>;
+};
+type DeferredTurnMaintenanceGlobal = typeof globalThis & {
+  [DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY]?: DeferredTurnMaintenanceCliExitHookState;
 };
 
 function resolveDeferredTurnMaintenanceAbortState(
@@ -231,6 +242,28 @@ function cancelDeferredTurnMaintenanceTask(params: {
   });
 }
 
+function markDeferredTurnMaintenanceTaskLost(params: {
+  sessionKey: string;
+  runId: string;
+  error: string;
+}): void {
+  const task = findTaskByRunIdForOwner({
+    runId: params.runId,
+    callerOwnerKey: params.sessionKey,
+  });
+  if (!task) {
+    return;
+  }
+  if (["succeeded", "failed", "timed_out", "cancelled", "lost"].includes(task.status)) {
+    return;
+  }
+  markTaskLostById({
+    taskId: task.taskId,
+    endedAt: Date.now(),
+    error: params.error,
+  });
+}
+
 export async function cancelActiveDeferredTurnMaintenanceRunsForCliExit(params?: {
   drainMs?: number;
 }): Promise<void> {
@@ -247,11 +280,13 @@ export async function cancelActiveDeferredTurnMaintenanceRunsForCliExit(params?:
   for (const [activeSessionKey, state] of activeEntries) {
     state.rerunRequested = false;
     activeDeferredTurnMaintenanceRuns.delete(activeSessionKey);
-    cancelDeferredTurnMaintenanceTask({
-      sessionKey: activeSessionKey,
-      runId: state.runId,
-      terminalSummary: "Deferred maintenance cancelled because the CLI command completed.",
-    });
+    if (!state.isWorkerStarted()) {
+      cancelDeferredTurnMaintenanceTask({
+        sessionKey: activeSessionKey,
+        runId: state.runId,
+        terminalSummary: "Deferred maintenance cancelled because the CLI command completed.",
+      });
+    }
     const lane = resolveDeferredTurnMaintenanceLane(activeSessionKey);
     clearCommandLane(lane);
     resetCommandLane(lane);
@@ -261,14 +296,39 @@ export async function cancelActiveDeferredTurnMaintenanceRunsForCliExit(params?:
   if (drainMs === 0) {
     return;
   }
+  const settledSessionKeys = new Set<string>();
+  const trackedPromises = activeEntries.map(([activeSessionKey, state]) =>
+    state.promise.finally(() => {
+      settledSessionKeys.add(activeSessionKey);
+    }),
+  );
   await Promise.race([
-    Promise.allSettled(activeEntries.map(([, state]) => state.promise)),
+    Promise.allSettled(trackedPromises),
     new Promise<void>((resolve) => {
       const timeout = setTimeout(resolve, drainMs);
       timeout.unref?.();
     }),
   ]);
+  for (const [activeSessionKey, state] of activeEntries) {
+    if (!state.isWorkerStarted() || settledSessionKeys.has(activeSessionKey)) {
+      continue;
+    }
+    markDeferredTurnMaintenanceTaskLost({
+      sessionKey: activeSessionKey,
+      runId: state.runId,
+      error: "Deferred maintenance did not stop before CLI exit after cancellation.",
+    });
+  }
 }
+
+function registerDeferredTurnMaintenanceCliExitHook(): void {
+  const globalState = globalThis as DeferredTurnMaintenanceGlobal;
+  const state = globalState[DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY] ?? {};
+  state.cancelForCliExit = cancelActiveDeferredTurnMaintenanceRunsForCliExit;
+  globalState[DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY] = state;
+}
+
+registerDeferredTurnMaintenanceCliExitHook();
 
 function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   sessionKey: string;
@@ -708,9 +768,11 @@ function scheduleDeferredTurnMaintenance(
 
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
   let runPromise: Promise<void>;
+  let workerStarted = false;
   try {
-    runPromise = enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(sessionKey), async () =>
-      runDeferredTurnMaintenanceWorker({
+    runPromise = enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(sessionKey), async () => {
+      workerStarted = true;
+      return await runDeferredTurnMaintenanceWorker({
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey,
@@ -721,8 +783,8 @@ function scheduleDeferredTurnMaintenance(
         config: params.config,
         runId: task.runId!,
         scheduledAbortSignal: schedulerAbort.abortSignal,
-      }),
-    );
+      });
+    });
   } catch (err) {
     schedulerAbort.dispose();
     markDeferredTurnMaintenanceTaskScheduleFailure({
@@ -764,6 +826,7 @@ function scheduleDeferredTurnMaintenance(
     latestParams: { ...params, sessionKey },
     taskId: task.taskId,
     runId: task.runId!,
+    isWorkerStarted: () => workerStarted,
   };
   activeDeferredTurnMaintenanceRuns.set(sessionKey, state);
   void trackedPromise;

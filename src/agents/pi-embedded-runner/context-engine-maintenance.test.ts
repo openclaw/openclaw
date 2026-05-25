@@ -37,6 +37,9 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
+const DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY = Symbol.for(
+  "openclaw.contextEngineTurnMaintenanceCliExitHook",
+);
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -293,6 +296,14 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
 describe("createDeferredTurnMaintenanceAbortSignal", () => {
   beforeEach(async () => {
     await loadFreshContextEngineMaintenanceModuleForTest();
+  });
+
+  it("registers a lightweight CLI-exit cleanup hook when the module is loaded", () => {
+    const hookState = (
+      globalThis as Record<PropertyKey, { cancelForCliExit?: unknown } | undefined>
+    )[DEFERRED_TURN_MAINTENANCE_CLI_EXIT_HOOK_KEY];
+
+    expect(hookState?.cancelForCliExit).toBe(cancelActiveDeferredTurnMaintenanceRunsForCliExit);
   });
 
   it("aborts on termination signals and unregisters listeners", () => {
@@ -716,7 +727,7 @@ describe("runContextEngineMaintenance", () => {
         });
 
         expect(deferredPromises).toHaveLength(1);
-        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit();
         await deferredPromises[0];
 
         expect(maintain).not.toHaveBeenCalled();
@@ -725,7 +736,7 @@ describe("runContextEngineMaintenance", () => {
         );
         expect(tasks).toHaveLength(1);
         expect(tasks[0].status).toBe("cancelled");
-        expect(String(tasks[0].terminalSummary)).toContain("CLI command completed");
+        expect(String(tasks[0].terminalSummary)).toContain("cancelled during shutdown");
 
         if (!releaseForeground) {
           throw new Error("Expected foreground turn release callback to be initialized");
@@ -800,7 +811,7 @@ describe("runContextEngineMaintenance", () => {
         await flushAsyncWork();
         expect(maintain).toHaveBeenCalledTimes(1);
 
-        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit();
         await deferredPromises[0];
 
         expect(observedAbortSignal?.aborted).toBe(true);
@@ -897,6 +908,112 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("blocks deferred transcript rewrites already queued behind the session lane", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        rewriteTranscriptEntriesInSessionFileMock.mockClear();
+
+        const sessionKey = "agent:main:session-cli-exit-queued-rewrite";
+        const sessionLane = resolveSessionLane(sessionKey);
+        let releaseForeground: (() => void) | undefined;
+        let foregroundTurn: Promise<void> | undefined;
+
+        let observedAbortSignal: AbortSignal | undefined;
+        let rewritePromise: Promise<unknown> | undefined;
+        let resolveRewriteQueued!: () => void;
+        const rewriteQueued = new Promise<void>((resolve) => {
+          resolveRewriteQueued = resolve;
+        });
+        const maintain = vi.fn(
+          async (params?: { runtimeContext?: ContextEngineRuntimeContext }) => {
+            observedAbortSignal = params?.runtimeContext?.abortSignal;
+            foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
+              await new Promise<void>((resolve) => {
+                releaseForeground = resolve;
+              });
+            });
+            await flushAsyncWork();
+            rewritePromise = params?.runtimeContext?.rewriteTranscriptEntries?.({
+              replacements: [
+                {
+                  entryId: "entry-queued-before-abort",
+                  message: castAgentMessage({
+                    role: "assistant",
+                    content: [{ type: "text", text: "queued rewrite" }],
+                    timestamp: 4,
+                  }),
+                },
+              ],
+            });
+            resolveRewriteQueued();
+            await expect(rewritePromise).rejects.toThrow(/short-lived CLI command completed/);
+            return {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+            };
+          },
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-cli-exit-queued-rewrite",
+          sessionKey,
+          sessionFile: "/tmp/session-cli-exit-queued-rewrite.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await flushAsyncWork();
+        expect(maintain).toHaveBeenCalledTimes(1);
+        await Promise.race([
+          rewriteQueued,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("timed out waiting for queued rewrite")), 1_000),
+          ),
+        ]);
+        expect(rewritePromise).toBeDefined();
+
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
+        releaseForeground();
+        await foregroundTurn;
+        await deferredPromises[0];
+
+        expect(observedAbortSignal?.aborted).toBe(true);
+        expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+      } finally {
+        resetCommandQueueStateForTest();
+      }
+    });
+  });
+
   it("clears host progress timers when active deferred maintenance ignores shutdown abort", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
       vi.useFakeTimers();
@@ -940,9 +1057,10 @@ describe("runContextEngineMaintenance", () => {
         const timerCountBeforeCancel = vi.getTimerCount();
         expect(timerCountBeforeCancel).toBeGreaterThan(0);
 
-        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        const cancelPromise = cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 100 });
+        await vi.advanceTimersByTimeAsync(100);
+        await cancelPromise;
 
-        expect(vi.getTimerCount()).toBeLessThan(timerCountBeforeCancel);
         await vi.advanceTimersByTimeAsync(11_000);
         expect(peekSystemEvents(sessionKey).join("\n")).not.toContain(
           "Deferred maintenance is still running.",
@@ -951,7 +1069,8 @@ describe("runContextEngineMaintenance", () => {
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(tasks).toHaveLength(1);
-        expect(tasks[0].status).toBe("cancelled");
+        expect(tasks[0].status).toBe("lost");
+        expect(String(tasks[0].error)).toContain("did not stop before CLI exit");
       } finally {
         vi.useRealTimers();
         resetCommandQueueStateForTest();
@@ -1027,7 +1146,7 @@ describe("runContextEngineMaintenance", () => {
           secondDeferredSettled = true;
         });
 
-        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit();
         await Promise.all(deferredPromises);
         await secondDeferred;
 
