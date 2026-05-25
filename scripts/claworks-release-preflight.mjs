@@ -43,6 +43,28 @@ results.push(
 );
 
 results.push(
+  check("robot plugin contract", () => {
+    run("pnpm test extensions/claworks-robot");
+  }),
+);
+
+results.push(
+  check("OT connector dry-run", () => {
+    run("pnpm claworks:ot-dry-run");
+  }),
+);
+
+if (process.env.CLAWORKS_PREFLIGHT_GATEWAY === "1") {
+  results.push(
+    check("gateway e2e", () => {
+      run("pnpm claworks:gateway:e2e", { env: { ...process.env, CLAWORKS_PRODUCT: "1" } });
+    }),
+  );
+} else {
+  console.log("\n[preflight] skip gateway e2e (set CLAWORKS_PREFLIGHT_GATEWAY=1 to include)");
+}
+
+results.push(
   check("docker compose prod config", () => {
     if (!existsSync(path.join(root, "docker-compose.prod.yml"))) {
       throw new Error("docker-compose.prod.yml missing");
@@ -56,6 +78,14 @@ results.push(
     run("pnpm claworks:runtime:publish:dry-run");
   }),
 );
+
+if (process.env.CLAWORKS_PREFLIGHT_ROOT_PACK !== "0") {
+  results.push(
+    check("root publish dry-run", () => {
+      run("pnpm claworks:publish:dry-run");
+    }),
+  );
+}
 
 results.push(
   check("git working tree", () => {

@@ -1791,6 +1791,7 @@
     "claworks:runtime:build": "node scripts/build-claworks-runtime.mjs",
     "claworks:runtime:dist-smoke": "node --import tsx scripts/claworks-runtime-dist-smoke.mjs",
     "claworks:runtime:publish:dry-run": "node scripts/claworks-runtime-publish-dry-run.mjs",
+    "claworks:publish:dry-run": "node scripts/claworks-publish-dry-run.mjs",
     "claworks:release:preflight": "node scripts/claworks-release-preflight.mjs",
     "claworks:feishu:live-e2e": "node scripts/claworks-feishu-live-e2e.mjs",
     "claworks:runtime:test": "vitest run packages/claworks-runtime",

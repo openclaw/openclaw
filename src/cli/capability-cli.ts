@@ -101,6 +101,7 @@ import {
   getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds,
 } from "./command-secret-targets.js";
+import { productizeUserCopy } from "./product-surface.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -737,7 +738,7 @@ async function runModelRun(params: {
     const localModelRunSystemPrompt =
       prepared.selection.provider === "openai-codex" ||
       prepared.model.api === "openai-codex-responses"
-        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        ? productizeUserCopy(LOCAL_MODEL_RUN_SYSTEM_PROMPT)
         : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,

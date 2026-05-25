@@ -206,7 +206,7 @@ export async function isCompletionInstalled(
 
 /**
  * Check if the profile uses the slow dynamic completion pattern.
- * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
+ * Returns true when the shell profile sources live completion output instead of the cached file.
  */
 export async function usesSlowDynamicCompletion(
   shell: CompletionShell,

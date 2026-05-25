@@ -184,15 +184,18 @@ pnpm claworks:personal:verify && pnpm claworks:kb-smoke
 
 Runtime 热修复：`POST /v1/doctor?fix=true`（与 `claworks doctor --fix` / `pnpm claworks:repair` 共用 `product-config-repair`）。
 
-### 8.4 开箱即用评分（2026-05-24）
+### 8.4 开箱即用评分（2026-05-25 发布前）
 
-| 维度             | 评分    | 说明                                                                                                                          |
-| ---------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| CLI 命令面       | **99%** | 继承 OpenClaw + 产品 npm aliases；help/channels/qr/wizard i18n/ doctor lint/config issue/update/onboard/插件诊断 提示已产品化 |
-| Doctor/fix       | **94%** | 双层 + 端口/LaunchAgent 隔离；生产 OT simulate/echo 检查与 repair                                                             |
-| 零配置启动       | **75%** | 仍需 claworks-packs 外仓 + 模型/飞书凭据                                                                                      |
-| 运维可观测       | **85%** | `/v1/health`、metrics、decision-log；无 OTEL                                                                                  |
-| 与 OpenClaw 共存 | **95%** | 18800 / ~/.claworks / ai.claworks.gateway                                                                                     |
+| 维度             | 评分     | 说明                                                                                                                          |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| CLI 命令面       | **99%**  | 继承 OpenClaw + 产品 npm aliases；help/channels/qr/wizard i18n/ doctor lint/config issue/update/onboard/插件诊断 提示已产品化 |
+| Doctor/fix       | **95%**  | 双层 + 端口/LaunchAgent 隔离；生产 OT simulate/echo 检查与 repair；`pnpm claworks:setup/start/doctor` 与文档对齐              |
+| 零配置启动       | **75%**  | 仍需 claworks-packs 外仓 + 模型/飞书凭据                                                                                      |
+| 运维可观测       | **85%**  | `/v1/health`、metrics、decision-log；无 OTEL                                                                                  |
+| 与 OpenClaw 共存 | **95%**  | 18800 / ~/.claworks / ai.claworks.gateway；见 `docs/claworks/install.md`                                                      |
+| Gateway 回归     | **100%** | `pnpm claworks:smoke` + `pnpm claworks:gateway:e2e` 全绿（runtime-store 双重注册已加固）                                      |
+
+**综合可发布评分：~92%**（阻塞项：OT 实机签收、npm 公开发布、Release tag 需人工）
 
 ### 8.5 用户可见文案产品化（2026-05-24）
 
@@ -216,6 +219,8 @@ Runtime 热修复：`POST /v1/doctor?fix=true`（与 `claworks doctor --fix` / `
 | `config-cli`（set/patch/schema/validate）                                                                  | ✅   | `--dry-run` / `schema` 描述、invalid-config 错误、JSON path 回退、schema 加载失败经 `productizeUserCopy` |
 | claworks-robot `cw_update_config` 描述                                                                     | ✅   | `claworks.json` 替代 openclaw.json                                                                       |
 | update-runner progress / tui 内部日志                                                                      | ⏭️   | 纯内部，跳过                                                                                             |
+| `capability-cli` local model run system prompt                                                             | ✅   | `productizeUserCopy` 覆盖 OpenClaw → ClaWorks                                                            |
+| `completion-runtime` shell 注释                                                                            | ✅   | 注释泛化，不再硬编码 `openclaw completion`                                                               |
 
 **遗留（下轮分批）**
 
@@ -228,13 +233,32 @@ Runtime 热修复：`POST /v1/doctor?fix=true`（与 `claworks doctor --fix` / `
 | `update-cli` progress 内部日志                         | ⏭️   | 审计已标跳过                                                                                   |
 | feishu / webhooks extension                            | —    | 无 doctor-contract 或 onboarding 裸 `openclaw` 提示                                            |
 
+### 8.6 可发布清单（2026-05-25）
+
+| 项                         | 命令 / 证据                                                                             | 状态        |
+| -------------------------- | --------------------------------------------------------------------------------------- | ----------- |
+| 产品烟测                   | `pnpm claworks:smoke`                                                                   | ✅          |
+| Gateway E2E                | `pnpm claworks:gateway:e2e`                                                             | ✅          |
+| Robot 插件 + runtime-store | `pnpm test extensions/claworks-robot`                                                   | ✅          |
+| Runtime 单元               | `pnpm claworks:runtime:test`                                                            | ✅          |
+| OT 模拟 dry-run            | `pnpm claworks:ot-dry-run`                                                              | ✅          |
+| 发布前预检                 | `pnpm claworks:release:preflight`（可选 `CLAWORKS_PREFLIGHT_GATEWAY=1` 含 gateway e2e） | ☐ 打 tag 前 |
+| OT 实机签收                | mqtt/opcua/modbus 现场，`simulate: false`                                               | ☐ 人工      |
+| npm 公开发布               | `pnpm claworks:publish:dry-run` + `pnpm claworks:runtime:publish:dry-run`               | ☐ 人工      |
+| Release tag                | `git status` 干净 + 打 tag                                                              | ☐ 人工      |
+
+安装与共存：[`docs/claworks/install.md`](../claworks/install.md)。签收模板：[`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)。
+
 ---
 
 ## 9. 验收命令
 
 ```bash
 pnpm claworks:runtime:test
+pnpm test extensions/claworks-robot
 pnpm claworks:smoke
+pnpm claworks:gateway:e2e
+pnpm claworks:ot-dry-run
 node --import tsx scripts/claworks-enterprise-biz-test.mjs
 CLAWORKS_INIT_SECURE=1 pnpm claworks:init
 pnpm claworks:start

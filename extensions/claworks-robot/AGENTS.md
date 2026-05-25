@@ -26,5 +26,6 @@ Telegraph style. OpenClaw plugin glue for `@claworks/runtime` only.
 
 ## Tests
 
-- `pnpm test extensions/claworks-robot` — manifest contract.
-- Runtime behavior: `pnpm claworks:runtime:test` + `pnpm claworks:smoke`.
+- `pnpm test extensions/claworks-robot` — manifest contract + `runtime-store.test.ts`（gateway 双重 register 契约）。
+- Runtime behavior: `pnpm claworks:runtime:test` + `pnpm claworks:smoke` + `pnpm claworks:gateway:e2e`.
+- Process-global store: `runtime-store.ts` — `Symbol.for` 共享；`stop` 调用 `clearClaworksRobotRuntimeStore()`。

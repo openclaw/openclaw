@@ -42,10 +42,11 @@ describe("claworks-robot runtime-store", () => {
 
     clearClaworksRobotRuntimeStore();
 
-    expect(getClaworksRobotRuntime()).toBeNull();
-    expect(getClaworksRobotBridge()).toBeNull();
     expect(
       (globalThis as Record<symbol, unknown>)[Symbol.for("claworks-robot.runtime-store")],
     ).toBeUndefined();
+    // Next read lazily re-inits an empty store (refs stay null).
+    expect(getClaworksRobotRuntime()).toBeNull();
+    expect(getClaworksRobotBridge()).toBeNull();
   });
 });
