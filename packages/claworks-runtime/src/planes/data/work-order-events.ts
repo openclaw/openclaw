@@ -32,5 +32,6 @@ export async function publishWorkOrderCreated(
     `playbook:${ctx.playbookId}`,
     workOrderEventPayload(wo, extra),
     ctx.runId,
+    ctx.traceparent,
   );
 }
