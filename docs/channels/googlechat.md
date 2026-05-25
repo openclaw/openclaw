@@ -183,6 +183,7 @@ Use these identifiers for delivery and allowlists:
       // or serviceAccountRef: { source: "file", provider: "filemain", id: "/channels/googlechat/serviceAccount" }
       audienceType: "app-url",
       audience: "https://gateway.example.com/googlechat",
+      appPrincipal: "123456789012345678901", // required when audienceType is "app-url"
       webhookPath: "/googlechat",
       botUser: "users/1234567890", // optional; helps mention detection
       allowBots: false,
@@ -211,6 +212,7 @@ Notes:
 
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
 - `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
+- `appPrincipal` is required when `audienceType` is `"app-url"` (set it to the numeric OAuth 2.0 client ID, not an email address). It is not needed for `project-number` audience.
 - Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.

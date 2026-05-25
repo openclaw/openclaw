@@ -100,4 +100,34 @@ export const GoogleChatAccountSchema = z
 export const GoogleChatConfigSchema = GoogleChatAccountSchema.extend({
   accounts: z.record(z.string(), GoogleChatAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
+}).superRefine((value, ctx) => {
+  const audienceType = value.audienceType;
+  const appPrincipal = value.appPrincipal?.trim();
+  if (audienceType === "app-url" && !appPrincipal) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["appPrincipal"],
+      message:
+        'channels.googlechat.audienceType="app-url" requires channels.googlechat.appPrincipal',
+    });
+  }
+
+  if (!value.accounts) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(value.accounts)) {
+    if (!account) {
+      continue;
+    }
+    const accountAudienceType = account.audienceType ?? audienceType;
+    const accountAppPrincipal = account.appPrincipal?.trim();
+    if (accountAudienceType === "app-url" && !accountAppPrincipal) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "appPrincipal"],
+        message:
+          'channels.googlechat.accounts.*.audienceType="app-url" requires channels.googlechat.accounts.*.appPrincipal',
+      });
+    }
+  }
 });
