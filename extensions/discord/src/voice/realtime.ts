@@ -65,7 +65,7 @@ const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
 const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 1_500;
-const DISCORD_REALTIME_WAKE_NAME_FUZZY_PREFIX_WORDS = 3;
+const DISCORD_REALTIME_WAKE_NAME_EDGE_WORDS = 2;
 const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
@@ -360,6 +360,17 @@ function normalizeWakeName(value: string): string | undefined {
   return normalized || undefined;
 }
 
+function normalizeSupportedWakeName(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeWakeName(value);
+  const wordCount = normalized ? Array.from(normalized.matchAll(/[a-z0-9]+/gi)).length : 0;
+  return wordCount >= 1 && wordCount <= DISCORD_REALTIME_WAKE_NAME_EDGE_WORDS
+    ? normalized
+    : undefined;
+}
+
 function normalizeWakeNameCandidate(value: string): string | undefined {
   const normalized = value
     .toLowerCase()
@@ -373,39 +384,10 @@ function compactWakeName(value: string): string {
   return value.replace(/[^a-z0-9]+/g, "");
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function includesWakeName(text: string, wakeName: string): boolean {
-  const normalizedText = normalizeRealtimeConsultMatchText(text);
-  const normalizedName = normalizeWakeName(wakeName);
-  if (!normalizedName) {
-    return false;
-  }
-  const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedName)}([^a-z0-9]|$)`);
-  return pattern.test(normalizedText);
-}
-
-function stripLeadingWakeName(text: string, wakeName: string): string {
-  const normalizedName = normalizeWakeName(wakeName);
-  if (!normalizedName) {
-    return text.trim();
-  }
-  const wakePattern = normalizedName.split(" ").map(escapeRegExp).join("\\s+");
-  return text
-    .replace(
-      new RegExp(
-        `^\\s*(?:(?:hey|ok|okay)(?:\\s*[-,:;]+\\s*|\\s+))?${wakePattern}(?:\\s*[-,:;]+\\s*|\\s+)`,
-        "i",
-      ),
-      "",
-    )
-    .trim();
-}
-
-type LeadingWakeNameCandidate = {
+type EdgeWakeNameCandidate = {
+  edge: "leading" | "trailing";
   heardName: string;
+  startIndex: number;
   endIndex: number;
   strongBoundary: boolean;
 };
@@ -415,39 +397,87 @@ type WakeNameTranscriptResult =
   | { allowed: false; text: string };
 type AllowedWakeNameTranscriptResult = Extract<WakeNameTranscriptResult, { allowed: true }>;
 
-function leadingWakeNameCandidates(text: string): LeadingWakeNameCandidate[] {
+function leadingWakeNameCandidates(text: string, maxWords: number): EdgeWakeNameCandidate[] {
   const opener = /^\s*(?:(?:hey|ok|okay)(?:\s*[-,:;]+\s*|\s+))?/i.exec(text);
   const nameStart = opener?.[0].length ?? 0;
-  const candidates: LeadingWakeNameCandidate[] = [];
-  const tokenPattern = /[a-z0-9]+/gi;
-  tokenPattern.lastIndex = nameStart;
+  const candidates: EdgeWakeNameCandidate[] = [];
+  const candidateStarts = nameStart > 0 ? [0, nameStart] : [0];
 
-  for (
-    let wordCount = 0;
-    wordCount < DISCORD_REALTIME_WAKE_NAME_FUZZY_PREFIX_WORDS;
-    wordCount += 1
-  ) {
-    const token = tokenPattern.exec(text);
-    if (!token) {
+  for (const startIndex of candidateStarts) {
+    const tokenPattern = /[a-z0-9]+/gi;
+    tokenPattern.lastIndex = startIndex;
+    const startCandidates: EdgeWakeNameCandidate[] = [];
+
+    for (let wordCount = 0; wordCount < maxWords; wordCount += 1) {
+      const token = tokenPattern.exec(text);
+      if (!token) {
+        break;
+      }
+      const previousEndIndex =
+        wordCount === 0 ? startIndex : startCandidates[wordCount - 1]?.endIndex;
+      const between = text.slice(previousEndIndex, token.index);
+      if (wordCount > 0 && !/^[\s'-]+$/.test(between)) {
+        break;
+      }
+      const endIndex = token.index + token[0].length;
+      const heardName = normalizeWakeNameCandidate(text.slice(startIndex, endIndex));
+      if (!heardName) {
+        break;
+      }
+      const boundary = text.slice(endIndex).match(/^\s*([,.:;!?-]|$)/);
+      startCandidates.push({
+        edge: "leading",
+        heardName,
+        startIndex,
+        endIndex,
+        strongBoundary: Boolean(boundary),
+      });
+    }
+
+    candidates.push(...startCandidates);
+  }
+
+  return candidates;
+}
+
+function trailingWakeNameCandidates(text: string, maxWords: number): EdgeWakeNameCandidate[] {
+  const tokens = Array.from(text.matchAll(/[a-z0-9]+/gi));
+  const candidates: EdgeWakeNameCandidate[] = [];
+  const tokenCount = Math.min(tokens.length, maxWords);
+
+  for (let wordCount = 1; wordCount <= tokenCount; wordCount += 1) {
+    const startToken = tokens[tokens.length - wordCount];
+    const endToken = tokens[tokens.length - 1];
+    if (!startToken || !endToken?.[0]) {
       break;
     }
-    const between = text.slice(
-      wordCount === 0 ? nameStart : candidates[wordCount - 1]?.endIndex,
-      token.index,
-    );
-    if (wordCount > 0 && !/^[\s'-]+$/.test(between)) {
+    const startIndex = startToken.index ?? 0;
+    const endIndex = (endToken.index ?? 0) + endToken[0].length;
+    if (!/^\s*(?:[,.:;!?-]+\s*)?$/.test(text.slice(endIndex))) {
       break;
     }
-    const endIndex = token.index + token[0].length;
-    const heardName = normalizeWakeNameCandidate(text.slice(nameStart, endIndex));
+    if (!/(^|[\s,.:;!?-])$/.test(text.slice(0, startIndex))) {
+      break;
+    }
+    if (wordCount > 1) {
+      const previousToken = tokens[tokens.length - wordCount + 1];
+      const between = previousToken
+        ? text.slice(startIndex + startToken[0].length, previousToken.index)
+        : "";
+      if (!/^[\s'-]+$/.test(between)) {
+        break;
+      }
+    }
+    const heardName = normalizeWakeNameCandidate(text.slice(startIndex, endIndex));
     if (!heardName) {
       break;
     }
-    const boundary = text.slice(endIndex).match(/^\s*([,.:;!?-]|$)/);
     candidates.push({
+      edge: "trailing",
       heardName,
+      startIndex,
       endIndex,
-      strongBoundary: Boolean(boundary),
+      strongBoundary: true,
     });
   }
 
@@ -481,11 +511,12 @@ function levenshteinDistance(left: string, right: string): number {
   return previous[right.length] ?? Math.max(left.length, right.length);
 }
 
-function hasOnlyVowelLikeSubstitutions(left: string, right: string): boolean {
+function hasOnlyPhoneticSubstitutions(left: string, right: string): boolean {
   if (left.length !== right.length) {
     return false;
   }
   const vowels = new Set(["a", "e", "i", "o", "u", "y"]);
+  const liquids = new Set(["l", "r"]);
   let substitutions = 0;
   for (let index = 0; index < left.length; index += 1) {
     const leftChar = left[index];
@@ -493,7 +524,9 @@ function hasOnlyVowelLikeSubstitutions(left: string, right: string): boolean {
     if (leftChar === rightChar) {
       continue;
     }
-    if (!vowels.has(leftChar ?? "") || !vowels.has(rightChar ?? "")) {
+    const vowelLike = vowels.has(leftChar ?? "") && vowels.has(rightChar ?? "");
+    const liquidLike = liquids.has(leftChar ?? "") && liquids.has(rightChar ?? "");
+    if (!vowelLike && !liquidLike) {
       return false;
     }
     substitutions += 1;
@@ -511,7 +544,7 @@ function commonPrefixLength(left: string, right: string): number {
   return limit;
 }
 
-function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: string): boolean {
+function isFuzzyWakeNameMatch(candidate: EdgeWakeNameCandidate, wakeName: string): boolean {
   const normalizedWakeName = normalizeWakeNameCandidate(wakeName);
   if (!normalizedWakeName) {
     return false;
@@ -536,7 +569,7 @@ function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: str
     heardCompact.length >= 4 &&
     wakeCompact.length >= 5 &&
     (heardCompact.length !== wakeCompact.length ||
-      hasOnlyVowelLikeSubstitutions(heardCompact, wakeCompact) ||
+      hasOnlyPhoneticSubstitutions(heardCompact, wakeCompact) ||
       commonPrefixLength(heardCompact, wakeCompact) >= 6)
   ) {
     return true;
@@ -553,18 +586,31 @@ function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: str
   return false;
 }
 
-function stripLeadingWakeNameCandidate(text: string, candidate: LeadingWakeNameCandidate): string {
+function stripEdgeWakeNameCandidate(text: string, candidate: EdgeWakeNameCandidate): string {
+  if (candidate.edge === "leading") {
+    return text
+      .slice(candidate.endIndex)
+      .replace(/^\s*(?:[-,:;.!?]+\s*)?/, "")
+      .trim();
+  }
   return text
-    .slice(candidate.endIndex)
-    .replace(/^\s*(?:[-,:;.!?]+\s*)?/, "")
+    .slice(0, candidate.startIndex)
+    .replace(/\s*(?:[-,:;.!?]+\s*)?$/, "")
     .trim();
 }
 
-function matchLeadingFuzzyWakeName(
+function matchEdgeWakeName(
   text: string,
   wakeNames: string[],
 ): AllowedWakeNameTranscriptResult | undefined {
-  for (const candidate of leadingWakeNameCandidates(text)) {
+  const candidates = [
+    ...leadingWakeNameCandidates(text, DISCORD_REALTIME_WAKE_NAME_EDGE_WORDS),
+    ...trailingWakeNameCandidates(text, DISCORD_REALTIME_WAKE_NAME_EDGE_WORDS),
+  ].toSorted(
+    (left, right) =>
+      compactWakeName(right.heardName).length - compactWakeName(left.heardName).length,
+  );
+  for (const candidate of candidates) {
     for (const wakeName of wakeNames) {
       const normalizedWakeName = normalizeWakeNameCandidate(wakeName);
       if (!normalizedWakeName) {
@@ -575,7 +621,7 @@ function matchLeadingFuzzyWakeName(
       if (heardCompact === wakeCompact || isFuzzyWakeNameMatch(candidate, wakeName)) {
         return {
           allowed: true,
-          text: stripLeadingWakeNameCandidate(text, candidate),
+          text: stripEdgeWakeNameCandidate(text, candidate),
           wakeName,
           heardName: candidate.heardName,
           match: heardCompact === wakeCompact ? "exact" : "fuzzy",
@@ -591,24 +637,25 @@ function resolveDiscordRealtimeWakeNames(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): string[] {
-  const configured = params.config?.wakeNames
-    ?.map((name) => normalizeWakeName(name))
-    .filter((name): name is string => Boolean(name));
-  if (configured && configured.length > 0) {
+  const rawConfigured = params.config?.wakeNames;
+  if (rawConfigured) {
+    const configured = rawConfigured
+      .map((name) => normalizeSupportedWakeName(name))
+      .filter((name): name is string => Boolean(name));
     return sortWakeNames(Array.from(new Set(configured)));
   }
   const agent = params.cfg.agents?.list?.find((candidate) => candidate.id === params.agentId);
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
-    .map((name) => (typeof name === "string" ? normalizeWakeName(name) : undefined))
+    .map((name) => normalizeSupportedWakeName(name))
     .filter((name): name is string => Boolean(name));
-  const productWakeNames = [normalizeWakeName("OpenClaw")].filter((name): name is string =>
+  const productWakeNames = [normalizeSupportedWakeName("OpenClaw")].filter((name): name is string =>
     Boolean(name),
   );
   const defaults =
     configuredAgentNames.length > 0
       ? [...configuredAgentNames, ...productWakeNames]
-      : [normalizeWakeName(params.agentId), ...productWakeNames].filter((name): name is string =>
-          Boolean(name),
+      : [normalizeSupportedWakeName(params.agentId), ...productWakeNames].filter(
+          (name): name is string => Boolean(name),
         );
   return sortWakeNames(Array.from(new Set(defaults)));
 }
@@ -1481,22 +1528,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!this.requireWakeName) {
       return { allowed: true, text, wakeName: "", heardName: "", match: "exact" };
     }
-    const wakeName = this.wakeNames.find((name) => includesWakeName(text, name));
-    if (wakeName) {
-      return {
-        allowed: true,
-        text: stripLeadingWakeName(text, wakeName),
-        wakeName,
-        heardName: wakeName,
-        match: "exact",
-      };
-    }
-    const fuzzyWakeName = matchLeadingFuzzyWakeName(text, this.wakeNames);
-    if (fuzzyWakeName) {
+    const wakeNameResult = matchEdgeWakeName(text, this.wakeNames);
+    if (wakeNameResult) {
       logger.info(
-        `discord voice: realtime wake-name gate matched canonical=${fuzzyWakeName.wakeName} heard=${fuzzyWakeName.heardName} match=${fuzzyWakeName.match} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
+        `discord voice: realtime wake-name gate matched canonical=${wakeNameResult.wakeName} heard=${wakeNameResult.heardName} match=${wakeNameResult.match} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
       );
-      return fuzzyWakeName;
+      return wakeNameResult;
     }
     return { allowed: false, text };
   }

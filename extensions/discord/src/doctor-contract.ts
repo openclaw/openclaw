@@ -7,6 +7,7 @@ import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-s
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
+const DISCORD_REALTIME_WAKE_NAME_MAX_WORDS = 2;
 type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
 
 function hasLegacyTtsProviderKeys(value: unknown): boolean {
@@ -75,6 +76,51 @@ function hasLegacyDiscordAccountGuildChannelAgentId(value: unknown): boolean {
     return false;
   }
   return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAgentId(account));
+}
+
+function realtimeWakeNameWordCount(value: string): number {
+  return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
+}
+
+function normalizeRealtimeWakeName(value: string): string | undefined {
+  const words = Array.from(value.matchAll(/[a-z0-9]+/gi), (match) => match[0]);
+  if (words.length === 0) {
+    return undefined;
+  }
+  return words.slice(0, DISCORD_REALTIME_WAKE_NAME_MAX_WORDS).join(" ");
+}
+
+function isSupportedRealtimeWakeName(value: string): boolean {
+  const wordCount = realtimeWakeNameWordCount(value);
+  return wordCount >= 1 && wordCount <= DISCORD_REALTIME_WAKE_NAME_MAX_WORDS;
+}
+
+function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
+  const voice = asObjectRecord(value);
+  const realtime = asObjectRecord(voice?.realtime);
+  const wakeNames = realtime?.wakeNames;
+  return Array.isArray(wakeNames)
+    ? wakeNames.length === 0 ||
+        wakeNames.some(
+          (wakeName) => typeof wakeName === "string" && !isSupportedRealtimeWakeName(wakeName),
+        )
+    : false;
+}
+
+function hasUnsupportedDiscordRealtimeWakeNames(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return hasUnsupportedRealtimeWakeNamesInVoice(entry.voice);
+}
+
+function hasUnsupportedDiscordAccountRealtimeWakeNames(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasUnsupportedDiscordRealtimeWakeNames(account));
 }
 
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
@@ -150,6 +196,83 @@ function migrateLegacyTtsConfig(
     changed = true;
   }
   return changed;
+}
+
+function normalizeUnsupportedRealtimeWakeNames(
+  entry: Record<string, unknown>,
+  pathPrefix: string,
+  changes: string[],
+): { entry: Record<string, unknown>; changed: boolean } {
+  const voice = asObjectRecord(entry.voice);
+  const realtime = asObjectRecord(voice?.realtime);
+  const wakeNames = realtime?.wakeNames;
+  if (!voice || !realtime || !Array.isArray(wakeNames)) {
+    return { entry, changed: false };
+  }
+
+  if (wakeNames.length === 0) {
+    const nextRealtime = { ...realtime };
+    delete nextRealtime.wakeNames;
+    changes.push(
+      `Removed empty ${pathPrefix}.voice.realtime.wakeNames; unset wake names use the default agent/OpenClaw fallback.`,
+    );
+    return {
+      entry: {
+        ...entry,
+        voice: {
+          ...voice,
+          realtime: nextRealtime,
+        },
+      },
+      changed: true,
+    };
+  }
+
+  let normalized = 0;
+  let removed = 0;
+  const nextWakeNames = wakeNames.flatMap((wakeName) => {
+    if (typeof wakeName !== "string" || isSupportedRealtimeWakeName(wakeName)) {
+      return [wakeName];
+    }
+    const nextWakeName = normalizeRealtimeWakeName(wakeName);
+    if (!nextWakeName) {
+      removed += 1;
+      return [];
+    }
+    normalized += 1;
+    return [nextWakeName];
+  });
+  if (normalized === 0 && removed === 0) {
+    return { entry, changed: false };
+  }
+  const dedupedWakeNames = Array.from(new Set(nextWakeNames));
+
+  const nextRealtime = { ...realtime };
+  if (dedupedWakeNames.length > 0) {
+    nextRealtime.wakeNames = dedupedWakeNames;
+  } else {
+    delete nextRealtime.wakeNames;
+  }
+  if (normalized > 0) {
+    changes.push(
+      `Shortened ${normalized} unsupported ${pathPrefix}.voice.realtime.wakeNames entries to one or two words.`,
+    );
+  }
+  if (removed > 0) {
+    changes.push(
+      `Removed ${removed} unsupported ${pathPrefix}.voice.realtime.wakeNames entries with no usable words.`,
+    );
+  }
+  return {
+    entry: {
+      ...entry,
+      voice: {
+        ...voice,
+        realtime: nextRealtime,
+      },
+    },
+    changed: true,
+  };
 }
 
 function normalizeDiscordGuildChannelAllowAliases(params: {
@@ -343,6 +466,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.agentId is legacy; use top-level bindings[] with match.accountId for per-channel Discord agent routing. Run "openclaw doctor --fix".',
     match: hasLegacyDiscordAccountGuildChannelAgentId,
   },
+  {
+    path: ["channels", "discord"],
+    message:
+      'channels.discord.voice.realtime.wakeNames entries longer than two words are unsupported; use one- or two-word activation names. Run "openclaw doctor --fix".',
+    match: hasUnsupportedDiscordRealtimeWakeNames,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      'channels.discord.accounts.<id>.voice.realtime.wakeNames entries longer than two words are unsupported; use one- or two-word activation names. Run "openclaw doctor --fix".',
+    match: hasUnsupportedDiscordAccountRealtimeWakeNames,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -438,6 +573,13 @@ export function normalizeCompatibilityConfig({
       });
       nextAccount = normalizedAgentIds.entry;
       accountChanged = accountChanged || normalizedAgentIds.changed;
+      const normalizedWakeNames = normalizeUnsupportedRealtimeWakeNames(
+        nextAccount,
+        `channels.discord.accounts.${accountId}`,
+        changes,
+      );
+      nextAccount = normalizedWakeNames.entry;
+      accountChanged = accountChanged || normalizedWakeNames.changed;
       if (!accountChanged) {
         continue;
       }
@@ -458,6 +600,13 @@ export function normalizeCompatibilityConfig({
     updated = { ...updated, voice };
     changed = true;
   }
+  const normalizedWakeNames = normalizeUnsupportedRealtimeWakeNames(
+    updated,
+    "channels.discord",
+    changes,
+  );
+  updated = normalizedWakeNames.entry;
+  changed = changed || normalizedWakeNames.changed;
 
   if (!changed) {
     return { config: cfg, changes: [] };
