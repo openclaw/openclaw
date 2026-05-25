@@ -723,6 +723,8 @@ export function buildAgentSystemPrompt(params: {
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
+  /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
+  fsWorkspaceOnly?: boolean;
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -925,6 +927,10 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
       ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
+  const workspaceOnlyGuidance =
+    params.fsWorkspaceOnly === true
+      ? "tools.fs.workspaceOnly is enabled: scratch/temp/meta files that file tools must later read/write/edit must stay inside the workspace, preferably as relative paths under `.openclaw/tmp/`. Do not write files to `/tmp/...` with exec if a later read/write/edit/apply_patch tool needs them; use `.openclaw/tmp/...` instead."
+      : "";
   const safetySection = [
     "## Safety",
     "No independent goals: no self-preservation, replication, resource acquisition, power-seeking, or long-term plans beyond the user's request.",
@@ -998,6 +1004,7 @@ export function buildAgentSystemPrompt(params: {
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
+    workspaceOnlyGuidance,
     workspaceNotes,
     bootstrapMode: params.bootstrapMode,
     bootstrapSystemPromptSections,
@@ -1133,6 +1140,7 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace",
       `Your working directory is: ${displayWorkspaceDir}`,
       workspaceGuidance,
+      workspaceOnlyGuidance,
       ...workspaceNotes,
       "",
       ...docsSection,
