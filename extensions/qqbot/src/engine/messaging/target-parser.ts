@@ -15,6 +15,39 @@ interface ParsedTarget {
   id: string;
 }
 
+function stripProviderPrefix(raw: string): string {
+  const trimmed = raw.trim();
+  const id = trimmed.replace(/^qqbot:/i, "");
+  if (/^qqbot:/i.test(id)) {
+    throw new Error(`Invalid target format: ${raw} - repeated qqbot: prefix`);
+  }
+  return id;
+}
+
+function stripProviderPrefixOrUndefined(raw: string): string | undefined {
+  try {
+    return stripProviderPrefix(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function readTypedId(id: string, type: TargetType): string | undefined {
+  const prefix = `${type}:`;
+  return id.toLowerCase().startsWith(prefix) ? id.slice(prefix.length) : undefined;
+}
+
+function startsWithForeignProviderPrefix(raw: string): boolean {
+  const prefix = /^([a-z][a-z0-9_-]*):/i.exec(raw.trim())?.[1]?.toLowerCase();
+  return (
+    prefix != null &&
+    prefix !== "qqbot" &&
+    prefix !== "c2c" &&
+    prefix !== "group" &&
+    prefix !== "channel"
+  );
+}
+
 /**
  * Parse a qqbot target string into a structured delivery target.
  *
@@ -32,26 +65,27 @@ interface ParsedTarget {
  * @throws {Error} When the target format is invalid.
  */
 export function parseTarget(to: string): ParsedTarget {
-  let id = to.replace(/^qqbot:/i, "");
+  const id = stripProviderPrefix(to);
 
-  if (id.startsWith("c2c:")) {
-    const userId = id.slice(4);
+  const c2cId = readTypedId(id, "c2c");
+  if (c2cId != null) {
+    const userId = c2cId;
     if (!userId) {
       throw new Error(`Invalid c2c target format: ${to} - missing user ID`);
     }
     return { type: "c2c", id: userId };
   }
 
-  if (id.startsWith("group:")) {
-    const groupId = id.slice(6);
+  const groupId = readTypedId(id, "group");
+  if (groupId != null) {
     if (!groupId) {
       throw new Error(`Invalid group target format: ${to} - missing group ID`);
     }
     return { type: "group", id: groupId };
   }
 
-  if (id.startsWith("channel:")) {
-    const channelId = id.slice(8);
+  const channelId = readTypedId(id, "channel");
+  if (channelId != null) {
     if (!channelId) {
       throw new Error(`Invalid channel target format: ${to} - missing channel ID`);
     }
@@ -72,9 +106,15 @@ export function parseTarget(to: string): ParsedTarget {
  * Returns `undefined` when the target does not look like a QQ Bot address.
  */
 export function normalizeTarget(target: string): string | undefined {
-  const id = target.replace(/^qqbot:/i, "");
-  if (id.startsWith("c2c:") || id.startsWith("group:") || id.startsWith("channel:")) {
-    return `qqbot:${id}`;
+  const id = stripProviderPrefixOrUndefined(target);
+  if (!id) {
+    return undefined;
+  }
+  for (const type of ["c2c", "group", "channel"] as const) {
+    const typedId = readTypedId(id, type);
+    if (typedId != null) {
+      return typedId ? `qqbot:${type}:${typedId}` : undefined;
+    }
   }
   // 32-char hex openid
   if (/^[0-9a-fA-F]{32}$/.test(id)) {
@@ -85,6 +125,28 @@ export function normalizeTarget(target: string): string | undefined {
     return `qqbot:c2c:${id}`;
   }
   return undefined;
+}
+
+/**
+ * Parse a QQ Bot explicit route target for shared delivery/session routing.
+ *
+ * The returned `to` is channel-local because callers already know the channel.
+ */
+export function parseExplicitTarget(
+  raw: string,
+): { to: string; chatType: "direct" | "group" | "channel" } | null {
+  if (startsWithForeignProviderPrefix(raw)) {
+    return null;
+  }
+  try {
+    const target = parseTarget(raw);
+    return {
+      to: `${target.type}:${target.id}`,
+      chatType: target.type === "c2c" ? "direct" : target.type === "group" ? "group" : "channel",
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

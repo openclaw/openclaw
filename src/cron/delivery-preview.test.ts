@@ -66,4 +66,28 @@ describe("resolveCronDeliveryPreview", () => {
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
   });
+
+  it("does not duplicate provider prefixes in explicit delivery labels", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValue({
+      ok: true,
+      channel: "qqbot",
+      to: "qqbot:c2c:A2B91CCEA0E039905B45C84DD96C92FD",
+      mode: "explicit",
+    });
+    const job = makeCronJob({
+      delivery: {
+        mode: "announce",
+        channel: "qqbot",
+        to: "qqbot:c2c:A2B91CCEA0E039905B45C84DD96C92FD",
+      },
+      sessionTarget: "isolated",
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(preview.label).toBe("announce -> qqbot:c2c:A2B91CCEA0E039905B45C84DD96C92FD");
+  });
 });

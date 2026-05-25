@@ -26,6 +26,7 @@ import { clearAccountCredentials } from "./engine/config/credentials.js";
 import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
+  parseExplicitTarget as parseQQBotExplicitTarget,
 } from "./engine/messaging/target-parser.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
@@ -234,6 +235,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
+    parseExplicitTarget: ({ raw }) => parseQQBotExplicitTarget(raw),
     targetResolver: {
       /** Return true when the id looks like a QQ Bot target. */
       looksLikeId: looksLikeQQBotTarget,
