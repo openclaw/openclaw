@@ -349,6 +349,62 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
   });
 
+  it("defaults missing manifest model costs for static discovery entries", async () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          {
+            ...createManifestPluginWithModelCatalog("anthropic"),
+            modelCatalog: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+              },
+              discovery: { anthropic: "static" },
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    await expect(
+      providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toEqual({
+      providers: {
+        anthropic: expect.objectContaining({
+          models: [
+            expect.objectContaining({
+              id: "claude-sonnet-4-6",
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            }),
+          ],
+        }),
+      },
+    });
+  });
+
   it("keeps manifest catalogs and loads only scoped plugins that have no entry", () => {
     const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);
