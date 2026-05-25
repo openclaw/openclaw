@@ -36,10 +36,14 @@ export type DiagnosticStabilityEventRecord = {
   pairedToolName?: string;
   provider?: string;
   model?: string;
+  operation?: string;
   durationMs?: number;
   requestBytes?: number;
   responseBytes?: number;
   timeToFirstByteMs?: number;
+  timeoutMs?: number;
+  elapsedMs?: number;
+  timerDelayMs?: number;
   resultCount?: number;
   commandLength?: number;
   exitCode?: number;
@@ -370,6 +374,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         record.source = event.activeWorkLabels[0];
       } else if (event.queuedWorkLabels?.length) {
         record.source = event.queuedWorkLabels[0];
+      }
+      break;
+    case "fetch.timeout.delayed":
+      record.timeoutMs = event.timeoutMs;
+      record.elapsedMs = event.elapsedMs;
+      record.timerDelayMs = event.timerDelayMs;
+      {
+        const operation = copyReasonCode(event.operation);
+        if (operation) {
+          record.operation = operation;
+        }
       }
       break;
     case "diagnostic.phase.completed":

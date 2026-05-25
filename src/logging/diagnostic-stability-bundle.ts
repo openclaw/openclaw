@@ -710,6 +710,7 @@ function readStabilityEventRecord(
   );
   assignOptionalCodeString(sanitized, "provider", record.provider, `${label}.provider`);
   assignOptionalCodeString(sanitized, "model", record.model, `${label}.model`);
+  assignOptionalCodeString(sanitized, "operation", record.operation, `${label}.operation`);
 
   assignOptionalNumber(sanitized, "durationMs", record.durationMs, `${label}.durationMs`);
   assignOptionalNumber(sanitized, "requestBytes", record.requestBytes, `${label}.requestBytes`);
@@ -720,6 +721,9 @@ function readStabilityEventRecord(
     record.timeToFirstByteMs,
     `${label}.timeToFirstByteMs`,
   );
+  assignOptionalNumber(sanitized, "timeoutMs", record.timeoutMs, `${label}.timeoutMs`);
+  assignOptionalNumber(sanitized, "elapsedMs", record.elapsedMs, `${label}.elapsedMs`);
+  assignOptionalNumber(sanitized, "timerDelayMs", record.timerDelayMs, `${label}.timerDelayMs`);
   assignOptionalNumber(sanitized, "costUsd", record.costUsd, `${label}.costUsd`);
   assignOptionalNumber(sanitized, "count", record.count, `${label}.count`);
   assignOptionalNumber(sanitized, "bytes", record.bytes, `${label}.bytes`);

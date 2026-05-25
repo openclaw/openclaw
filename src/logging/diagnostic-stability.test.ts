@@ -255,6 +255,58 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
   });
 
+  it("projects delayed fetch timeout diagnostics with sanitized context", () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+      eventLoopDelayHint: "timer delayed 7175ms, likely event-loop starvation",
+      operation: "matrix.guarded-redirect-fetch",
+      url: "https://api.telegram.org/bot[REDACTED]/getMe",
+    });
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.summary.byType, {
+      "fetch.timeout.delayed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+      operation: "matrix.guarded-redirect-fetch",
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("eventLoopDelayHint");
+    expect(snapshot.events[0]).not.toHaveProperty("url");
+  });
+
+  it("drops unsafe delayed fetch timeout operation labels", () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+      eventLoopDelayHint: "timer delayed 7175ms, likely event-loop starvation",
+      operation: "fetch token=secret",
+    });
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("operation");
+  });
+
   it("sanitizes tool and model diagnostic error categories", async () => {
     startDiagnosticStabilityRecorder();
 

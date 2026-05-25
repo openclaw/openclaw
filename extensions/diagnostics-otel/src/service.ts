@@ -104,6 +104,10 @@ type TelemetryExporterDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "telemetry.exporter" }
 >;
+type FetchTimeoutDelayedDiagnosticEvent = Extract<
+  DiagnosticEventPayload,
+  { type: "fetch.timeout.delayed" }
+>;
 type SessionRecoveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "session.recovery.requested" | "session.recovery.completed" }
@@ -1112,6 +1116,31 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         {
           unit: "1",
           description: "CPU core ratio reported by diagnostic liveness warnings",
+        },
+      );
+      const fetchTimeoutDelayedCounter = meter.createCounter("openclaw.fetch.timeout.delayed", {
+        unit: "1",
+        description: "Fetch timeout timers that fired late enough to indicate event-loop delay",
+      });
+      const fetchTimeoutConfiguredMsHistogram = meter.createHistogram(
+        "openclaw.fetch.timeout.configured_ms",
+        {
+          unit: "ms",
+          description: "Configured fetch timeout for delayed timeout diagnostics",
+        },
+      );
+      const fetchTimeoutElapsedMsHistogram = meter.createHistogram(
+        "openclaw.fetch.timeout.elapsed_ms",
+        {
+          unit: "ms",
+          description: "Elapsed time before delayed fetch timeout aborts",
+        },
+      );
+      const fetchTimeoutTimerDelayMsHistogram = meter.createHistogram(
+        "openclaw.fetch.timeout.timer_delay_ms",
+        {
+          unit: "ms",
+          description: "Timer delay reported by delayed fetch timeout diagnostics",
         },
       );
       const telemetryExporterCounter = meter.createCounter("openclaw.telemetry.exporter.events", {
@@ -2559,6 +2588,33 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         span.end(evt.ts);
       };
 
+      const recordFetchTimeoutDelayed = (evt: FetchTimeoutDelayedDiagnosticEvent) => {
+        const attrs = {
+          "openclaw.operation": lowCardinalityAttr(evt.operation, "unknown"),
+        };
+        fetchTimeoutDelayedCounter.add(1, attrs);
+        fetchTimeoutConfiguredMsHistogram.record(evt.timeoutMs, attrs);
+        fetchTimeoutElapsedMsHistogram.record(evt.elapsedMs, attrs);
+        fetchTimeoutTimerDelayMsHistogram.record(evt.timerDelayMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.fetch.timeout_ms": evt.timeoutMs,
+          "openclaw.fetch.elapsed_ms": evt.elapsedMs,
+          "openclaw.fetch.timer_delay_ms": evt.timerDelayMs,
+        };
+        const span = spanWithDuration("openclaw.fetch.timeout.delayed", spanAttrs, 0, {
+          endTimeMs: evt.ts,
+        });
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: "fetch timeout delayed",
+        });
+        span.end(evt.ts);
+      };
+
       const recordTelemetryExporter = (
         evt: TelemetryExporterDiagnosticEvent,
         metadata: DiagnosticEventMetadata,
@@ -2659,6 +2715,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.liveness.warning":
               recordLivenessWarning(evt);
+              return;
+            case "fetch.timeout.delayed":
+              recordFetchTimeoutDelayed(evt);
               return;
             case "diagnostic.phase.completed":
               recordDiagnosticPhaseCompleted(evt);

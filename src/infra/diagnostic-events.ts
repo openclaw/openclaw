@@ -344,6 +344,16 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   queuedWorkLabels?: string[];
 };
 
+export type DiagnosticFetchTimeoutDelayedEvent = DiagnosticBaseEvent & {
+  type: "fetch.timeout.delayed";
+  timeoutMs: number;
+  elapsedMs: number;
+  timerDelayMs: number;
+  eventLoopDelayHint: string;
+  operation?: string;
+  url?: string;
+};
+
 export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
   DiagnosticPhaseSnapshot & {
     type: "diagnostic.phase.completed";
@@ -670,6 +680,7 @@ export type DiagnosticEventPayload =
   | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
+  | DiagnosticFetchTimeoutDelayedEvent
   | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent

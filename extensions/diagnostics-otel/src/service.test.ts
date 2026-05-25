@@ -894,6 +894,65 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("records delayed fetch timeout diagnostics", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+
+    await service.start(ctx);
+    emitDiagnosticEvent({
+      type: "fetch.timeout.delayed",
+      timeoutMs: 10_000,
+      elapsedMs: 17_175,
+      timerDelayMs: 7_175,
+      eventLoopDelayHint: "timer delayed 7175ms, likely event-loop starvation",
+      operation: "matrix.guarded-redirect-fetch",
+      url: "https://api.telegram.org/bot[REDACTED]/getMe",
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.fetch.timeout.delayed")?.add).toHaveBeenCalledWith(
+      1,
+      {
+        "openclaw.operation": "matrix.guarded-redirect-fetch",
+      },
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.fetch.timeout.configured_ms")?.record,
+    ).toHaveBeenCalledWith(10_000, {
+      "openclaw.operation": "matrix.guarded-redirect-fetch",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.fetch.timeout.elapsed_ms")?.record,
+    ).toHaveBeenCalledWith(17_175, {
+      "openclaw.operation": "matrix.guarded-redirect-fetch",
+    });
+    expect(
+      telemetryState.histograms.get("openclaw.fetch.timeout.timer_delay_ms")?.record,
+    ).toHaveBeenCalledWith(7_175, {
+      "openclaw.operation": "matrix.guarded-redirect-fetch",
+    });
+    const fetchTimeoutSpanOptions = startedSpanOptions("openclaw.fetch.timeout.delayed");
+    expect(fetchTimeoutSpanOptions?.attributes?.["openclaw.operation"]).toBe(
+      "matrix.guarded-redirect-fetch",
+    );
+    expect(fetchTimeoutSpanOptions?.attributes?.["openclaw.fetch.timeout_ms"]).toBe(10_000);
+    expect(fetchTimeoutSpanOptions?.attributes?.["openclaw.fetch.elapsed_ms"]).toBe(17_175);
+    expect(fetchTimeoutSpanOptions?.attributes?.["openclaw.fetch.timer_delay_ms"]).toBe(7_175);
+    expect(fetchTimeoutSpanOptions?.attributes).not.toHaveProperty("openclaw.fetch.url");
+    expect(fetchTimeoutSpanOptions?.attributes).not.toHaveProperty(
+      "openclaw.fetch.event_loop_delay_hint",
+    );
+    const span = telemetryState.spans.find(
+      (item) => item.name === "openclaw.fetch.timeout.delayed",
+    );
+    expect(span?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "fetch timeout delayed",
+    });
+
+    await service.stop?.(ctx);
+  });
+
   test("reports log exporter emit failures without exporting raw error text", async () => {
     const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
