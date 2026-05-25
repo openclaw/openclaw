@@ -22,6 +22,10 @@ import {
 import { listAgentIds } from "../agent-scope.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
+  queueEmbeddedPiMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunSessionId,
+} from "../pi-embedded-runner/runs.js";
+import {
   type AgentWaitResult,
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
@@ -54,6 +58,11 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
+
+function resolveRunScopedFallbackSessionKey(sessionKey: string): string | undefined {
+  const match = /^(agent:[^:]+:.+):run:[^:]+$/.exec(sessionKey.trim());
+  return match?.[1];
+}
 
 function resolveConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
@@ -155,8 +164,48 @@ async function startAgentRun(params: {
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
-}): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
+  deliveryTimeoutMs?: number;
+  allowActiveRunQueueFallback?: boolean;
+}): Promise<
+  | { ok: true; runId: string; activeRunQueue?: boolean }
+  | { ok: false; result: ReturnType<typeof jsonResult> }
+> {
   try {
+    const activeRunSessionId = params.allowActiveRunQueueFallback
+      ? resolveActiveEmbeddedRunSessionId(params.sessionKey)
+      : undefined;
+    const fallbackSessionKey = activeRunSessionId
+      ? resolveRunScopedFallbackSessionKey(params.sessionKey)
+      : undefined;
+    const messageText =
+      typeof params.sendParams.message === "string" ? params.sendParams.message : undefined;
+    if (activeRunSessionId && fallbackSessionKey && messageText) {
+      void (async () => {
+        const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(
+          activeRunSessionId,
+          messageText,
+          {
+            steeringMode: "all",
+            debounceMs: 0,
+            deliveryTimeoutMs: params.deliveryTimeoutMs,
+            waitForTranscriptCommit: true,
+          },
+        );
+        if (queueOutcome.queued) {
+          return;
+        }
+        await params.callGateway({
+          method: "agent",
+          params: {
+            ...params.sendParams,
+            sessionKey: fallbackSessionKey,
+            idempotencyKey: crypto.randomUUID(),
+          },
+          timeoutMs: 10_000,
+        });
+      })().catch(() => undefined);
+      return { ok: true, runId: params.runId, activeRunQueue: true };
+    }
     const response = await params.callGateway<{ runId: string }>({
       method: "agent",
       params: params.sendParams,
@@ -497,12 +546,16 @@ export function createSessionsSendTool(opts?: {
           runId,
           sendParams,
           sessionKey: displayKey,
+          deliveryTimeoutMs: announceTimeoutMs,
+          allowActiveRunQueueFallback: true,
         });
         if (!start.ok) {
           return start.result;
         }
         runId = start.runId;
-        startA2AFlow(undefined, runId);
+        if (!start.activeRunQueue) {
+          startA2AFlow(undefined, runId);
+        }
         return jsonResult({
           runId,
           status: "accepted",
@@ -516,6 +569,7 @@ export function createSessionsSendTool(opts?: {
         runId,
         sendParams,
         sessionKey: displayKey,
+        deliveryTimeoutMs: announceTimeoutMs,
       });
       if (!start.ok) {
         return start.result;
