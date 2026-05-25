@@ -139,13 +139,14 @@ function normalizeInboundEventForAccount(params: {
   if (configuredAccountId && params.event.accountId !== configuredAccountId) {
     return { ok: false, statusCode: 403, error: "account_id_mismatch" };
   }
-  if (platform === params.event.platform) {
+  if (platform === params.event.platform && params.account.providerId === params.event.providerId) {
     return { ok: true, event: params.event };
   }
   return {
     ok: true,
     event: {
       ...params.event,
+      providerId: params.account.providerId,
       platform,
     },
   };
