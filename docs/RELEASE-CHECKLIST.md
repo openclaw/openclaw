@@ -1,7 +1,7 @@
 # ClaWorks Release Checklist
 
 **用途**：客户交付 / 生产签收前的验收清单。  
-**更新**：2026-05-25（P0 #7–#10 本地验证）  
+**更新**：2026-05-25（发布前收尾：smoke + gateway:e2e 回归全绿）  
 **相关文档**：[`OPERATOR-CHECKLIST.md`](OPERATOR-CHECKLIST.md)、[`DEPLOYMENT.md`](../DEPLOYMENT.md)、[`PRODUCTION-READINESS.md`](design/PRODUCTION-READINESS.md)、[`QUICKSTART.md`](../QUICKSTART.md)
 
 ---
@@ -27,7 +27,7 @@
 | --- | ----------------- | ---------------------------------------------------------------------------------- | ---- |
 | 1   | Runtime 单元测试  | `pnpm claworks:runtime:test` → 全绿                                                | ✅   |
 | 2   | 产品烟测          | `pnpm claworks:smoke` → 全绿                                                       | ✅   |
-| 3   | Robot 插件契约    | `pnpm test extensions/claworks-robot` → 17/17                                      | ✅   |
+| 3   | Robot 插件契约    | `pnpm test extensions/claworks-robot` → 19/19（含 runtime-store 双重注册）         | ✅   |
 | 4   | Runtime lint/类型 | `pnpm lint:core -- packages/claworks-runtime` → 0 error                            | ✅   |
 | 5   | Doctor 可运行     | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor` → 无阻塞 Invalid config              | ✅   |
 | 6   | 生产 Compose 有效 | `docker compose -f docker-compose.prod.yml config`                                 | ✅   |
@@ -49,22 +49,25 @@
 
 ## 3. P1 强烈建议（生产加固）
 
-| #   | 检查项         | 说明                                                       | 状态 |
-| --- | -------------- | ---------------------------------------------------------- | ---- |
-| 1   | PostgreSQL     | `DATABASE_URL=postgresql://...` + `pnpm claworks:migrate`  | ☐    |
-| 2   | OT 连接器实机  | 关闭 `simulate`；mqtt/opcua/modbus 现场联调报告            | ☐    |
-| 3   | 依赖 audit     | `pnpm audit --registry=https://registry.npmjs.org` 或 SBOM | ☐    |
-| 4   | Extension 裁剪 | `pnpm claworks:prune-extensions:apply`（生产白名单）       | ☐    |
-| 5   | 备份策略       | `ecosystem-backup.sh` + `claworks-data` 卷定期备份         | ☐    |
-| 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                 | ☐    |
-| 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过 | ☐    |
-| 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；CI 见下方说明）  | ✅   |
+| #   | 检查项         | 说明                                                                                                                                                   | 状态 |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
+| 1   | PostgreSQL     | `DATABASE_URL=postgresql://...` + `pnpm claworks:migrate`                                                                                              | ☐    |
+| 2   | OT 连接器实机  | 关闭 `simulate`；mqtt/opcua/modbus 现场联调报告（见 [`QUICKSTART.md`](../QUICKSTART.md#ot-连接器实机验证预生产)）；dry-run：`pnpm claworks:ot-dry-run` | ☐    |
+| 3   | 依赖 audit     | `pnpm audit --registry=https://registry.npmjs.org` 或 SBOM                                                                                             | ☐    |
+| 4   | Extension 裁剪 | `pnpm claworks:prune-extensions:apply`（生产白名单）                                                                                                   | ☐    |
+| 5   | 备份策略       | `ecosystem-backup.sh` + `claworks-data` 卷定期备份                                                                                                     | ☐    |
+| 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                                                                                                             | ☐    |
+| 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过                                                                                             | ☐    |
+| 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；2026-05-25 回归全绿）                                                                                        | ✅   |
+| 9   | Evolution 烟测 | `pnpm claworks:evolution:smoke`（进化链 + drafts REST + pending 持久化）                                                                               | ☐    |
 
 ### Gateway E2E 与 CI
 
 - **脚本**：`pnpm claworks:gateway:e2e`（`scripts/claworks-gateway-e2e.mjs`）会启动真实 Gateway 并探测 `/v1` 与 MCP。
-- **当前 CI**：`.github/workflows/claworks-smoke.yml` 仅跑 `pnpm claworks:smoke`（无 live gateway）；release 分支签收前请在 Testbox/本机补跑 gateway e2e。
-- **后续（P2+）**：若需进 CI，建议在 `claworks-smoke` 增加 optional job（`workflow_dispatch` 或 nightly），避免 PR 默认路径每次起 Gateway。
+- **进化链烟测**：`pnpm claworks:evolution:smoke`（`scripts/claworks-evolution-chain-smoke.mjs`）验证 `autonomy.learn_opportunity` → `evolution.simulation_requested` → `evolution.regression_requested`、`GET /v1/evolve/drafts`、沙盒 pending 晋升 SQLite 持久化。CI：`.github/workflows/claworks-evolution-smoke.yml`（`workflow_dispatch` + 每周日 schedule；进化相关 PR 路径触发）。
+- **弱模型回归**：`pnpm claworks:weak-model-regression`；CI：`.github/workflows/claworks-weak-model-regression.yml`（`workflow_dispatch` + 每日 nightly + 相关 PR 路径）。
+- **当前 CI**：`.github/workflows/claworks-smoke.yml` 仅跑 `pnpm claworks:smoke`（无 live gateway）；release 分支签收前请在 Testbox/本机补跑 gateway e2e 与 evolution smoke。
+- **后续（P2+）**：若需进默认 PR 路径，保持 evolution/weak-model 为 optional job，避免每次 PR 起 Gateway 或全量回归。
 
 ---
 
@@ -83,8 +86,20 @@ pnpm claworks:runtime:test
 pnpm test extensions/claworks-robot
 pnpm claworks:smoke
 
-# 可选：真实 Gateway 闭环（预发布 / 签收前手工跑；约 2–5 分钟）
-# CLAWORKS_PRODUCT=1 pnpm claworks:gateway:e2e
+# 真实 Gateway 闭环（预发布 / 签收前；约 2–5 分钟）
+pnpm claworks:gateway:e2e
+
+# 进化链烟测（进程内；约 1–3 分钟；需 sibling claworks-packs 或 CLAWORKS_PACKS_DIR）
+pnpm claworks:evolution:smoke
+
+# 弱模型回归套件（可选；CI nightly / workflow_dispatch）
+pnpm claworks:weak-model-regression
+
+# OT 模拟连接器（无实机）
+pnpm claworks:ot-dry-run
+
+# 打 tag 前预检（默认跳过 gateway e2e；全量：CLAWORKS_PREFLIGHT_GATEWAY=1 pnpm claworks:release:preflight）
+pnpm claworks:release:preflight
 
 # 产品诊断
 CLAWORKS_INIT_SECURE=1 pnpm claworks:init   # 首次

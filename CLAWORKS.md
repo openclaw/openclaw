@@ -28,13 +28,32 @@ IM / Webhook / Schedule / API
 
 ## 自改进流水线
 
-私域数据采集 → 导出 → 商业模型分析 → 生成进化包 → 导入热更新 → PlaybookSimulator 验证
+私域数据采集 → 导出 → **商业模型离线分析（人工）** → 生成进化包 → 导入热更新 → PlaybookSimulator 验证
 
-- **半自动草稿**：`autonomy.learn_opportunity`（知识缺口 / CBR 覆盖不足）触发 `EvolveEngine.proposeDraft`，YAML 写入 KB `evolution_drafts`（`pending_review`），发布 `evolve.playbook_drafted`，**不自动部署**。
-- **沙盒导入**：`evolution.import_pack` 或 `POST /v1/evolution/import` 传 `sandbox: true` / `simulate_only: true`，Playbook 仅 load 到运行时沙盒源、跑干跑回归；通过后发布 `evolution.sandbox_ready_for_promotion` 等待 HITL 晋升，**不自动写入生产 Pack**（除非 dev 环境显式 `evolution.auto_promote_sandbox: true`）。
-- **模拟蒸馏**：`POST /v1/evolution/simulate`（或发布 `evolution.simulation_requested`）触发端到端弱模型回归 + 导出；摘要写入 KB `simulation_runs`。
-- **每周导出**：`evolution_weekly_export` 定时（周日 02:00）调用 `evolution.export_data`，运维在联网环境用商业模型处理后再 `claworks evolution import`。
-- **导入→回归闭环**：`evolution_pack_import_and_verify` 在 pack 热重载后发布 `evolution.regression_requested`，由 `weak_model_regression_suite` 自动跑弱模型意图回归。
+### 自动化（runtime + base pack）
+
+| 阶段         | 触发                                                                    | 行为                                                                                                         | 是否自动部署   |
+| ------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | -------------- |
+| 学习机会检测 | `detectLearnOpportunities` / 负反馈 / stub 兜底                         | 发布 `autonomy.learn_opportunity`                                                                            | —              |
+| 自治处理     | `autonomy.learn_opportunity` → `handleAutonomyLearnOpportunity`         | KB/CBR 写入、在线规则、CBR 复用提示                                                                          | —              |
+| 知识缺口模拟 | `signal=knowledge_gap`                                                  | 发布 `evolution.simulation_requested` → `evolution.regression_requested` → `weak_model_regression_suite`     | 否             |
+| 缺口批量导出 | 同上（24h 防抖）                                                        | `evolution.export_data`(7d) → KB `evolution_exports` + `evolution.gap_batch_exported`                        | 否             |
+| 每周导出     | `evolution_weekly_export` cron 周日 02:00 CST                           | `evolution.export_data` → KB `evolution_exports` + 运维通知                                                  | 否             |
+| 模拟蒸馏     | `POST /v1/evolution/simulate` 或 `evolution.simulation_requested`       | `evolution_simulation_pipeline` 弱模型回归 + 导出摘要 → KB `simulation_runs`                                 | 否             |
+| 半自动草稿   | 知识缺口 / CBR 覆盖不足 + LLM 可用                                      | `EvolveEngine.proposeDraft` → KB `evolution_drafts` + `evolve.playbook_drafted` / `evolve.suggestions_ready` | **否**         |
+| 沙盒导入     | `evolution.import_pack` / `POST /v1/evolution/import` + `sandbox: true` | 沙盒 load + 回归；通过后 `evolution.sandbox_ready_for_promotion` + SQLite pending                            | **否**（HITL） |
+| 导入→回归    | `evolution_pack_import_and_verify`                                      | pack 热重载后 `evolution.regression_requested`                                                               | 视 pack 内容   |
+| 草稿晋升     | `POST /v1/evolve/promote-draft` + `approved: true`                      | 写入 `user_evolved` pack；可选 `verify_after_deploy`（默认 true）                                            | HITL 批准后    |
+| 沙盒晋升     | `POST /v1/evolution/promote` / `evolution.promote_sandbox`              | 生产 pack 热更新                                                                                             | HITL 批准后    |
+
+### 仍需人工（商业模型 / 运维）
+
+1. **联网环境**：从 KB `evolution_exports` 取出脱敏导出 JSON，用商业强模型分析并生成 `EvolutionPack`。
+2. **导入**：`claworks evolution import` 或 `POST /v1/evolution/import`（生产路径需 HITL；可先 `sandbox: true` 验证）。
+3. **草稿审核**：`GET /v1/evolve/drafts` 审阅 LLM 草稿，批准后 `promote-draft`。
+4. **沙盒晋升**：收到 `evolution.sandbox_ready_for_promotion` 后确认 `promote` / `evolution.promote_sandbox`。
+
+验收：`pnpm claworks:evolution:smoke`（进程内链路与 pending 持久化）；签收前另跑 `pnpm claworks:gateway:e2e`。
 
 ## Pack 生态（158+ 活跃 Playbook）
 

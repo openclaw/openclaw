@@ -23,10 +23,12 @@
 
 ## P1 结果
 
-| #   | 检查项      | 结果                                                                |
-| --- | ----------- | ------------------------------------------------------------------- |
-| 8   | Gateway E2E | ✅ `pnpm claworks:gateway:e2e` 全绿（145 playbooks / MCP 32 tools） |
-| 7   | CI smoke    | 未在本机跑 GitHub Actions                                           |
+| #   | 检查项         | 结果                                                                                     |
+| --- | -------------- | ---------------------------------------------------------------------------------------- |
+| 8   | Gateway E2E    | ✅ `pnpm claworks:gateway:e2e` 全绿（145 playbooks / MCP 32 tools）                      |
+| 9   | Evolution 烟测 | `pnpm claworks:evolution:smoke` — 签收前补跑（CI: `claworks-evolution-smoke.yml`）       |
+| 10  | 弱模型回归 CI  | `pnpm claworks:weak-model-regression` — CI: `claworks-weak-model-regression.yml` nightly |
+| 7   | CI smoke       | 未在本机跑 GitHub Actions                                                                |
 
 ---
 
@@ -39,6 +41,8 @@
 - 修复 `detectLearnOpportunities` 重复发布 stub 事件风暴；修复 `samples` 未定义引用
 - `/v1/health` 与 `/v1/metrics` 免 Bearer 认证（K8s 探针友好）
 - 更新 `claworks-packs` 中 `autonomy_on_learn_opportunity` Playbook 字段对齐
+- **进化链烟测**：`pnpm claworks:evolution:smoke` — 验证 learn → simulation → regression、`GET /v1/evolve/drafts`、沙盒 pending 晋升 SQLite 跨重启
+- **弱模型回归 CI**：`.github/workflows/claworks-weak-model-regression.yml`（nightly + `workflow_dispatch`）
 
 ---
 
