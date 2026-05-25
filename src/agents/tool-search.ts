@@ -10,6 +10,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings, uniqueValues } from "../shared/string-normalization.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -447,7 +448,7 @@ function sessionCatalogKeys(input: {
   if (input.agentId?.trim()) {
     keys.push(`agent:${input.agentId.trim()}`);
   }
-  return [...new Set(keys)];
+  return uniqueStrings(keys);
 }
 
 function sessionCatalogKey(input: {
@@ -799,7 +800,7 @@ export function registerToolSearchCatalog(params: {
     byId.set(entry.name, entry);
   }
   const next = {
-    entries: [...new Set(byId.values())].toSorted((a, b) => a.id.localeCompare(b.id)),
+    entries: uniqueValues(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
@@ -847,7 +848,7 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   if (ctx.runId?.trim()) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
-  const uniqueCatalogs = [...new Set(sessionCatalogs.values())];
+  const uniqueCatalogs = uniqueValues(sessionCatalogs.values());
   if (uniqueCatalogs.length === 1) {
     const catalog = uniqueCatalogs[0];
     if (catalog) {

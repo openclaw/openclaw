@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -46,14 +47,12 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const supported = [
-    ...new Set(
-      raw
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
+  const supported = uniqueStrings(
+    raw
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
   return supported.length > 0 ? supported : undefined;
 }
 
