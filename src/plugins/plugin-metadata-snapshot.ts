@@ -568,7 +568,17 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
   snapshot: PluginMetadataSnapshot;
 }): boolean {
-  return result.snapshot.plugins.length > 0 || result.snapshot.index.plugins.length > 0;
+  const snapshot = result.snapshot;
+  const hasCompleteSnapshotShape =
+    Array.isArray(snapshot.plugins) &&
+    Array.isArray(snapshot.diagnostics) &&
+    Array.isArray(snapshot.registryDiagnostics) &&
+    Array.isArray(snapshot.manifestRegistry.plugins) &&
+    Array.isArray(snapshot.manifestRegistry.diagnostics) &&
+    Array.isArray(snapshot.index.plugins) &&
+    Array.isArray(snapshot.index.diagnostics);
+  const hasPluginMetadata = snapshot.plugins.length > 0 || snapshot.index.plugins.length > 0;
+  return hasCompleteSnapshotShape && hasPluginMetadata;
 }
 
 export function resolvePluginMetadataSnapshot(
