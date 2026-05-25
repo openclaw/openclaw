@@ -4,6 +4,7 @@ import { createResearchAgent } from "../agents/research-agent.js";
 import { ConnectorManager } from "../interfaces/connectors/connector-manager.js";
 import { resolveConnectorConfigs } from "../interfaces/connectors/presets.js";
 import { createActionRegistry } from "../kernel/action-registry.js";
+import { createAutonomyEngine } from "../kernel/autonomy-engine.js";
 import { createBridgeRegistry, BRIDGE_SKILL } from "../kernel/bridge-registry.js";
 import { createCardBuilder } from "../kernel/card-builder.js";
 import { createContextEngine } from "../kernel/context-engine.js";
@@ -456,12 +457,15 @@ export async function createClaworksRuntime(
   // 开启自动学习：失败的 Playbook run 自动写入 CbrStore，供未来 propose() 参考
   // 必须在 cbrStore 初始化之后，否则 startAutoLearning 会空操作
   const _stopAutoLearning = runtime.evolveEngine.startAutoLearning();
+  const _stopDraftReview = runtime.evolveEngine.startDraftReviewPipeline();
   runtime.kernel.bus.subscribe(CW_EVENTS.SYSTEM_RUNTIME_STOPPED, async () => {
     _stopAutoLearning();
+    _stopDraftReview();
   });
 
   // 初始化离线进化同步管理器（导出进化数据包 / 导入进化包）
   runtime.evolutionSync = new EvolutionSyncManager(runtime);
+  runtime.autonomyEngine = createAutonomyEngine(runtime);
 
   // 初始化桥接注册表（LLM / 通知 / Skill 等外部服务）
   runtime.bridges = createBridgeRegistry();
@@ -497,6 +501,11 @@ export async function createClaworksRuntime(
       }),
   };
 
+  runtime.playbookEngine.setRenderPromptTemplate((id, variables) => {
+    const rendered = runtime.promptRegistry?.render(id, variables as Record<string, string>);
+    return rendered?.trim() ? rendered : null;
+  });
+
   // 初始化卡片构建器（飞书/企微/钉钉 富交互卡片渲染）
   runtime.cardBuilder = createCardBuilder();
 
@@ -507,7 +516,9 @@ export async function createClaworksRuntime(
   // 使用延迟引用 runtime.llmComplete，允许在 structuredOutput 创建后才注入 LLM
   runtime.structuredOutput = createStructuredOutputEngine(async (opts) => {
     const fn = runtime.llmComplete ?? runtime.bridges?.get("llm")?.complete;
-    if (!fn) throw new Error("LLM 未配置：请设置 CLAWORKS_LLM_BASE_URL 或对接 OpenClaw 提供商");
+    if (!fn) {
+      throw new Error("LLM 未配置：请设置 CLAWORKS_LLM_BASE_URL 或对接 OpenClaw 提供商");
+    }
     return fn(opts);
   });
 
@@ -533,12 +544,18 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
     const storedTasks = await runtime.objectStore.query("ScheduledTask", { limit: 500 });
     for (const obj of storedTasks.items) {
       const task = obj.data as Record<string, unknown>;
-      if (task.enabled === false) continue;
+      if (task.enabled === false) {
+        continue;
+      }
       const playbookId = String(task.playbook_id ?? task.id ?? "");
       const cron = String(task.cron ?? "");
-      if (!playbookId || !cron) continue;
+      if (!playbookId || !cron) {
+        continue;
+      }
       const existing = runtime.playbookEngine.list().find((p) => p.id === playbookId);
-      if (!existing) continue;
+      if (!existing) {
+        continue;
+      }
       const timezone = task.timezone ? String(task.timezone) : undefined;
       const dynDef = {
         id: playbookId,

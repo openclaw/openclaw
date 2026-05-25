@@ -78,18 +78,18 @@
  *    - 对比进化前后的成功率
  *
  * 集成点：
- * - 触发导出：`runtime.autonomyEngine.exportLearningData()`（待实现）
+ * - 触发导出：`runtime.autonomyEngine.exportLearningData()`（委托 `evolutionSync.exportEvolutionData()`）
  * - 触发导入：`POST /v1/evolution/import`（已实现）
  * - 触发验证：`POST /v1/playbooks/:id/simulate`（已实现）
  * ──────────────────────────────────────────────────────────────────────────
  */
 
-import {} from "node:crypto";
 import { mkdir, writeFile, unlink, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { parsePlaybookYaml } from "../pack-loader/yaml-parsers.js";
 import { BRIDGE_LLM } from "./bridge-registry.js";
+import { CW_EVENTS } from "./event-names.js";
 import type { OutputSchema } from "./structured-output.js";
 
 // ── 公开类型 ──────────────────────────────────────────────────────────────
@@ -134,59 +134,23 @@ export type EvolveResult = {
   cbr_case_id?: string;
 };
 
-export const EVOLUTION_DRAFTS_NAMESPACE = "evolution_drafts";
-
-export type ParsedEvolutionDraft = {
+export type PromoteDraftRequest = {
   proposalId: string;
-  status: string;
-  confidence: number;
-  signal?: string;
-  playbookYaml: string;
-};
-
-/** 从 KB evolution_drafts 文档正文解析草稿元数据与 YAML */
-export function parseEvolutionDraftText(text: string): ParsedEvolutionDraft | null {
-  const proposalMatch = text.match(/^proposal_id:\s*(.+)$/m);
-  const statusMatch = text.match(/^status:\s*(.+)$/m);
-  const confidenceMatch = text.match(/^confidence:\s*([\d.]+)$/m);
-  const signalMatch = text.match(/^signal:\s*(.+)$/m);
-  const yamlStart = text.search(/^id:\s/m);
-  if (!proposalMatch || yamlStart < 0) {
-    return null;
-  }
-  const playbookYaml = text.slice(yamlStart).trim();
-  if (!playbookYaml) {
-    return null;
-  }
-  return {
-    proposalId: proposalMatch[1]!.trim(),
-    status: statusMatch?.[1]?.trim() ?? "pending_review",
-    confidence: confidenceMatch ? Number.parseFloat(confidenceMatch[1]!) : 0.5,
-    signal: signalMatch?.[1]?.trim(),
-    playbookYaml,
-  };
-}
-
-export type PromoteDraftOptions = {
-  proposalId: string;
-  /** 必须为 true 才会部署；fail-closed */
   approved: boolean;
   packId?: string;
   verifyAfterDeploy?: boolean;
   source?: string;
 };
 
-export type PromoteDraftResult =
-  | { status: "approval_required"; proposal_id: string; message: string }
-  | { status: "not_found"; proposal_id: string }
-  | { status: "already_promoted"; proposal_id: string }
-  | {
-      status: "promoted" | "deployed_unverified" | "deploy_failed";
-      proposal_id: string;
-      deployed: boolean;
-      test_passed?: boolean;
-      playbook_path?: string;
-    };
+export type PromoteDraftResult = {
+  status: string;
+  deployed?: boolean;
+  proposal?: EvolveProposal;
+  deploy?: EvolveResult;
+  reason?: string;
+};
+
+export const EVOLUTION_DRAFTS_NAMESPACE = "evolution_drafts";
 
 /** 运行时是否具备 LLM 桥（structuredOutput / bridge / llmComplete） */
 export function hasEvolveLlmBridge(runtime: ClaworksRuntime): boolean {
@@ -208,8 +172,8 @@ export interface EvolveEngine {
     req: EvolveRequest,
     opts?: { source?: string; signal?: string },
   ): Promise<EvolveProposal>;
-  /** 将 KB 草稿晋升到生产 Pack（需 approved=true） */
-  promoteDraft(opts: PromoteDraftOptions): Promise<PromoteDraftResult>;
+  /** KB 草稿 HITL 晋升：approved=false 请求审批；approved=true 部署草稿 */
+  promoteDraft(req: PromoteDraftRequest): Promise<PromoteDraftResult>;
   /** 部署方案（写文件 + 热重载） */
   deploy(proposal: EvolveProposal, opts?: { packId?: string }): Promise<EvolveResult>;
   /** 发布测试事件，验证 Playbook 是否正确触发 */
@@ -230,6 +194,11 @@ export interface EvolveEngine {
    * 返回 unsubscribe 函数，Runtime 停止时调用。
    */
   startAutoLearning(): () => void;
+  /**
+   * 订阅 evolve.playbook_drafted，丰富草稿元数据并发布 evolve.suggestions_ready（HITL，不自动 deploy）。
+   * 返回 unsubscribe 函数，Runtime 停止时调用。
+   */
+  startDraftReviewPipeline(): () => void;
 }
 
 // ── LLM prompt 常量 ───────────────────────────────────────────────────────
@@ -329,6 +298,64 @@ const PROPOSAL_SCHEMA: OutputSchema = {
 // ── 工厂函数 ──────────────────────────────────────────────────────────────
 
 export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
+  async function publishDraftSuggestions(payload: Record<string, unknown>): Promise<void> {
+    const proposalId = String(payload.id ?? payload.proposal_id ?? "").trim();
+    if (!proposalId) {
+      return;
+    }
+
+    let playbookId: string | undefined;
+    let triggerPattern: string | undefined;
+    let draftConfidence: number | undefined;
+    let yamlValid = false;
+    let yamlError: string | undefined;
+
+    try {
+      const hits = await runtime.kb.search(proposalId, {
+        namespace: EVOLUTION_DRAFTS_NAMESPACE,
+        limit: 10,
+      });
+      const draftDoc = hits.find((h) => h.text.includes(`proposal_id: ${proposalId}`));
+      const parsed = draftDoc ? parseEvolutionDraftText(draftDoc.text) : null;
+      if (parsed?.playbookYaml) {
+        draftConfidence = parsed.confidence;
+        playbookId = parsed.playbookYaml.match(/^id:\s*(.+)$/m)?.[1]?.trim();
+        triggerPattern = parsed.playbookYaml.match(/^ {2}pattern:\s*(.+)$/m)?.[1]?.trim();
+        try {
+          parsePlaybookYaml(parsed.playbookYaml, "evolve-draft-review");
+          yamlValid = true;
+        } catch (err) {
+          yamlError = err instanceof Error ? err.message : String(err);
+        }
+      }
+    } catch (err) {
+      yamlError = err instanceof Error ? err.message : String(err);
+    }
+
+    const title = typeof payload.title === "string" ? payload.title : proposalId;
+    await runtime.kernel.publish(CW_EVENTS.EVOLVE_SUGGESTIONS_READY, "evolve.draft_review", {
+      draft_id: proposalId,
+      proposal_id: proposalId,
+      title,
+      status: payload.status ?? "pending_review",
+      namespace: EVOLUTION_DRAFTS_NAMESPACE,
+      signal: payload.signal,
+      playbook_id: playbookId,
+      trigger_pattern: triggerPattern,
+      confidence: typeof payload.confidence === "number" ? payload.confidence : draftConfidence,
+      simulation: {
+        skipped: true,
+        yaml_valid: yamlValid,
+        error: yamlError,
+      },
+      hitl_required: true,
+      suggestions: [
+        `Playbook 草稿「${title}」已写入 KB（${EVOLUTION_DRAFTS_NAMESPACE}），待人工审核。`,
+        `调用 evolve.promote_draft(proposalId="${proposalId}", approved=true) 部署。`,
+      ],
+    });
+  }
+
   return {
     // ── propose ────────────────────────────────────────────────────────────
     async propose(req: EvolveRequest): Promise<EvolveProposal> {
@@ -455,120 +482,74 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
         warnings: proposal.warnings,
       });
 
-      // 非阻塞：校验草稿 YAML 语法
-      void (async () => {
-        try {
-          parsePlaybookYaml(proposal.playbook_yaml, "evolve-draft-validate");
-          await runtime.kernel.publish("evolve.draft_validated", source, {
-            proposal_id: proposal.id,
-            valid: true,
-          });
-        } catch (err) {
-          await runtime.kernel
-            .publish("evolve.draft_validated", source, {
-              proposal_id: proposal.id,
-              valid: false,
-              error: err instanceof Error ? err.message : String(err),
-            })
-            .catch(() => undefined);
-        }
-      })();
-
       return proposal;
     },
 
-    // ── promoteDraft ───────────────────────────────────────────────────────
-    async promoteDraft(opts) {
-      const source = opts.source ?? "evolve.promote_draft";
-      if (opts.approved !== true) {
-        await runtime.kernel
-          .publish("hitl.approval_requested", source, {
-            gate_id: `evolve-draft-${opts.proposalId}`,
-            message: `Playbook 草稿 ${opts.proposalId} 等待人工确认后部署。请调用 evolve.promote_draft 并传 approved=true。`,
-            proposal_id: opts.proposalId,
-          })
-          .catch(() => undefined);
-        return {
-          status: "approval_required",
-          proposal_id: opts.proposalId,
-          message: "需要 approved=true 才能部署草稿",
-        };
+    async promoteDraft(req: PromoteDraftRequest): Promise<PromoteDraftResult> {
+      const source = req.source ?? "evolve.promote_draft";
+      const proposalId = req.proposalId.trim();
+      if (!proposalId) {
+        return { status: "error", reason: "proposal_id 必填" };
       }
 
-      const hits = await runtime.kb.search(opts.proposalId, {
+      if (!req.approved) {
+        await runtime.kernel.publish("hitl.approval_requested", source, {
+          proposal_id: proposalId,
+          kind: "evolve_draft_promotion",
+        });
+        return { status: "approval_required" };
+      }
+
+      const hits = await runtime.kb.search(proposalId, {
         namespace: EVOLUTION_DRAFTS_NAMESPACE,
-        limit: 10,
+        limit: 8,
       });
-      const draftDoc = hits.find((h) => h.text.includes(`proposal_id: ${opts.proposalId}`));
-      if (!draftDoc) {
-        return { status: "not_found", proposal_id: opts.proposalId };
+      const draftHit =
+        hits.find((hit) => hit.text.includes(`proposal_id: ${proposalId}`)) ?? hits[0];
+      if (!draftHit?.text) {
+        return { status: "error", reason: `draft not found: ${proposalId}` };
       }
 
-      const parsed = parseEvolutionDraftText(draftDoc.text);
-      if (!parsed) {
-        return { status: "not_found", proposal_id: opts.proposalId };
-      }
-      if (parsed.status === "promoted") {
-        return { status: "already_promoted", proposal_id: opts.proposalId };
+      const parsed = parseEvolutionDraftText(draftHit.text);
+      if (!parsed?.playbookYaml) {
+        return { status: "error", reason: "invalid evolution draft body" };
       }
 
-      const idFromYaml = parsed.playbookYaml.match(/^id:\s*(.+)$/m)?.[1]?.trim() ?? opts.proposalId;
-      const proposal: EvolveProposal = {
-        id: idFromYaml,
-        title: draftDoc.title ?? idFromYaml,
-        description: parsed.signal ? `signal=${parsed.signal}` : "evolution draft",
-        playbook_yaml: parsed.playbookYaml,
-        required_capabilities: [],
-        missing_capabilities: [],
-        trigger_event: parsed.playbookYaml.match(/^  pattern:\s*(.+)$/m)?.[1]?.trim() ?? "manual",
-        test_event: parsed.playbookYaml.match(/^  pattern:\s*(.+)$/m)?.[1]?.trim() ?? "manual",
-        test_payload: {},
-        confidence: parsed.confidence,
-        warnings: [],
-      };
+      const proposal = normalizeProposal(
+        {
+          id: parsed.proposalId ?? proposalId,
+          title: draftHit.title ?? proposalId,
+          description: draftHit.title ?? proposalId,
+          playbook_yaml: parsed.playbookYaml,
+          confidence: parsed.confidence,
+        },
+        draftHit.title ?? proposalId,
+      );
 
-      const deployResult = await this.deploy(proposal, { packId: opts.packId });
-      let testPassed: boolean | undefined;
-      if (deployResult.deployed && opts.verifyAfterDeploy !== false) {
-        const verifyResult = await this.verify(
+      const deployResult = await this.deploy(proposal, { packId: req.packId });
+      if (req.verifyAfterDeploy !== false && proposal.test_event) {
+        const verification = await this.verify(
           proposal.id,
           proposal.test_event,
           proposal.test_payload,
         );
-        deployResult.test_passed = verifyResult.passed;
-        deployResult.test_output = verifyResult.output;
-        testPassed = verifyResult.passed;
+        deployResult.test_passed = verification.passed;
+        deployResult.test_output = verification.output;
       }
 
-      await runtime.kb
-        .ingest(draftDoc.text.replace(/^status:\s*pending_review/m, "status: promoted"), {
-          namespace: EVOLUTION_DRAFTS_NAMESPACE,
-          source,
-          title: draftDoc.title,
-          metadata: { status: "promoted", proposal_id: opts.proposalId },
-        })
-        .catch(() => undefined);
-
       await runtime.kernel.publish("evolve.playbook_deployed", source, {
-        playbook_id: proposal.id,
+        proposal_id: proposal.id,
         title: proposal.title,
         deployed: deployResult.deployed,
-        test_passed: deployResult.test_passed,
         playbook_path: deployResult.playbook_path,
-        from_draft: true,
-        proposal_id: opts.proposalId,
+        status: deployResult.test_passed === false ? "deployed_unverified" : "deployed",
       });
 
       return {
-        status: deployResult.test_passed
-          ? "promoted"
-          : deployResult.deployed
-            ? "deployed_unverified"
-            : "deploy_failed",
-        proposal_id: opts.proposalId,
+        status: "deployed_unverified",
         deployed: deployResult.deployed,
-        test_passed: testPassed,
-        playbook_path: deployResult.playbook_path,
+        proposal,
+        deploy: deployResult,
       };
     },
 
@@ -800,10 +781,56 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       runtime.logger?.("[EvolveEngine] 自动学习监听已启动（订阅 playbook.run.failed）");
       return unsub;
     },
+
+    startDraftReviewPipeline(): () => void {
+      const unsub = runtime.kernel.subscribe(
+        CW_EVENTS.EVOLVE_PLAYBOOK_DRAFTED,
+        (payload: Record<string, unknown>) => {
+          void publishDraftSuggestions(payload).catch((err) => {
+            runtime.logger?.(
+              `[EvolveEngine] draft review failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        },
+      );
+      runtime.logger?.(
+        "[EvolveEngine] 草稿 HITL 流水线已启动（订阅 evolve.playbook_drafted → evolve.suggestions_ready）",
+      );
+      return unsub;
+    },
   };
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────────────
+
+export function parseEvolutionDraftText(text: string): {
+  proposalId?: string;
+  playbookYaml?: string;
+  confidence?: number;
+} | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const proposalMatch = trimmed.match(/^proposal_id:\s*(\S+)/m);
+  const confidenceMatch = trimmed.match(/^confidence:\s*([\d.]+)/m);
+  const yamlStart = trimmed.split("\n").findIndex((line) => /^id:\s*/.test(line));
+  if (yamlStart < 0) {
+    return null;
+  }
+
+  const playbookYaml = trimmed.split("\n").slice(yamlStart).join("\n").trim();
+  if (!playbookYaml) {
+    return null;
+  }
+
+  return {
+    proposalId: proposalMatch?.[1],
+    playbookYaml,
+    confidence: confidenceMatch ? Number.parseFloat(confidenceMatch[1]) : undefined,
+  };
+}
 
 function buildFallbackProposal(description: string): Omit<EvolveProposal, "id"> {
   const id = `evolved_${Date.now()}`;

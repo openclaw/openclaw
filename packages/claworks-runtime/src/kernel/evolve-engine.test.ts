@@ -216,4 +216,37 @@ describe("EvolveEngine", () => {
     expect(result.deployed).toBe(true);
     expect(runtime._published.some((e) => e.type === "evolve.playbook_deployed")).toBe(true);
   });
+
+  it("startDraftReviewPipeline 在 evolve.playbook_drafted 后发布 evolve.suggestions_ready", async () => {
+    const runtime = makeEvolveRuntime();
+    const engine = createEvolveEngine(runtime as never);
+
+    const proposal = await engine.proposeDraft(
+      { description: "OEE 查询 Playbook" },
+      { source: "test.draft_review", signal: "knowledge_gap" },
+    );
+    runtime._published.length = 0;
+
+    engine.startDraftReviewPipeline();
+    runtime.kernel.emit("evolve.playbook_drafted", {
+      id: proposal.id,
+      title: proposal.title,
+      status: "pending_review",
+      signal: "knowledge_gap",
+      confidence: proposal.confidence,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const ready = runtime._published.find((e) => e.type === "evolve.suggestions_ready");
+    expect(ready).toBeTruthy();
+    expect(ready?.payload.draft_id).toBe(proposal.id);
+    expect(ready?.payload.hitl_required).toBe(true);
+    expect(ready?.payload.simulation).toEqual(
+      expect.objectContaining({ skipped: true, yaml_valid: true }),
+    );
+    expect(ready?.payload.suggestions).toEqual(
+      expect.arrayContaining([expect.stringMatching(/evolve\.promote_draft/)]),
+    );
+  });
 });
