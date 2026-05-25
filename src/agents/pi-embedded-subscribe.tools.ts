@@ -463,6 +463,10 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   return Array.from(new Set(urls));
 }
 
+function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
+  return media.outbound === false;
+}
+
 function extractTextContentMediaArtifact(content: unknown[]): {
   mediaUrls: string[];
   audioAsVoice?: boolean;
@@ -510,6 +514,9 @@ export function extractToolResultMediaArtifact(
   const record = result as Record<string, unknown>;
   const detailsMedia = readToolResultDetailsMedia(record);
   if (detailsMedia) {
+    if (isNonOutboundToolResultMedia(detailsMedia)) {
+      return undefined;
+    }
     const mediaUrls = collectStructuredMediaUrls(detailsMedia);
     if (mediaUrls.length > 0) {
       return {
