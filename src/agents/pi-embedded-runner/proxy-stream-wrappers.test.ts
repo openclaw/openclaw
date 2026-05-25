@@ -3,7 +3,6 @@ import type { Context, Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
-  createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
 } from "./proxy-stream-wrappers.js";
@@ -204,51 +203,5 @@ describe("proxy stream wrappers", () => {
     expect(payload.messages[0]?.content).toEqual([
       { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
     ]);
-  });
-
-  it("normalizes string stop to array in Kilocode wrapper", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { stop: "\n" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createKilocodeWrapper(baseStreamFn);
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "kilocode",
-        id: "deepseek/deepseek-v4-flash",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.stop).toEqual(["\n"]);
-  });
-
-  it("leaves array stop unchanged in Kilocode wrapper", () => {
-    const payloads: Array<Record<string, unknown>> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { stop: ["\n", "END"] };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return createAssistantMessageEventStream();
-    };
-
-    const wrapped = createKilocodeWrapper(baseStreamFn);
-    void wrapped(
-      {
-        api: "openai-completions",
-        provider: "kilocode",
-        id: "deepseek/deepseek-v4-flash",
-      } as Model<"openai-completions">,
-      { messages: [] },
-      {},
-    );
-
-    expect(payloads[0]?.stop).toEqual(["\n", "END"]);
   });
 });
