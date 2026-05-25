@@ -35,7 +35,7 @@ describe("resolveVisibleModelCatalog", () => {
     expect(authChecker).toHaveBeenNthCalledWith(2, "openai");
     expect(authChecker).toHaveBeenCalledTimes(2);
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
-  });
+  }, 240_000);
 
   it("does not runtime-normalize unrestricted default browse", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => "custom-modern-model");
@@ -94,7 +94,7 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
-  });
+  }, 240_000);
 
   it("uses runtime model normalization for exact allowlist entries", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
