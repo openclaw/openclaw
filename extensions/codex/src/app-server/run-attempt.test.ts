@@ -2450,6 +2450,8 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "external channel prompt";
+    const onUserMessagePersisted = vi.fn();
+    params.onUserMessagePersisted = onUserMessagePersisted;
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -2458,6 +2460,15 @@ describe("runCodexAppServerAttempt", () => {
       expect(raw).toContain('"role":"user"');
       expect(raw).toContain('"content":"external channel prompt"');
       expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"');
+    });
+    await vi.waitFor(() => {
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "external channel prompt",
+          idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+        }),
+      );
     });
 
     const rawBeforeCompletion = await fs.readFile(sessionFile, "utf8");

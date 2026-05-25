@@ -159,13 +159,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:prompt",
     );
 
-    await mirrorCodexAppServerTranscript({
+    const firstMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
     });
-    await mirrorCodexAppServerTranscript({
+    const secondMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "agent:main:main",
       messages: [userMessage],
@@ -185,6 +185,18 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
     expect(updates[0]?.messageSeq).toBe(1);
+    expect(firstMirror.userMessagesPresent).toHaveLength(1);
+    expect(firstMirror.userMessagesPresent[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "show me live" }],
+      idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+    });
+    expect(secondMirror.userMessagesPresent).toHaveLength(1);
+    expect(secondMirror.userMessagesPresent[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "show me live" }],
+      idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+    });
   });
 
   it("emits stable sequence numbers for multi-message mirror batches", async () => {

@@ -13,6 +13,11 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
+type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
+
+export type CodexAppServerTranscriptMirrorResult = {
+  userMessagesPresent: MirroredUserMessage[];
+};
 
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 
@@ -128,13 +133,13 @@ export async function mirrorCodexAppServerTranscript(params: {
   messages: AgentMessage[];
   idempotencyScope?: string;
   config?: SessionWriteLockAcquireTimeoutConfig;
-}): Promise<void> {
+}): Promise<CodexAppServerTranscriptMirrorResult> {
   const messages = params.messages.filter(
     (message): message is MirroredAgentMessage =>
       message.role === "user" || message.role === "assistant" || message.role === "toolResult",
   );
   if (messages.length === 0) {
-    return;
+    return { userMessagesPresent: [] };
   }
 
   const lock = await acquireSessionWriteLock({
@@ -143,6 +148,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   });
   const appendedUpdates: Array<{ messageId: string; message: AgentMessage; messageSeq: number }> =
     [];
+  const userMessagesPresent: MirroredUserMessage[] = [];
   try {
     const mirrorState = await readTranscriptMirrorState(params.sessionFile);
     let nextMessageSeq = mirrorState.messageCount;
@@ -151,13 +157,16 @@ export async function mirrorCodexAppServerTranscript(params: {
       const idempotencyKey = params.idempotencyScope
         ? `${params.idempotencyScope}:${dedupeIdentity}`
         : undefined;
-      if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
-        continue;
-      }
       const transcriptMessage = {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as AgentMessage;
+      if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
+        if (transcriptMessage.role === "user") {
+          userMessagesPresent.push(transcriptMessage);
+        }
+        continue;
+      }
       const nextMessage = runAgentHarnessBeforeMessageWriteHook({
         message: transcriptMessage,
         agentId: params.agentId,
@@ -179,6 +188,9 @@ export async function mirrorCodexAppServerTranscript(params: {
         message: messageToAppend,
         config: params.config,
       });
+      if (appendedMessage.role === "user") {
+        userMessagesPresent.push(appendedMessage);
+      }
       nextMessageSeq += 1;
       appendedUpdates.push({ messageId, message: appendedMessage, messageSeq: nextMessageSeq });
       if (idempotencyKey) {
@@ -198,6 +210,8 @@ export async function mirrorCodexAppServerTranscript(params: {
       messageSeq: update.messageSeq,
     });
   }
+
+  return { userMessagesPresent };
 }
 
 async function readTranscriptMirrorState(
