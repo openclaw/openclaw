@@ -8,6 +8,7 @@ import {
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
+import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
@@ -396,6 +397,7 @@ function resolveHeartbeatArtifactSpanEnd(
   let sawTerminalHeartbeatArtifact = false;
   let sawNonTerminalAssistantOutput = false;
   let sawToolActivity = false;
+  let sawHeartbeatTokenInAssistant = false;
 
   while (index < messages.length) {
     const message = messages[index];
@@ -434,23 +436,31 @@ function resolveHeartbeatArtifactSpanEnd(
     }
     if (message.role === "assistant") {
       sawNonTerminalAssistantOutput = true;
+      const { text } = resolveMessageText(message.content);
+      if (text.includes(HEARTBEAT_TOKEN)) {
+        sawHeartbeatTokenInAssistant = true;
+      }
       index++;
       continue;
     }
     return undefined;
   }
 
-  // Keep unrecognized assistant output when a subsequent user message
-  // proves the user interacted with it, or when the heartbeat used tools
-  // (indicating it did real work worth preserving). Only trim text-only
-  // non-standard responses at the trailing position. Fixes #85614: models
-  // that don't produce a clean HEARTBEAT_OK left stale heartbeat context.
-  if (
-    sawNonTerminalAssistantOutput &&
-    !sawTerminalHeartbeatArtifact &&
-    (index < messages.length || sawToolActivity)
-  ) {
-    return undefined;
+  // Keep unrecognized assistant output that doesn't resemble HEARTBEAT_OK.
+  // If the model responded without the HEARTBEAT_OK token at all, it
+  // intentionally produced a meaningful report worth preserving regardless
+  // of position or tool activity. Fixes #85614.
+  //
+  // If the output DOES contain the token, it's a verbose OK wrapper; only
+  // preserve when a user message followed (proving interaction) or tools
+  // were used (indicating real work).
+  if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
+    if (!sawHeartbeatTokenInAssistant) {
+      return undefined;
+    }
+    if (index < messages.length || sawToolActivity) {
+      return undefined;
+    }
   }
   return index;
 }
