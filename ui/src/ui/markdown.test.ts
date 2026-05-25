@@ -367,6 +367,38 @@ describe("toSanitizedMarkdownHtml", () => {
       );
     });
 
+    it("omits copy chrome when rendering user-preserved code blocks", () => {
+      const source = `python3 - <<'PY'
+import openpyxl
+
+for ws in wb.worksheets:
+    print(f"--- {ws.title} ---")
+    rows = 0
+
+    for row in ws.iter_rows(values_only=True):
+        print(row)
+PY
+`;
+      const html = toSanitizedMarkdownHtml(`\`\`\`bash\n${source}\`\`\``, {
+        codeBlockChrome: "none",
+      });
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(fragment.textContent).toBe(source);
+    });
+
+    it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
+      const markdown = "```\ncode\n```";
+      const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
+      const copyable = toSanitizedMarkdownHtml(markdown);
+
+      expect(htmlFragment(plain).querySelector(".code-block-copy")).toBeNull();
+      expect(htmlFragment(copyable).querySelector(".code-block-copy")).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+    });
+
     it("highlights fenced code blocks while preserving copy text", () => {
       const source = 'const answer = "yes";\nconsole.log(answer);\n';
       const html = toSanitizedMarkdownHtml(`\`\`\`js\n${source}\`\`\``);
