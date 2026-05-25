@@ -745,6 +745,10 @@ function buildInternalSourceReplyToolResult(payload: {
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplySink?: "internal-ui";
+  sourceReply?: unknown;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
   dryRun: boolean;
 }): AgentToolResult<{
   status: string;
@@ -753,6 +757,10 @@ function buildInternalSourceReplyToolResult(payload: {
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplySink?: "internal-ui";
+  sourceReply?: unknown;
+  message?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
   dryRun: boolean;
 }> {
   const action = payload.dryRun ? "Prepared" : "Sent";
@@ -773,6 +781,10 @@ function buildInternalSourceReplyToolResult(payload: {
         ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
         : {}),
       ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
+      ...(payload.sourceReply !== undefined ? { sourceReply: payload.sourceReply } : {}),
+      ...(payload.message !== undefined ? { message: payload.message } : {}),
+      ...(payload.mediaUrl !== undefined ? { mediaUrl: payload.mediaUrl } : {}),
+      ...(payload.mediaUrls !== undefined ? { mediaUrls: payload.mediaUrls } : {}),
       dryRun: payload.dryRun,
     },
   };
