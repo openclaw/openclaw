@@ -16,6 +16,8 @@ import {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const OPTIMIZED_TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
   expect(result.detectedRefs).toHaveLength(0);
@@ -381,7 +383,7 @@ describe("loadImageFromRef", () => {
 
       expect(image?.type).toBe("image");
       expect(image?.mimeType).toBe("image/png");
-      expect(image?.data).toBe(pngB64);
+      expect(image?.data).toBe(OPTIMIZED_TINY_PNG_BASE64);
     } finally {
       await fs.rm(sandboxParent, { recursive: true, force: true });
     }
