@@ -139,7 +139,7 @@ pnpm test extensions/claworks/canonical-surface.contract.test.ts
 | 项                        | 说明                                                                               |
 | ------------------------- | ---------------------------------------------------------------------------------- |
 | 全仓 core type-aware lint | `pnpm lint:core`（无 `--` 收窄）仍有 ~800+ 历史 typescript/\* 告警；runtime 包已清 |
-| npm 公开发布              | `@claworks/runtime` 暂缓公开发布；见 `docs/design/REBRAND-TO-CLAWORKS.md`          |
+| npm 公开发布              | dry-run 就绪；见 [`docs/claworks/npm-publish.md`](claworks/npm-publish.md)         |
 | Studio React 编辑器       | 静态 `/studio` 已有；全功能编辑器未做                                              |
 | Extension 物理裁剪        | 138→核心扩展；非阻塞                                                               |
 | Drizzle 全量 ORM          | 见 `docs/design/POSTGRES-MIGRATION-PATH.md`                                        |
