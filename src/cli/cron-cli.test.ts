@@ -1335,6 +1335,22 @@ describe("cron cli", () => {
     });
   });
 
+  it("accepts documented +duration values for cron edit --at", async () => {
+    const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    let patch: CronUpdatePatch;
+    try {
+      patch = await runCronEditAndGetPatch(["--at", "+30m"]);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-01-01T00:30:00.000Z",
+    });
+  });
+
   it("rejects --tz with --every on cron edit", async () => {
     await expectCronCommandExit(["cron", "edit", "job-1", "--every", "10m", "--tz", "UTC"]);
   });
