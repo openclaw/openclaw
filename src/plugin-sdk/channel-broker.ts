@@ -360,7 +360,10 @@ function normalizeBrokerMessageText(value: string | undefined): string | undefin
   if (typeof value !== "string") {
     throw new Error("broker message text must be a string");
   }
-  return value.length > 0 ? value : undefined;
+  if (value.length === 0) {
+    return undefined;
+  }
+  return value;
 }
 
 function normalizeBrokerAttachments(

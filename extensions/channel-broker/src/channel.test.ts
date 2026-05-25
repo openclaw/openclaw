@@ -588,6 +588,54 @@ describe("channel-broker plugin", () => {
     expect(attachment).not.toHaveProperty("url");
   });
 
+  it("marks direct audio media sends as voice in provider payloads and receipts", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-voice-1",
+        providerId: "acme",
+        platform: "Telegram",
+        status: "sent",
+        messageIds: ["native-voice-1"],
+      }),
+    );
+    setChannelBrokerRuntime({ sendOutboundRequest, createRequestId: () => "broker-voice-1" });
+
+    const result = await channelBrokerPlugin.message?.send?.media?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      to: "telegram:123",
+      mediaUrl: "https://cdn.example.test/audio.ogg",
+      accountId: "acme",
+      audioAsVoice: true,
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-voice-1",
+        platform: "telegram",
+        payloads: [
+          {
+            attachments: [{ url: "https://cdn.example.test/audio.ogg", mediaType: "voice" }],
+          },
+        ],
+        requirements: { media: true },
+      }),
+    });
+    expect(result?.receipt.parts[0]?.kind).toBe("voice");
+  });
+
   it("delivers structured payloads without dropping channelData", async () => {
     const sendOutboundRequest = vi.fn(async ({ request }) =>
       createBrokerReceipt({

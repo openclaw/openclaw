@@ -196,7 +196,7 @@ describe("channel-broker SDK", () => {
       },
       message: {
         id: " msg-1 ",
-        text: " hello ",
+        text: "  hello\n",
         attachments: [
           {
             id: " file-1 ",
@@ -238,7 +238,7 @@ describe("channel-broker SDK", () => {
       },
       message: {
         id: "msg-1",
-        text: " hello ",
+        text: "  hello\n",
         attachments: [
           {
             id: "file-1",
@@ -316,6 +316,17 @@ describe("channel-broker SDK", () => {
         message: { id: "msg-1" },
       }),
     ).toThrow("broker inbound event id is required");
+    expect(() =>
+      normalizeBrokerInboundEvent({
+        version: BROKER_PROTOCOL_VERSION,
+        eventId: "evt-1",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: { id: "chat-1", type: "channel" },
+        sender: { id: "user-1" },
+        message: { id: "msg-1", text: 123 },
+      } as never),
+    ).toThrow("broker message text must be a string");
   });
 
   it("merges provider-wide and platform-specific capability badges", () => {
