@@ -2,6 +2,7 @@ import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ChatReplyTarget } from "../types/chat-types.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
@@ -10,6 +11,40 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const REPLY_QUOTE_MAX_CHARS = 180;
+
+function escapeReplyQuoteHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function formatReplyQuoteText(text: string): string {
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  if (!singleLine) {
+    return "";
+  }
+  const truncated =
+    singleLine.length > REPLY_QUOTE_MAX_CHARS
+      ? `${singleLine.slice(0, REPLY_QUOTE_MAX_CHARS - 3).trimEnd()}...`
+      : singleLine;
+  return escapeReplyQuoteHtml(truncated);
+}
+
+export function prependReplyQuote(message: string, replyTarget: ChatReplyTarget | null): string {
+  const body = message.trim();
+  if (!replyTarget) {
+    return body;
+  }
+  const quote = formatReplyQuoteText(replyTarget.text);
+  if (!quote) {
+    return body;
+  }
+  return body ? `> ${quote}\n\n${body}` : `> ${quote}`;
+}
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -164,11 +199,12 @@ export async function sendChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  replyTarget?: ChatReplyTarget | null,
 ): Promise<string | null> {
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  const msg = prependReplyQuote(message, replyTarget ?? null);
   const hasAttachments = attachments && attachments.length > 0;
   if (!msg && !hasAttachments) {
     return null;

@@ -20,6 +20,13 @@ export type MessageGroup = {
   isStreaming: boolean;
 };
 
+/** Message selected as the source for a UI-only Markdown reply quote. */
+export type ChatReplyTarget = {
+  key: string;
+  role: string;
+  text: string;
+};
+
 /** Content item types in a normalized message */
 export type MessageContentItem = {
   type: "text" | "tool_call" | "tool_result";

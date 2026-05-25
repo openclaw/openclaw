@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
@@ -16,7 +16,7 @@ import { SKIP_DELETE_CONFIRM_KEY } from "../chat/grouped-render.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
-import { renderChat, type ChatProps } from "./chat.ts";
+import { renderChat, resetChatViewState, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function readDeleteConfirmPreference(): string | null {
@@ -273,7 +273,166 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
   };
 }
 
+afterEach(() => {
+  resetChatViewState();
+  document.body.querySelector(".chat-reply-context-menu")?.remove();
+});
+
 describe("chat view", () => {
+  it("opens a Reply context menu and focuses the composer after selecting it", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    let selectedReplyTarget: ChatProps["selectedReplyTarget"] = null;
+    let selectedReplyText: string | null = null;
+    const renderCurrent = () =>
+      render(
+        renderChat(
+          createProps({
+            messages: [{ role: "assistant", content: "quote me", timestamp: 1000 }],
+            selectedReplyTarget,
+            onReply: (target) => {
+              selectedReplyTarget = target;
+              selectedReplyText = target?.text ?? null;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    renderCurrent();
+
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble).not.toBeNull();
+    bubble?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 24,
+        clientY: 32,
+      }),
+    );
+    await flushTasks();
+
+    const menuItem = document.body.querySelector<HTMLButtonElement>(
+      ".chat-reply-context-menu__item",
+    );
+    expect(menuItem?.textContent).toBe("Reply");
+    menuItem?.click();
+    await flushTasks();
+
+    expect(selectedReplyText).toBe("quote me");
+    expect(container.querySelector(".agent-chat__reply-preview")?.textContent).toContain(
+      "quote me",
+    );
+    expect(document.activeElement).toBe(container.querySelector("textarea"));
+  });
+
+  it("selects a reply target from the per-message Reply button", () => {
+    const container = document.createElement("div");
+    let selectedReplyTarget: ChatProps["selectedReplyTarget"] = null;
+    let selectedReplyText: string | null = null;
+    const renderCurrent = () =>
+      render(
+        renderChat(
+          createProps({
+            messages: [{ role: "user", content: "keyboard target", timestamp: 1000 }],
+            selectedReplyTarget,
+            onReply: (target) => {
+              selectedReplyTarget = target;
+              selectedReplyText = target?.text ?? null;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    renderCurrent();
+
+    const replyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Reply"]');
+    expect(replyButton).not.toBeNull();
+    replyButton?.click();
+
+    expect(selectedReplyText).toBe("keyboard target");
+    renderCurrent();
+    expect(container.querySelector(".agent-chat__reply-preview")?.textContent).toContain(
+      "keyboard target",
+    );
+  });
+
+  it("clears the selected reply target from the composer preview", () => {
+    const container = document.createElement("div");
+    let selectedReplyTarget: ChatProps["selectedReplyTarget"] = {
+      key: "msg:1",
+      role: "assistant",
+      text: "clear me",
+    };
+    const renderCurrent = () =>
+      render(
+        renderChat(
+          createProps({
+            selectedReplyTarget,
+            onReply: (target) => {
+              selectedReplyTarget = target;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    renderCurrent();
+
+    expect(container.querySelector(".agent-chat__reply-preview")?.textContent).toContain(
+      "clear me",
+    );
+    container.querySelector<HTMLButtonElement>('button[aria-label="Cancel reply"]')?.click();
+
+    expect(selectedReplyTarget).toBeNull();
+    renderCurrent();
+    expect(container.querySelector(".agent-chat__reply-preview")).toBeNull();
+  });
+
+  it("prepends an escaped single-line blockquote when sending a reply", () => {
+    const container = document.createElement("div");
+    let draft = "Follow up";
+    let selectedReplyTarget: ChatProps["selectedReplyTarget"] = {
+      key: "msg:1",
+      role: "assistant",
+      text: '<b>quoted</b>\nwith "chars" & more',
+    };
+    const onSend = vi.fn();
+    const renderCurrent = () =>
+      render(
+        renderChat(
+          createProps({
+            draft,
+            selectedReplyTarget,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onReply: (target) => {
+              selectedReplyTarget = target;
+            },
+            onSend,
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    renderCurrent();
+
+    const previewText = container.querySelector<HTMLElement>(".agent-chat__reply-preview-text");
+    expect(previewText?.textContent).toContain('<b>quoted</b> with "chars" & more');
+    expect(previewText?.innerHTML).not.toContain("<b>quoted</b>");
+
+    container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+
+    expect(draft).toBe(
+      "> &lt;b&gt;quoted&lt;/b&gt; with &quot;chars&quot; &amp; more\n\nFollow up",
+    );
+    expect(selectedReplyTarget).toBeNull();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the context notice when only cumulative inputTokens exceed the limit", () => {
     const container = document.createElement("div");
     render(

@@ -6,7 +6,7 @@ import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
+import type { ChatReplyTarget, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -114,6 +114,7 @@ export function renderMessageGroup(
   group: MessageGroup,
   opts: {
     onOpenSidebar?: (content: string) => void;
+    onReply?: (target: ChatReplyTarget) => void;
     showReasoning: boolean;
     showToolCalls?: boolean;
     assistantName?: string;
@@ -168,6 +169,8 @@ export function renderMessageGroup(
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
+              replyKey: item.key,
+              onReply: opts.onReply,
             },
             opts.onOpenSidebar,
           ),
@@ -669,9 +672,100 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: string) =
   `;
 }
 
+let activeReplyMenu: HTMLDivElement | null = null;
+
+function removeActiveReplyMenu(): void {
+  activeReplyMenu?.remove();
+  activeReplyMenu = null;
+  document.removeEventListener("click", closeReplyMenuOnOutside, true);
+  document.removeEventListener("keydown", closeReplyMenuOnEscape, true);
+}
+
+function closeReplyMenuOnOutside(event: MouseEvent): void {
+  if (activeReplyMenu?.contains(event.target as Node)) {
+    return;
+  }
+  removeActiveReplyMenu();
+}
+
+function closeReplyMenuOnEscape(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    removeActiveReplyMenu();
+  }
+}
+
+function getReplyTarget(message: unknown, key: string | undefined): ChatReplyTarget | null {
+  if (!key) {
+    return null;
+  }
+  const text = extractTextCached(message)?.trim();
+  if (!text) {
+    return null;
+  }
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
+  return { key, role, text };
+}
+
+function openReplyContextMenu(
+  event: MouseEvent,
+  args: { onReply: (target: ChatReplyTarget) => void; replyTarget: ChatReplyTarget },
+): void {
+  event.preventDefault();
+  removeActiveReplyMenu();
+
+  const menu = document.createElement("div");
+  menu.className = "chat-reply-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.style.left = `${event.clientX}px`;
+  menu.style.top = `${event.clientY}px`;
+
+  const reply = document.createElement("button");
+  reply.className = "chat-reply-context-menu__item";
+  reply.type = "button";
+  reply.setAttribute("role", "menuitem");
+  reply.textContent = "Reply";
+  reply.addEventListener("click", () => {
+    removeActiveReplyMenu();
+    args.onReply(args.replyTarget);
+  });
+
+  menu.append(reply);
+  document.body.append(menu);
+  activeReplyMenu = menu;
+  requestAnimationFrame(() => {
+    reply.focus();
+    document.addEventListener("click", closeReplyMenuOnOutside, true);
+    document.addEventListener("keydown", closeReplyMenuOnEscape, true);
+  });
+}
+
+function renderReplyButton(
+  replyTarget: ChatReplyTarget,
+  onReply: (target: ChatReplyTarget) => void,
+) {
+  return html`
+    <button
+      class="btn btn--xs chat-reply-btn"
+      type="button"
+      title="Reply"
+      aria-label="Reply"
+      @click=${() => onReply(replyTarget)}
+    >
+      ${icons.messageSquare}
+    </button>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    showToolCalls?: boolean;
+    replyKey?: string;
+    onReply?: (target: ChatReplyTarget) => void;
+  },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -697,6 +791,7 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const replyTarget = opts.onReply ? getReplyTarget(message, opts.replyKey) : null;
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -724,12 +819,22 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
 
-  const hasActions = canCopyMarkdown || canExpand;
+  const hasActions = Boolean(replyTarget) || canCopyMarkdown || canExpand;
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses}"
+      @contextmenu=${replyTarget
+        ? (event: MouseEvent) =>
+            openReplyContextMenu(event, {
+              replyTarget,
+              onReply: opts.onReply!,
+            })
+        : undefined}
+    >
       ${hasActions
         ? html`<div class="chat-bubble-actions">
+            ${replyTarget && opts.onReply ? renderReplyButton(replyTarget, opts.onReply) : nothing}
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`
