@@ -405,6 +405,56 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
   });
 
+  it("ignores manifest model catalogs that cannot form valid models.json providers", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          {
+            ...createManifestPluginWithModelCatalog("anthropic"),
+            modelCatalog: {
+              providers: {
+                "claude-cli": {
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+              },
+              discovery: { "claude-cli": "static", anthropic: "static" },
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["anthropic"]);
+  });
+
   it("keeps manifest catalogs and loads only scoped plugins that have no entry", () => {
     const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);

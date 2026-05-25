@@ -68,7 +68,10 @@ const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
-const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
+const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
+  raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
+  smoke: GATEWAY_LIVE_SMOKE,
+});
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
@@ -1005,6 +1008,13 @@ describe("providerScopedModelRegistryProviders", () => {
 });
 
 describe("resolveGatewayLiveModelThinkingLevel", () => {
+  it("allows release lanes to lower gateway live thinking without smoke mode", () => {
+    expect(resolveGatewayLiveThinkingLevel({ raw: "low", smoke: false })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: false })).toBe("high");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: true })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: "wat", smoke: false })).toBe("high");
+  });
+
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
@@ -2094,6 +2104,18 @@ function resolveGatewayLiveModelThinkingLevel(params: {
     }
   }
   return clampThinkingLevel(model, normalized);
+}
+
+function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
+  const raw = params.raw?.trim().toLowerCase();
+  if (!raw) {
+    return params.smoke ? "low" : "high";
+  }
+  return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(raw)
+    ? raw
+    : params.smoke
+      ? "low"
+      : "high";
 }
 
 function buildLiveGatewayConfig(params: {

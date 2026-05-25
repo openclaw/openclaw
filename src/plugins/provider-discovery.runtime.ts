@@ -134,6 +134,9 @@ function providerConfigFromManifestRows(
   rows: readonly NormalizedModelCatalogRow[],
 ): ModelProviderConfig | undefined {
   const firstRow = rows[0];
+  if (!firstRow?.baseUrl || !firstRow.api) {
+    return undefined;
+  }
   const models = rows
     .map((row) => modelDefinitionFromManifestRow(row))
     .filter((model): model is ModelDefinitionConfig => Boolean(model));
