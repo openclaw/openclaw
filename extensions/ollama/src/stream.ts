@@ -366,7 +366,7 @@ const KIMI_INLINE_REASONING_MAX_PENDING_CHARS = 512;
 const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
 
 type KimiInlineReasoningVisibleTextResolution =
-  | { kind: "visible"; text: string }
+  | { kind: "visible"; text: string; bypassInlineReasoning?: boolean }
   | { kind: "pending" };
 
 function resolveKimiInlineReasoningVisibleText(params: {
@@ -383,7 +383,12 @@ function resolveKimiInlineReasoningVisibleText(params: {
     if (!params.final && params.text.length <= KIMI_INLINE_REASONING_MAX_PENDING_CHARS) {
       return { kind: "pending" };
     }
-    return { kind: "visible", text: params.text };
+    return {
+      kind: "visible",
+      text: params.text,
+      bypassInlineReasoning:
+        !params.final && params.text.length > KIMI_INLINE_REASONING_MAX_PENDING_CHARS,
+    };
   }
 
   const boundaryStartIndex = match.index + match[1].length;
@@ -409,9 +414,8 @@ function resolveStreamingVisibleText(params: {
   modelId: string;
   text: string;
   final: boolean;
-}): string | undefined {
-  const resolution = resolveKimiInlineReasoningVisibleText(params);
-  return resolution.kind === "visible" ? resolution.text : undefined;
+}): KimiInlineReasoningVisibleTextResolution {
+  return resolveKimiInlineReasoningVisibleText(params);
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
@@ -858,6 +862,10 @@ type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
 
+type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
+  sanitizeKimiInlineReasoning?: boolean;
+};
+
 function readOllamaToolCallId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -1012,17 +1020,21 @@ export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
   usageFallback?: OllamaUsageFallback,
-  options: OllamaToolCallNameOptions = {},
+  options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
   const thinking = response.message.thinking ?? response.message.reasoning ?? "";
   if (thinking) {
     content.push({ type: "thinking", thinking });
   }
-  const text = stripKimiInlineReasoningFromVisibleText({
-    modelId: modelInfo.id,
-    text: response.message.content || "",
-  });
+  const rawText = response.message.content || "";
+  const text =
+    options.sanitizeKimiInlineReasoning === false
+      ? rawText
+      : stripKimiInlineReasoningFromVisibleText({
+          modelId: modelInfo.id,
+          text: rawText,
+        });
   if (text) {
     content.push({ type: "text", text });
   }
@@ -1199,6 +1211,7 @@ export function createOllamaStreamFn(
           let finalResponse: OllamaChatResponse | undefined;
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+          let bypassKimiInlineReasoningSanitizer = false;
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
@@ -1307,6 +1320,24 @@ export function createOllamaStreamFn(
             });
           };
 
+          const resolveVisibleContent = (final: boolean): string | undefined => {
+            if (bypassKimiInlineReasoningSanitizer) {
+              return accumulatedRawContent;
+            }
+            const resolution = resolveStreamingVisibleText({
+              modelId: model.id,
+              text: accumulatedRawContent,
+              final,
+            });
+            if (resolution.kind === "pending") {
+              return undefined;
+            }
+            if (resolution.bypassInlineReasoning) {
+              bypassKimiInlineReasoningSanitizer = true;
+            }
+            return resolution.text;
+          };
+
           for await (const chunk of parseNdjsonStream(reader)) {
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta) {
@@ -1348,12 +1379,7 @@ export function createOllamaStreamFn(
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
               accumulatedRawContent += rawDelta;
-              const nextVisibleContent = resolveStreamingVisibleText({
-                modelId: model.id,
-                text: accumulatedRawContent,
-                final: false,
-              });
-              flushVisibleText(nextVisibleContent);
+              flushVisibleText(resolveVisibleContent(false));
             }
             if (chunk.message?.tool_calls) {
               closeThinkingBlock();
@@ -1361,11 +1387,7 @@ export function createOllamaStreamFn(
               accumulatedToolCalls.push(...chunk.message.tool_calls);
             }
             if (chunk.done) {
-              pendingFinalVisibleContent = resolveStreamingVisibleText({
-                modelId: model.id,
-                text: accumulatedRawContent,
-                final: true,
-              });
+              pendingFinalVisibleContent = resolveVisibleContent(true);
               finalResponse = chunk;
               break;
             }
@@ -1404,12 +1426,10 @@ export function createOllamaStreamFn(
             input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
             output: estimateOllamaCompletionTokens(finalResponse),
           };
-          const assistantMessage = buildAssistantMessage(
-            finalResponse,
-            modelInfo,
-            usageFallback,
-            toolCallNameOptions,
-          );
+          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
+            ...toolCallNameOptions,
+            sanitizeKimiInlineReasoning: !bypassKimiInlineReasoningSanitizer,
+          });
           closeThinkingBlock();
           closeTextBlock();
 
