@@ -5,7 +5,7 @@
   },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
-  "providerCatalogEntry": "./provider-registration.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
   "modelIdNormalization": {
     "providers": {
