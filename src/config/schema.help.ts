@@ -1320,6 +1320,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window in milliseconds for coalescing rapid file-watch events before reindex runs. Increase to reduce churn on frequently-written files, or lower for faster freshness.",
   "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds":
     "Overrides the timeout for inline embedding batches during memory indexing. Leave unset to use provider defaults: 600 seconds for local/self-hosted providers such as local, Ollama, and LM Studio, and 120 seconds for hosted providers.",
+  "agents.defaults.memorySearch.sync.idleEvictMs":
+    "Idle TTL in milliseconds for cached MemoryIndexManager instances in long-running gateways (default 900000, i.e. 15 minutes). A manager that has not served a request for this long is closed by the gateway sweep, releasing its chokidar FSWatcher and read file descriptors. Set to 0 to disable eviction. Gateway-wide: this is read from agents.defaults only; per-agent overrides under agents.list[].memorySearch.sync are accepted by the schema but ignored at runtime, because the cache is process-wide.",
+  "agents.defaults.memorySearch.sync.idleEvictScanMs":
+    "How often the gateway runs the idle-eviction sweep, in milliseconds (default 300000, i.e. 5 minutes). Lower for tighter resource caps at the cost of more sweep work; raise to reduce sweep overhead at the cost of higher peak fd/RSS. Set to 0 to disable the periodic sweep. Gateway-wide: read from agents.defaults only.",
   "agents.defaults.memorySearch.sync.sessions.deltaBytes":
     "Requires at least this many newly appended bytes before session transcript changes trigger reindex (default: 100000). Increase to reduce frequent small reindexes, or lower for faster transcript freshness.",
   "agents.defaults.memorySearch.sync.sessions.deltaMessages":

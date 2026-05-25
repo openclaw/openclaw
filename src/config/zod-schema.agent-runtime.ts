@@ -917,6 +917,17 @@ export const MemorySearchSchema = z
         watchDebounceMs: z.number().int().nonnegative().optional(),
         intervalMinutes: z.number().int().nonnegative().optional(),
         embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),
+        // Idle-TTL (ms) for cached MemoryIndexManager instances in
+        // long-running gateways. Gateway-wide (process-wide) only: read from
+        // agents.defaults.memorySearch.sync; per-agent overrides under
+        // agents.list[].memorySearch.sync are accepted by this schema but
+        // ignored at runtime, because INDEX_CACHE is a process-wide
+        // singleton and the sweep runs over the entire cache. See the
+        // MemorySearchConfig.sync TS doc for the full contract.
+        idleEvictMs: z.number().int().nonnegative().optional(),
+        // How often the idle-eviction sweep runs (ms). Same gateway-wide
+        // scope contract as idleEvictMs above.
+        idleEvictScanMs: z.number().int().nonnegative().optional(),
         sessions: z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
