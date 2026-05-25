@@ -399,6 +399,34 @@ function stripKimiInlineReasoningFromVisibleText(params: {
   return answer;
 }
 
+function resolveStreamingVisibleText(params: {
+  modelId: string;
+  text: string;
+  final: boolean;
+}): string | undefined {
+  if (!isOllamaCloudKimiModelRef(params.modelId)) {
+    return params.text;
+  }
+
+  const boundaryIndex = findKimiInlineReasoningBoundaryIndex(params.text);
+  if (boundaryIndex < 0) {
+    return params.final ? params.text : undefined;
+  }
+
+  const prefix = params.text.slice(0, boundaryIndex).trim();
+  const answer = params.text.slice(boundaryIndex + KIMI_INLINE_REASONING_BOUNDARY.length).trim();
+  if (
+    prefix &&
+    answer &&
+    prefix.length >= KIMI_INLINE_REASONING_MIN_PREFIX_CHARS &&
+    answer.length >= KIMI_INLINE_REASONING_MIN_ANSWER_CHARS
+  ) {
+    return answer;
+  }
+
+  return params.final ? params.text : undefined;
+}
+
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
   if (!nextText) {
     return "";
@@ -1182,6 +1210,7 @@ export function createOllamaStreamFn(
           let accumulatedThinking = "";
           const accumulatedToolCalls: OllamaToolCall[] = [];
           let finalResponse: OllamaChatResponse | undefined;
+          let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
           let streamStarted = false;
           let thinkingStarted = false;
@@ -1242,6 +1271,55 @@ export function createOllamaStreamFn(
             });
           };
 
+          const flushVisibleText = (nextVisibleContent: string | undefined) => {
+            if (nextVisibleContent === undefined) {
+              return;
+            }
+            const previousVisibleContent = accumulatedVisibleContent;
+            const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+            accumulatedVisibleContent = nextVisibleContent;
+            if (!delta) {
+              return;
+            }
+            if (thinkingStarted && !thinkingEnded) {
+              closeThinkingBlock();
+            }
+
+            if (!streamStarted) {
+              streamStarted = true;
+              const emptyPartial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: [],
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({ type: "start", partial: emptyPartial });
+            }
+            if (!textBlockStarted) {
+              textBlockStarted = true;
+              const partial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: buildCurrentContent(),
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
+            }
+
+            const partial = buildStreamAssistantMessage({
+              model: modelInfo,
+              content: buildCurrentContent(),
+              stopReason: "stop",
+              usage: buildUsageWithNoCost({}),
+            });
+            stream.push({
+              type: "text_delta",
+              contentIndex: textContentIndex(),
+              delta,
+              partial,
+            });
+          };
+
           for await (const chunk of parseNdjsonStream(reader)) {
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta) {
@@ -1282,59 +1360,13 @@ export function createOllamaStreamFn(
 
             if (chunk.message?.content) {
               const rawDelta = chunk.message.content;
-              const previousVisibleContent = accumulatedVisibleContent;
               accumulatedRawContent += rawDelta;
-              const nextVisibleContent = stripKimiInlineReasoningFromVisibleText({
+              const nextVisibleContent = resolveStreamingVisibleText({
                 modelId: model.id,
                 text: accumulatedRawContent,
+                final: false,
               });
-              const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
-              if (!delta) {
-                accumulatedVisibleContent = nextVisibleContent;
-                if (chunk.done) {
-                  finalResponse = chunk;
-                  break;
-                }
-                continue;
-              }
-              if (thinkingStarted && !thinkingEnded) {
-                closeThinkingBlock();
-              }
-
-              if (!streamStarted) {
-                streamStarted = true;
-                const emptyPartial = buildStreamAssistantMessage({
-                  model: modelInfo,
-                  content: [],
-                  stopReason: "stop",
-                  usage: buildUsageWithNoCost({}),
-                });
-                stream.push({ type: "start", partial: emptyPartial });
-              }
-              if (!textBlockStarted) {
-                textBlockStarted = true;
-                const partial = buildStreamAssistantMessage({
-                  model: modelInfo,
-                  content: buildCurrentContent(),
-                  stopReason: "stop",
-                  usage: buildUsageWithNoCost({}),
-                });
-                stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
-              }
-
-              accumulatedVisibleContent = nextVisibleContent;
-              const partial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: buildCurrentContent(),
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({
-                type: "text_delta",
-                contentIndex: textContentIndex(),
-                delta,
-                partial,
-              });
+              flushVisibleText(nextVisibleContent);
             }
             if (chunk.message?.tool_calls) {
               closeThinkingBlock();
@@ -1342,6 +1374,11 @@ export function createOllamaStreamFn(
               accumulatedToolCalls.push(...chunk.message.tool_calls);
             }
             if (chunk.done) {
+              pendingFinalVisibleContent = resolveStreamingVisibleText({
+                modelId: model.id,
+                text: accumulatedRawContent,
+                final: true,
+              });
               finalResponse = chunk;
               break;
             }
@@ -1350,6 +1387,17 @@ export function createOllamaStreamFn(
           if (!finalResponse) {
             throw new Error("Ollama API stream ended without a final response");
           }
+
+          if (
+            pendingFinalVisibleContent !== undefined &&
+            isLikelyGarbledVisibleText({ text: pendingFinalVisibleContent, modelId: model.id })
+          ) {
+            throw new Error(
+              `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
+            );
+          }
+
+          flushVisibleText(pendingFinalVisibleContent);
 
           if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
             throw new Error(
