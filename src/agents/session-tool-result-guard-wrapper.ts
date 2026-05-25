@@ -6,6 +6,7 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
@@ -16,6 +17,16 @@ type GuardedSessionManager = SessionManager & {
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
+
+function isUserMessage(message: AgentMessage): message is Extract<AgentMessage, { role: "user" }> {
+  return (message as { role?: unknown }).role === "user";
+}
+
+function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
+  const marker = (message as { __openclaw?: { beforeAgentRunBlocked?: unknown } })["__openclaw"]
+    ?.beforeAgentRunBlocked;
+  return marker !== undefined;
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -32,6 +43,7 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    userMessageForPersistence?: PersistedUserTurnMessage;
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
@@ -49,6 +61,7 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
+  let pendingUserMessageForPersistence = opts?.userMessageForPersistence;
   const beforeMessageWrite = (event: {
     message: import("@earendil-works/pi-agent-core").AgentMessage;
   }) => {
@@ -100,8 +113,23 @@ export function guardSessionManager(
 
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      if (
+        !pendingUserMessageForPersistence ||
+        !isUserMessage(withProvenance) ||
+        isBeforeAgentRunBlockedMessage(withProvenance)
+      ) {
+        return withProvenance;
+      }
+
+      const prepared = pendingUserMessageForPersistence;
+      pendingUserMessageForPersistence = undefined;
+      return {
+        ...(withProvenance as unknown as Record<string, unknown>),
+        ...(prepared as unknown as Record<string, unknown>),
+      } as unknown as AgentMessage;
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     missingToolResultText: opts?.missingToolResultText,
