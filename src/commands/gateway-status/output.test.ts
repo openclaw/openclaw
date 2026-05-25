@@ -92,6 +92,7 @@ function createReachableTarget(
   id: string,
   self: GatewayStatusProbedTarget["self"],
   target?: Partial<GatewayStatusProbedTarget["target"]>,
+  configPath = "/tmp/openclaw/config.json",
 ): GatewayStatusProbedTarget {
   const probe = createProbe("admin_capable", {
     ok: true,
@@ -108,6 +109,30 @@ function createReachableTarget(
       ...target,
     },
     self,
+    configSummary: {
+      path: configPath,
+      exists: true,
+      valid: true,
+      issues: [],
+      legacyIssues: [],
+      gateway: {
+        mode: null,
+        bind: null,
+        port: null,
+        controlUiEnabled: null,
+        controlUiBasePath: null,
+        authMode: null,
+        authTokenConfigured: false,
+        authPasswordConfigured: false,
+        remoteUrl: null,
+        remoteTokenConfigured: false,
+        remotePasswordConfigured: false,
+        tailscaleMode: null,
+      },
+      discovery: {
+        wideAreaEnabled: null,
+      },
+    },
   };
 }
 
@@ -213,6 +238,48 @@ describe("gateway status output", () => {
     });
 
     expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
+  });
+
+  it("warns when same-host reachable probes have different gateway config identities", () => {
+    const self = {
+      host: "gateway-host",
+      ip: "192.0.2.10",
+      version: "2026.5.22",
+      platform: "linux",
+    };
+    const warnings = buildGatewayStatusWarnings({
+      probed: [
+        createReachableTarget(
+          "localLoopback",
+          self,
+          {
+            kind: "localLoopback",
+            url: "ws://127.0.0.1:18789",
+          },
+          "/tmp/openclaw-main/config.json",
+        ),
+        createReachableTarget(
+          "explicit",
+          self,
+          {
+            kind: "explicit",
+            url: "ws://gateway-host:28789",
+          },
+          "/tmp/openclaw-rescue/config.json",
+        ),
+      ],
+      sshTarget: null,
+      sshTunnelStarted: false,
+      sshTunnelError: null,
+      discoveryCount: 0,
+    });
+
+    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toStrictEqual({
+      code: "multiple_gateways",
+      message:
+        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+      targetIds: ["localLoopback", "explicit"],
+    });
   });
 
   it("warns about multiple gateways when reachable probes report distinct identities", () => {

@@ -29,10 +29,18 @@ function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null
   }
   const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
   const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
-  if (!host && !ip) {
+  const discriminator =
+    typeof entry.self.instanceId === "string" && entry.self.instanceId.trim()
+      ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
+      : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
+        ? `device:${entry.self.deviceId.trim().toLowerCase()}`
+        : typeof entry.configSummary?.path === "string" && entry.configSummary.path.trim()
+          ? `config:${entry.configSummary.path.trim().toLowerCase()}`
+          : "";
+  if ((!host && !ip) || !discriminator) {
     return null;
   }
-  return `${host}\0${ip}`;
+  return `${host}\0${ip}\0${discriminator}`;
 }
 
 function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
