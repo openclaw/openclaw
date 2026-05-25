@@ -211,6 +211,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
   buildDeveloperInstructions,
@@ -2508,6 +2509,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
+    if (shouldRetireCodexAppServerClientAfterTurn(thread, appServer)) {
+      retireSharedCodexAppServerClientIfCurrent(client);
+    }
     releaseSharedClientLeaseOnce();
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
@@ -2528,6 +2532,13 @@ export async function runCodexAppServerAttempt(
     steeringQueueRef.current?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+function shouldRetireCodexAppServerClientAfterTurn(
+  thread: CodexAppServerThreadLifecycleBinding,
+  appServer: CodexAppServerRuntimeOptions,
+): boolean {
+  return appServer.start.transport === "stdio" && thread.userMcpServersFingerprint !== undefined;
 }
 
 function readDynamicToolCallParams(
