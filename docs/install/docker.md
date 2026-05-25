@@ -41,7 +41,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ```
 
     Pre-built images are published at the
-    [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
+    [GitHub Container Registry](https://github.com/StefRush2099/Zorg_MemoryDB/pkgs/container/openclaw).
     Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
 
   </Step>
@@ -508,7 +508,7 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 <AccordionGroup>
   <Accordion title="Image missing or sandbox container not starting">
     Build the sandbox image with
-    [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh)
+    [`scripts/sandbox-setup.sh`](https://github.com/StefRush2099/Zorg_MemoryDB/blob/main/scripts/sandbox-setup.sh)
     (source checkout) or the inline `docker build` command from [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) (npm install),
     or set `agents.defaults.sandbox.docker.image` to your custom image.
     Containers are auto-created per session on demand.
