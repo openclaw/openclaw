@@ -5,16 +5,19 @@
 
 ## 已合入（近期批次）
 
-| 批次                | 内容                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------- |
-| profile 原子切换    | `pack.load_profile_requested` → PackLoader 串行重载                                          |
-| W3C traceparent     | EventKernel → PlaybookRun → StepLog                                                          |
-| 弱模型 CI           | nightly + **PR pull_request** 触发                                                           |
-| evolve HITL         | 草稿 → 沙盒 → `evolution.promote_sandbox`                                                    |
-| auto_promote（dev） | `evolution.auto_promote_sandbox`（production_mode 强制 false）                               |
-| 可观测性文档        | `docs/OBSERVABILITY.md`                                                                      |
-| npm dry-run         | `pnpm claworks:publish:dry-run` + `pnpm claworks:runtime:publish:dry-run`                    |
-| 发布前收尾          | runtime-store 加固、gateway e2e 全绿、`docs/claworks/install.md`、`pnpm claworks:ot-dry-run` |
+| 批次                  | 内容                                                                                          |
+| --------------------- | --------------------------------------------------------------------------------------------- |
+| profile 原子切换      | `pack.load_profile_requested` → PackLoader 串行重载                                           |
+| W3C traceparent       | EventKernel → PlaybookRun → StepLog                                                           |
+| 弱模型 CI             | nightly + **PR pull_request** 触发                                                            |
+| PlaybookMatcher 修复  | `evolution.simulation_requested` 不再语义误匹配 `weak_model_regression_suite`（`8ed05f2`）    |
+| 进化链 smoke 断言     | `pnpm claworks:evolution:smoke` 断言 `weak_model_regression_suite` Playbook 完成（`6eaa339`） |
+| 弱模型 regression E2E | `evolution.regression_requested` → capability 路由单测（`1dbb9a1`）                           |
+| evolve HITL           | 草稿 → 沙盒 → `evolution.promote_sandbox`                                                     |
+| auto_promote（dev）   | `evolution.auto_promote_sandbox`（production_mode 强制 false）                                |
+| 可观测性文档          | `docs/OBSERVABILITY.md`                                                                       |
+| npm dry-run           | `pnpm claworks:publish:dry-run` + `pnpm claworks:runtime:publish:dry-run`                     |
+| 发布前收尾            | runtime-store 加固、gateway e2e 全绿、`docs/claworks/install.md`、`pnpm claworks:ot-dry-run`  |
 
 ## B 类 — 明确不提交
 

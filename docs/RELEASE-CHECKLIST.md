@@ -48,7 +48,7 @@
   ```
 - **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。本地 `~/.claworks/claworks.json` 仍为 dev（`production_mode` 未设）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
 - **#9 令牌（2026-05-25）**：临时目录 `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 生成 api_key + `gateway.auth.token`；in-process REST：`/v1/health` 无 Bearer → `200`；`/v1/identity` 无/错 Bearer → `401`；正确 Bearer → `200`。修复 `matchesKey` 对 32 字符 plaintext key 的误判。本地长期 Gateway 仍无 api_key（dev 开放）— 签收前需 secure init。MCP RBAC 单测：`mcp-auth.test.ts` 5/5。
-- **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；P0 验收全绿（runtime test 420/420、smoke 27/27、lint 0 error、doctor 无阻塞 Invalid config）；工作区已分组 conventional commit；本地 tag `v2026.5.19`（未 push）。
+- **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；P0 验收全绿（runtime test 420+/420+、smoke 27/27、lint 0 error、doctor 无阻塞 Invalid config）；工作区已分组 conventional commit；本地 tag `v2026.5.19`（未 push）。打 tag 步骤见 [`RELEASE-NOTES-2026-05-24.md`](RELEASE-NOTES-2026-05-24.md)。
 
 ---
 
@@ -64,12 +64,12 @@
 | 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                                                                                                             | ☐    |
 | 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过                                                                                             | ☐    |
 | 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；2026-05-25 回归全绿）                                                                                        | ✅   |
-| 9   | Evolution 烟测 | `pnpm claworks:evolution:smoke`（进化链 + drafts REST + pending 持久化）                                                                               | ☐    |
+| 9   | Evolution 烟测 | `pnpm claworks:evolution:smoke`（进化链 + `weak_model_regression_suite` 完成 + drafts REST + pending 持久化）                                          | ✅   |
 
 ### Gateway E2E 与 CI
 
 - **脚本**：`pnpm claworks:gateway:e2e`（`scripts/claworks-gateway-e2e.mjs`）会启动真实 Gateway 并探测 `/v1` 与 MCP。
-- **进化链烟测**：`pnpm claworks:evolution:smoke`（`scripts/claworks-evolution-chain-smoke.mjs`）验证 `autonomy.learn_opportunity` → `evolution.simulation_requested` → `evolution.regression_requested`、`GET /v1/evolve/drafts`、沙盒 pending 晋升 SQLite 持久化。CI：`.github/workflows/claworks-evolution-smoke.yml`（`workflow_dispatch` + 每周日 schedule；进化相关 PR 路径触发）。
+- **进化链烟测**：`pnpm claworks:evolution:smoke`（`scripts/claworks-evolution-chain-smoke.mjs`）验证 `autonomy.learn_opportunity` → `evolution.simulation_requested` → `evolution.regression_requested`、**`weak_model_regression_suite` Playbook 完成**、`GET /v1/evolve/drafts`、沙盒 pending 晋升 SQLite 持久化。CI：`.github/workflows/claworks-evolution-smoke.yml`（`workflow_dispatch` + 每周日 schedule；进化相关 PR 路径触发）。
 - **弱模型回归**：`pnpm claworks:weak-model-regression`；CI：`.github/workflows/claworks-weak-model-regression.yml`（`workflow_dispatch` + 每日 nightly + 相关 PR 路径）。
 - **当前 CI**：`.github/workflows/claworks-smoke.yml` 仅跑 `pnpm claworks:smoke`（无 live gateway）；release 分支签收前请在 Testbox/本机补跑 gateway e2e 与 evolution smoke。
 - **后续（P2+）**：若需进默认 PR 路径，保持 evolution/weak-model 为 optional job，避免每次 PR 起 Gateway 或全量回归。
