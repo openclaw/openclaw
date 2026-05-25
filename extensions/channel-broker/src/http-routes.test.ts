@@ -636,6 +636,51 @@ describe("channel-broker HTTP routes", () => {
     expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a retryable response for redelivery while durable send is still pending", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    let rejectFirstTurn!: (error: Error) => void;
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectFirstTurn = reject;
+        }),
+    );
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: createResponse(),
+    });
+    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(425);
+    expect(JSON.parse(redelivery.body)).toMatchObject({
+      ok: false,
+      status: "pending",
+      message: "delivery pending",
+    });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+
+    rejectFirstTurn(new Error("stop first turn"));
+    await expect(first).rejects.toThrow("stop first turn");
+  });
+
   it("allows provider redelivery after a failed broker webhook dispatch", async () => {
     const body = inboundBody();
     const config = brokerConfig();
