@@ -455,7 +455,7 @@ describe("subagent registry persistence", () => {
       requesterSessionKey: "agent:main:main",
       completionOwner: "origin-bridge-final",
     });
-    expect(restoredEntry?.pendingFinalDeliveryPayload?.completionOwner).toBe("origin-bridge-final");
+    expect(restoredEntry?.delivery?.payload?.completionOwner).toBe("origin-bridge-final");
 
     resetSubagentRegistryForTests({ persist: false });
     addSubagentRunForTests(restoredEntry as never);
@@ -497,6 +497,65 @@ describe("subagent registry persistence", () => {
     expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
     });
+  });
+
+  it("normalizes persisted completion owners and drops unknown restored values", async () => {
+    const persisted = {
+      version: 2,
+      runs: {
+        "run-owner-trimmed": {
+          runId: "run-owner-trimmed",
+          childSessionKey: "agent:main:subagent:owner-trimmed",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "trim owner",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+          completionOwner: " origin-bridge-final ",
+          pendingFinalDeliveryPayload: {
+            requesterSessionKey: "agent:main:main",
+            childSessionKey: "agent:main:subagent:owner-trimmed",
+            childRunId: "run-owner-trimmed",
+            task: "trim owner",
+            expectsCompletionMessage: true,
+            completionOwner: " requester-session-final ",
+          },
+          createdAt: 1,
+          startedAt: 1,
+        },
+        "run-owner-unknown": {
+          runId: "run-owner-unknown",
+          childSessionKey: "agent:main:subagent:owner-unknown",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "unknown owner",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+          completionOwner: "stale-owner-mode",
+          pendingFinalDeliveryPayload: {
+            requesterSessionKey: "agent:main:main",
+            childSessionKey: "agent:main:subagent:owner-unknown",
+            childRunId: "run-owner-unknown",
+            task: "unknown owner",
+            expectsCompletionMessage: true,
+            completionOwner: "stale-owner-mode",
+          },
+          createdAt: 1,
+          startedAt: 1,
+        },
+      },
+    };
+    await writePersistedRegistry(persisted, { seedChildSessions: false });
+
+    const restored = loadSubagentRegistryFromDisk();
+    expect(restored.get("run-owner-trimmed")?.completionOwner).toBe("origin-bridge-final");
+    expect(restored.get("run-owner-trimmed")?.delivery?.payload?.completionOwner).toBe(
+      "requester-session-final",
+    );
+    expect(restored.get("run-owner-unknown")?.completionOwner).toBeUndefined();
+    expect(
+      restored.get("run-owner-unknown")?.delivery?.payload?.completionOwner,
+    ).toBeUndefined();
   });
 
   it("retries cleanup announce after a failed announce", async () => {
