@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- QQ Bot: respect `OPENCLAW_HOME` for outbound media path resolution so `<qqmedia>` sends no longer silently fail when `HOME` and `OPENCLAW_HOME` differ (Docker / multi-user hosts). Persisted QQ Bot data (sessions, known users, refs) stays anchored on the OS home for upgrade compatibility. Fixes #83562. Thanks @sliverp.
 - Update: report the primary malformed `openclaw.extensions` payload error without adding a duplicate missing-main diagnostic. (#86596) Thanks @ferminquant.
 - Control UI: keep host-local Markdown file paths inert while preserving app-relative links. (#86620) Thanks @BryanTegomoh.
 - Gateway: dampen repeated unauthenticated device-required probes per URL while preserving explicit-auth and paired recovery paths. (#86575) Thanks @ferminquant.
