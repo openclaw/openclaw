@@ -324,6 +324,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
   }
 
+  protected resetProviderInitializationForRetry(): void {
+    this.providerInitialized = false;
+    this.providerInitPromise = null;
+    this.providerUnavailableReason = undefined;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+  }
+
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
     if (this.provider?.id !== "local") {
       return;
