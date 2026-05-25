@@ -220,50 +220,6 @@ function resolveCanUseInternalRuntimeHandoff(
   return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
 }
 
-function normalizeLifecycleTimestamp(value: number | undefined, now: number): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > now) {
-    return undefined;
-  }
-  return value;
-}
-
-function resolveAgentSendRotationEndReason(params: {
-  updatedAt: number | undefined;
-  sessionStartedAt?: number;
-  lastInteractionAt?: number;
-  dailyResetAt?: number;
-  idleExpiresAt?: number;
-  now: number;
-  replacedByRequestedSessionId: boolean;
-}): PluginHookSessionEndReason {
-  const updatedAt = normalizeLifecycleTimestamp(params.updatedAt, params.now) ?? 0;
-  const sessionStartedAt =
-    normalizeLifecycleTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
-  const lastInteractionAt =
-    normalizeLifecycleTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
-  const dailyExpired =
-    params.dailyResetAt != null && Number.isFinite(params.dailyResetAt)
-      ? sessionStartedAt < params.dailyResetAt
-      : false;
-  const idleExpired =
-    params.idleExpiresAt != null && Number.isFinite(params.idleExpiresAt)
-      ? params.now > params.idleExpiresAt && lastInteractionAt <= params.idleExpiresAt
-      : false;
-  if (dailyExpired && idleExpired) {
-    return (params.dailyResetAt ?? Number.POSITIVE_INFINITY) <=
-      (params.idleExpiresAt ?? Number.POSITIVE_INFINITY)
-      ? "daily"
-      : "idle";
-  }
-  if (dailyExpired) {
-    return "daily";
-  }
-  if (idleExpired) {
-    return "idle";
-  }
-  return params.replacedByRequestedSessionId ? "new" : "unknown";
-}
-
 function emitAgentSendSessionLifecycleTransition(
   transition: AgentSendSessionLifecycleTransition | undefined,
 ): void {
@@ -1653,17 +1609,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             previousSessionId,
             previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
             previousEndReason: previousSessionId
-              ? resolveAgentSendRotationEndReason({
-                  updatedAt: entry?.updatedAt,
-                  sessionStartedAt: lifecycleTimestamps?.sessionStartedAt,
-                  lastInteractionAt: lifecycleTimestamps?.lastInteractionAt,
-                  dailyResetAt: freshness?.dailyResetAt,
-                  idleExpiresAt: freshness?.idleExpiresAt,
-                  now,
-                  replacedByRequestedSessionId: Boolean(
-                    usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId,
-                  ),
-                })
+              ? (freshness?.staleReason ??
+                (usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId
+                  ? "new"
+                  : "unknown"))
               : undefined,
           };
         }
