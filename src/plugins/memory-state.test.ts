@@ -402,6 +402,48 @@ describe("memory plugin state", () => {
     expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
   });
 
+  it("falls back to legacy prompt registration when config selects a plugin without a capability", () => {
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "memory-core",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual(["legacy prompt"]);
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })?.pluginId).toBe(
+      "legacy-memory-v1",
+    );
+  });
+
+  it("does not fall back to legacy prompt registration when recall is disabled", () => {
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "none",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual([]);
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
+  });
+
   it("passes citations mode through to the prompt builder", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,

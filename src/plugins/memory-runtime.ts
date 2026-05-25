@@ -89,7 +89,7 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
     [
       getMemoryRuntime(),
       ...listMemoryRuntimeRegistrations().map((registration) => registration.runtime),
-    ].filter((runtime) => runtime?.closeAllMemorySearchManagers),
+    ].filter((runtime) => typeof runtime?.closeAllMemorySearchManagers === "function"),
   );
   for (const runtime of runtimes) {
     await runtime?.closeAllMemorySearchManagers?.();

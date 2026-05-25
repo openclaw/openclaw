@@ -238,6 +238,16 @@ function getMemoryCapabilityForPlugin(pluginId: string): MemoryPluginCapability 
   )?.capability;
 }
 
+function getLegacyMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
+  const capability = getMemoryCapabilityForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID);
+  return capability
+    ? {
+        pluginId: LEGACY_MEMORY_COMPAT_PLUGIN_ID,
+        capability,
+      }
+    : undefined;
+}
+
 function resolveSelectedMemoryCapability(params?: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -265,7 +275,7 @@ function resolveSelectedMemoryCapability(params?: {
     return undefined;
   }
   const capability = getMemoryCapabilityForPlugin(pluginId);
-  return capability ? { pluginId, capability } : undefined;
+  return capability ? { pluginId, capability } : getLegacyMemoryCapabilityRegistration();
 }
 
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
