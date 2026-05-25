@@ -220,6 +220,41 @@ function hasFailedDispatchCounts(result: unknown): boolean {
   return Object.values(failedCounts).some((value) => typeof value === "number" && value > 0);
 }
 
+type ChannelBrokerDurableInboundMetadata = {
+  providerId: string;
+  platform: string;
+  ackPolicy: ChannelBrokerInboundAckPolicy;
+};
+
+function hashNamespacePart(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 24);
+}
+
+function createChannelBrokerDurableInboundReceiveJournal(
+  pluginRuntime: PluginRuntime,
+  accountId: string,
+) {
+  const accountPart = hashNamespacePart(accountId);
+  return createDurableInboundReceiveJournal<
+    BrokerInboundEventV1,
+    ChannelBrokerDurableInboundMetadata,
+    ChannelBrokerDurableInboundMetadata
+  >({
+    pendingStore: pluginRuntime.state.openKeyedStore({
+      namespace: `channel-broker.inbound.v1.pending.${accountPart}`,
+      maxEntries: CHANNEL_BROKER_DURABLE_INBOUND_PENDING_MAX_ENTRIES,
+      defaultTtlMs: CHANNEL_BROKER_DURABLE_INBOUND_PENDING_TTL_MS,
+    }),
+    completedStore: pluginRuntime.state.openKeyedStore({
+      namespace: `channel-broker.inbound.v1.completed.${accountPart}`,
+      maxEntries: CHANNEL_BROKER_DURABLE_INBOUND_COMPLETED_MAX_ENTRIES,
+      defaultTtlMs: CHANNEL_BROKER_DURABLE_INBOUND_COMPLETED_TTL_MS,
+    }),
+    pendingTtlMs: CHANNEL_BROKER_DURABLE_INBOUND_PENDING_TTL_MS,
+    completedTtlMs: CHANNEL_BROKER_DURABLE_INBOUND_COMPLETED_TTL_MS,
+  });
+}
+
 function isPluginRuntime(value: unknown): value is PluginRuntime {
   const channel = (
     value as { channel?: { inbound?: { buildContext?: unknown; run?: unknown } } } | null

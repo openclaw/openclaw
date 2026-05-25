@@ -146,6 +146,51 @@ function createOpenKeyedStoreMock(): OpenKeyedStoreMock {
   return openKeyedStore;
 }
 
+function createMemoryKeyedStore<T>() {
+  const values = new Map<string, { key: string; value: T; createdAt: number }>();
+  return {
+    async register(key: string, value: T): Promise<void> {
+      values.set(key, { key, value, createdAt: 1 });
+    },
+    async registerIfAbsent(key: string, value: T): Promise<boolean> {
+      if (values.has(key)) {
+        return false;
+      }
+      values.set(key, { key, value, createdAt: 1 });
+      return true;
+    },
+    async lookup(key: string): Promise<T | undefined> {
+      return values.get(key)?.value;
+    },
+    async consume(key: string): Promise<T | undefined> {
+      const value = values.get(key)?.value;
+      values.delete(key);
+      return value;
+    },
+    async delete(key: string): Promise<boolean> {
+      return values.delete(key);
+    },
+    async entries(): Promise<Array<{ key: string; value: T; createdAt: number }>> {
+      return Array.from(values.values());
+    },
+    async clear(): Promise<void> {
+      values.clear();
+    },
+  };
+}
+
+function createOpenKeyedStoreMock() {
+  const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
+  return vi.fn(({ namespace }: { namespace: string }) => {
+    let store = stores.get(namespace);
+    if (!store) {
+      store = createMemoryKeyedStore();
+      stores.set(namespace, store);
+    }
+    return store;
+  });
+}
+
 function brokerConfig(
   secret = "broker-secret",
   overrides: Record<string, unknown> = {},
@@ -477,6 +522,7 @@ describe("channel-broker HTTP routes", () => {
       matchedBy: "default" as const,
       channel: "channel-broker",
     }));
+    const openKeyedStore = createOpenKeyedStoreMock();
     const pluginRuntime = createPluginRuntimeMock({
       config: {
         current: () => config,
@@ -486,7 +532,7 @@ describe("channel-broker HTTP routes", () => {
           resolveAgentRoute,
         },
       },
-      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      state: { openKeyedStore },
     });
     setChannelBrokerRuntime(pluginRuntime);
     const res = createResponse();
@@ -553,6 +599,39 @@ describe("channel-broker HTTP routes", () => {
         }),
       }),
     );
+    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: first,
+    });
+    const second = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: second,
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(second.statusCode).toBe(200);
+    expect(JSON.parse(second.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
   });
 
   it("routes inbound progress and final deliveries through broker previews", async () => {
