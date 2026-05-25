@@ -17,16 +17,20 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
+type CurrentAttemptAssistantWithError = NonNullable<
+  EmbeddedRunAttemptResult["currentAttemptAssistant"]
+> & { errorMessage: string };
 
 function isCurrentAttemptAssistant(
   value: unknown,
-): value is NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]> {
+): value is CurrentAttemptAssistantWithError {
   return (
     typeof value === "object" &&
     value !== null &&
     "provider" in value &&
     "model" in value &&
-    "errorMessage" in value
+    "errorMessage" in value &&
+    typeof value.errorMessage === "string"
   );
 }
 
