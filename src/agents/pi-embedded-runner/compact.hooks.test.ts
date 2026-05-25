@@ -12,7 +12,9 @@ import {
   listRegisteredPluginAgentPromptGuidanceMock,
   loadCompactHooksHarness,
   maybeCompactAgentHarnessSessionMock,
+  resolveAgentHarnessPolicyMock,
   registerProviderStreamForModelMock,
+  resolveContextWindowInfoMock,
   resolveContextEngineMock,
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
@@ -439,6 +441,115 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     if (fallbackCall[3] === undefined) {
       throw new Error("Expected fallback resolve-model options");
     }
+  });
+
+  it("routes OpenAI compaction through the selected Codex runtime provider before auth", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        auth: {
+          order: {
+            "openai-codex": ["openai-codex:work"],
+          },
+        },
+        agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
+  });
+
+  it("preserves direct OpenAI API-key compaction when no Codex auth is configured", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+          },
+        },
+        agents: { defaults: { embeddedHarness: { runtime: "codex" } } },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai");
+    expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
+  });
+
+  it("uses the persisted Codex runtime for compaction context windows", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "pi" });
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [], contextWindow: 1_000_000 },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "codex",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        auth: {
+          order: {
+            "openai-codex": ["openai-codex:work"],
+          },
+        },
+        agents: { defaults: { embeddedHarness: { runtime: "pi" } } },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+    });
   });
 
   it("keeps compaction fallback selection ephemeral", async () => {
