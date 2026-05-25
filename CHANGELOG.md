@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Scripts: make the gateway restart benchmark fail by default when a restart probe fails instead of reporting a nonzero failure rate with exit 0.
 - Scripts: build CLI startup artifacts before the gateway CPU startup bench so fresh Linux runners do not report false `n/a` readiness and process metrics.
 - Scripts: keep intentional Knip unused-file findings optional so full CI and sparse proof workspaces stay aligned.
 - Tests: normalize bundled plugin lifecycle probe paths and state-root lookup so native Windows release sweeps accept valid packaged plugin installs.

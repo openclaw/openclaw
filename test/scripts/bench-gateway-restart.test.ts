@@ -408,6 +408,57 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
 
     expect(result.summary.failureRate).toBe(1);
     expect(result.summary.firstFailureCode).toBe("initial_readyz_timeout");
+    expect(testing.hasBenchmarkFailures([result])).toBe(true);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: false })).toBe(true);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(false);
+  });
+
+  it("does not mark failure-free benchmark summaries as failed", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        childExitCode: 0,
+        childSignal: null,
+        events: [],
+        failureCode: null,
+        firstOutputMs: 1,
+        initialGatewayReadyLogLine: "[gateway] ready",
+        initialGatewayReadyLogMs: 20,
+        initialHealthz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 10,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialHttpListenLogLine: "[gateway] http server listening (0 plugins)",
+        initialHttpListenLogMs: 9,
+        initialReadyz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 12,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialStartupTrace: {},
+        iterations: [],
+        maxRssMb: 220,
+        outputTail: "",
+        resourceSlope: {
+          activeHandlesCountPerRestart: null,
+          activeRequestsCountPerRestart: null,
+          activeTimersCountPerRestart: null,
+          fdCountPerRestart: null,
+          heapUsedMbPerRestart: null,
+          rssMbPerRestart: null,
+        },
+      },
+    ]);
+
+    expect(testing.hasBenchmarkFailures([result])).toBe(false);
   });
 
   it("writes restart intent files for the target gateway pid", () => {

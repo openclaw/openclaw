@@ -144,6 +144,7 @@ type PluginFixtureResult = {
 };
 
 type CliOptions = {
+  allowFailures: boolean;
   cases: GatewayBenchCase[];
   entry: string;
   json: boolean;
@@ -294,6 +295,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 
 function parseOptions(): CliOptions {
   return {
+    allowFailures: hasFlag("--allow-failures"),
     cases: resolveCases(parseRepeatableFlag("--case")),
     entry: resolveEntry(parseFlagValue("--entry")),
     json: hasFlag("--json"),
@@ -327,6 +329,7 @@ Options:
   --post-ready-delay-ms <ms> Resource snapshot delay after next ready (default: ${DEFAULT_POST_READY_DELAY_MS})
   --output <path>          Write machine-readable JSON to a file
   --json                   Emit machine-readable JSON
+  --allow-failures         Exit 0 even when restart failures are measured
   --help, -h               Show this text
 
 Case ids:
@@ -1605,6 +1608,16 @@ function printResult(result: CaseResult): void {
   }
 }
 
+function hasBenchmarkFailures(results: CaseResult[]): boolean {
+  return results.some(
+    (result) => result.summary.failureRate > 0 || result.summary.firstFailureCode !== null,
+  );
+}
+
+function shouldFailBenchmark(results: CaseResult[], options: { allowFailures: boolean }): boolean {
+  return !options.allowFailures && hasBenchmarkFailures(results);
+}
+
 async function main() {
   if (hasHelpFlag()) {
     printUsage();
@@ -1644,10 +1657,16 @@ async function main() {
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
+    if (shouldFailBenchmark(results, options)) {
+      process.exitCode = 1;
+    }
     return;
   }
   for (const result of results) {
     printResult(result);
+  }
+  if (shouldFailBenchmark(results, options)) {
+    process.exitCode = 1;
   }
 }
 
@@ -1663,11 +1682,13 @@ export const testing = {
   finalizeRestartIteration,
   flushOutputLineBuffers,
   hasInitialReadyLogs,
+  hasBenchmarkFailures,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveRestartDeadlineFailure,
   resolveEntry,
   sanitizedEnv,
+  shouldFailBenchmark,
   summarizeCase,
   waitForRestartProbe,
   writeConfig,
