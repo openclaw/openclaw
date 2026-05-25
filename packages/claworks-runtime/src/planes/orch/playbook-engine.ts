@@ -24,6 +24,7 @@ import {
   type CallPlaybookFn,
   type ConnectorInvokeFn,
   type NotifyFn,
+  type CapabilityInvokeFn,
   type StepExecutorDeps,
 } from "./step-executor.js";
 
@@ -65,6 +66,10 @@ export interface PlaybookEngine {
   setLlmComplete(fn: LlmCompleteFn | undefined): void;
   setNotify(fn: NotifyFn | undefined): void;
   setConnectorInvoke(fn: ConnectorInvokeFn | undefined): void;
+  setCapabilityInvoke(
+    fn: CapabilityInvokeFn | undefined,
+    has?: (capabilityId: string) => boolean,
+  ): void;
   setPublishAnomaly(fn: ((payload: Record<string, unknown>) => Promise<void>) | undefined): void;
   setRenderPromptTemplate(
     fn: ((id: string, vars: Record<string, unknown>) => string | null) | undefined,
@@ -104,6 +109,9 @@ export type PlaybookEngineDeps = {
   logger?: (msg: string) => void;
   /** Pack action registry — passed through to step-executor for dynamic dispatch */
   actionRegistry?: import("../../kernel/action-registry.js").ActionRegistry;
+  /** Capability invoke bridge — passed through to step-executor for perceive.* etc. */
+  capabilityInvoke?: CapabilityInvokeFn;
+  capabilityHas?: (capabilityId: string) => boolean;
   /** Pack intent registry — passed through to function-executor */
   intentRegistry?: import("../../kernel/intent-registry.js").IntentRegistry;
   /** 生产模式：stub 步骤 fail-closed */
@@ -170,6 +178,8 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
   const productionMode = deps.productionMode ?? false;
   let publishAnomaly = deps.publishAnomaly;
   let renderPromptTemplate = deps.renderPromptTemplate;
+  let capabilityInvoke = deps.capabilityInvoke;
+  let capabilityHas = deps.capabilityHas;
 
   const upsertRun = db.prepare(`
     INSERT INTO cw_playbook_runs (id, playbook_id, status, input, output, error, steps, started_at, completed_at)
@@ -496,6 +506,8 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
         return { output: child.output, status: child.status };
       },
       actionRegistry: deps.actionRegistry,
+      capabilityInvoke,
+      capabilityHas,
       intentRegistry: deps.intentRegistry,
       logger: deps.logger,
       productionMode,
@@ -566,6 +578,11 @@ export function createPlaybookEngine(deps: PlaybookEngineDeps): PlaybookEngine {
 
     setConnectorInvoke(fn) {
       connectorInvoke = fn;
+    },
+
+    setCapabilityInvoke(fn, has) {
+      capabilityInvoke = fn;
+      capabilityHas = has;
     },
 
     setPublishAnomaly(fn) {

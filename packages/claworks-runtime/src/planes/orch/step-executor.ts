@@ -93,6 +93,13 @@ export type ScriptRunFn = (params: {
   input?: Record<string, unknown>;
 }) => Promise<Record<string, unknown>>;
 
+/** Route Playbook action steps to CapabilityRegistry.invoke (e.g. perceive.intent). */
+export type CapabilityInvokeFn = (
+  capabilityId: string,
+  params: Record<string, unknown>,
+  ctx: PlaybookStepContext,
+) => Promise<Record<string, unknown>>;
+
 export type CallPlaybookFn = (
   playbookId: string,
   params: Record<string, unknown>,
@@ -121,6 +128,10 @@ export type StepExecutorDeps = {
    * 找到时直接委托给 Pack 注册的 ActionHandler，无需修改 runtime。
    */
   actionRegistry?: ActionRegistry;
+  /** Capability registry invoke bridge — routes actionApiName like perceive.intent */
+  capabilityInvoke?: CapabilityInvokeFn;
+  /** Whether capabilityId is registered (avoids misrouting snake_case CRUD actions) */
+  capabilityHas?: (capabilityId: string) => boolean;
   /**
    * Pack intent registry — 传递给 function-executor 的 publish_event_from_intent。
    * 各 Pack 在 entry.ts 通过 PackContribution.intentMappings 注册。
@@ -850,6 +861,11 @@ async function executeActionStep(
     const reg = deps.actionRegistry.get(action)!;
     deps.logger?.(`[claworks:action] dispatching '${action}' to pack '${reg.packId}'`);
     return await reg.handler(params, ctx);
+  }
+
+  if (deps.capabilityHas?.(action) && deps.capabilityInvoke) {
+    deps.logger?.(`[claworks:action] routing '${action}' via capabilities.invoke`);
+    return await deps.capabilityInvoke(action, params, ctx);
   }
 
   if (step.objectType && step.objectId) {

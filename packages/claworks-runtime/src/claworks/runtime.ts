@@ -401,6 +401,28 @@ export async function createClaworksRuntime(
   runtime.constitution = constitution;
   registerExtensionCapabilities(runtime, constitution);
   capabilities.setConstitution(constitution);
+  runtime.playbookEngine.setCapabilityInvoke(
+    async (capabilityId, params, stepCtx) => {
+      const userId = String(params.user_id ?? stepCtx.variables.user_id ?? "").trim() || undefined;
+      const capCtx = {
+        source: "playbook",
+        runId: stepCtx.runId,
+        playbookId: stepCtx.playbookId,
+        stepCtx,
+        userId,
+        subjectId: stepCtx.robot.name,
+        subjectType: "system",
+        correlationId: stepCtx.runId,
+        invoke: async (id: string, p: Record<string, unknown>) =>
+          runtime.capabilities.invoke(id, capCtx, p),
+        logger: opts?.logger,
+      };
+      return runtime.capabilities.invoke(capabilityId, capCtx, params, {
+        constitutionCheck: { source: "playbook", userId },
+      });
+    },
+    (id) => runtime.capabilities.get(id) !== undefined,
+  );
 
   // 从 ObjectStore 恢复 Tier 2 用户规则（重启持久性）
   try {
