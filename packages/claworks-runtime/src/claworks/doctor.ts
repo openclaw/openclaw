@@ -9,7 +9,7 @@ import {
 } from "./pack-runtime.js";
 import {
   hasPackSourcesAvailable,
-  repairClaworksRobotPluginConfig,
+  repairClaworksJsonConfig,
   seedPacksToStateDir,
   detectPackLayerSystemConflict,
   discoverPackSourceDir,
@@ -146,7 +146,7 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     });
   }
 
-  // ── OpenClaw 桥接对齐（LLM / 通知 / IM）──────────────────────────────────
+  // ── Gateway 桥接（LLM / 通知 / IM）────────────────────────────────────────
   const modelRouter = runtime.config.model_router ?? {};
   const hasLlmRoute = Boolean(
     modelRouter.chat?.trim() ||
@@ -155,16 +155,16 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     modelRouter.default?.trim(),
   );
   checks.push({
-    id: "openclaw_bridge_llm",
+    id: "gateway_bridge_llm",
     status: hasLlmRoute ? "ok" : "warn",
     message: hasLlmRoute
       ? "model_router configured for Gateway LLM bridge"
-      : "No model_router — Playbook llm/subagent steps need agents.defaults.model + bridge at runtime",
+      : "No model_router — set CLAWORKS_LLM_BASE_URL or agents.defaults.model, then claworks doctor --fix",
   });
 
   const notifyTargets = runtime.config.notify?.targets ?? [];
   checks.push({
-    id: "openclaw_bridge_notify",
+    id: "gateway_bridge_notify",
     status: notifyTargets.length > 0 ? "ok" : "warn",
     message:
       notifyTargets.length > 0
@@ -174,7 +174,7 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
 
   const imAuto = runtime.config.im_bridge?.auto_on_message_received === true;
   checks.push({
-    id: "openclaw_bridge_im",
+    id: "gateway_bridge_im",
     status: imAuto ? "ok" : "warn",
     message: imAuto
       ? "IM auto-bridge enabled (message_received → classify_im)"
@@ -248,6 +248,18 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     });
   }
 
+  const echoEnabled =
+    (connectors.echo as { enabled?: boolean } | undefined)?.enabled !== false &&
+    connectors.echo !== undefined;
+  if (echoEnabled && isProduction) {
+    checks.push({
+      id: "connectors_echo_demo",
+      status: "error",
+      message:
+        "connectors.echo is demo-only (synthetic OT events) — disable for production and configure MQTT/OPC UA connectors",
+    });
+  }
+
   return checks;
 }
 
@@ -266,20 +278,21 @@ export async function runClaworksDoctorFix(
     },
   };
   const sourceDir = discoverPackSourceDir();
-  const pluginRepair = repairClaworksRobotPluginConfig(wrapped, {
+  const jsonRepair = repairClaworksJsonConfig(wrapped, {
     packSourceDir: sourceDir,
-    enableEchoConnector: true,
+    enableEchoConnector: !isClaworksProductionMode(runtime.config),
+    seedRobotMd: false,
   });
-  if (pluginRepair.changed) {
+  if (jsonRepair.changed) {
     const repaired = (
       wrapped.plugins as { entries?: Record<string, { config?: typeof runtime.config }> }
     )?.entries?.["claworks-robot"]?.config;
     if (repaired) {
       runtime.config = repaired;
     }
-    applied.push(...pluginRepair.actions);
+    applied.push(...jsonRepair.actions);
   }
-  warnings.push(...pluginRepair.warnings);
+  warnings.push(...jsonRepair.warnings);
 
   const sourceDirForSeed = sourceDir;
   const seed = seedPacksToStateDir({

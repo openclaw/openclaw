@@ -178,6 +178,48 @@ describe("product-config-repair", () => {
     expect(result.connectors.line.simulate).toBe(false);
   });
 
+  it("repairClaworksRobotPluginConfig disables echo connector in production", () => {
+    const config: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            enabled: true,
+            config: {
+              production_mode: true,
+              connectors: { echo: { preset: "echo", enabled: true } },
+            },
+          },
+        },
+      },
+    };
+    const result = repairClaworksRobotPluginConfig(config, { enableEchoConnector: true });
+    expect(result.changed).toBe(true);
+    const echo = (
+      config.plugins as {
+        entries: Record<string, { config: { connectors: { echo: { enabled?: boolean } } } }>;
+      }
+    ).entries["claworks-robot"].config.connectors.echo;
+    expect(echo.enabled).toBe(false);
+  });
+
+  it("repairClaworksRobotPluginConfig does not add echo in production", () => {
+    const config: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            enabled: true,
+            config: { production_mode: true, connectors: {} },
+          },
+        },
+      },
+    };
+    repairClaworksRobotPluginConfig(config, { enableEchoConnector: true });
+    const connectors = (
+      config.plugins as { entries: Record<string, { config: { connectors?: { echo?: unknown } } }> }
+    ).entries["claworks-robot"].config.connectors;
+    expect(connectors?.echo).toBeUndefined();
+  });
+
   it("repairOtConnectorSimulateFlags honors CLAWORKS_PRODUCTION env", () => {
     const connectors = {
       plant: { preset: "opcua-simulate", simulate: true, enabled: true },

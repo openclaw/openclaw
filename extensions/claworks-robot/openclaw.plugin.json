@@ -164,7 +164,7 @@
                 "properties": {
                     "auto_on_message_received": {
                         "type": "boolean",
-                        "description": "Route OpenClaw message_received hook into EventKernel intent classify"
+                        "description": "Route incoming IM messages into EventKernel intent classify"
                     }
                 }
             },
@@ -181,7 +181,8 @@
                                 "rest-poll",
                                 "mqtt",
                                 "opcua",
-                                "modbus"
+                                "modbus",
+                                "filesystem-kb"
                             ]
                         },
                         "enabled": {
@@ -189,7 +190,7 @@
                         },
                         "simulate": {
                             "type": "boolean",
-                            "description": "Use simulate preset variant for dev/test"
+                            "description": "Use simulate preset variant for dev/test (disabled when production_mode=true)"
                         },
                         "command": {
                             "type": "string"

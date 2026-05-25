@@ -81,7 +81,27 @@ describe("collectClaworksInitWarnings", () => {
       { plugins: { entries: { "claworks-robot": { config: {} } } } },
       {},
     );
-    expect(warnings.some((w) => w.includes("personal_work"))).toBe(true);
+    expect(
+      warnings.some(
+        (w) => w.includes("personal_work") && w.includes("claworks-personal.env.example"),
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when production_mode and echo connector both enabled", () => {
+    const warnings = collectClaworksInitWarnings({
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            config: {
+              production_mode: true,
+              connectors: { echo: { enabled: true, preset: "echo" } },
+            },
+          },
+        },
+      },
+    });
+    expect(warnings.some((w) => w.includes("production_mode") && w.includes("echo"))).toBe(true);
   });
 });
 

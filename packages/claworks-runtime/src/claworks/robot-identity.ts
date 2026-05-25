@@ -147,11 +147,11 @@ export function extractOwnerFromMd(md: string): RobotOwner | undefined {
   const fields: Record<string, string> = {};
 
   for (const line of lines) {
-    if (/^## Owner\b/i.test(line) || /^## 主人/.test(line)) {
+    if (/^## Owner\b/i.test(line) || line.startsWith("## 主人")) {
       inOwner = true;
       continue;
     }
-    if (inOwner && /^## /.test(line)) {
+    if (inOwner && line.startsWith("## ")) {
       break;
     }
     if (!inOwner) {
@@ -184,11 +184,11 @@ export function extractRulesFromMd(md: string): string[] {
   let inRulesSection = false;
 
   for (const line of lines) {
-    if (/^## 核心规则/.test(line) || /^## Core Rules/i.test(line)) {
+    if (line.startsWith("## 核心规则") || /^## Core Rules/i.test(line)) {
       inRulesSection = true;
       continue;
     }
-    if (inRulesSection && /^## /.test(line)) {
+    if (inRulesSection && line.startsWith("## ")) {
       break;
     }
     if (inRulesSection && /^\d+\./.test(line.trim())) {

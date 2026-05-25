@@ -103,7 +103,7 @@ export class ConnectorManager {
   }
 
   async stopAll(): Promise<void> {
-    for (const id of [...this.connectors.keys()]) {
+    for (const id of this.connectors.keys()) {
       await this.stop(id);
     }
   }

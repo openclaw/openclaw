@@ -102,6 +102,11 @@ export function collectClaworksInitWarnings(
       "connectors.echo 为演示 OT 事件（非真实产线数据）；生产环境请配置 MQTT/OPC UA 等真实连接器",
     );
   }
+  if (production && connectors.echo?.enabled !== false && connectors.echo) {
+    warnings.push(
+      "production_mode 已开启但 connectors.echo 仍启用 — 运行 claworks doctor --fix 关闭演示连接器",
+    );
+  }
   const simulating = Object.entries(connectors).filter(
     ([, cfg]) => cfg && typeof cfg === "object" && cfg.simulate === true,
   );
@@ -112,7 +117,7 @@ export function collectClaworksInitWarnings(
   }
   if (!production && env.CLAWORKS_PRODUCT_PROFILE?.trim() !== "personal_work") {
     warnings.push(
-      "个人企业混合（自托管 Qwen/KB）：CLAWORKS_PRODUCT_PROFILE=personal_work pnpm claworks:repair:personal",
+      "个人企业混合（自托管 Qwen/KB）：复制 contrib/examples/claworks-personal.env.example → ~/.claworks/personal.env，然后 CLAWORKS_PRODUCT_PROFILE=personal_work pnpm claworks:repair:personal",
     );
   }
   return warnings;
@@ -273,7 +278,7 @@ export async function runClaworksInit(opts: {
     step: stepNo++,
     title: "下一步",
     detail:
-      "运行 claworks start 启动 Gateway；生产前 claworks doctor --fix；个人企业见 CLAWORKS_PRODUCT_PROFILE=personal_work",
+      "运行 pnpm claworks:start 启动 Gateway；生产前 CLAWORKS_INIT_SECURE=1 pnpm claworks:init --force；个人企业见 pnpm claworks:repair:personal",
     status: "ok",
   });
 

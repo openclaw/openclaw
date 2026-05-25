@@ -47,7 +47,10 @@ export interface EventKernel {
   /** 注入能力注册表（在 runtime 组装完成后调用）。 */
   setCapabilityRegistry(registry: CapabilityRegistry): void;
   /** 返回最近 N 条事件（用于 observe.* 能力统计）。 */
-  getRecentEvents(limit?: number, type?: string): Array<{ type: string; source: string; ts: Date }>;
+  getRecentEvents(
+    limit?: number,
+    type?: string,
+  ): Array<{ type: string; source: string; ts: Date; payload?: Record<string, unknown> }>;
 }
 
 export type EventKernelOptions = {
@@ -84,7 +87,12 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
   `);
   let running = false;
   let capabilityRegistry: CapabilityRegistry | null = null;
-  const recentEventLog: Array<{ type: string; source: string; ts: Date }> = [];
+  const recentEventLog: Array<{
+    type: string;
+    source: string;
+    ts: Date;
+    payload?: Record<string, unknown>;
+  }> = [];
   const MAX_RECENT_LOG = 500;
 
   async function publishAnomaly(payload: Record<string, unknown>): Promise<void> {
@@ -269,7 +277,7 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
         subjectType: pubOpts?.subjectType ?? "system",
         idempotencyKey: pubOpts?.idempotencyKey,
       };
-      recentEventLog.push({ type, source, ts: event.timestamp });
+      recentEventLog.push({ type, source, ts: event.timestamp, payload });
       if (recentEventLog.length > MAX_RECENT_LOG) {
         recentEventLog.splice(0, recentEventLog.length - MAX_RECENT_LOG);
       }
@@ -368,7 +376,7 @@ export function createEventKernel(opts: EventKernelOptions): EventKernel {
     getRecentEvents(
       limit = 200,
       filterType?: string,
-    ): Array<{ type: string; source: string; ts: Date }> {
+    ): Array<{ type: string; source: string; ts: Date; payload?: Record<string, unknown> }> {
       let events = recentEventLog;
       if (filterType) {
         events = events.filter((e) => e.type === filterType);

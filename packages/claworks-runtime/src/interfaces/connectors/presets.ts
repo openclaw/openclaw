@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ConnectorConfig } from "./types.js";
 
 export type ConnectorConfigInput = Omit<ConnectorConfig, "command"> & {
-  /** Built-in connector id: echo | rest-poll | mqtt | opcua | modbus */
+  /** Built-in connector id: echo | rest-poll | mqtt | opcua | modbus | filesystem-kb */
   preset?: string;
   /**
    * 模拟模式（开发/测试用）。
@@ -92,6 +92,11 @@ export function getConnectorPreset(
       return {
         command: process.execPath,
         args: [presetPath(root, "database-poll", "database-poll-bridge.mjs")],
+      };
+    case "filesystem-kb":
+      return {
+        command: process.execPath,
+        args: [presetPath(root, "filesystem-kb", "filesystem-kb-bridge.mjs")],
       };
     default:
       return null;

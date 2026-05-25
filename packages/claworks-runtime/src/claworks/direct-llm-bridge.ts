@@ -214,7 +214,9 @@ function createAnthropicBridge(
         max_tokens: 4096,
         messages: [{ role: "user", content: prompt }],
       };
-      if (system) body.system = system;
+      if (system) {
+        body.system = system;
+      }
 
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",

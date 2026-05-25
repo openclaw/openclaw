@@ -149,7 +149,7 @@ export function repairPersonalEnterpriseProfile(
     changed = true;
   }
 
-  plugins.slots = { memory: "memory-lancedb", ...((plugins.slots as object) ?? {}) };
+  plugins.slots = { memory: "memory-lancedb", ...(plugins.slots as object) };
 
   const models = (config.models ?? {}) as Record<string, unknown>;
   config.models = models;

@@ -490,8 +490,11 @@ export function repairClaworksRobotPluginConfig(
     warnings.push(layerConflict.message);
   }
 
+  const productionMode =
+    pluginConfig.production_mode === true || isClaworksProductionMode(pluginConfig);
+
   const connectors = (pluginConfig.connectors ?? {}) as Record<string, unknown>;
-  if (opts?.enableEchoConnector !== false && !connectors.echo) {
+  if (opts?.enableEchoConnector !== false && !connectors.echo && !productionMode) {
     pluginConfig.connectors = {
       ...connectors,
       echo: { preset: "echo", enabled: true },
@@ -503,7 +506,7 @@ export function repairClaworksRobotPluginConfig(
   pluginConfig.im_bridge ??= {};
   if (pluginConfig.im_bridge.auto_on_message_received !== true) {
     pluginConfig.im_bridge.auto_on_message_received = true;
-    actions.push("im_bridge.auto_on_message_received = true (OpenClaw channel → EventKernel)");
+    actions.push("im_bridge.auto_on_message_received = true (IM 渠道 → EventKernel)");
     changed = true;
   }
 
@@ -533,6 +536,18 @@ export function repairClaworksRobotPluginConfig(
     pluginConfig.connectors = otRepair.connectors;
     actions.push(...otRepair.actions);
     changed = true;
+  }
+
+  if (productionMode) {
+    const echoCfg = (pluginConfig.connectors as Record<string, { enabled?: boolean }>)?.echo;
+    if (echoCfg && echoCfg.enabled !== false) {
+      pluginConfig.connectors = {
+        ...(pluginConfig.connectors as Record<string, unknown>),
+        echo: { ...echoCfg, enabled: false },
+      };
+      actions.push("connectors.echo: disabled (demo OT, production)");
+      changed = true;
+    }
   }
 
   const seed = seedPacksToStateDir({
@@ -627,7 +642,7 @@ export function repairClaworksJsonConfig(
   ) {
     gateway.port = CLAWORKS_STANDARD_GATEWAY_PORT;
     actions.push(
-      `gateway.port -> ${CLAWORKS_STANDARD_GATEWAY_PORT} (OpenClaw reserves ${OPENCLAW_RESERVED_GATEWAY_PORT})`,
+      `gateway.port -> ${CLAWORKS_STANDARD_GATEWAY_PORT} (ClaWorks 标准端口，避免占用 ${OPENCLAW_RESERVED_GATEWAY_PORT})`,
     );
     changed = true;
   }
