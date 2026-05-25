@@ -569,6 +569,13 @@ PY
       const html = toSanitizedMarkdownHtml("[click](file:///etc/passwd)");
       expect(html).toBe("<p><a>click</a></p>\n");
     });
+
+    it("allows safe app-protocol links", () => {
+      const result = toSanitizedMarkdownHtml(
+        "[Open in Obsidian](obsidian://open?vault=MyVault&file=Note)",
+      );
+      expect(result).toContain('href="obsidian://open?vault=MyVault&amp;file=Note"');
+    });
   });
 
   describe("ReDoS protection", () => {

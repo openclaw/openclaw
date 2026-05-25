@@ -72,10 +72,34 @@ const allowedAttrs = [
   "type",
   "aria-label",
 ];
+// App-protocol schemes that are safe to link — they open registered
+// desktop apps and cannot execute arbitrary script.
+const SAFE_APP_PROTOCOLS = new Set([
+  "obsidian:",
+  "things:",
+  "fantastical:",
+  "shortcuts:",
+  "craftdocs:",
+  "notion:",
+  "bear:",
+  "vscode:",
+]);
+
+// Extend DOMPurify's default URI regexp to also accept our safe app protocols.
+// The default allows http, https, ftp, ftps, mailto, tel, callto, sms, cid, xmpp.
+// We add our desktop-app schemes so DOMPurify doesn't strip them before the
+// afterSanitizeAttributes hook can inspect them.
+const SAFE_APP_PROTOCOL_NAMES = [...SAFE_APP_PROTOCOLS].map((p) => p.replace(/:$/, ""));
+const ALLOWED_URI_REGEXP = new RegExp(
+  `^(?:(?:https?|ftp|ftps|mailto|tel|callto|sms|cid|xmpp|${SAFE_APP_PROTOCOL_NAMES.join("|")}):|\\/|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$))`,
+  "i",
+);
+
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
   ALLOWED_ATTR: allowedAttrs,
   ADD_DATA_URI_TAGS: ["img"],
+  ALLOWED_URI_REGEXP,
 };
 
 let hooksInstalled = false;
@@ -153,7 +177,12 @@ function installHooks() {
     // Block dangerous URL schemes (javascript:, data:, vbscript:, etc.)
     try {
       const url = new URL(href, window.location.href);
-      if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "mailto:") {
+      if (
+        url.protocol !== "http:" &&
+        url.protocol !== "https:" &&
+        url.protocol !== "mailto:" &&
+        !SAFE_APP_PROTOCOLS.has(url.protocol)
+      ) {
         node.removeAttribute("href");
         return;
       }
