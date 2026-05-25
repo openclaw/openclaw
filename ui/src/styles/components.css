@@ -6122,6 +6122,215 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.ov-summary-strip {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 16px;
+}
+
+.ov-summary-tile {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  text-align: left;
+}
+
+.ov-summary-tile--button {
+  cursor: pointer;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.ov-summary-tile--button:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.ov-summary-tile--button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ov-summary-tile.danger {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.2));
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.ov-summary-tile.warn {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.24));
+  background: rgba(234, 179, 8, 0.05);
+}
+
+.ov-summary-tile.ok {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.ov-summary-tile__label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ov-summary-tile__value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-summary-tile__hint {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ov-status-badge.ok {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--success, #16a34a);
+}
+
+.ov-status-badge.warn {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  background: rgba(234, 179, 8, 0.1);
+  color: var(--warn);
+}
+
+.ov-status-badge.danger {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.24));
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
+
+.ov-operator-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(280px, 1.3fr) minmax(260px, 1fr) minmax(260px, 1fr);
+  align-items: stretch;
+}
+
+.ov-operator-grid + .ov-operator-grid {
+  margin-top: 16px;
+}
+
+.ov-operator-grid--secondary {
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+}
+
+.ov-operator-attention {
+  margin: 0;
+}
+
+.ov-operator-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ov-operator-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  text-align: left;
+}
+
+.ov-operator-row--button {
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.ov-operator-row--button:hover {
+  border-color: var(--border-strong);
+  background: var(--card-highlight);
+}
+
+.ov-operator-row--button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ov-operator-row.ok {
+  border-color: rgba(34, 197, 94, 0.2);
+}
+
+.ov-operator-row.warn {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.22));
+  background: rgba(234, 179, 8, 0.05);
+}
+
+.ov-operator-row.danger {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.22));
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.ov-operator-row__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-operator-row__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-value.warn {
+  color: var(--warn);
+}
+
+.ov-setup-grid {
+  margin-top: 0;
+}
+
 /* Stagger entrance */
 .ov-cards .ov-card:nth-child(1) {
   animation-delay: 0ms;

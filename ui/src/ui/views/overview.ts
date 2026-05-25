@@ -1,10 +1,19 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
+import {
+  formatCost,
+  formatRelativeTimestamp,
+  formatDurationHuman,
+  formatTokens,
+} from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
+import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
+import { formatNextRun } from "../presenter.ts";
+import { collectQuotaWindows, formatQuotaReset } from "../provider-quota-summary.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
@@ -17,8 +26,6 @@ import type {
   SkillStatusReport,
 } from "../types.ts";
 import { renderConnectCommand } from "./connect-command.ts";
-import { renderOverviewAttention } from "./overview-attention.ts";
-import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
@@ -63,6 +70,87 @@ export type OverviewProps = {
   onNavigate: (tab: string) => void;
   onRefreshLogs: () => void;
 };
+
+type OverviewTone = "ok" | "warn" | "danger" | "neutral";
+
+function renderOverviewBadge(label: string | TemplateResult, tone: OverviewTone = "neutral") {
+  return html`<span class=${`ov-status-badge ${tone}`}>${label}</span>`;
+}
+
+function renderSummaryTile(params: {
+  kind?: string;
+  label: string;
+  value: string | TemplateResult;
+  hint: string | TemplateResult;
+  tone?: OverviewTone;
+  tab?: string;
+  onNavigate: (tab: string) => void;
+}) {
+  const dataKind = params.kind ?? nothing;
+  const content = html`
+    <span class="ov-summary-tile__label">${params.label}</span>
+    <span class="ov-summary-tile__value">${params.value}</span>
+    <span class="ov-summary-tile__hint">${params.hint}</span>
+  `;
+  if (!params.tab) {
+    return html`<div class=${`ov-summary-tile ${params.tone ?? "neutral"}`} data-kind=${dataKind}>
+      ${content}
+    </div>`;
+  }
+  return html`
+    <button
+      class=${`ov-summary-tile ov-summary-tile--button ${params.tone ?? "neutral"}`}
+      data-kind=${dataKind}
+      @click=${() => params.onNavigate(params.tab as string)}
+    >
+      ${content}
+    </button>
+  `;
+}
+
+function renderEmptyOperatorRow(
+  title: string,
+  description: string,
+  tone: OverviewTone = "neutral",
+) {
+  return html`
+    <div class=${`ov-operator-row ${tone}`}>
+      <div>
+        <div class="ov-operator-row__title">${title}</div>
+        <div class="ov-operator-row__meta">${description}</div>
+      </div>
+    </div>
+  `;
+}
+
+function summarizeLogLines(lines: string[]) {
+  const visible = lines.slice(-200);
+  const errors = visible.filter((line) => /\b(error|fatal|exception|failed)\b/i.test(line)).length;
+  const warnings = visible.filter((line) => /\b(warn|warning)\b/i.test(line)).length;
+  return { lines: visible.length, errors, warnings };
+}
+
+function sessionStatusLabel(session: SessionsListResult["sessions"][number]): {
+  label: string;
+  tone: OverviewTone;
+} {
+  if (session.hasActiveRun || session.hasActiveSubagentRun || session.status === "running") {
+    return { label: t("common.running"), tone: "ok" };
+  }
+  if (session.status === "failed" || session.status === "timeout") {
+    return { label: session.status, tone: "danger" };
+  }
+  if (session.status === "killed") {
+    return { label: session.status, tone: "warn" };
+  }
+  if (session.status === "done") {
+    return { label: "done", tone: "neutral" };
+  }
+  return {
+    label: session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : t("common.na"),
+    tone: "neutral",
+  };
+}
 
 const PAIRING_HINT_COPY: Record<
   PairingHint["kind"],
@@ -253,226 +341,581 @@ export function renderOverview(props: OverviewProps) {
     ? props.settings.locale
     : i18n.getLocale();
 
-  return html`
-    <section class="grid">
-      <div class="card">
-        <div class="card-title">${t("overview.access.title")}</div>
-        <div class="card-sub">${t("overview.access.subtitle")}</div>
-        <div class="ov-access-grid" style="margin-top: 16px;">
-          <label class="field ov-access-grid__full">
-            <span>${t("overview.access.wsUrl")}</span>
-            <input
-              .value=${props.settings.gatewayUrl}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
-                  gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
-                });
-              }}
-              placeholder="ws://100.x.y.z:18789"
-            />
-          </label>
-          ${isTrustedProxy
-            ? ""
-            : html`
-                <label class="field">
-                  <span>${t("overview.access.token")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                    <input
-                      type=${props.showGatewayToken ? "text" : "password"}
-                      autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
-                      .value=${props.settings.token}
-                      @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onSettingsChange({ ...props.settings, token: v });
-                      }}
-                      placeholder="OPENCLAW_GATEWAY_TOKEN"
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayToken
-                        ? t("overview.access.hideToken")
-                        : t("overview.access.showToken")}
-                      aria-label=${t("overview.access.toggleTokenVisibility")}
-                      aria-pressed=${props.showGatewayToken}
-                      @click=${props.onToggleGatewayTokenVisibility}
-                    >
-                      ${props.showGatewayToken ? icons.eye : icons.eyeOff}
-                    </button>
-                  </div>
-                </label>
-                <label class="field">
-                  <span>${t("overview.access.password")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                    <input
-                      type=${props.showGatewayPassword ? "text" : "password"}
-                      autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
-                      .value=${props.password}
-                      @input=${(e: Event) => {
-                        const v = (e.target as HTMLInputElement).value;
-                        props.onPasswordChange(v);
-                      }}
-                      placeholder=${t("overview.access.passwordPlaceholder")}
-                    />
-                    <button
-                      type="button"
-                      class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayPassword
-                        ? t("overview.access.hidePassword")
-                        : t("overview.access.showPassword")}
-                      aria-label=${t("overview.access.togglePasswordVisibility")}
-                      aria-pressed=${props.showGatewayPassword}
-                      @click=${props.onToggleGatewayPasswordVisibility}
-                    >
-                      ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
-                    </button>
-                  </div>
-                </label>
-              `}
-          <label class="field">
-            <span>${t("overview.access.sessionKey")}</span>
-            <input
-              .value=${props.settings.sessionKey}
-              @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
-            />
-          </label>
-          <label class="field">
-            <span>${t("overview.access.language")}</span>
-            <select
-              .value=${currentLocale}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLSelectElement).value as Locale;
-                void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
-              }}
-            >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc} ?selected=${currentLocale === loc}>
-                  ${t(`languages.${key}`)}
-                </option>`;
-              })}
-            </select>
-          </label>
-        </div>
-        <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
-          <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted"
-            >${isTrustedProxy
-              ? t("overview.access.trustedProxy")
-              : t("overview.access.connectHint")}</span
-          >
-        </div>
-        ${!props.connected
-          ? html`
-              <div class="login-gate__help" style="margin-top: 16px;">
-                <div class="login-gate__help-title">${t("overview.connection.title")}</div>
-                <ol class="login-gate__steps">
-                  <li>
-                    ${t("overview.connection.step1")}
-                    ${renderConnectCommand("openclaw gateway run")}
-                  </li>
-                  <li>
-                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
-                  </li>
-                  <li>${t("overview.connection.step3")}</li>
-                  <li>
-                    ${t("overview.connection.step4")}<code
-                      >openclaw doctor --generate-gateway-token</code
-                    >
-                  </li>
-                </ol>
-                <div class="login-gate__docs">
-                  ${t("overview.connection.docsHint")}
-                  <a
-                    class="session-link"
-                    href="https://docs.openclaw.ai/web/dashboard"
-                    target="_blank"
-                    rel="noreferrer"
-                    >${t("overview.connection.docsLink")}</a
+  const sessions = props.sessionsResult?.sessions ?? [];
+  const activeSessions = sessions.filter(
+    (session) =>
+      session.hasActiveRun || session.hasActiveSubagentRun || session.status === "running",
+  );
+  const failedSessions = sessions.filter(
+    (session) => session.status === "failed" || session.status === "timeout",
+  );
+  const recentSessions = sessions.slice(0, 5);
+  const totals = props.usageResult?.totals;
+  const totalCost = formatCost(totals?.totalCost);
+  const totalTokens = formatTokens(totals?.totalTokens);
+  const totalMessages = String(props.usageResult?.aggregates?.messages?.total ?? 0);
+  const skills = props.skillsReport?.skills ?? [];
+  const enabledSkills = skills.filter((skill) => !skill.disabled).length;
+  const blockedSkills = skills.filter((skill) => skill.blockedByAllowlist).length;
+  const failedCronJobs = props.cronJobs.filter((job) => job.state?.lastStatus === "error");
+  const overdueCronJobs = props.cronJobs.filter(
+    (job) =>
+      job.enabled && job.state?.nextRunAtMs != null && Date.now() - job.state.nextRunAtMs > 300_000,
+  );
+  const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
+  const monitoredProviders = (props.modelAuthStatus?.providers ?? []).filter(
+    isMonitoredAuthProvider,
+  );
+  const expiredProviders = monitoredProviders.filter(
+    (provider) => provider.status === "expired" || provider.status === "missing",
+  );
+  const expiringProviders = monitoredProviders.filter((provider) => provider.status === "expiring");
+  const quotaWindows = collectQuotaWindows(monitoredProviders);
+  const primaryQuota = quotaWindows[0];
+  const secondaryQuota = quotaWindows.find(
+    (entry) =>
+      entry.displayName !== primaryQuota?.displayName || entry.label !== primaryQuota?.label,
+  );
+  const logSummary = summarizeLogLines(props.overviewLogLines);
+  const hasOperationalData =
+    props.usageResult != null ||
+    props.sessionsResult != null ||
+    props.skillsReport != null ||
+    props.cronStatus != null ||
+    props.modelAuthStatus != null;
+
+  const accessCard = html`
+    <div class="card">
+      <div class="card-title">${t("overview.access.title")}</div>
+      <div class="card-sub">${t("overview.access.subtitle")}</div>
+      <div class="ov-access-grid" style="margin-top: 16px;">
+        <label class="field ov-access-grid__full">
+          <span>${t("overview.access.wsUrl")}</span>
+          <input
+            .value=${props.settings.gatewayUrl}
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              props.onSettingsChange({
+                ...props.settings,
+                gatewayUrl: v,
+                token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
+              });
+            }}
+            placeholder="ws://100.x.y.z:18789"
+          />
+        </label>
+        ${isTrustedProxy
+          ? ""
+          : html`
+              <label class="field">
+                <span>${t("overview.access.token")}</span>
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                  <input
+                    type=${props.showGatewayToken ? "text" : "password"}
+                    autocomplete="off"
+                    style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
+                    .value=${props.settings.token}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onSettingsChange({ ...props.settings, token: v });
+                    }}
+                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                    style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                    title=${props.showGatewayToken
+                      ? t("overview.access.hideToken")
+                      : t("overview.access.showToken")}
+                    aria-label=${t("overview.access.toggleTokenVisibility")}
+                    aria-pressed=${props.showGatewayToken}
+                    @click=${props.onToggleGatewayTokenVisibility}
                   >
+                    ${props.showGatewayToken ? icons.eye : icons.eyeOff}
+                  </button>
+                </div>
+              </label>
+              <label class="field">
+                <span>${t("overview.access.password")}</span>
+                <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                  <input
+                    type=${props.showGatewayPassword ? "text" : "password"}
+                    autocomplete="off"
+                    style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
+                    .value=${props.password}
+                    @input=${(e: Event) => {
+                      const v = (e.target as HTMLInputElement).value;
+                      props.onPasswordChange(v);
+                    }}
+                    placeholder=${t("overview.access.passwordPlaceholder")}
+                  />
+                  <button
+                    type="button"
+                    class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                    style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
+                    title=${props.showGatewayPassword
+                      ? t("overview.access.hidePassword")
+                      : t("overview.access.showPassword")}
+                    aria-label=${t("overview.access.togglePasswordVisibility")}
+                    aria-pressed=${props.showGatewayPassword}
+                    @click=${props.onToggleGatewayPasswordVisibility}
+                  >
+                    ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
+                  </button>
+                </div>
+              </label>
+            `}
+        <label class="field">
+          <span>${t("overview.access.sessionKey")}</span>
+          <input
+            .value=${props.settings.sessionKey}
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              props.onSessionKeyChange(v);
+            }}
+          />
+        </label>
+        <label class="field">
+          <span>${t("overview.access.language")}</span>
+          <select
+            .value=${currentLocale}
+            @change=${(e: Event) => {
+              const v = (e.target as HTMLSelectElement).value as Locale;
+              void i18n.setLocale(v);
+              props.onSettingsChange({ ...props.settings, locale: v });
+            }}
+          >
+            ${SUPPORTED_LOCALES.map((loc) => {
+              const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
+              return html`<option value=${loc} ?selected=${currentLocale === loc}>
+                ${t(`languages.${key}`)}
+              </option>`;
+            })}
+          </select>
+        </label>
+      </div>
+      <div class="row" style="margin-top: 14px;">
+        <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
+        <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
+        <span class="muted"
+          >${isTrustedProxy
+            ? t("overview.access.trustedProxy")
+            : t("overview.access.connectHint")}</span
+        >
+      </div>
+      ${!props.connected
+        ? html`
+            <div class="login-gate__help" style="margin-top: 16px;">
+              <div class="login-gate__help-title">${t("overview.connection.title")}</div>
+              <ol class="login-gate__steps">
+                <li>
+                  ${t("overview.connection.step1")} ${renderConnectCommand("openclaw gateway run")}
+                </li>
+                <li>
+                  ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
+                </li>
+                <li>${t("overview.connection.step3")}</li>
+                <li>
+                  ${t("overview.connection.step4")}<code
+                    >openclaw doctor --generate-gateway-token</code
+                  >
+                </li>
+              </ol>
+              <div class="login-gate__docs">
+                ${t("overview.connection.docsHint")}
+                <a
+                  class="session-link"
+                  href="https://docs.openclaw.ai/web/dashboard"
+                  target="_blank"
+                  rel="noreferrer"
+                  >${t("overview.connection.docsLink")}</a
+                >
+              </div>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+
+  const snapshotCard = html`
+    <div class="card">
+      <div class="card-title">${t("overview.snapshot.title")}</div>
+      <div class="card-sub">${t("overview.snapshot.subtitle")}</div>
+      <div class="stat-grid" style="margin-top: 16px;">
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.status")}</div>
+          <div class="stat-value ${props.connected ? "ok" : "warn"}">
+            ${props.connected ? t("common.ok") : t("common.offline")}
+          </div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.uptime")}</div>
+          <div class="stat-value">${uptime}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.tickInterval")}</div>
+          <div class="stat-value">${tick}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
+          <div class="stat-value">
+            ${props.lastChannelsRefresh
+              ? formatRelativeTimestamp(props.lastChannelsRefresh)
+              : t("common.na")}
+          </div>
+        </div>
+      </div>
+      ${props.lastError
+        ? html`<div class="callout danger" style="margin-top: 14px;">
+            <div>${props.lastError}</div>
+            ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
+            ${queryTokenHint ?? ""}
+          </div>`
+        : html`
+            <div class="callout" style="margin-top: 14px">
+              ${t("overview.snapshot.channelsHint")}
+            </div>
+          `}
+    </div>
+  `;
+
+  return html`
+    ${!props.connected
+      ? html`<section class="grid">${accessCard}${snapshotCard}</section>`
+      : html`
+          <section class="ov-summary-strip" aria-label="Overview summary">
+            ${renderSummaryTile({
+              label: "Gateway",
+              value: html`${renderOverviewBadge(t("common.ok"), "ok")} ${t("common.online")}`,
+              hint: `uptime ${uptime}`,
+              tone: "ok",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: "Channels",
+              value: props.lastChannelsRefresh
+                ? html`${renderOverviewBadge("fresh", "ok")} refreshed`
+                : html`${renderOverviewBadge(t("common.na"), "neutral")} unknown`,
+              hint: props.lastChannelsRefresh
+                ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                : t("overview.snapshot.channelsHint"),
+              tone: props.lastChannelsRefresh ? "ok" : "neutral",
+              tab: "channels",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: "Active work",
+              value: `${activeSessions.length}/${props.sessionsResult?.count ?? sessions.length} active`,
+              hint:
+                failedSessions.length > 0
+                  ? `${failedSessions.length} failed or timed out`
+                  : "no failed active sessions",
+              tone:
+                failedSessions.length > 0 ? "danger" : activeSessions.length > 0 ? "ok" : "neutral",
+              tab: "sessions",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("overview.stats.cron"),
+              value:
+                props.cronStatus?.enabled === false
+                  ? html`${renderOverviewBadge(t("common.disabled"), "neutral")}`
+                  : failedCronJobs.length > 0
+                    ? html`${renderOverviewBadge(`${failedCronJobs.length} failed`, "danger")}
+                      ${props.cronJobs.length} jobs`
+                    : `${props.cronJobs.length} jobs`,
+              hint: cronNext ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) }) : "",
+              tone: failedCronJobs.length > 0 ? "danger" : "neutral",
+              tab: "cron",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              kind: primaryQuota ? "quota" : "usage",
+              label: t("tabs.usage"),
+              value: primaryQuota
+                ? html`${primaryQuota.remaining}% left`
+                : `${totalCost} / ${totalMessages} msgs`,
+              hint: primaryQuota
+                ? `${[primaryQuota.displayName, primaryQuota.label].filter(Boolean).join(" · ")}${
+                    secondaryQuota
+                      ? ` · ${[secondaryQuota.displayName, secondaryQuota.label]
+                          .filter(Boolean)
+                          .join(" · ")} ${secondaryQuota.remaining}% left`
+                      : formatQuotaReset(primaryQuota.resetAt)
+                        ? ` reset ${formatQuotaReset(primaryQuota.resetAt)}`
+                        : ""
+                  }`
+                : `${totalTokens} tokens`,
+              tone:
+                primaryQuota?.remaining != null && primaryQuota.remaining <= 25
+                  ? "warn"
+                  : "neutral",
+              tab: "usage",
+              onNavigate: props.onNavigate,
+            })}
+            ${renderSummaryTile({
+              label: t("overview.cards.modelAuth"),
+              value:
+                expiredProviders.length > 0
+                  ? html`${renderOverviewBadge(`${expiredProviders.length} expired`, "danger")}`
+                  : expiringProviders.length > 0
+                    ? html`${renderOverviewBadge(`${expiringProviders.length} expiring`, "warn")}`
+                    : monitoredProviders.length > 0
+                      ? html`${renderOverviewBadge(`${monitoredProviders.length} ok`, "ok")}`
+                      : html`${renderOverviewBadge(t("common.na"), "neutral")}`,
+              hint:
+                monitoredProviders.length > 0
+                  ? monitoredProviders
+                      .map((provider) => provider.displayName)
+                      .slice(0, 2)
+                      .join(", ")
+                  : "api-key-only or unavailable",
+              tone:
+                expiredProviders.length > 0
+                  ? "danger"
+                  : expiringProviders.length > 0
+                    ? "warn"
+                    : "neutral",
+              tab: "overview",
+              onNavigate: props.onNavigate,
+            })}
+          </section>
+
+          <section class="ov-operator-grid">
+            <div class="card ov-attention ov-operator-attention">
+              <div class="card-title">${t("overview.attention.title")}</div>
+              <div class="card-sub">Failures, expiring auth, and blocked work.</div>
+              <div class="ov-attention-list" style="margin-top: 12px;">
+                ${props.attentionItems.length > 0
+                  ? props.attentionItems.map(
+                      (item) => html`
+                        <div
+                          class=${`ov-attention-item ${item.severity === "error" ? "danger" : item.severity === "warning" ? "warn" : ""}`}
+                        >
+                          <span class="ov-attention-icon">${icons.radio}</span>
+                          <div class="ov-attention-body">
+                            <div class="ov-attention-title">${item.title}</div>
+                            <div class="muted">${item.description}</div>
+                          </div>
+                          ${item.href
+                            ? html`<a
+                                class="ov-attention-link"
+                                href=${item.href}
+                                target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
+                                rel=${item.external ? buildExternalLinkRel() : nothing}
+                                >${t("common.docs")}</a
+                              >`
+                            : nothing}
+                        </div>
+                      `,
+                    )
+                  : renderEmptyOperatorRow(
+                      "No urgent attention items",
+                      "Gateway and monitored auth are clear.",
+                      "ok",
+                    )}
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">${t("overview.cards.recentSessions")}</div>
+              <div class="card-sub">Current work state, model, and recency.</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${recentSessions.length > 0
+                  ? recentSessions.map((session) => {
+                      const status = sessionStatusLabel(session);
+                      return html`
+                        <button
+                          class="ov-operator-row ov-operator-row--button"
+                          @click=${() => props.onNavigate("sessions")}
+                        >
+                          <div>
+                            <div class="ov-operator-row__title">
+                              <span class="ov-recent__key"
+                                >${resolveSessionDisplayName(session.key, session)}</span
+                              >
+                            </div>
+                            <div class="ov-operator-row__meta">
+                              ${[session.model, session.kind].filter(Boolean).join(" · ")}
+                            </div>
+                          </div>
+                          ${renderOverviewBadge(status.label, status.tone)}
+                        </button>
+                      `;
+                    })
+                  : renderEmptyOperatorRow(
+                      "No sessions loaded",
+                      hasOperationalData
+                        ? "No recent sessions match the current view."
+                        : "Session data is still loading.",
+                    )}
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Codex Usage</div>
+              <div class="card-sub">Compact until quota is low or usage spikes.</div>
+              <div class="stat-grid" style="margin-top: 16px;">
+                <div class="stat">
+                  <div class="stat-label">Quota</div>
+                  <div
+                    class="stat-value ${primaryQuota?.remaining != null &&
+                    primaryQuota.remaining <= 25
+                      ? "warn"
+                      : "ok"}"
+                  >
+                    ${primaryQuota ? `${primaryQuota.remaining}%` : t("common.na")}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Cost</div>
+                  <div class="stat-value">${totalCost}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Messages</div>
+                  <div class="stat-value">${totalMessages}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Tokens</div>
+                  <div class="stat-value">${totalTokens}</div>
                 </div>
               </div>
-            `
-          : nothing}
-      </div>
-
-      <div class="card">
-        <div class="card-title">${t("overview.snapshot.title")}</div>
-        <div class="card-sub">${t("overview.snapshot.subtitle")}</div>
-        <div class="stat-grid" style="margin-top: 16px;">
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.status")}</div>
-            <div class="stat-value ${props.connected ? "ok" : "warn"}">
-              ${props.connected ? t("common.ok") : t("common.offline")}
-            </div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.uptime")}</div>
-            <div class="stat-value">${uptime}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.tickInterval")}</div>
-            <div class="stat-value">${tick}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
-            <div class="stat-value">
-              ${props.lastChannelsRefresh
-                ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                : t("common.na")}
-            </div>
-          </div>
-        </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
-              <div>${props.lastError}</div>
-              ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
-              ${queryTokenHint ?? ""}
-            </div>`
-          : html`
               <div class="callout" style="margin-top: 14px">
-                ${t("overview.snapshot.channelsHint")}
+                ${primaryQuota
+                  ? `${primaryQuota.displayName} ${primaryQuota.label} window${
+                      formatQuotaReset(primaryQuota.resetAt)
+                        ? ` resets ${formatQuotaReset(primaryQuota.resetAt)}`
+                        : ""
+                    }.`
+                  : "Provider quota is unavailable for this setup; showing local session usage instead."}
               </div>
-            `}
-      </div>
-    </section>
+            </div>
+          </section>
 
-    <div class="ov-section-divider"></div>
+          <section class="ov-operator-grid ov-operator-grid--secondary">
+            <div class="card">
+              <div class="card-title">${t("tabs.cron")}</div>
+              <div class="card-sub">Failures, overdue jobs, and next wake.</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${failedCronJobs.length > 0
+                  ? failedCronJobs.slice(0, 4).map(
+                      (job) => html`
+                        <button
+                          class="ov-operator-row ov-operator-row--button danger"
+                          @click=${() => props.onNavigate("cron")}
+                        >
+                          <div>
+                            <div class="ov-operator-row__title">${job.name}</div>
+                            <div class="ov-operator-row__meta">
+                              ${job.state?.lastErrorReason ??
+                              job.state?.lastError ??
+                              "last run failed"}
+                            </div>
+                          </div>
+                          ${renderOverviewBadge("failed", "danger")}
+                        </button>
+                      `,
+                    )
+                  : overdueCronJobs.length > 0
+                    ? overdueCronJobs.slice(0, 4).map(
+                        (job) => html`
+                          <button
+                            class="ov-operator-row ov-operator-row--button warn"
+                            @click=${() => props.onNavigate("cron")}
+                          >
+                            <div>
+                              <div class="ov-operator-row__title">${job.name}</div>
+                              <div class="ov-operator-row__meta">next run is overdue</div>
+                            </div>
+                            ${renderOverviewBadge("overdue", "warn")}
+                          </button>
+                        `,
+                      )
+                    : renderEmptyOperatorRow(
+                        "No failed cron jobs",
+                        cronNext
+                          ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
+                          : "No next wake scheduled.",
+                        "ok",
+                      )}
+              </div>
+            </div>
 
-    ${renderOverviewCards({
-      usageResult: props.usageResult,
-      sessionsResult: props.sessionsResult,
-      skillsReport: props.skillsReport,
-      cronJobs: props.cronJobs,
-      cronStatus: props.cronStatus,
-      modelAuthStatus: props.modelAuthStatus,
-      presenceCount: props.presenceCount,
-      onNavigate: props.onNavigate,
-    })}
-    ${renderOverviewAttention({ items: props.attentionItems })}
+            <div class="card">
+              <div class="card-title">Connectors & Skills</div>
+              <div class="card-sub">Auth and capability health that can break work later.</div>
+              <div class="ov-operator-list" style="margin-top: 12px;">
+                ${renderEmptyOperatorRow(
+                  "Model auth",
+                  expiredProviders.length > 0
+                    ? expiredProviders.map((provider) => provider.displayName).join(", ")
+                    : expiringProviders.length > 0
+                      ? expiringProviders.map((provider) => provider.displayName).join(", ")
+                      : monitoredProviders.length > 0
+                        ? `${monitoredProviders.length} monitored providers ok`
+                        : "No expiring OAuth/token providers reported.",
+                  expiredProviders.length > 0
+                    ? "danger"
+                    : expiringProviders.length > 0
+                      ? "warn"
+                      : "ok",
+                )}
+                ${renderEmptyOperatorRow(
+                  "Skills",
+                  skills.length > 0
+                    ? `${enabledSkills}/${skills.length} enabled${
+                        blockedSkills > 0 ? `, ${blockedSkills} blocked` : ""
+                      }`
+                    : "Skill status unavailable.",
+                  blockedSkills > 0 ? "warn" : "neutral",
+                )}
+              </div>
+            </div>
 
-    <div class="ov-section-divider"></div>
+            <div class="card">
+              <div class="card-title">Log & Event Anomalies</div>
+              <div class="card-sub">Raw logs stay behind expanders unless something clusters.</div>
+              <div class="stat-grid" style="margin-top: 16px;">
+                <div class="stat">
+                  <div class="stat-label">Events</div>
+                  <div class="stat-value">${props.eventLog.length}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Log lines</div>
+                  <div class="stat-value">${logSummary.lines}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Warnings</div>
+                  <div class="stat-value ${logSummary.warnings > 0 ? "warn" : "ok"}">
+                    ${logSummary.warnings}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Errors</div>
+                  <div class="stat-value ${logSummary.errors > 0 ? "warn" : "ok"}">
+                    ${logSummary.errors}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
 
-    <div class="ov-bottom-grid">
-      ${renderOverviewEventLog({
-        events: props.eventLog,
-      })}
-      ${renderOverviewLogTail({
-        lines: props.overviewLogLines,
-        onRefreshLogs: props.onRefreshLogs,
-      })}
-    </div>
+          <div class="ov-section-divider"></div>
+
+          <div class="ov-bottom-grid">
+            ${renderOverviewEventLog({
+              events: props.eventLog,
+            })}
+            ${renderOverviewLogTail({
+              lines: props.overviewLogLines,
+              onRefreshLogs: props.onRefreshLogs,
+            })}
+          </div>
+
+          <div class="ov-section-divider"></div>
+
+          <section class="grid ov-setup-grid">${accessCard}${snapshotCard}</section>
+        `}
   `;
 }

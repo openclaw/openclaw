@@ -138,6 +138,7 @@ describe("overview view rendering", () => {
   it("renders recent session names through the shared display resolver", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
+      connected: true,
       sessionsResult: {
         ts: 0,
         path: "",
@@ -184,6 +185,7 @@ describe("overview view rendering", () => {
   it("promotes provider quota into a dedicated overview card", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
+      connected: true,
       usageResult: {
         totals: { totalCost: 0, totalTokens: 0 },
         aggregates: { messages: { total: 0 } },
