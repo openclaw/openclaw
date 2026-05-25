@@ -3,11 +3,14 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  isSupportedRealtimeVoiceActivationName,
+  normalizeRealtimeVoiceActivationNamePrefix,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
-const DISCORD_REALTIME_WAKE_NAME_MAX_WORDS = 2;
 type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
 
 function hasLegacyTtsProviderKeys(value: unknown): boolean {
@@ -78,23 +81,6 @@ function hasLegacyDiscordAccountGuildChannelAgentId(value: unknown): boolean {
   return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAgentId(account));
 }
 
-function realtimeWakeNameWordCount(value: string): number {
-  return Array.from(value.matchAll(/[a-z0-9]+/gi)).length;
-}
-
-function normalizeRealtimeWakeName(value: string): string | undefined {
-  const words = Array.from(value.matchAll(/[a-z0-9]+/gi), (match) => match[0]);
-  if (words.length === 0) {
-    return undefined;
-  }
-  return words.slice(0, DISCORD_REALTIME_WAKE_NAME_MAX_WORDS).join(" ");
-}
-
-function isSupportedRealtimeWakeName(value: string): boolean {
-  const wordCount = realtimeWakeNameWordCount(value);
-  return wordCount >= 1 && wordCount <= DISCORD_REALTIME_WAKE_NAME_MAX_WORDS;
-}
-
 function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
   const voice = asObjectRecord(value);
   const realtime = asObjectRecord(voice?.realtime);
@@ -102,7 +88,8 @@ function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
   return Array.isArray(wakeNames)
     ? wakeNames.length === 0 ||
         wakeNames.some(
-          (wakeName) => typeof wakeName === "string" && !isSupportedRealtimeWakeName(wakeName),
+          (wakeName) =>
+            typeof wakeName === "string" && !isSupportedRealtimeVoiceActivationName(wakeName),
         )
     : false;
 }
@@ -231,10 +218,10 @@ function normalizeUnsupportedRealtimeWakeNames(
   let normalized = 0;
   let removed = 0;
   const nextWakeNames = wakeNames.flatMap((wakeName) => {
-    if (typeof wakeName !== "string" || isSupportedRealtimeWakeName(wakeName)) {
+    if (typeof wakeName !== "string" || isSupportedRealtimeVoiceActivationName(wakeName)) {
       return [wakeName];
     }
-    const nextWakeName = normalizeRealtimeWakeName(wakeName);
+    const nextWakeName = normalizeRealtimeVoiceActivationNamePrefix(wakeName);
     if (!nextWakeName) {
       removed += 1;
       return [];
