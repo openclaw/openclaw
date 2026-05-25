@@ -4,6 +4,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 describe("provider auth profile helpers", () => {
   afterEach(() => {
     vi.doUnmock("../agents/agent-scope-config.js");
+    vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
     vi.doUnmock("../agents/auth-profiles/oauth.js");
     vi.doUnmock("../agents/auth-profiles/order.js");
     vi.doUnmock("../agents/auth-profiles/store.js");
@@ -83,5 +84,60 @@ describe("provider auth profile helpers", () => {
         store: fallbackStore,
       }),
     );
+  });
+
+  it("scopes external CLI auth discovery to provider profile resolution", async () => {
+    vi.resetModules();
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    const externalCli = { mode: "scoped", providerIds: ["openai-codex"] };
+    const loadAuthProfileStoreForSecretsRuntime = vi.fn(() => store);
+
+    vi.doMock("../agents/agent-scope-config.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
+    }));
+    vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
+      externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
+    }));
+    vi.doMock("../agents/auth-profiles/oauth.js", () => ({
+      resolveApiKeyForProfile: vi.fn(),
+    }));
+    vi.doMock("../agents/auth-profiles/order.js", () => ({
+      resolveAuthProfileOrder: ({
+        provider,
+        store,
+      }: {
+        provider: string;
+        store: AuthProfileStore;
+      }) =>
+        Object.entries(store.profiles)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([profileId]) => profileId),
+    }));
+    vi.doMock("../agents/auth-profiles/store.js", () => ({
+      ensureAuthProfileStore: vi.fn(() => store),
+      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
+      loadAuthProfileStoreForSecretsRuntime,
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      updateAuthProfileStoreWithLock: vi.fn(),
+    }));
+
+    const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
+
+    expect(isProviderAuthProfileConfigured({ provider: "openai-codex" })).toBe(true);
+    expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenCalledWith("/tmp/openclaw-agent", {
+      externalCli,
+    });
   });
 });

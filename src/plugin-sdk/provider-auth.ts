@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
@@ -337,7 +338,12 @@ function resolveUsableProviderAuthProfiles(params: {
   allowKeychainPrompt?: boolean;
 }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const externalCli = externalCliDiscoveryForProviderAuth({
+    cfg: params.cfg,
+    provider: params.provider,
+    allowKeychainPrompt: params.allowKeychainPrompt,
+  });
+  const store = loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli });
   const profileIds = resolveAuthProfileOrder({
     cfg: params.cfg,
     store,
