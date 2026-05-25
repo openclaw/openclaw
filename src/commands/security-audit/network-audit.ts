@@ -18,7 +18,9 @@ export async function auditNetwork(): Promise<SecurityFinding[]> {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("State")) continue;
+      if (!trimmed || trimmed.startsWith("State")) {
+        continue;
+      }
 
       // Parse ss output: tcp LISTEN 0 128 0.0.0.0:8080 0.0.0.0:* users:(("node",pid=1234,fd=5))
       const portMatch = trimmed.match(/:(\d+)\s/);

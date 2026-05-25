@@ -126,8 +126,12 @@ async function* walkFiles(dir: string, baseDir: string): AsyncGenerator<string> 
         yield* walkFiles(fullPath, baseDir);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        if (EXCLUDED_EXTENSIONS.has(ext)) continue;
-        if (EXCLUDED_FILES.has(entry.name)) continue;
+        if (EXCLUDED_EXTENSIONS.has(ext)) {
+          continue;
+        }
+        if (EXCLUDED_FILES.has(entry.name)) {
+          continue;
+        }
         yield fullPath;
       }
     }

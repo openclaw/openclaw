@@ -17,7 +17,9 @@ function severityRank(severity: SecuritySeverity): number {
 }
 
 function shouldIncludeFinding(finding: SecurityFinding, minSeverity?: SecuritySeverity): boolean {
-  if (!minSeverity) return true;
+  if (!minSeverity) {
+    return true;
+  }
   return severityRank(finding.severity) <= severityRank(minSeverity);
 }
 
