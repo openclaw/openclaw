@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { tryAppendInlineUserTurnTranscriptMessage } from "../sessions/user-turn-transcript.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -124,6 +125,36 @@ async function runCliAgentEndHook(
     return;
   }
   runAgentHarnessAgentEndHook(hookParams);
+}
+
+async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
+  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscript) {
+    return;
+  }
+
+  const transcriptTarget = {
+    transcriptPath: params.sessionFile,
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    cwd: params.workspaceDir,
+    errorContext: "CLI user turn transcript",
+    ...(params.config ? { config: params.config } : {}),
+  };
+  const persisted = params.userTurnTranscript.message
+    ? await tryAppendInlineUserTurnTranscriptMessage({
+        ...transcriptTarget,
+        message: params.userTurnTranscript.message,
+      })
+    : await tryAppendInlineUserTurnTranscriptMessage({
+        ...transcriptTarget,
+        input: {
+          text: params.userTurnTranscript.text,
+          timestamp: Date.now(),
+        },
+      });
+  if (persisted) {
+    await params.onUserMessagePersisted?.(persisted.message);
+  }
 }
 
 async function finalizeCliContextEngineTurn(params: {
@@ -620,6 +651,7 @@ export async function runPreparedCliAgent(
       }
     }
 
+    await persistApprovedCliUserTurnTranscript(params);
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,

@@ -30,7 +30,6 @@ const state = vi.hoisted(() => ({
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
-  persistUserTurnTranscriptMock: vi.fn(),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
@@ -137,17 +136,6 @@ vi.mock("../../utils/message-channel.js", () => ({
   resolveMessageChannel: () => "whatsapp",
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
-
-vi.mock("../../sessions/user-turn-transcript.js", async () => {
-  const actual = await vi.importActual<typeof import("../../sessions/user-turn-transcript.js")>(
-    "../../sessions/user-turn-transcript.js",
-  );
-  return {
-    ...actual,
-    tryPersistInlineUserTurnTranscript: (params: unknown) =>
-      state.persistUserTurnTranscriptMock(params),
-  };
-});
 
 vi.mock("../heartbeat.js", () => ({
   stripHeartbeatToken: (text: string) => ({
@@ -1104,12 +1092,6 @@ describe("runAgentTurnWithFallback", () => {
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
-    state.persistUserTurnTranscriptMock.mockReset();
-    state.persistUserTurnTranscriptMock.mockResolvedValue({
-      sessionFile: "/tmp/session.jsonl",
-      messageId: "user-message",
-      message: { role: "user", content: "persisted" },
-    });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1784,7 +1766,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("persists CLI-backed user turns through the shared session helper", async () => {
+  it("passes prepared CLI user turns to the runtime persistence boundary", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("codex-cli", "gpt-5.4"),
@@ -1826,21 +1808,21 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(state.persistUserTurnTranscriptMock).toHaveBeenCalledOnce();
-    expectMockCallArgFields(state.persistUserTurnTranscriptMock, 0, "user turn persistence", {
-      message: followupRun.userMessageForPersistence,
-      sessionId: "session",
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
       sessionKey: "main",
-      sessionEntry,
-      sessionStore: activeSessionStore,
-      storePath: "/tmp/sessions.json",
       agentId: "agent",
-      cwd: "/tmp",
-      errorContext: "CLI user turn transcript",
+      sessionId: "session",
+      userTurnTranscript: { message: followupRun.userMessageForPersistence },
+      suppressNextUserMessagePersistence: false,
     });
+    const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
+    expect(requireRecord(call[0], "CLI runtime").onUserMessagePersisted).toEqual(
+      expect.any(Function),
+    );
   });
 
-  it("uses clean transcript text for text-only CLI user persistence", async () => {
+  it("passes clean transcript text for text-only CLI user persistence", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("codex-cli", "gpt-5.4"),
@@ -1864,15 +1846,16 @@ describe("runAgentTurnWithFallback", () => {
       transcriptCommandBody: "display prompt",
     });
 
-    expectMockCallArgFields(state.persistUserTurnTranscriptMock, 0, "user turn persistence", {
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
       sessionId: "session",
       sessionKey: "main",
       agentId: "agent",
-      text: "display prompt",
-      errorContext: "CLI user turn transcript",
+      prompt: "runtime prompt with metadata",
+      transcriptPrompt: "display prompt",
+      userTurnTranscript: { text: "display prompt" },
+      suppressNextUserMessagePersistence: false,
     });
-    const call = requireMockCall(state.persistUserTurnTranscriptMock, 0, "user turn persistence");
-    expect(requireRecord(call[0], "user turn persistence").input).toBeUndefined();
   });
 
   it("does not reuse or persist CLI sessions for room-event turns", async () => {

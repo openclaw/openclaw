@@ -10,7 +10,6 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
-const persistUserTurnTranscriptMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -353,16 +352,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("../../agents/cli-runner.js", () => ({
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
-  vi.doMock("../../sessions/user-turn-transcript.js", async () => {
-    const actual = await vi.importActual<typeof import("../../sessions/user-turn-transcript.js")>(
-      "../../sessions/user-turn-transcript.js",
-    );
-    return {
-      ...actual,
-      tryPersistInlineUserTurnTranscript: (params: unknown) =>
-        persistUserTurnTranscriptMock(params),
-    };
-  });
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
@@ -472,11 +461,6 @@ beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   runCliAgentMock.mockReset();
-  persistUserTurnTranscriptMock.mockReset();
-  persistUserTurnTranscriptMock.mockResolvedValue({
-    message: { role: "user", content: [{ type: "text", text: "hello" }] },
-    sessionFile: "/tmp/session.jsonl",
-  });
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockImplementation(
     async (params: {
@@ -832,23 +816,63 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
-    expect(persistUserTurnTranscriptMock).toHaveBeenCalledOnce();
-    const persistenceCall = requireLastMockCallArg(
-      persistUserTurnTranscriptMock,
-      "persist user turn transcript",
-    );
-    expect(persistenceCall).toMatchObject({
+    expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
-      sessionEntry,
-      sessionStore,
       agentId: "agent",
-      cwd: "/tmp",
+      workspaceDir: "/tmp",
       config: runtimeConfig,
-      text: "hello",
-      errorContext: "CLI user turn transcript",
+      userTurnTranscript: { text: "hello" },
+      suppressNextUserMessagePersistence: false,
     });
-    expect(persistenceCall.input).toBeUndefined();
+    expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("passes prepared media user turns to CLI runtime dispatch", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const userMessageForPersistence = {
+      role: "user",
+      content: "describe this",
+      MediaPath: "/tmp/image.png",
+      MediaType: "image/png",
+    } as never;
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        userMessageForPersistence,
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(mediaCall.userTurnTranscript).toEqual({ message: userMessageForPersistence });
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {

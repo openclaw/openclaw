@@ -808,8 +808,128 @@ describe("runCliAgent reliability", () => {
     releaseAgentEnd();
   });
 
+  it("persists approved CLI user turns before model execution", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscript: { text: "display prompt" },
+          onUserMessagePersisted,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+
+      const messages = fs
+        .readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { message?: unknown })
+        .map((entry) => entry.message)
+        .filter(Boolean);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+      expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists approved CLI media user turns without caller-side transcript shaping", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "image handled",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-media",
+      });
+      await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime image prompt",
+          userTurnTranscript: {
+            message: {
+              role: "user",
+              content: "describe this",
+              MediaPath: "/tmp/image.png",
+              MediaType: "image/png",
+            },
+          },
+          onUserMessagePersisted,
+        },
+      });
+
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "describe this",
+          MediaPath: "/tmp/image.png",
+          MediaType: "image/png",
+        }),
+      );
+      const transcript = fs.readFileSync(sessionFile, "utf-8");
+      expect(transcript).toContain('"MediaPath":"/tmp/image.png"');
+      expect(transcript).toContain('"MediaType":"image/png"');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
     supervisorSpawnMock.mockClear();
+    const onUserMessagePersisted = vi.fn();
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -836,15 +956,20 @@ describe("runCliAgent reliability", () => {
 
     try {
       let resolved = false;
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
       const run = runPreparedCliAgent({
-        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+        ...context,
         params: {
-          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
-            .params,
+          ...context.params,
           agentId: "main",
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
+          userTurnTranscript: { text: "secret prompt" },
+          onUserMessagePersisted,
         },
       }).then((result) => {
         resolved = true;
@@ -869,6 +994,7 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.livenessState).toBe("blocked");
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",

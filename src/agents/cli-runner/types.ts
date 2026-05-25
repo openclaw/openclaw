@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
@@ -20,6 +21,16 @@ import type {
 } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
+
+export type CliUserTurnTranscriptInput =
+  | {
+      message: PersistedUserTurnMessage;
+      text?: never;
+    }
+  | {
+      message?: never;
+      text: string;
+    };
 
 export type RunCliAgentParams = {
   sessionId: string;
@@ -32,6 +43,13 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /**
+   * Canonical user turn to persist after before_agent_run allows the prompt.
+   * This is transcript projection only; model input still comes from prompt/images/context.
+   */
+  userTurnTranscript?: CliUserTurnTranscriptInput;
+  suppressNextUserMessagePersistence?: boolean;
+  onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
