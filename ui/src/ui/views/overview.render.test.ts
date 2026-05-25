@@ -313,6 +313,15 @@ describe("overview view rendering", () => {
             },
           },
           {
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            status: "ok",
+            profiles: [{ profileId: "openrouter", type: "api_key", status: "ok" }],
+            usage: {
+              windows: [{ label: "Credits", usedPercent: 57 }],
+            },
+          },
+          {
             provider: "zai",
             displayName: "Z.ai",
             status: "ok",
@@ -329,12 +338,11 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
-      "Tokens (6h) quota 60% left Z.ai · Tokens (6h) · Gemini · Pro 80% left",
+      "Credits 43% left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
     );
-    expect(compactText(container.querySelector(".ov-usage-note"))).toBe(
-      "Z.ai · Tokens (6h) quota.",
-    );
+    expect(compactText(container.querySelector(".ov-usage-note"))).toBe("OpenRouter · Credits.");
     expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("window");
+    expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("quota");
   });
 
   it("does not call provider quota unavailable while auth status is still loading", async () => {

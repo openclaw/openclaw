@@ -76,6 +76,8 @@
     "overview.operator.usageCostMessages",
     "overview.operator.usageProviderQuota",
     "overview.operator.usageProviderQuotaResets",
+    "overview.operator.usageQuotaLabel",
+    "overview.operator.usageQuotaLabelResets",
     "overview.operator.usageQuotaLoading",
     "overview.operator.usageQuotaNotConfigured",
     "overview.operator.usageQuotaNoWindows",
@@ -85,12 +87,12 @@
     "subtitles.activity",
     "tabs.activity"
   ],
-  "generatedAt": "2026-05-25T13:58:00.858Z",
+  "generatedAt": "2026-05-25T18:41:44.737Z",
   "locale": "vi",
   "model": "claude-opus-4-7",
   "provider": "anthropic",
-  "sourceHash": "bc5518fb7167ea6f6506e6f59f3363b8297b2d4e9469e32bdbb7243fda17ac67",
-  "totalKeys": 1222,
+  "sourceHash": "1ea3792ff0bde36385ef547b15f8c9b02aba842197bd0d2ae6abf68553d305b9",
+  "totalKeys": 1224,
   "translatedKeys": 1138,
   "workflow": 1
 }

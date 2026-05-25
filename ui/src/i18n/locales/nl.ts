@@ -650,6 +650,8 @@ export const nl: TranslationMap = {
         "No provider quota is configured for this setup; showing local session usage.",
       usageQuotaResets: "{provider} · {window} quota resets {time}.",
       usageQuotaWindow: "{provider} · {window} quota.",
+      usageQuotaLabelResets: "{provider} · {label} resets {time}.",
+      usageQuotaLabel: "{provider} · {label}.",
       usageProviderQuotaResets: "{provider} quota resets {time}.",
       usageProviderQuota: "{provider} quota.",
       uptime: "uptime {time}",

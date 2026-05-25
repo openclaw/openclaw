@@ -15,6 +15,7 @@ import { formatNextRun } from "../presenter.ts";
 import {
   collectQuotaWindows,
   formatQuotaReset,
+  quotaLabelNeedsQuotaSuffix,
   type QuotaWindowSummary,
 } from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
@@ -142,9 +143,9 @@ function tCount(singularKey: string, pluralKey: string, count: number): string {
 }
 
 function quotaLimitLabel(entry: QuotaWindowSummary): string {
-  return entry.label
+  return entry.label && quotaLabelNeedsQuotaSuffix(entry.label)
     ? t("overview.operator.quotaLimitLabel", { label: entry.label })
-    : t("overview.operator.providerQuota");
+    : entry.label || t("overview.operator.providerQuota");
 }
 
 function quotaIdentity(entry: QuotaWindowSummary): string {
@@ -450,18 +451,32 @@ export function renderOverview(props: OverviewProps) {
     0,
     props.attentionItems.length - visibleAttentionItems.length,
   );
+  const primaryQuotaNeedsSuffix = primaryQuota
+    ? quotaLabelNeedsQuotaSuffix(primaryQuota.label)
+    : false;
   const quotaStatusNote = primaryQuota
     ? primaryQuota.label
       ? primaryQuotaReset
-        ? t("overview.operator.usageQuotaResets", {
-            provider: primaryQuota.displayName,
-            window: primaryQuota.label,
-            time: primaryQuotaReset,
-          })
-        : t("overview.operator.usageQuotaWindow", {
-            provider: primaryQuota.displayName,
-            window: primaryQuota.label,
-          })
+        ? primaryQuotaNeedsSuffix
+          ? t("overview.operator.usageQuotaResets", {
+              provider: primaryQuota.displayName,
+              window: primaryQuota.label,
+              time: primaryQuotaReset,
+            })
+          : t("overview.operator.usageQuotaLabelResets", {
+              provider: primaryQuota.displayName,
+              label: primaryQuota.label,
+              time: primaryQuotaReset,
+            })
+        : primaryQuotaNeedsSuffix
+          ? t("overview.operator.usageQuotaWindow", {
+              provider: primaryQuota.displayName,
+              window: primaryQuota.label,
+            })
+          : t("overview.operator.usageQuotaLabel", {
+              provider: primaryQuota.displayName,
+              label: primaryQuota.label,
+            })
       : primaryQuotaReset
         ? t("overview.operator.usageProviderQuotaResets", {
             provider: primaryQuota.displayName,

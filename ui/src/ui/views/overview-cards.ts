@@ -7,6 +7,7 @@ import { formatNextRun } from "../presenter.ts";
 import {
   collectQuotaWindows,
   formatQuotaReset,
+  quotaLabelNeedsQuotaSuffix,
   type QuotaWindowSummary,
 } from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
@@ -62,9 +63,10 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     return null;
   }
   const reset = formatQuotaReset(primary.resetAt);
-  const primaryLabel = primary.label
-    ? t("overview.operator.quotaLimitLabel", { label: primary.label })
-    : t("overview.operator.providerQuota");
+  const primaryLabel =
+    primary.label && quotaLabelNeedsQuotaSuffix(primary.label)
+      ? t("overview.operator.quotaLimitLabel", { label: primary.label })
+      : primary.label || t("overview.operator.providerQuota");
   const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
     Boolean,
   );

@@ -7,6 +7,13 @@ export type QuotaWindowSummary = {
   resetAt?: number;
 };
 
+const SELF_DESCRIBING_QUOTA_LABEL = /\b(balance|budget|credits?|limits?|quota|tokens?|usage)\b/i;
+
+export function quotaLabelNeedsQuotaSuffix(label: string): boolean {
+  const trimmed = label.trim();
+  return Boolean(trimmed) && !SELF_DESCRIBING_QUOTA_LABEL.test(trimmed);
+}
+
 export function formatQuotaReset(resetAt?: number): string | null {
   if (!resetAt || !Number.isFinite(resetAt)) {
     return null;
