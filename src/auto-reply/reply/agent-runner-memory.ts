@@ -44,6 +44,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -708,12 +709,17 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  const { authProfileId } = resolveRunAuthProfile(
+    params.followupRun.run,
+    params.followupRun.run.provider,
+  );
   const cliExecutionProvider =
     resolveCliRuntimeExecutionProvider({
       provider: params.followupRun.run.provider,
       cfg: params.cfg,
       agentId: params.followupRun.run.agentId,
       modelId: params.followupRun.run.model ?? params.defaultModel,
+      authProfileId,
     }) ?? params.followupRun.run.provider;
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   if (params.isHeartbeat || isCli) {
@@ -1002,12 +1008,17 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
+  const { authProfileId: flushAuthProfileId } = resolveRunAuthProfile(
+    params.followupRun.run,
+    params.followupRun.run.provider,
+  );
   const cliExecutionProvider =
     resolveCliRuntimeExecutionProvider({
       provider: params.followupRun.run.provider,
       cfg: params.cfg,
       agentId: params.followupRun.run.agentId,
       modelId: params.followupRun.run.model ?? params.defaultModel,
+      authProfileId: flushAuthProfileId,
     }) ?? params.followupRun.run.provider;
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;

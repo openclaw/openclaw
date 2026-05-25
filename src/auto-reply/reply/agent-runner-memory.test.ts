@@ -2186,6 +2186,116 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("does not skip memory flush when authProfileId pins to a direct-API profile despite CLI in auth order", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+        auth: {
+          profiles: {
+            "direct-api": { provider: "anthropic" },
+            "cli-profile": { provider: "claude-cli" },
+          },
+          order: {
+            anthropic: ["cli-profile", "direct-api"],
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authProfileId: "direct-api",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // With authProfileId pointing to direct-api (provider: "anthropic"), the
+    // resolver should NOT treat this as CLI — so memory flush proceeds.
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not skip preflight compaction when authProfileId pins to a direct-API profile despite CLI in auth order", async () => {
+    const sessionFile = path.join(rootDir, "direct-api-preflight.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+        auth: {
+          profiles: {
+            "direct-api": { provider: "anthropic" },
+            "cli-profile": { provider: "claude-cli" },
+          },
+          order: {
+            anthropic: ["cli-profile", "direct-api"],
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authProfileId: "direct-api",
+      }),
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // With authProfileId pointing to direct-api (provider: "anthropic"), the
+    // resolver should NOT treat this as CLI — so preflight compaction proceeds.
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses configured prompts and stored bootstrap warning signatures", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
