@@ -1356,6 +1356,7 @@ describe("chat session controls", () => {
       "agent:main:telegram-two",
     ]);
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1420,6 +1421,7 @@ describe("chat session controls", () => {
 
     await vi.waitFor(() => expect(state.chatSessionPickerAppliedQuery).toBe("tele"));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1494,6 +1496,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1505,6 +1508,7 @@ describe("chat session controls", () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
@@ -1591,6 +1595,7 @@ describe("chat session controls", () => {
       "agent:main:telegram-page-52",
     ]);
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,
       includeUnknown: true,
