@@ -38,6 +38,27 @@ function parseGatewayAuthMode(value: string | undefined): GatewayAuthMode | unde
   );
 }
 
+function buildAuditGatewayAuthOverride(params: {
+  mode?: GatewayAuthMode;
+  token?: string;
+  password?: string;
+}) {
+  if (!params.mode) {
+    return undefined;
+  }
+  if (params.mode === "token" && !params.token) {
+    throw new Error("Invalid --auth token: pass --token <token> for audit auth override.");
+  }
+  if (params.mode === "password" && !params.password) {
+    throw new Error("Invalid --auth password: pass --password <password> for audit auth override.");
+  }
+  return {
+    mode: params.mode,
+    ...(params.token ? { token: params.token } : {}),
+    ...(params.password ? { password: params.password } : {}),
+  };
+}
+
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
   const rich = isRich();
   const c = summary.critical;
@@ -93,6 +114,11 @@ export function registerSecurityCli(program: Command) {
       const authMode = parseGatewayAuthMode(opts.auth);
       const token = normalizeOptionalString(opts.token);
       const password = normalizeOptionalString(opts.password);
+      const auditGatewayAuthOverride = buildAuditGatewayAuthOverride({
+        mode: authMode,
+        token,
+        password,
+      });
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
       const sourceConfig = getRuntimeConfig();
@@ -116,13 +142,7 @@ export function registerSecurityCli(program: Command) {
                 ...(password ? { password } : {}),
               }
             : undefined,
-        auditGatewayAuthOverride: authMode
-          ? {
-              mode: authMode,
-              ...(token ? { token } : {}),
-              ...(password ? { password } : {}),
-            }
-          : undefined,
+        auditGatewayAuthOverride,
       });
 
       if (opts.json) {

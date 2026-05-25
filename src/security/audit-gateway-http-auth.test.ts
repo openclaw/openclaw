@@ -83,6 +83,25 @@ describe("security audit gateway HTTP auth findings", () => {
       },
     },
     {
+      name: "reports gateway.http.no_auth when runtime password mode lacks a password",
+      cfg: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+          http: {
+            endpoints: {
+              chatCompletions: { enabled: true },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "gateway.http.no_auth", severity: "warn" as const },
+      env: {} as NodeJS.ProcessEnv,
+      gatewayAuthOverride: {
+        mode: "password" as const,
+      },
+    },
+    {
       name: "reports HTTP API session-key override surfaces when enabled",
       cfg: {
         gateway: {

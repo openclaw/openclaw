@@ -205,4 +205,25 @@ describe("security CLI", () => {
     expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
     expect(lastSecurityAuditOptions()?.auditGatewayAuthOverride).toEqual(auditGatewayAuthOverride);
   });
+
+  it.each([
+    {
+      argv: ["--auth", "token"],
+      message: /pass --token <token>/i,
+    },
+    {
+      argv: ["--auth", "password"],
+      message: /pass --password <password>/i,
+    },
+  ])(
+    "rejects shared-secret auth override without the matching secret",
+    async ({ argv, message }) => {
+      primeDeepAuditConfig();
+
+      await expect(
+        createProgram().parseAsync(["security", "audit", ...argv, "--json"], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(runSecurityAudit).not.toHaveBeenCalled();
+    },
+  );
 });

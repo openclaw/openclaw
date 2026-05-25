@@ -114,6 +114,19 @@ function findHooksTokenGatewayAuthReuseLabel(params: {
     : undefined;
 }
 
+function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
+  if (auth.mode === "token") {
+    return Boolean(normalizeOptionalString(auth.token));
+  }
+  if (auth.mode === "password") {
+    return Boolean(normalizeOptionalString(auth.password));
+  }
+  if (auth.mode === "trusted-proxy") {
+    return true;
+  }
+  return false;
+}
+
 const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
   { id: "openai.gpt35", re: /\bgpt-3\.5\b/i, label: "GPT-3.5 family" },
   { id: "anthropic.claude2", re: /\bclaude-(instant|2)\b/i, label: "Claude 2/Instant family" },
@@ -702,7 +715,7 @@ export function collectGatewayHttpNoAuthFindings(
     tailscaleMode,
     env,
   });
-  if (auth.mode !== "none") {
+  if (hasResolvedGatewayHttpAuth(auth)) {
     return findings;
   }
 
