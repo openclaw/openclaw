@@ -2915,6 +2915,58 @@ describe("DiscordVoiceManager", () => {
     expect(lastAgentCommandArgs().message).not.toContain("Hey");
   });
 
+  it("reuses recently ignored speaker context when wake-name consult has no pending turn", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: "owner prompt", senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+
+    bridgeParams?.onTranscript?.("user", "room noise", true);
+    bridgeParams?.onTranscript?.("user", "Molty, so", true);
+    bridgeParams?.onTranscript?.("user", "Malty, what do you have to say?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(lastAgentCommandArgs().message).toContain("what do you have to say?");
+    expect(lastAgentCommandArgs().message).not.toContain("Malty");
+    expect(lastAgentCommandArgs().extraSystemPrompt).toBe("owner prompt");
+    expectUserMessageIncludes("wake answer");
+  });
+
   it("accepts OpenClaw as a default wake name before realtime agent-proxy consults", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "openclaw wake answer" }] });
     const manager = createManager(

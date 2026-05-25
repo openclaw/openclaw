@@ -284,7 +284,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.captureSilenceGraceMs": {
     label: "Discord Voice Capture Silence Grace (ms)",
-    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

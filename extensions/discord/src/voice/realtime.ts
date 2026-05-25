@@ -58,6 +58,7 @@ const DISCORD_REALTIME_FALLBACK_TEXT = "I hit an error while checking that. Plea
 const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
+const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
 const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
@@ -138,6 +139,11 @@ type RecentAgentProxyConsultContext = {
   promise?: Promise<string>;
   questions: string[];
   result?: RecentAgentProxyConsultResult;
+};
+
+type RecentIgnoredWakeNameSpeakerContext = {
+  context: DiscordRealtimeSpeakerContext;
+  createdAt: number;
 };
 
 function formatRealtimeLogPreview(text: string): string {
@@ -636,6 +642,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private wakeNames: string[] = [];
   private pendingAgentProxyConsultContexts: PendingAgentProxyConsultContext[] = [];
   private recentAgentProxyConsultContexts: RecentAgentProxyConsultContext[] = [];
+  private recentIgnoredWakeNameSpeakerContext: RecentIgnoredWakeNameSpeakerContext | undefined;
   private readonly pendingSpeakerTurns: PendingSpeakerTurn[] = [];
   private outputAudioTimestampMs = 0;
   private outputAudioDiscordBytes = 0;
@@ -832,6 +839,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.clearForcedConsultTimers();
     this.pendingAgentProxyConsultContexts = [];
     this.recentAgentProxyConsultContexts = [];
+    this.recentIgnoredWakeNameSpeakerContext = undefined;
     this.pendingSpeakerTurns.length = 0;
     this.queuedExactSpeechMessages = [];
     this.exactSpeechResponseActive = false;
@@ -1424,10 +1432,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.recordMeetingNotesUtterance(trimmed, meetingNotesTurn);
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed);
     if (!wakeNameResult.allowed) {
+      this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
       logger.info(
         `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.wakeNames.join(",") || "none"}`,
       );
-      this.consumePendingSpeakerContext();
       return;
     }
     const acceptedText = wakeNameResult.text || trimmed;
@@ -1540,13 +1548,17 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!question) {
       return undefined;
     }
-    const context = this.consumePendingSpeakerContext();
     const skipReason = classifySkippableForcedAgentProxyTranscript(question);
     if (skipReason) {
+      const context = this.consumePendingSpeakerContext();
       logger.info(
         `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatRealtimeLogPreview(question)}`,
       );
       return undefined;
+    }
+    let context = this.consumePendingSpeakerContext();
+    if (!context) {
+      context = this.consumeRecentIgnoredWakeNameSpeakerContext();
     }
     if (!context) {
       const recent = this.findRecentAgentProxyConsultContext(question);
@@ -1679,6 +1691,30 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const [turn] = this.pendingSpeakerTurns.splice(index, 1);
     this.prunePendingSpeakerTurns();
     return turn?.context;
+  }
+
+  private rememberIgnoredWakeNameSpeakerContext(
+    context: DiscordRealtimeSpeakerContext | undefined,
+  ): void {
+    if (!context) {
+      return;
+    }
+    this.recentIgnoredWakeNameSpeakerContext = {
+      context,
+      createdAt: Date.now(),
+    };
+  }
+
+  private consumeRecentIgnoredWakeNameSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
+    const recent = this.recentIgnoredWakeNameSpeakerContext;
+    this.recentIgnoredWakeNameSpeakerContext = undefined;
+    if (
+      !recent ||
+      Date.now() - recent.createdAt > DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS
+    ) {
+      return undefined;
+    }
+    return recent.context;
   }
 
   private peekPendingSpeakerTurn(): PendingSpeakerTurn | undefined {
