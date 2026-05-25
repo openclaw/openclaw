@@ -3,6 +3,7 @@ import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,6 +57,7 @@ export type SubscribeEmbeddedPiSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;

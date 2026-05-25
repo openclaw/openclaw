@@ -1143,7 +1143,11 @@ export async function handleToolExecutionEnd(
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const response = normalizeHeartbeatToolResponse(result?.details);
     if (response) {
+      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
+      if (isFirstHeartbeatResponse) {
+        void ctx.params.onHeartbeatToolResponse?.(response);
+      }
     }
   }
 
