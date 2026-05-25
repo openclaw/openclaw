@@ -1272,6 +1272,7 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
+    // Final lifecycle events use the adopted run session when the agent persisted one.
     const finalSessionRef = {
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,

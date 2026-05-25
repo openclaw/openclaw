@@ -33,6 +33,7 @@ export function createDiagnosticMessageLifecycle(
   const hasSessionRef = (ref: MessageLifecycleRef): boolean =>
     Boolean(ref.sessionId || ref.sessionKey);
 
+  // Processed events still matter without a session ref; queue-depth/state events do not.
   const canTrackSessionState = (ref: MessageLifecycleRef): boolean =>
     params.enabled && params.trackSessionState && hasSessionRef(ref);
 
