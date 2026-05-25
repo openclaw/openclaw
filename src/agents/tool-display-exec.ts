@@ -453,7 +453,9 @@ export function resolveExecDetail(
   }
 
   const nodeName =
-    typeof record.node === "string" && record.node.trim() ? record.node.trim() : undefined;
+    record.host === "node" && typeof record.node === "string" && record.node.trim()
+      ? record.node.trim()
+      : undefined;
 
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);

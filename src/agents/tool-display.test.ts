@@ -484,4 +484,17 @@ describe("tool display details", () => {
 
     expect(detail).not.toContain("node:");
   });
+
+  it("omits node label when host is not 'node' even if node is set", () => {
+    for (const host of ["gateway", "sandbox", "auto"]) {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: "npm install", host, node: "raspberrypi" },
+        }),
+      );
+
+      expect(detail).not.toContain("node:");
+    }
+  });
 });
