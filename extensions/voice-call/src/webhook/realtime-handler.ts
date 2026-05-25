@@ -86,6 +86,16 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
+function shouldUseOpenAIAutoGreeting(
+  provider: RealtimeVoiceProviderPlugin,
+  providerConfig: RealtimeVoiceProviderConfig,
+): boolean {
+  if (provider.id !== "openai") {
+    return false;
+  }
+  return providerConfig.autoRespondToAudio !== false;
+}
+
 function readConsultArgText(args: unknown, key: string): string | undefined {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
@@ -641,14 +651,20 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const useProviderAutoGreeting =
+      Boolean(initialGreetingInstructions) &&
+      shouldUseOpenAIAutoGreeting(this.realtimeProvider, this.providerConfig);
+    const sessionInstructions = useProviderAutoGreeting
+      ? initialGreetingInstructions
+      : this.config.instructions;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
-      instructions: this.config.instructions,
+      instructions: sessionInstructions,
       tools: this.config.tools,
       initialGreetingInstructions,
-      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
+      triggerGreetingOnReady: Boolean(initialGreetingInstructions) && !useProviderAutoGreeting,
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {

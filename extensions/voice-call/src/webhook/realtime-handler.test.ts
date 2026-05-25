@@ -41,10 +41,11 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 
 function makeRealtimeProvider(
   createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  id: RealtimeVoiceProviderPlugin["id"] = "openai",
 ): RealtimeVoiceProviderPlugin {
   return {
-    id: "openai",
-    label: "OpenAI",
+    id,
+    label: id === "openai" ? "OpenAI" : id,
     isConfigured: () => true,
     createBridge,
   };
@@ -82,6 +83,7 @@ function makeHandler(
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),
   };
+  const realtimeProvider = deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge());
   return new RealtimeCallHandler(
     config,
     {
@@ -102,8 +104,8 @@ function makeHandler(
       getCallStatus: vi.fn(),
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
-    deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    { apiKey: "test-key" },
+    realtimeProvider,
+    config.providers[realtimeProvider.id] ?? { apiKey: "test-key" },
     "/voice/webhook",
   );
 }
@@ -443,6 +445,136 @@ describe("RealtimeCallHandler path routing", () => {
         callbacks?.onReady?.();
 
         expect(triggerGreeting).not.toHaveBeenCalled();
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("lets OpenAI server VAD speak the initial outbound greeting once", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    let createRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const triggerGreeting = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        createRequest = request;
+        return makeBridge({ triggerGreeting });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-greeting",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: { initialMessage: "Hi, this is Milly." },
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-greeting", callSid: "CA-greeting" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onReady?.();
+
+        expect(triggerGreeting).not.toHaveBeenCalled();
+        expect(createRequest?.instructions).toContain("Hi, this is Milly.");
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps explicit greetings when OpenAI auto response is disabled", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    const triggerGreeting = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ triggerGreeting });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-manual-greeting",
+        provider: "twilio",
+        direction: "outbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: { initialMessage: "Hi, this is Milly." },
+      }),
+    );
+    const handler = makeHandler(
+      { providers: { openai: { autoRespondToAudio: false } } },
+      {
+        manager: {
+          getCallByProviderCallId,
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-manual-greeting", callSid: "CA-manual-greeting" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onReady?.();
+
+        expect(triggerGreeting).toHaveBeenCalledWith(expect.stringContaining("Hi, this is Milly."));
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
