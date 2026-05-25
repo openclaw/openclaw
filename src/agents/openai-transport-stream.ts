@@ -800,29 +800,29 @@ function stripResponsesRequestEncryptedContent(
 ): OpenAIResponsesRequestParams {
   const stripped = stripEncryptedContentFields(params.input);
   const hadInputChanges = stripped.changed;
-  
+
   // Also remove reasoning.encrypted_content from include array to prevent
   // the server from trying to encrypt reasoning content that will fail decryption
   let hadIncludeChanges = false;
-  let newInclude = params.include;
+  let newInclude: string[] | undefined = params.include;
   if (Array.isArray(params.include)) {
     newInclude = params.include.filter((item) => item !== "reasoning.encrypted_content");
     hadIncludeChanges = newInclude.length !== params.include.length;
   }
-  
+
   if (!hadInputChanges && !hadIncludeChanges) {
     return params;
   }
-  
+
   const result: OpenAIResponsesRequestParams = {
     ...params,
     input: stripped.value as ResponseInput,
   };
-  
-  if (hadIncludeChanges) {
-    result.include = newInclude.length > 0 ? newInclude : undefined;
+
+  if (hadIncludeChanges && newInclude && newInclude.length > 0) {
+    result.include = newInclude;
   }
-  
+
   return result;
 }
 
