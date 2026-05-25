@@ -1097,12 +1097,13 @@ function extractTranscriptUserText(content: unknown): string | undefined {
   return textBlocks.length > 0 ? textBlocks.join("") : undefined;
 }
 
-async function rewriteChatSendUserTurnMediaPaths(params: {
+export async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
   message: string;
   savedImages: SavedMedia[];
   cfg: OpenClawConfig;
+  timestamp?: number;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   if (!("MediaPath" in mediaFields)) {
@@ -1124,7 +1125,29 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
     ) {
       return false;
     }
-    return extractTranscriptUserText((message as { content?: unknown }).content) === params.message;
+    const transcriptText = extractTranscriptUserText((message as { content?: unknown }).content);
+    if (!transcriptText) return false;
+
+    // Primary: exact text match (fast path)
+    if (transcriptText === params.message) {
+      return true;
+    }
+
+    // Fallback 1: message contains the sent text (handles extra timestamps/media markers)
+    if (transcriptText.includes(params.message)) {
+      return true;
+    }
+
+    // Fallback 2: time-based proximity (±5 seconds) for fuzzy match when exact fails
+    if (params.timestamp && typeof entry.record.timestamp === "number") {
+      const timeDiffMs = Math.abs(entry.record.timestamp - params.timestamp);
+      if (timeDiffMs < 5000) {
+        // within 5 seconds
+        return true;
+      }
+    }
+
+    return false;
   });
   const targetMessage = target?.record.message as Record<string, unknown> | undefined;
   if (!target || !target.id || !targetMessage) {
@@ -2805,6 +2828,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: parsedMessage,
           savedImages: await persistedImagesPromise,
           cfg,
+          timestamp: now,
         });
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
