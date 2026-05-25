@@ -34,6 +34,7 @@ import {
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveUnitFastTestIncludePattern } from "../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   isBoundaryTestFile,
@@ -1124,23 +1125,6 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
-}
-
-function isUnitUiTestTarget(relative) {
-  if (!relative.endsWith(".test.ts")) {
-    return false;
-  }
-  return (
-    relative === "ui/src/ui/app-chat.test.ts" ||
-    relative.startsWith("ui/src/ui/chat/") ||
-    relative === "ui/src/ui/views/agents-utils.test.ts" ||
-    relative === "ui/src/ui/views/channels.test.ts" ||
-    relative === "ui/src/ui/views/chat.test.ts" ||
-    relative === "ui/src/ui/views/dreaming.test.ts" ||
-    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
-    relative === "ui/src/ui/controllers/agents.test.ts" ||
-    relative === "ui/src/ui/controllers/chat.test.ts"
-  );
 }
 
 function isControlUiE2eTarget(relative) {
