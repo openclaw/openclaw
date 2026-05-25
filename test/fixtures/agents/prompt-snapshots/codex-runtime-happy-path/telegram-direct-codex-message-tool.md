@@ -103,6 +103,7 @@
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
 }
@@ -121,6 +122,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-direct-codex-message-tool"
 }
@@ -150,6 +152,7 @@
     }
   ],
   "model": "gpt-5.5",
+  "personality": "none",
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
