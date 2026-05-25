@@ -92,6 +92,13 @@ class VoiceE2eService : Service() {
           .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
       )
 
+      if (mode == "connect") {
+        val resultJson = """{"ok":true,"mode":"connect","connected":true}"""
+        writeResult(resultJson)
+        Log.i(tag, "PASS $resultJson")
+        return
+      }
+
       val transcript =
         intent
           .getDecodedStringExtra("transcript")

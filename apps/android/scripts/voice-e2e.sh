@@ -23,7 +23,8 @@ usage() {
 Usage: apps/android/scripts/voice-e2e.sh [options]
 
 Options:
-  --mode normal|realtime|both     Voice path to test. Default: both.
+  --mode connect|normal|realtime|both
+                                  Gateway probe or voice path to test. Default: both.
   --transcript TEXT               Synthetic user transcript for the voice turn.
   --realtime-assistant TEXT       Synthetic realtime assistant relay text.
   --host HOST                     Gateway host visible from Android. Default: 127.0.0.1.
@@ -208,6 +209,9 @@ case "$MODE" in
     ;;
   realtime|talk)
     run_mode realtime
+    ;;
+  connect)
+    run_mode connect
     ;;
   *)
     echo "unknown mode: $MODE" >&2
