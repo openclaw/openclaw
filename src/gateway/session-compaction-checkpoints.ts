@@ -7,7 +7,7 @@ import {
   SessionManager,
   type FileEntry as PiSessionFileEntry,
 } from "@earendil-works/pi-coding-agent";
-import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
@@ -506,20 +506,14 @@ export async function persistSessionCompactionCheckpoint(params: {
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
-  const existingStore = loadSessionStore(target.storePath, { skipCache: true });
-  const existingCheckpoints = sessionStoreCheckpoints(existingStore[target.canonicalKey]);
-  const snapshotBytesByPath = await statCheckpointSnapshotBytes([
-    ...existingCheckpoints,
-    checkpoint,
-  ]);
-
-  await updateSessionStore(target.storePath, (store) => {
+  await updateSessionStore(target.storePath, async (store) => {
     const existing = store[target.canonicalKey];
     if (!existing?.sessionId) {
       return;
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
+    const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
     trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
     store[target.canonicalKey] = {
       ...existing,
