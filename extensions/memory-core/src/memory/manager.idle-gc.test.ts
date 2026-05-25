@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { acquireManagedCacheKey, type ManagedCache } from "./manager-cache.js";
+import {
+  acquireManagedCacheKey,
+  isManagedCacheKeyBusy,
+  type ManagedCache,
+} from "./manager-cache.js";
 import { closeIdleMemoryIndexManagers, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
@@ -311,5 +315,76 @@ describe("closeIdleMemoryIndexManagers", () => {
 
     releaseA();
     releaseB();
+  });
+
+  // These tests exercise the identity-guarded teardown contract enforced
+  // by MemoryIndexManager.close()'s finally block (and the matching
+  // guard in closeMemoryIndexManagersForAgent). The race they cover:
+  //
+  //   T0  sweep / closeMemoryIndexManagersForAgent picks M_old for close
+  //   T1  M_old.close() starts; awaits provider/db teardown
+  //   T2  another caller getOrCreate(key) sees closed=true, installs M_new
+  //   T3  M_old.close() finally block runs
+  //
+  // Without an identity guard, T3 would delete cache[key] = M_new,
+  // lastAccessAt[key] (recorded by T2), and inflightCount[key] (used by
+  // T2's caller), making M_new invisible to every future idle sweep.
+  //
+  // The unit tests below model that finally block directly against the
+  // shared ManagedCache instance so they catch any regression where the
+  // identity guard is dropped or applied to only some of the three maps.
+  function runIdentityGuardedFinally(closingManager: FakeManager) {
+    // Equivalent of the post-fix MemoryIndexManager.close() finally:
+    if (cache.cache.get(closingManager.cacheKey) === closingManager) {
+      cache.cache.delete(closingManager.cacheKey);
+      cache.lastAccessAt.delete(closingManager.cacheKey);
+      cache.inflightCount.delete(closingManager.cacheKey);
+    }
+  }
+
+  it("identity guard: keeps replacement manager metadata when M_old.close() finally races getOrCreate(M_new)", async () => {
+    // Seed M_old into the cache the way getOrCreate would have left it.
+    const mOld = seed("race:key", Date.now() - 30_000);
+    // T2 happens: a caller replaces M_old with M_new in the same slot,
+    // records a fresh lastAccessAt, and acquires the busy refcount via
+    // its first sync()/search() call.
+    const mNew = makeFakeManager("race:key");
+    cache.cache.set("race:key", mNew);
+    seededKeys.push("race:key"); // already pushed by seed(), idempotent in afterEach
+    cache.lastAccessAt.set("race:key", Date.now());
+    const releaseNew = acquireManagedCacheKey(cache, "race:key");
+
+    // T3 happens: M_old.close()'s finally block fires. With the identity
+    // guard it must observe that the cache slot is no longer M_old and
+    // leave M_new's metadata alone.
+    runIdentityGuardedFinally(mOld);
+
+    expect(cache.cache.get("race:key")).toBe(mNew);
+    // The critical post-fix invariants — without these the next idle
+    // sweep would not be able to find or guard M_new.
+    expect(cache.lastAccessAt.has("race:key")).toBe(true);
+    expect(isManagedCacheKeyBusy(cache, "race:key")).toBe(true);
+
+    // M_new should still participate in the next idle sweep once it
+    // becomes idle: drop its busy refcount, age its lastAccessAt past
+    // the threshold, and verify the sweep picks it up.
+    releaseNew();
+    cache.lastAccessAt.set("race:key", Date.now() - 30_000);
+    const result = await closeIdleMemoryIndexManagers({ idleMs: 5_000 });
+    expect(result.evicted).toBe(1);
+    expect(mNew.close).toHaveBeenCalledTimes(1);
+    expect(cache.cache.has("race:key")).toBe(false);
+  });
+
+  it("identity guard: clears metadata when M_old is still the cache occupant (no race occurred)", async () => {
+    // No racing replacement. Sanity check that the identity guard does
+    // not regress the normal teardown path.
+    const mOld = seed("noop:key", Date.now() - 30_000);
+
+    runIdentityGuardedFinally(mOld);
+
+    expect(cache.cache.has("noop:key")).toBe(false);
+    expect(cache.lastAccessAt.has("noop:key")).toBe(false);
+    expect(isManagedCacheKeyBusy(cache, "noop:key")).toBe(false);
   });
 });

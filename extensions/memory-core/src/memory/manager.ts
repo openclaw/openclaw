@@ -147,9 +147,17 @@ export async function closeMemoryIndexManagersForAgent(params: {
   if (!manager) {
     return;
   }
-  INDEX_CACHE.delete(key);
-  INDEX_MANAGER_CACHE.lastAccessAt.delete(key);
-  INDEX_MANAGER_CACHE.inflightCount.delete(key);
+  // Identity-guarded teardown: only clear metadata if we are still the
+  // current cache occupant for this key. A racing getOrCreate(key) that
+  // observes manager.closed === true may install a replacement here
+  // between our snapshot above and these deletes; in that case we must
+  // leave the replacement's metadata alone. See the matching identity
+  // guard in MemoryIndexManager.close() for the full rationale.
+  if (INDEX_CACHE.get(key) === manager) {
+    INDEX_CACHE.delete(key);
+    INDEX_MANAGER_CACHE.lastAccessAt.delete(key);
+    INDEX_MANAGER_CACHE.inflightCount.delete(key);
+  }
   try {
     await manager.close();
   } catch (err) {
@@ -1087,14 +1095,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await closeCurrentProvider();
     } finally {
       closeMemoryDatabase(this.db);
+      // Identity-guarded teardown. Between the top of close() and this
+      // finally block, a concurrent getOrCreate(this.cacheKey) may have
+      // inserted a replacement manager into the same key (it sees our
+      // already-closed marker, removes us, and installs a fresh
+      // instance). In that case we must leave the replacement's
+      // metadata untouched:
+      //
+      //   - INDEX_CACHE.delete would already be a no-op because the
+      //     value is no longer us, but spell out the identity check.
+      //   - INDEX_MANAGER_CACHE.lastAccessAt.delete on a stale key would
+      //     erase the replacement's freshly-recorded access timestamp
+      //     and make the replacement invisible to the next idle sweep
+      //     (it would then live forever, defeating the whole point of
+      //     the sidecar).
+      //   - INDEX_MANAGER_CACHE.inflightCount.delete on a stale key
+      //     would clear refcounts the replacement is actively using.
+      //
+      // So all three metadata maps are gated on the same identity
+      // check. release() callbacks held by callers of the prior
+      // acquireManagedCacheKey() remain idempotent: a release fired
+      // after we are no longer the cache occupant decrements an entry
+      // that may now belong to the replacement, but that is still safe
+      // because (a) we incremented it while we were the occupant, and
+      // (b) the symmetric decrement is the expected accounting.
       if (INDEX_CACHE.get(this.cacheKey) === this) {
         INDEX_CACHE.delete(this.cacheKey);
+        INDEX_MANAGER_CACHE.lastAccessAt.delete(this.cacheKey);
+        INDEX_MANAGER_CACHE.inflightCount.delete(this.cacheKey);
       }
-      INDEX_MANAGER_CACHE.lastAccessAt.delete(this.cacheKey);
-      // Clear any residual inflightCount for this key. Outstanding
-      // release() callbacks tied to acquireManagedCacheKey() are
-      // idempotent and safe to fire after the cache slot is gone.
-      INDEX_MANAGER_CACHE.inflightCount.delete(this.cacheKey);
     }
     const closeError = closeErrors.values().next().value;
     if (closeError) {
