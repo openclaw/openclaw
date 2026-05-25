@@ -69,6 +69,54 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
+  it("raises inherited low tsdown heap settings to the build floor", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6144");
+  });
+
+  it("raises split inherited low tsdown heap settings to the build floor", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6144");
+  });
+
+  it("can run tsdown without invoking pnpm", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
+
+    expect(result).toEqual({
+      command: "/usr/bin/node",
+      args: [
+        "node_modules/tsdown/dist/run.mjs",
+        "--config-loader",
+        "unrun",
+        "--logLevel",
+        "warn",
+        "--no-clean",
+      ],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env: {
+          NODE_OPTIONS: "--max-old-space-size=6144",
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        },
+      },
+    });
+  });
+
   it("keeps source-checkout prune best-effort", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rmSync = vi.spyOn(fs, "rmSync");

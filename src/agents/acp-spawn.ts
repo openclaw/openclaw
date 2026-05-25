@@ -41,6 +41,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import {
   getSessionBindingService,
@@ -70,7 +71,7 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -447,9 +448,39 @@ function resolveTargetAcpAgentId(params: {
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return (cfg.acp?.allowedAgents ?? []).some((entry) => {
+    if (entry.trim() === "*") {
+      return true;
+    }
     const normalized = normalizeOptionalAgentId(entry);
-    return normalized === "*" || normalized === agentId;
+    return normalized === agentId;
   });
+}
+
+function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set<string>(listAgentIds(cfg));
+  for (const agent of cfg.agents?.list ?? []) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
+  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  if (defaultAgent) {
+    ids.add(defaultAgent);
+  }
+  for (const entry of cfg.acp?.allowedAgents ?? []) {
+    if (entry.trim() === "*") {
+      continue;
+    }
+    const id = normalizeOptionalAgentId(entry);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids);
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
@@ -801,6 +832,7 @@ function resolveAcpSubagentEnvelopeState(params: {
     allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
       params.cfg.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(params.cfg),
   });
   if (!targetPolicy.ok) {
     return {
@@ -1395,6 +1427,9 @@ export async function spawnAcpDirect(
       : undefined;
 
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
+  const parentEventRouting = parentSessionKey
+    ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
+    : undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
@@ -1404,6 +1439,7 @@ export async function spawnAcpDirect(
       agentId: targetAgentId,
       mainKey: cfg.session?.mainKey,
       sessionScope: cfg.session?.scope,
+      eventRouting: parentEventRouting,
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
@@ -1460,6 +1496,7 @@ export async function spawnAcpDirect(
         agentId: targetAgentId,
         mainKey: cfg.session?.mainKey,
         sessionScope: cfg.session?.scope,
+        eventRouting: parentEventRouting,
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,

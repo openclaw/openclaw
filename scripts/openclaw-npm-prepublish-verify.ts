@@ -10,7 +10,7 @@ import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-s
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
-  resolveInstalledBinaryPath,
+  resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
@@ -20,15 +20,17 @@ type InstalledPackageJson = {
 
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
+    npmArgs: args,
     npmExecPath: process.env.npm_execpath,
     nodeExecPath: process.execPath,
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
+  return execFileSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   }).trim();
 }
 
@@ -67,16 +69,13 @@ function main(): void {
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const installedBinaryVersion = execFileSync(
-      resolveInstalledBinaryPath(prefixDir),
-      ["--version"],
-      {
-        cwd: workingDir,
-        encoding: "utf8",
-        shell: process.platform === "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ).trim();
+    const binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+    const installedBinaryVersion = execFileSync(binaryInvocation.command, binaryInvocation.args, {
+      cwd: workingDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: binaryInvocation.windowsVerbatimArguments,
+    }).trim();
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {
       errors.push(
         `installed openclaw binary version mismatch: expected ${resolvedExpectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,

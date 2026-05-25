@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
@@ -149,7 +150,11 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalogForBrowse({
+    cfg,
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -157,7 +162,7 @@ export async function buildModelsProviderData(
     defaultModel: resolvedDefault.model,
     agentId,
   });
-  const visibleCatalog = resolveVisibleModelCatalog({
+  const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
@@ -168,6 +173,7 @@ export async function buildModelsProviderData(
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
       resolveDefaultAgentWorkspaceDir(),
     view: options.view,
+    runtimeAuthDiscovery: false,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -245,20 +251,20 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  const hasAuth =
+  const hasAuth: (provider: string) => Promise<boolean> =
     options.view === "all"
-      ? () => true
+      ? async () => true
       : createProviderAuthChecker({
           cfg,
           workspaceDir:
             options.workspaceDir ??
             (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
             resolveDefaultAgentWorkspaceDir(),
-          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+          agentId,
         });
 
   for (const entry of catalog) {
-    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
+    if (usesUnfilteredCatalogModels(entry.provider) && (await hasAuth(entry.provider))) {
       add(entry.provider, entry.id);
     }
   }

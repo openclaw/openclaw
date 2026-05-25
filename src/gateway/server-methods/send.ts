@@ -16,10 +16,12 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { normalizePollInput } from "../../polls.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
@@ -27,7 +29,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -130,9 +132,16 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = applyPluginAutoEnable({
-    config: params.context.getRuntimeConfig(),
+  const runtimeConfig = params.context.getRuntimeConfig();
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+    config: runtimeConfig,
     env: process.env,
+  });
+  const cfg = applyPluginAutoEnable({
+    config: runtimeConfig,
+    env: process.env,
+    manifestRegistry: currentSnapshot?.manifestRegistry,
+    discovery: currentSnapshot?.discovery,
   }).config;
   let channel = normalizedChannel;
   if (!channel) {
@@ -264,6 +273,21 @@ function createGatewayInflightUnavailableFailure(params: {
   };
 }
 
+async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
+  context: GatewayRequestContext;
+  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
+}) {
+  try {
+    await mirrorDeliveredSourceReplyToTranscript(params.mirror);
+  } catch (err) {
+    params.context.logGateway?.warn?.("Source reply transcript mirror failed after delivery.", {
+      error: formatForLog(err),
+      channel: params.mirror.channel,
+      sessionKey: params.mirror.sessionKey,
+    });
+  }
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
@@ -297,22 +321,6 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
-    // Owner status is an authorization signal used to unlock owner-only
-    // channel actions and owner-only tool policy. The legitimate propagation
-    // path is the trusted runtime forwarding a real channel-sender ownership
-    // bit through the gateway RPC — but that wire value must not be honored
-    // for callers who are not already full operators. Per SECURITY.md,
-    // shared-secret bearer and admin-scoped callers get the full default
-    // operator scope set (including `operator.admin`); those callers are
-    // trusted to forward `senderIsOwner`. Narrowly-scoped callers
-    // (e.g. `operator.write`-only, including the gateway-forwarding
-    // least-privilege path) are not trusted to assert ownership, so their
-    // wire value is forced to `false` to prevent a non-admin scoped caller
-    // from unlocking owner-only channel actions by setting
-    // `senderIsOwner: true` on the request.
-    const callerScopes = client?.connect?.scopes ?? [];
-    const callerIsFullOperator = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
-    const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
     const inflight = resolveGatewayInflightMap({ context, dedupeKey });
@@ -355,6 +363,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
 
       try {
+        const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
@@ -362,7 +371,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner,
+          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
+            ? request.senderIsOwner === true
+            : false,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
@@ -373,7 +384,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           ),
           toolContext: request.toolContext,
           dryRun: false,
-          gatewayClientScopes: client?.connect?.scopes ?? [],
+          gatewayClientScopes,
         });
         if (!handled) {
           const error = errorShape(
@@ -384,6 +395,24 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
+        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+        const agentId =
+          normalizeOptionalString(request.agentId) ??
+          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+        await mirrorDeliveredSourceReplyToTranscriptBestEffort({
+          context,
+          mirror: {
+            action: request.action,
+            channel,
+            actionParams: request.params,
+            cfg,
+            sessionKey,
+            agentId,
+            toolContext: request.toolContext,
+            idempotencyKey: request.idempotencyKey,
+            deliveredPayload: payload,
+          },
+        });
         return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
       } catch (err) {
         return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });

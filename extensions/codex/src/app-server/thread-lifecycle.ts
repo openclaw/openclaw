@@ -29,6 +29,7 @@ import {
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
+  type CodexTurnEnvironmentParams,
   type CodexTurnStartParams,
   type JsonObject,
   type CodexUserInput,
@@ -96,6 +97,7 @@ export async function startOrResumeThread(params: {
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
@@ -111,6 +113,9 @@ export async function startOrResumeThread(params: {
           agentId: params.agentId ?? params.params.agentId,
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
+  const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
+    params.environmentSelection,
+  );
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
@@ -157,6 +162,19 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
+  ) {
+    embeddedAgentLog.debug(
+      "codex app-server environment selection changed; starting a new thread",
+      {
+        threadId: binding.threadId,
+      },
+    );
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
   }
@@ -296,6 +314,7 @@ export async function startOrResumeThread(params: {
             pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             contextEngine: contextEngineBinding,
+            environmentSelectionFingerprint,
             createdAt: binding.createdAt,
           },
           {
@@ -329,6 +348,7 @@ export async function startOrResumeThread(params: {
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
+          environmentSelectionFingerprint,
           lifecycle: { action: "resumed" },
         };
       } catch (error) {
@@ -363,6 +383,7 @@ export async function startOrResumeThread(params: {
         config,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+        environmentSelection: params.environmentSelection,
       }),
     ),
   );
@@ -392,6 +413,7 @@ export async function startOrResumeThread(params: {
         pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
         pluginAppPolicyContext: pluginThreadConfig?.policyContext,
         contextEngine: contextEngineBinding,
+        environmentSelectionFingerprint,
         createdAt,
       },
       {
@@ -427,6 +449,7 @@ export async function startOrResumeThread(params: {
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     contextEngine: contextEngineBinding,
+    environmentSelectionFingerprint,
     createdAt,
     updatedAt: createdAt,
     lifecycle: {
@@ -563,6 +586,7 @@ export function buildThreadStartParams(
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    environmentSelection?: CodexTurnEnvironmentParams[];
   },
 ): CodexThreadStartParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -585,7 +609,7 @@ export function buildThreadStartParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
-    ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
+    ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
@@ -691,6 +715,9 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    environmentSelection?: CodexTurnEnvironmentParams[];
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
   return {
@@ -704,33 +731,92 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-    collaborationMode: buildTurnCollaborationMode(params),
+    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    collaborationMode: buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+      heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+    }),
   };
+}
+
+function resolveCodexThreadEnvironmentSelection(options: {
+  nativeCodeModeEnabled?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
+}): Pick<CodexThreadStartParams, "environments"> {
+  if (options.nativeCodeModeEnabled === false) {
+    return { environments: [] };
+  }
+  if (options.environmentSelection) {
+    return { environments: options.environmentSelection };
+  }
+  return {};
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
 ): CodexTurnCollaborationMode {
   return {
     mode: "default",
     settings: {
       model: params.modelId,
       reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-      developer_instructions: buildTurnScopedCollaborationInstructions(params),
+      developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
 }
 
-function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
+function buildTurnScopedCollaborationInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: {
+    turnScopedDeveloperInstructions?: string;
+    heartbeatCollaborationInstructions?: string;
+  } = {},
+): string | null {
   if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
+    return joinPresentSections(
+      buildCronCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+    );
   }
   if (params.trigger === "heartbeat") {
-    return buildHeartbeatCollaborationInstructions();
+    return joinPresentSections(
+      buildHeartbeatCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+      options.heartbeatCollaborationInstructions,
+    );
+  }
+  if (options.turnScopedDeveloperInstructions?.trim()) {
+    return joinPresentSections(
+      buildDefaultCollaborationInstructions(),
+      options.turnScopedDeveloperInstructions,
+    );
   }
   return null;
+}
+
+function buildDefaultCollaborationInstructions(): string {
+  // Codex only applies the built-in Default-mode preset when `developer_instructions`
+  // is null. OpenClaw adds per-turn workspace instructions here, so preserve that
+  // pinned Codex default behavior before appending the workspace overlay.
+  return [
+    "# Collaboration Mode: Default",
+    "",
+    "You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.",
+    "",
+    "Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.",
+    "",
+    "## request_user_input availability",
+    "",
+    "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
+    "",
+    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
+  ].join("\n");
 }
 
 function buildCronCollaborationInstructions(): string {
@@ -748,6 +834,10 @@ function buildHeartbeatCollaborationInstructions(): string {
     "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
     CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
+}
+
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -773,6 +863,12 @@ function fingerprintUserMcpServersConfigPatch(
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
 }
 
+function fingerprintEnvironmentSelection(
+  environments: CodexTurnEnvironmentParams[] | undefined,
+): string | undefined {
+  return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
+}
+
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   if (!isJsonObject(tool)) {
     return stabilizeJsonValue(tool);
@@ -781,7 +877,9 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (key === "description") {
+    // Tool-search presentation can change per turn without changing the
+    // durable app-server execution contract for an existing thread.
+    if (key === "description" || key === "deferLoading" || key === "namespace") {
       continue;
     }
     stable[key] = stabilizeJsonValue(child);
@@ -835,10 +933,10 @@ export function buildDeveloperInstructions(
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
-    "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
+    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
-    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
-    buildVisibleReplyInstruction(params),
+    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+    buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
@@ -862,11 +960,17 @@ function buildDeferredDynamicToolManifest(
   return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
 }
 
-function buildVisibleReplyInstruction(params: EmbeddedRunAttemptParams): string {
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
-    return "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.";
+function buildVisibleReplyInstruction(
+  params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string {
+  const messageToolAvailable = dynamicTools
+    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    : params.disableMessageTool !== true;
+  if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
+    return "To send a visible message, use the `message` tool.";
   }
-  return "Preserve channel/session context. Visible channel replies should use the active Codex delivery path; do not describe would-reply.";
+  return "To send a visible reply, use the active Codex delivery path.";
 }
 
 function buildUserInput(
@@ -912,7 +1016,7 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai-codex" ? "openai" : normalized;
 }
 
-// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini) use the
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in
