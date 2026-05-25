@@ -8,8 +8,12 @@ export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
   return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
 }
 
-export function uniqueStrings(values: Iterable<string>): string[] {
+export function uniqueValues<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
+}
+
+export function uniqueStrings(values: Iterable<string>): string[] {
+  return uniqueValues(values);
 }
 
 export function sortUniqueStrings(values: Iterable<string>): string[] {

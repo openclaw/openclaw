@@ -37,6 +37,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
@@ -541,7 +542,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {

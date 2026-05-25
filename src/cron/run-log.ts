@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
@@ -241,7 +242,7 @@ function normalizeRunStatuses(opts?: {
         status === "ok" || status === "error" || status === "skipped",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   const status = normalizeRunStatusFilter(opts?.status);
@@ -264,7 +265,7 @@ function normalizeDeliveryStatuses(opts?: {
         status === "not-requested",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   if (

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { readJsonIfExists, writeJson } from "./json-files.js";
 
 export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
@@ -310,9 +311,7 @@ export async function assertNoLegacyPluginDependencyStagingDebris(
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
   await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
-  const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await writeJson(inventoryPath, inventory, { trailingNewline: true });
   return inventory;
@@ -327,9 +326,7 @@ async function readPackageDistInventoryOptional(packageRoot: string): Promise<st
   if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string")) {
     throw new Error(`Invalid package dist inventory at ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
   }
-  return [...new Set(parsed.map(normalizeRelativePath))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return sortUniqueStrings(parsed.map(normalizeRelativePath));
 }
 
 export async function readPackageDistInventoryIfPresent(

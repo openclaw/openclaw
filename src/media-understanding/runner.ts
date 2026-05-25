@@ -32,6 +32,7 @@ import {
   normalizeNullableString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -119,7 +120,7 @@ function resolveConfiguredKeyProviderOrder(params: {
       ),
     );
 
-  return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+  return uniqueStrings([...configuredProviders, ...params.fallbackProviders]);
 }
 
 function resolveConfiguredImageModelId(params: {
@@ -352,8 +353,7 @@ function candidateBinaryNames(name: string): string[] {
     .map((item) => item.trim())
     .filter(Boolean)
     .map((item) => (item.startsWith(".") ? item : `.${item}`));
-  const unique = Array.from(new Set(pathext));
-  return [name, ...unique.map((item) => `${name}${item}`)];
+  return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {

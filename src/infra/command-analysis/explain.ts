@@ -33,7 +33,7 @@ function riskLabel(risk: CommandRisk): string {
 export function summarizeCommandExplanation(
   explanation: CommandExplanation,
 ): CommandExplanationSummary {
-  const riskKinds = [...new Set(explanation.risks.map((risk) => risk.kind))];
+  const riskKinds = uniqueStrings(explanation.risks.map((risk) => risk.kind));
   const warningLines = explanation.risks.map((risk) => {
     const label = riskLabel(risk);
     return label === risk.kind ? `Contains ${risk.kind}` : `Contains ${risk.kind}: ${label}`;
@@ -42,7 +42,7 @@ export function summarizeCommandExplanation(
     commandCount: explanation.topLevelCommands.length,
     nestedCommandCount: explanation.nestedCommands.length,
     riskKinds,
-    warningLines: [...new Set(warningLines)],
+    warningLines: uniqueStrings(warningLines),
   };
 }
 

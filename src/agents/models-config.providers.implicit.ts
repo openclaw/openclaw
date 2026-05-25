@@ -10,6 +10,7 @@ import {
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -88,7 +89,7 @@ function resolveProviderDiscoveryFilter(params: {
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean);
-    return ids.length > 0 ? [...new Set(ids)] : undefined;
+    return ids.length > 0 ? uniqueStrings(ids) : undefined;
   }
   const scopedProviderIds = params.providerIds
     ?.map((value) => value.trim())

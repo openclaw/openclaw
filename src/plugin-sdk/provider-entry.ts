@@ -9,6 +9,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
@@ -107,7 +108,7 @@ function resolveEnvVars(params: {
   ]
     .map((value) => value.trim())
     .filter(Boolean);
-  return combined.length > 0 ? [...new Set(combined)] : undefined;
+  return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
 
 function projectProviderCatalogResultToUnifiedTextRows(params: {

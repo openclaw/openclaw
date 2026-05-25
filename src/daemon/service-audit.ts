@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -350,7 +351,7 @@ function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
     }
     inlineKeys.push(normalized);
   }
-  return [...new Set(inlineKeys)].toSorted();
+  return sortUniqueStrings(inlineKeys);
 }
 
 function auditProxyServiceEnvironment(
