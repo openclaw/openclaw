@@ -310,6 +310,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes split channel-broker extension targets to the channel-broker shard", () => {
+    expect(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+        "extensions/channel-broker/src/http-routes.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extension-channel-broker.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/channel-broker/src/http-routes.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
