@@ -254,7 +254,10 @@ async function assertRequiredMessageSendDurability(params: {
     support.reason === "capability_mismatch" && support.capability
       ? `missing ${support.capability}`
       : support.reason;
-  throw new Error(`Required durable message send is unsupported for ${params.channel}: ${suffix}`);
+  throw new Error(
+    `Required durable message send is unsupported for ${params.channel}: ${suffix}. ` +
+      "Retry with bestEffort:true or omit bestEffort for best-effort delivery, or use a channel with required durable delivery support.",
+  );
 }
 
 function resolveGatewayOptions(opts?: MessageGatewayOptions) {

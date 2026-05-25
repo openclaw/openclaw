@@ -788,6 +788,20 @@ describe("message tool secret scoping", () => {
   });
 });
 
+describe("message tool delivery mode schema", () => {
+  it("describes bestEffort false as required durable delivery", () => {
+    const tool = createMessageTool();
+    const properties = getToolProperties(tool);
+    const bestEffort = properties.bestEffort as { description?: string; type?: string } | undefined;
+
+    expect(bestEffort?.type).toBe("boolean");
+    expect(bestEffort?.description).toContain("Omit or set true");
+    expect(bestEffort?.description).toContain("generated media");
+    expect(bestEffort?.description).toContain("Set false only when required durable delivery");
+    expect(bestEffort?.description).toContain("reconcileUnknownSend");
+  });
+});
+
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
     mockSendResult();

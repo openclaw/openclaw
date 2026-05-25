@@ -207,7 +207,12 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
-    bestEffort: Type.Optional(Type.Boolean()),
+    bestEffort: Type.Optional(
+      Type.Boolean({
+        description:
+          "Optional delivery mode. Omit or set true for ordinary replies, generated media, and other best-effort sends. Set false only when required durable delivery is necessary and the current channel supports reconcileUnknownSend.",
+      }),
+    ),
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
