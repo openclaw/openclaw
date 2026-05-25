@@ -886,6 +886,7 @@ describe("loadModelCatalog", () => {
         input: ["text", "image"],
         reasoning: true,
         contextWindow: 1048576,
+        contextTokens: 1048576,
       },
     ]);
 
@@ -893,6 +894,11 @@ describe("loadModelCatalog", () => {
 
     const entry = requireCatalogEntry(result, "kilocode", "google/gemini-3.1-pro-preview");
     expect(entry.name).toBe("Gemini 3 Pro Preview");
+    expect(entry.catalogSource).toBe("provider-supplemental");
+    expect(entry.contextWindow).toBe(1048576);
+    expect(entry.contextTokens).toBe(1048576);
+    expect(entry.reasoning).toBe(true);
+    expect(entry.input).toEqual(["text", "image"]);
   });
 
   it("loads manifest catalog rows from the current metadata snapshot without provider runtime", () => {

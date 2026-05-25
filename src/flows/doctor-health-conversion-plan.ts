@@ -174,6 +174,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect allowlist/catalog issues for hooks.gmail.model as config findings.",
   },
   {
+    contributionId: "doctor:model-allowlist-catalog",
+    conversion: "detect-only",
+    target: ["core/doctor/model-allowlist-catalog"],
+    rule: "Detect explicit agent model allowlists that hide provider-supplemental catalog rows without mutating config.",
+  },
+  {
     contributionId: "doctor:systemd-linger",
     conversion: "interactive-maintenance",
     target: ["core/doctor/systemd-linger"],
