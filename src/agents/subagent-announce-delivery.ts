@@ -10,7 +10,7 @@ import {
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -907,6 +907,16 @@ async function sendSubagentAnnounceDirectly(params: {
           wakeOutcome,
         )}`,
       );
+    }
+    if (
+      params.expectsCompletionMessage &&
+      isCronRunSessionKey(canonicalRequesterSessionKey) &&
+      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
+    ) {
+      return {
+        delivered: true,
+        path: "none",
+      };
     }
     if (params.signal?.aborted) {
       return {
