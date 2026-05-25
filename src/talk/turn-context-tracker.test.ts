@@ -15,6 +15,17 @@ describe("realtime voice turn context tracker", () => {
     expect(tracker.consumeAudioContext()).toBeUndefined();
   });
 
+  it("marks consumed handles closed when callers close them later", () => {
+    const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const turn = tracker.open({ id: "speaker" });
+    tracker.markAudio(turn);
+
+    expect(tracker.consumeAudioContext()).toEqual({ id: "speaker" });
+    tracker.close(turn);
+
+    expect(turn.closed).toBe(true);
+  });
+
   it("drops closed audio turns that are older than later audio", () => {
     const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>();
     const older = tracker.open({ id: "older" });

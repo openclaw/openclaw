@@ -129,10 +129,10 @@ export function createRealtimeVoiceTurnContextTracker<
       handle.lastAudioAt = now();
     },
     close(handle) {
+      handle.closed = true;
       if (!turns.includes(handle)) {
         return;
       }
-      handle.closed = true;
       prune();
     },
     consumeAudioContext() {
