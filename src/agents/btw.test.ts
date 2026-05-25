@@ -603,6 +603,61 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("uses the active post-compaction transcript for Codex BTW questions", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:work");
+    const checkpointFile = "/tmp/session-1.checkpoint.98904e8a-a402-4d92-8795-4a2d7bba2276.jsonl";
+    const postCompactionFile = "/tmp/session-1.jsonl";
+
+    await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+      sessionEntry: createSessionEntry({
+        sessionFile: checkpointFile,
+        compactionCheckpoints: [
+          {
+            checkpointId: "98904e8a-a402-4d92-8795-4a2d7bba2276",
+            sessionKey: DEFAULT_SESSION_KEY,
+            sessionId: "session-1",
+            createdAt: 1,
+            reason: "manual",
+            preCompaction: {
+              sessionId: "session-1",
+              sessionFile: checkpointFile,
+              leafId: "pre-leaf",
+            },
+            postCompaction: {
+              sessionId: "session-1",
+              sessionFile: postCompactionFile,
+              leafId: "post-leaf",
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
+    ).toContain("session-1.jsonl");
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
+    ).not.toContain(".checkpoint.");
+  });
+
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
     registerAgentHarness({
       id: "codex",

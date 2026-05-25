@@ -1,7 +1,9 @@
+import path from "node:path";
 import { readFile } from "node:fs/promises";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  type SessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
@@ -24,13 +26,63 @@ export function resolveBtwSessionTranscriptPath(params: {
       agentId,
       storePath: params.storePath,
     });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    const sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return (
+      resolvePostCompactionSessionTranscriptPath({
+        sessionFile,
+        sessionEntry: params.sessionEntry,
+        pathOpts,
+      }) ?? sessionFile
+    );
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
     );
     return undefined;
   }
+}
+
+function resolvePostCompactionSessionTranscriptPath(params: {
+  sessionFile: string;
+  sessionEntry?: StoredSessionEntry;
+  pathOpts?: SessionFilePathOptions;
+}): string | undefined {
+  const checkpoints = params.sessionEntry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+
+  const resolvedSessionFile = path.resolve(params.sessionFile);
+  for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
+    const checkpoint = checkpoints[index];
+    const preSessionId = checkpoint.preCompaction.sessionId?.trim();
+    if (!preSessionId) {
+      continue;
+    }
+    const preSessionFile = resolveSessionFilePath(
+      preSessionId,
+      { sessionFile: checkpoint.preCompaction.sessionFile },
+      params.pathOpts,
+    );
+    if (path.resolve(preSessionFile) !== resolvedSessionFile) {
+      continue;
+    }
+
+    const postSessionId =
+      checkpoint.postCompaction.sessionId?.trim() ||
+      checkpoint.sessionId?.trim() ||
+      params.sessionEntry?.sessionId?.trim();
+    if (!postSessionId) {
+      continue;
+    }
+    return resolveSessionFilePath(
+      postSessionId,
+      { sessionFile: checkpoint.postCompaction.sessionFile },
+      params.pathOpts,
+    );
+  }
+
+  return undefined;
 }
 
 function readSessionEntryId(entry: AgentSessionEntry): string | undefined {
