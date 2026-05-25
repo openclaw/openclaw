@@ -41,6 +41,35 @@ const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
 type XSearchModule = typeof import("./x-search.js");
 
+const XAI_BILLING_LIMIT_CODES = [
+  "BILLING_DISABLED",
+  "BILLING_HARD_LIMIT",
+  "CREDIT_BALANCE_EXHAUSTED",
+  "CREDIT_BALANCE_TOO_LOW",
+  "INSUFFICIENT_BALANCE",
+  "INSUFFICIENT_CREDITS",
+  "INSUFFICIENT_QUOTA",
+  "MONTHLY_SPENDING_LIMIT",
+  "PAYMENT_REQUIRED",
+  "SPEND_LIMIT",
+  "SPENDING_LIMIT",
+  "SPENDING_LIMIT_EXCEEDED",
+  "SPENDING_LIMIT_REACHED",
+] as const;
+
+const XAI_RATE_LIMIT_CODES = [
+  "QUOTA_EXCEEDED",
+  "RATE_LIMIT",
+  "RATE_LIMIT_EXCEEDED",
+  "RATE_LIMIT_REACHED",
+  "RATE_LIMITED",
+  "RESOURCE_EXHAUSTED",
+  "TOO_MANY_REQUESTS",
+  "USAGE_LIMIT",
+  "USAGE_LIMIT_EXCEEDED",
+  "USAGE_LIMIT_REACHED",
+] as const;
+
 let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
 let xSearchModulePromise: Promise<XSearchModule> | undefined;
 
@@ -52,6 +81,31 @@ function loadCodeExecutionModule(): Promise<CodeExecutionModule> {
 function loadXSearchModule(): Promise<XSearchModule> {
   xSearchModulePromise ??= import("./x-search.js");
   return xSearchModulePromise;
+}
+
+function normalizeXaiErrorSignal(raw: string): string {
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_");
+}
+
+function hasXaiErrorSignal(raw: string, signals: readonly string[]): boolean {
+  const normalized = normalizeXaiErrorSignal(raw);
+  return signals.some((signal) => {
+    const escaped = signal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|_)${escaped}(?:_|$)`).test(normalized);
+  });
+}
+
+function classifyXaiFailoverReason(errorMessage: string) {
+  if (hasXaiErrorSignal(errorMessage, XAI_BILLING_LIMIT_CODES)) {
+    return "billing" as const;
+  }
+  if (hasXaiErrorSignal(errorMessage, XAI_RATE_LIMIT_CODES)) {
+    return "rate_limit" as const;
+  }
+  return undefined;
 }
 
 function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -219,6 +273,7 @@ export default defineSingleProviderPluginEntry({
     refreshOAuth: refreshXaiOAuthCredential,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
+    classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
   },
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());

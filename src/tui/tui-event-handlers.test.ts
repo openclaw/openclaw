@@ -1022,6 +1022,27 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
+  it("preserves backend billing and usage-limit errors in local mode", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      localMode: true,
+      state: {
+        activeChatRunId: null,
+        sessionInfo: { modelProvider: "xai" },
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-xai-spending-limit",
+      sessionKey: "agent:main:main",
+      state: "error",
+      errorMessage: "403 SPENDING_LIMIT: xAI spending limit reached. Add credits in the xAI console.",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run error: HTTP 403: SPENDING_LIMIT: xAI spending limit reached. Add credits in the xAI console.",
+    );
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

@@ -69,6 +69,32 @@ describe("xai provider plugin", () => {
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
   });
 
+  it("classifies Grok usage and spending limit errors", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '403 {"error":{"code":"SPENDING_LIMIT","message":"Monthly spending limit reached"}}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "xAI request failed: usage limit reached for this Grok account",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "Provider API error (429): Too many requests [code=rate_limit_reached]",
+      }),
+    ).toBe("rate_limit");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage: "xAI request failed: invalid request format",
+      }),
+    ).toBeUndefined();
+  });
+
   it("registers xAI speech providers for batch and streaming STT", async () => {
     const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
       plugin,
