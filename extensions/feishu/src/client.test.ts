@@ -62,7 +62,13 @@ const mockBaseHttpInstance = vi.hoisted(() => {
     },
   };
 });
-const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
+const proxyEnvKeys = [
+  "https_proxy",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "HTTP_PROXY",
+  "OPENCLAW_PROXY_ACTIVE",
+] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
 const registerFeishuDocToolsMock = vi.hoisted(() => vi.fn());
 const registerFeishuChatToolsMock = vi.hoisted(() => vi.fn());
@@ -468,6 +474,35 @@ describe("createFeishuClient HTTP timeout", () => {
       timeout: FEISHU_HTTP_TIMEOUT_MS,
       httpAgent: callerHttpAgent,
       httpsAgent: callerHttpsAgent,
+      proxy: false,
+    });
+  });
+
+  it("overrides request-level agents while managed proxy mode is active", async () => {
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    const callerHttpAgent = { caller: "http" };
+    const callerHttpsAgent = { caller: "https" };
+
+    createFeishuClient({
+      appId: "app_13",
+      appSecret: "secret_13", // pragma: allowlist secret
+      accountId: "http-proxy-managed-agent",
+    });
+
+    const httpInstance = readLastClientHttpInstance();
+    await httpInstance.request({
+      url: "https://example.com/api",
+      httpAgent: callerHttpAgent,
+      httpsAgent: callerHttpsAgent,
+    });
+
+    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledWith({
+      url: "https://example.com/api",
+      timeout: FEISHU_HTTP_TIMEOUT_MS,
+      httpAgent: { proxied: true },
+      httpsAgent: { proxied: true },
       proxy: false,
     });
   });
