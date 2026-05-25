@@ -33,6 +33,7 @@ import {
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { isSilentReplyPayloadText } from "../tokens.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -2381,8 +2382,10 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
-      ctx.InboundEventKind !== "room_event" &&
+      (ctx.InboundEventKind !== "room_event" || ctx.Provider === "discord") &&
       !sendPolicyDenied &&
+      hasOutboundReplyContent(reply, { trimText: true }) &&
+      !isSilentReplyPayloadText(reply.text) &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
