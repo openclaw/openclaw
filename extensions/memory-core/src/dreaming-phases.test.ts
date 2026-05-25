@@ -18,7 +18,9 @@ import {
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
+  applyShortTermPromotions,
   rankShortTermPromotionCandidates,
+  readShortTermRecallEntries,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
   type ShortTermRecallEntry,
@@ -2534,6 +2536,349 @@ describe("memory-core dreaming phases", () => {
     const baselineSignals = phaseSignalStore.entries[baseline[0].key];
     expect(baselineSignals?.lightHits).toBe(1);
     expect(baselineSignals?.remHits).toBe(1);
+  });
+
+  it("keeps full-sweep REM candidate truths on the light-staged handoff", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const sweepNowMs = Date.parse("2026-04-05T10:00:00.000Z");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-01.md"),
+      "Legacy runbook says always restart the gateway before checking credentials.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      "Fresh customer handoff says verify the S3 Glacier restore window first.\n",
+      "utf-8",
+    );
+
+    for (const [index, day] of ["2026-04-01", "2026-04-02"].entries()) {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: `legacy gateway recall ${index}`,
+        dayBucket: day,
+        nowMs: Date.parse(`${day}T09:00:00.000Z`),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.99,
+            snippet: "Legacy runbook says always restart the gateway before checking credentials.",
+            source: "memory",
+          },
+        ],
+      });
+    }
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "fresh glacier handoff",
+      dayBucket: "2026-04-05",
+      nowMs: Date.parse("2026-04-05T09:55:00.000Z"),
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Fresh customer handoff says verify the S3 Glacier restore window first.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: sweepNowMs,
+    });
+    const legacyKey = requireCandidateKeyByPath(
+      candidates,
+      (candidatePath) => candidatePath === "memory/2026-04-01.md",
+      "legacy high-recall note",
+    );
+    const freshKey = requireCandidateKeyByPath(
+      candidates,
+      (candidatePath) => candidatePath === "memory/2026-04-05.md",
+      "fresh light-staged note",
+    );
+    const unfilteredRemPreview = testing.previewRemDreaming({
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir, nowMs: sweepNowMs }),
+        nowMs: sweepNowMs,
+        lookbackDays: 7,
+      }),
+      limit: 1,
+      minPatternStrength: 0,
+    });
+    expect(unfilteredRemPreview.candidateKeys).toEqual([legacyKey]);
+
+    const testConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                    minPatternStrength: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: sweepNowMs,
+    });
+
+    const phaseSignalStore = JSON.parse(
+      await fs.readFile(resolveShortTermPhaseSignalStorePath(workspaceDir), "utf-8"),
+    ) as {
+      entries: Record<string, { lightHits?: number; remHits?: number }>;
+    };
+    expect(phaseSignalStore.entries[freshKey]?.lightHits).toBe(1);
+    expect(phaseSignalStore.entries[freshKey]?.remHits).toBe(1);
+    expect(phaseSignalStore.entries[legacyKey]?.remHits).toBeUndefined();
+
+    const dailyOutput = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(dailyOutput).toContain("Fresh customer handoff says verify the S3 Glacier");
+    expect(dailyOutput).not.toContain("Legacy runbook says always restart the gateway");
+  });
+
+  it("falls back to REM lookback when the full-sweep light handoff is empty", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const sweepNowMs = Date.parse("2026-04-05T10:00:00.000Z");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-01.md"),
+      "Dormant incident note says rotate webhook secrets after closure.\n",
+      "utf-8",
+    );
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "dormant incident recall",
+      dayBucket: "2026-04-01",
+      nowMs: Date.parse("2026-04-01T09:00:00.000Z"),
+      results: [
+        {
+          path: "memory/2026-04-01.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.95,
+          snippet: "Dormant incident note says rotate webhook secrets after closure.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: sweepNowMs,
+    });
+    const dormantKey = requireCandidateKeyByPath(
+      candidates,
+      (candidatePath) => candidatePath === "memory/2026-04-01.md",
+      "REM-lookback note outside light handoff",
+    );
+
+    const testConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                    minPatternStrength: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: sweepNowMs,
+    });
+
+    const phaseSignalStore = JSON.parse(
+      await fs.readFile(resolveShortTermPhaseSignalStorePath(workspaceDir), "utf-8"),
+    ) as {
+      entries: Record<string, { lightHits?: number; remHits?: number }>;
+    };
+    expect(phaseSignalStore.entries[dormantKey]?.lightHits ?? 0).toBe(0);
+    expect(phaseSignalStore.entries[dormantKey]?.remHits).toBe(1);
+
+    const dailyOutput = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(dailyOutput).toContain("Dormant incident note says rotate webhook secrets");
+  });
+
+  it("falls back to REM lookback when light-staged keys are not REM-eligible", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const sweepNowMs = Date.parse("2026-04-05T10:00:00.000Z");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-01.md"),
+      "Older unpromoted runbook says page storage before restarting workers.\n",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      "Recently promoted handoff says record the billing export checksum.\n",
+      "utf-8",
+    );
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "older storage recall",
+      dayBucket: "2026-04-01",
+      nowMs: Date.parse("2026-04-01T09:00:00.000Z"),
+      results: [
+        {
+          path: "memory/2026-04-01.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.95,
+          snippet: "Older unpromoted runbook says page storage before restarting workers.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "fresh billing checksum",
+      dayBucket: "2026-04-05",
+      nowMs: Date.parse("2026-04-05T09:55:00.000Z"),
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.99,
+          snippet: "Recently promoted handoff says record the billing export checksum.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: sweepNowMs,
+    });
+    const olderKey = requireCandidateKeyByPath(
+      candidates,
+      (candidatePath) => candidatePath === "memory/2026-04-01.md",
+      "older REM candidate",
+    );
+    const promotedKey = requireCandidateKeyByPath(
+      candidates,
+      (candidatePath) => candidatePath === "memory/2026-04-05.md",
+      "fresh promoted handoff",
+    );
+    await applyShortTermPromotions({
+      workspaceDir,
+      candidates: [requireCandidateByKey(candidates, promotedKey)],
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T09:56:00.000Z"),
+    });
+
+    const testConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 2,
+                  },
+                  rem: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                    minPatternStrength: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: sweepNowMs,
+    });
+
+    const phaseSignalStore = JSON.parse(
+      await fs.readFile(resolveShortTermPhaseSignalStorePath(workspaceDir), "utf-8"),
+    ) as {
+      entries: Record<string, { lightHits?: number; remHits?: number }>;
+    };
+    expect(phaseSignalStore.entries[promotedKey]?.lightHits).toBe(1);
+    expect(phaseSignalStore.entries[promotedKey]?.remHits ?? 0).toBe(0);
+    expect(phaseSignalStore.entries[olderKey]?.remHits).toBe(1);
+
+    const dailyOutput = await fs.readFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+      "utf-8",
+    );
+    expect(dailyOutput).toContain("Older unpromoted runbook says page storage");
   });
 
   it("skips REM short-term candidates whose source file disappeared", async () => {

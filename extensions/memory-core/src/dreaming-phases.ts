@@ -1607,7 +1607,7 @@ async function runLightDreaming(params: {
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
-}): Promise<void> {
+}): Promise<string[]> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
@@ -1645,6 +1645,7 @@ async function runLightDreaming(params: {
     params.config.dedupeSimilarity,
   );
   const capped = entries.slice(0, params.config.limit);
+  const stagedKeys = capped.map((entry) => entry.key);
   const bodyLines = buildLightDreamingBody(capped);
   await writeDailyDreamingPhaseBlock({
     workspaceDir: params.workspaceDir,
@@ -1657,7 +1658,7 @@ async function runLightDreaming(params: {
   await recordDreamingPhaseSignals({
     workspaceDir: params.workspaceDir,
     phase: "light",
-    keys: capped.map((entry) => entry.key),
+    keys: stagedKeys,
     nowMs,
   });
   if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
@@ -1695,6 +1696,7 @@ async function runLightDreaming(params: {
       });
     }
   }
+  return stagedKeys;
 }
 
 async function runRemDreaming(params: {
@@ -1703,6 +1705,7 @@ async function runRemDreaming(params: {
   primaryWorkspaceDir?: string;
   config: RemDreamingConfig;
   logger: Logger;
+  stagedCandidateKeys?: readonly string[];
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
@@ -1723,7 +1726,7 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const entries = await filterLiveShortTermRecallEntries({
+  const allEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
     entries: filterRecallEntriesWithinLookback({
       entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
@@ -1731,11 +1734,29 @@ async function runRemDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
-  const preview = previewRemDreaming({
+  const stagedCandidateKeys = params.stagedCandidateKeys?.map((key) => key.trim()).filter(Boolean);
+  const stagedCandidateKeySet =
+    stagedCandidateKeys === undefined || stagedCandidateKeys.length === 0
+      ? undefined
+      : new Set(stagedCandidateKeys);
+  // Use light handoff when it yields REM truths; otherwise keep REM's wider lookback.
+  let entries =
+    stagedCandidateKeySet === undefined
+      ? allEntries
+      : allEntries.filter((entry) => stagedCandidateKeySet.has(entry.key));
+  let preview = previewRemDreaming({
     entries,
     limit: params.config.limit,
     minPatternStrength: params.config.minPatternStrength,
   });
+  if (stagedCandidateKeySet !== undefined && preview.candidateKeys.length === 0) {
+    entries = allEntries;
+    preview = previewRemDreaming({
+      entries,
+      limit: params.config.limit,
+      minPatternStrength: params.config.minPatternStrength,
+    });
+  }
   await writeDailyDreamingPhaseBlock({
     workspaceDir: params.workspaceDir,
     phase: "rem",
@@ -1812,8 +1833,9 @@ export async function runDreamingSweepPhases(params: {
     pluginConfig: params.pluginConfig,
     cfg: params.cfg as Parameters<typeof resolveMemoryLightDreamingConfig>[0]["cfg"],
   });
+  let lightStagedKeys: string[] | undefined;
   if (light.enabled && light.limit > 0) {
-    await runLightDreaming({
+    lightStagedKeys = await runLightDreaming({
       workspaceDir: params.workspaceDir,
       cfg: params.cfg,
       config: light,
@@ -1834,6 +1856,7 @@ export async function runDreamingSweepPhases(params: {
       cfg: params.cfg,
       config: rem,
       logger: params.logger,
+      stagedCandidateKeys: lightStagedKeys,
       subagent: params.subagent,
       nowMs: sweepNowMs,
       detachNarratives: params.detachNarratives,
