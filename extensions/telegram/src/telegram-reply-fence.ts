@@ -207,6 +207,9 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   ) {
     return false;
   }
+  if (dispatchText.trimStart().startsWith("/")) {
+    return true;
+  }
   if (ctxPayload.ChatType === "direct") {
     return false;
   }

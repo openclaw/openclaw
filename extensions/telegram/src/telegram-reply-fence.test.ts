@@ -71,6 +71,13 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: true,
       }),
     ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/diagnostics confirm abc123def456",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
   });
 });
 
