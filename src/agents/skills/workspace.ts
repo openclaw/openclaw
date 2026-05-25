@@ -1100,8 +1100,11 @@ function resolveWorkspaceSkillPromptState(
   prompt: string;
   resolvedSkills: Skill[];
 } {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
+    return { eligible: [], prompt: "", resolvedSkills: [] };
+  }
+  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,

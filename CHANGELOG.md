@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Agent transcript: include OpenClaw agent session logs when finding local transcript candidates.
 - Crabbox: bootstrap raw AWS macOS shell commands wrapped in absolute `time` paths so RSS probes can run Node and pnpm on fresh macOS runners.
 - Crabbox: bootstrap raw AWS macOS shell commands even when setup statements precede Node or pnpm usage.
+- TUI/local: skip unnecessary secret resolution, gateway model catalog loading, bootstrap, and skill scans in explicit local-model runs so startup reaches the model request faster.
 - Sessions/doctor: load large session stores without clone amplification during read-only doctor checks and reclaim stale `sessions.json.*.tmp` sidecars. Fixes #56827. Thanks @openperf.
 - Tests: clean successful plugin gateway gauntlet isolated temp roots while keeping an explicit preservation switch for failed/debug runs.
 - Plugins/perf: reuse derived plugin metadata snapshots for the lifetime of the process so reply-time skill setup no longer rescans plugin metadata on every turn.
