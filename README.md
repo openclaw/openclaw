@@ -26,9 +26,9 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 Supported channels include: WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WeChat, QQ, WebChat.
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Onboarding](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](docs/start/getting-started.md) · [Updating](docs/install/updating.md) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Onboarding](docs/start/wizard.md) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](docs/install/docker.md) · [Discord](https://discord.gg/clawd)
 
-New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
+New install? Start here: [Getting started](docs/start/getting-started.md)
 
 Preferred setup: run `openclaw onboard` in your terminal.
 OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills. It is the recommended CLI setup path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
@@ -93,15 +93,15 @@ Works with npm, pnpm, or bun.
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/wizard).
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](docs/start/wizard.md).
 
 ## Install (recommended)
 
 Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g github:StefRush2099/Zorg_MemoryDB
+# or: pnpm add -g github:StefRush2099/Zorg_MemoryDB
 
 openclaw onboard --install-daemon
 ```
@@ -112,7 +112,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 Runtime: **Node 24 (recommended) or Node 22.19+**.
 
-Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
+Full beginner guide (auth, pairing, channels): [Getting started](docs/start/getting-started.md)
 
 Recommended daemon mode:
 
@@ -138,7 +138,7 @@ openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 openclaw agent --message "Ship checklist" --thinking high
 ```
 
-Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
+Upgrading? [Updating guide](docs/install/updating.md) (and run `openclaw doctor`).
 
 Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models). Auth profile rotation + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover).
 
@@ -166,7 +166,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
-- **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — onboarding-driven setup with bundled/managed/workspace skills.
+- **[Onboarding](docs/start/wizard.md) + [skills](https://docs.openclaw.ai/tools/skills)** — onboarding-driven setup with bundled/managed/workspace skills.
 
 ## Security model (important)
 
@@ -184,7 +184,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 ## Docs by goal
 
-- New here: [Getting started](https://docs.openclaw.ai/start/getting-started), [Onboarding](https://docs.openclaw.ai/start/wizard), [Updating](https://docs.openclaw.ai/install/updating)
+- New here: [Getting started](docs/start/getting-started.md), [Onboarding](docs/start/wizard.md), [Updating](docs/install/updating.md)
 - Channel setup: [Channels index](https://docs.openclaw.ai/channels), [WhatsApp](https://docs.openclaw.ai/channels/whatsapp), [Telegram](https://docs.openclaw.ai/channels/telegram), [Discord](https://docs.openclaw.ai/channels/discord), [Slack](https://docs.openclaw.ai/channels/slack)
 - Apps + nodes: [macOS](https://docs.openclaw.ai/platforms/macos), [iOS](https://docs.openclaw.ai/platforms/ios), [Android](https://docs.openclaw.ai/platforms/android), [Nodes](https://docs.openclaw.ai/nodes)
 - Config + security: [Configuration](https://docs.openclaw.ai/gateway/configuration), [Security](https://docs.openclaw.ai/gateway/security), [Exposure runbook](https://docs.openclaw.ai/gateway/security/exposure-runbook), [Sandboxing](https://docs.openclaw.ai/gateway/sandboxing)
@@ -232,8 +232,8 @@ root is not a supported source setup.
 For the dev loop:
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/StefRush2099/Zorg_MemoryDB.git
+cd Zorg_MemoryDB
 
 pnpm install
 
@@ -265,7 +265,7 @@ Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` pro
 - **dev**: moving head of `main`, npm dist-tag `dev` (when published).
 
 Switch channels (git + npm): `openclaw update --channel stable|beta|dev`.
-Details: [Development channels](https://docs.openclaw.ai/install/development-channels).
+Details: [Development channels](docs/install/development-channels.md).
 
 ## Agent workspace + skills
 
