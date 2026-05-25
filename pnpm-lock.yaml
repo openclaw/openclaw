@@ -22,7 +22,7 @@ overrides:
   ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
-  qs: 6.14.2
+  qs: 6.15.2
   node-domexception: npm:@nolyfill/domexception@1.0.28
   typebox: 1.1.38
   tar: 7.5.15
@@ -6250,8 +6250,8 @@ packages:
     engines: {node: '>=10.13.0'}
     hasBin: true
 
-  qs@6.14.2:
-    resolution: {integrity: sha512-V/yCWTTF7VJ9hIh18Ugr2zhJMP01MY7c5kh4J870L7imm6/DIzBsNLTXzMwUA3yZ5b/KBqLx8Kp3uRvd7xSe3Q==}
+  qs@6.15.2:
+    resolution: {integrity: sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==}
     engines: {node: '>=0.6'}
 
   quansync@1.0.0:
@@ -8265,7 +8265,7 @@ snapshots:
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
       protobufjs: 8.4.0
-      qs: 6.14.2
+      qs: 6.15.2
       ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
@@ -8411,7 +8411,7 @@ snapshots:
       '@microsoft/teams.cards': 2.0.11
       '@microsoft/teams.common': 2.0.11
       jwt-decode: 4.0.0
-      qs: 6.14.2
+      qs: 6.15.2
     transitivePeerDependencies:
       - debug
 
@@ -8442,7 +8442,7 @@ snapshots:
   '@microsoft/teams.graph@2.0.11':
     dependencies:
       '@microsoft/teams.common': 2.0.11
-      qs: 6.14.2
+      qs: 6.15.2
     transitivePeerDependencies:
       - debug
 
@@ -9970,7 +9970,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.7.2
       on-finished: 2.4.1
-      qs: 6.14.2
+      qs: 6.15.2
       raw-body: 3.0.2
       type-is: 2.1.0
     transitivePeerDependencies:
@@ -10438,7 +10438,7 @@ snapshots:
       once: 1.4.0
       parseurl: 1.3.3
       proxy-addr: 2.0.7
-      qs: 6.14.2
+      qs: 6.15.2
       range-parser: 1.2.1
       router: 2.2.0
       send: 1.2.1
@@ -12117,7 +12117,7 @@ snapshots:
       pngjs: 5.0.0
       yargs: 15.4.1
 
-  qs@6.14.2:
+  qs@6.15.2:
     dependencies:
       side-channel: 1.1.0
 

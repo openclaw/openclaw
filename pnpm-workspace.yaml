@@ -76,7 +76,7 @@ overrides:
   ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
-  qs: 6.14.2
+  qs: 6.15.2
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.1.38
   tar: 7.5.15
