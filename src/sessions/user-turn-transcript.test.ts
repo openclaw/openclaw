@@ -323,6 +323,52 @@ describe("user turn transcript persistence", () => {
         }),
       ]);
     });
+
+    it("returns the existing user turn when the idempotency key was already persisted", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-idempotent-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const first = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello once",
+          timestamp: 123,
+          idempotencyKey: "chat-run-1:user",
+        },
+        updateMode: "none",
+      });
+      const second = await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello once replayed",
+          timestamp: 456,
+          idempotencyKey: "chat-run-1:user",
+        },
+        updateMode: "none",
+      });
+
+      expect(second?.messageId).toBe(first?.messageId);
+      expect(second?.message).toMatchObject({
+        role: "user",
+        content: "hello once",
+        timestamp: 123,
+        idempotencyKey: "chat-run-1:user",
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello once",
+          timestamp: 123,
+          idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
   });
 
   describe("persistUserTurnTranscript", () => {

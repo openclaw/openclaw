@@ -10,6 +10,7 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
@@ -243,6 +244,12 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   config?: OpenClawConfig;
 };
 
+type AppendSessionTranscriptMessageResult<TMessage> = {
+  messageId: string;
+  message: TMessage;
+  appended: boolean;
+};
+
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
   return (
     typeof value === "object" &&
@@ -254,7 +261,7 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
 
 export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<{ messageId: string; message: TMessage }> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
   const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
     sessionFile: params.transcriptPath,
   });
@@ -291,13 +298,21 @@ async function withSessionTranscriptWriteLock<T>(
 
 async function appendSessionTranscriptMessageLocked<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
-): Promise<{ messageId: string; message: TMessage }> {
+): Promise<AppendSessionTranscriptMessageResult<TMessage>> {
   const now = params.now ?? Date.now();
-  const messageId = randomUUID();
   await ensureTranscriptHeader(params.transcriptPath, {
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
   });
+  const idempotencyKey = readMessageIdempotencyKey(params.message);
+  const existing = idempotencyKey
+    ? await findTranscriptMessageByIdempotencyKey<TMessage>(params.transcriptPath, idempotencyKey)
+    : undefined;
+  if (existing) {
+    return { ...existing, appended: false };
+  }
+
+  const messageId = randomUUID();
   const stat = await fs.stat(params.transcriptPath).catch(() => null);
   let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
     () => ({
@@ -330,5 +345,39 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     message: finalMessage,
   };
   await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
-  return { messageId, message: finalMessage };
+  return { messageId, message: finalMessage, appended: true };
+}
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as { idempotencyKey?: unknown }).idempotencyKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+async function findTranscriptMessageByIdempotencyKey<TMessage>(
+  transcriptPath: string,
+  idempotencyKey: string,
+): Promise<{ messageId: string; message: TMessage } | undefined> {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: unknown;
+      };
+      const message = parsed.message;
+      if (readMessageIdempotencyKey(message) !== idempotencyKey) {
+        continue;
+      }
+      return {
+        messageId:
+          typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : idempotencyKey,
+        message: message as TMessage,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }

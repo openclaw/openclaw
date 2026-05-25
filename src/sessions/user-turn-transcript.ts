@@ -310,18 +310,22 @@ export async function appendUserTurnTranscriptMessage(
 
   switch (params.updateMode ?? "inline") {
     case "inline":
-      emitSessionTranscriptUpdate({
-        sessionFile: params.transcriptPath,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        message: appended.message,
-        messageId: appended.messageId,
-      });
+      if (appended.appended) {
+        emitSessionTranscriptUpdate({
+          sessionFile: params.transcriptPath,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          message: appended.message,
+          messageId: appended.messageId,
+        });
+      }
       break;
     case "file-only":
-      emitSessionTranscriptUpdate({
-        sessionFile: params.transcriptPath,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      });
+      if (appended.appended) {
+        emitSessionTranscriptUpdate({
+          sessionFile: params.transcriptPath,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        });
+      }
       break;
     case "none":
       break;

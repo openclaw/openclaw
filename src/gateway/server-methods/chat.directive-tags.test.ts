@@ -3555,6 +3555,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    });
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchImageOrder).toBeUndefined();
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
@@ -3726,6 +3729,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    });
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchImageOrder).toBeUndefined();
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
@@ -4383,6 +4389,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
             (candidate as { role?: unknown }).role === "user",
         );
       expect(persistedUser?.content).toBe("hello from failed dispatch");
+    });
+  });
+
+  it("does not duplicate fallback user transcript rows when chat.send is replayed", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
+    mockState.dispatchError = new Error("upstream unavailable");
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond: vi.fn(),
+      idempotencyKey: "idem-user-transcript-error-replay",
+      message: "hello from replayed failed dispatch",
+      expectBroadcast: false,
+    });
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond: vi.fn(),
+      idempotencyKey: "idem-user-transcript-error-replay",
+      message: "hello from replayed failed dispatch",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        readTranscriptJsonLines(mockState.transcriptPath)
+          .map((entry) => entry.message)
+          .filter(
+            (candidate): candidate is Record<string, unknown> =>
+              typeof candidate === "object" &&
+              candidate !== null &&
+              (candidate as { role?: unknown }).role === "user",
+          ),
+      ).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from replayed failed dispatch",
+          idempotencyKey: "idem-user-transcript-error-replay:user",
+        }),
+      ]);
+      const userUpdates = mockState.emittedTranscriptUpdates.filter(
+        (update) => userUpdateMessage(update)?.role === "user",
+      );
+      expect(userUpdates).toHaveLength(1);
     });
   });
 

@@ -2578,6 +2578,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 text: parsedMessage,
                 media,
                 timestamp: now,
+                idempotencyKey: `${clientRunId}:user`,
                 mediaOnlyText: "[User sent media without caption]",
               }
             : undefined,
@@ -2708,6 +2709,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   text: parsedMessage,
                   media: persistedImages,
                   timestamp: now,
+                  idempotencyKey: `${clientRunId}:user`,
                 },
               });
             },
