@@ -102,6 +102,10 @@ async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
 
+function isManagedProxyActive() {
+  return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
+}
+
 type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> & {
   httpAgent?: Agent;
   httpsAgent?: Agent;
@@ -142,8 +146,13 @@ function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
     const agent = await getWsProxyAgent();
     if (agent) {
-      next.httpAgent ??= agent;
-      next.httpsAgent ??= agent;
+      if (isManagedProxyActive()) {
+        next.httpAgent = agent;
+        next.httpsAgent = agent;
+      } else {
+        next.httpAgent ??= agent;
+        next.httpsAgent ??= agent;
+      }
       next.proxy = false;
     }
     return next;
