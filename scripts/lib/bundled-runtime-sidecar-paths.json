@@ -1,6 +1,7 @@
 [
   "dist/extensions/browser/runtime-api.js",
   "dist/extensions/canvas/runtime-api.js",
+  "dist/extensions/channel-broker/runtime-api.js",
   "dist/extensions/clickclack/runtime-api.js",
   "dist/extensions/copilot-proxy/runtime-api.js",
   "dist/extensions/google/runtime-api.js",
