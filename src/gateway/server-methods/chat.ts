@@ -2249,7 +2249,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const responseMessages = rawToolPayloadsRequested
       ? rawMessages.slice(-scanMax)
       : (turnProjection?.messages ?? safeMessagesProjection?.messages ?? canvasAugmentedMessages);
-    const normalized = augmentChatHistoryWithCanvasBlocks(responseMessages);
+    // Only re-augment when raw payloads are requested: the non-raw paths
+    // already flow from `canvasAugmentedMessages`, so a second pass is a
+    // no-op on the hot path for the common display case.
+    const normalized = rawToolPayloadsRequested
+      ? augmentChatHistoryWithCanvasBlocks(responseMessages)
+      : responseMessages;
     const normalizeMs = markMetricMs();
     const finalHistoryBudgetBytes = maxHistoryBytes;
     const perMessageHardCap = Math.min(

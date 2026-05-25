@@ -128,7 +128,12 @@ describe("gateway server chat", () => {
         }
         return extractFirstTextBlock(message);
       })
-      .filter((value): value is string => typeof value === "string");
+      .filter((value): value is string => typeof value === "string")
+      // The bounded-display chat.history default collapses raw tool payloads to a
+      // fixed placeholder string. These tests assert on semantic content
+      // (NO_REPLY filtering, message mirroring, dry-run suppression) and not on
+      // placeholder presence; drop the placeholder so assertions stay focused.
+      .filter((value) => value !== "[chat.history tool payload omitted]");
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
     if (!value || typeof value !== "object") {
