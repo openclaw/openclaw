@@ -157,7 +157,6 @@ class TalkModeManager internal constructor(
   private val completedRunStates = LinkedHashMap<String, Boolean>()
   private val completedRunTexts = LinkedHashMap<String, String>()
   private var configLoaded = false
-  private var executionMode = TalkModeExecutionMode.Native
   private val startGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
@@ -526,50 +525,14 @@ class TalkModeManager internal constructor(
       try {
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (executionMode == TalkModeExecutionMode.RealtimeRelay) {
-          startRealtimeRelay(generation)
-        } else {
-          startNativeRecognition(generation)
-        }
+        startRealtimeRelay(generation)
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
         _statusText.value = "Start failed: ${err.message ?: err::class.simpleName}"
         Log.w(tag, "start failed: ${err.message ?: err::class.simpleName}")
-        if (executionMode == TalkModeExecutionMode.RealtimeRelay) {
-          stopRealtimeRelay(closeSession = false, preserveStatus = true)
-          disableRealtimeModeAndNotifyOwner()
-        }
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
+        disableRealtimeModeAndNotifyOwner()
       }
-    }
-  }
-
-  private suspend fun startNativeRecognition(generation: Long) {
-    withContext(Dispatchers.Main) {
-      if (generation != startGeneration.get()) return@withContext
-      if (!_isEnabled.value || stopRequested) return@withContext
-      if (_isListening.value) return@withContext
-      Log.d(tag, "start native")
-
-      if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-        _statusText.value = "Speech recognizer unavailable"
-        Log.w(tag, "speech recognizer unavailable")
-        return@withContext
-      }
-
-      val micOk =
-        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-          PackageManager.PERMISSION_GRANTED
-      if (!micOk) {
-        _statusText.value = "Microphone permission required"
-        Log.w(tag, "microphone permission required")
-        return@withContext
-      }
-
-      recognizer?.destroy()
-      recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
-      startListeningInternal(markListening = true)
-      startSilenceMonitor()
-      Log.d(tag, "listening")
     }
   }
 
@@ -2221,11 +2184,9 @@ class TalkModeManager internal constructor(
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
-      executionMode = parsed.executionMode
       configLoaded = true
     } catch (_: Throwable) {
       silenceWindowMs = TalkDefaults.defaultSilenceTimeoutMs
-      executionMode = TalkModeExecutionMode.Native
       configLoaded = false
     }
   }

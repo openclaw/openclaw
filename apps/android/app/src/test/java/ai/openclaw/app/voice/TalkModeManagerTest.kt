@@ -362,7 +362,6 @@ class TalkModeManagerTest {
           onStoppedByRelay = { stoppedByRelay.set(true) },
         )
 
-      setPrivateField(manager, "executionMode", TalkModeExecutionMode.RealtimeRelay)
       setPrivateField(manager, "configLoaded", true)
       manager.setEnabled(true)
       advanceUntilIdle()
