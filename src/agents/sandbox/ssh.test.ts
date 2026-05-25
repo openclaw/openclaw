@@ -124,6 +124,8 @@ describe("sandbox ssh helpers", () => {
   it.each([
     ["workflow install <name>", /unresolved placeholder token <name>/],
     ["workflow run <workflow-id> --ref main", /unresolved placeholder token <workflow-id>/],
+    ["echo $(workflow run <workflow-id> --ref main)", /unresolved placeholder token <workflow-id>/],
+    ["WORKFLOW_ID=<workflow-id> workflow run", /unresolved placeholder token <workflow-id>/],
     ['echo "unterminated', /unclosed double quote/],
     ["printf '%s", /unclosed single quote/],
     ["echo foo\\", /trailing backslash escape/],
@@ -148,6 +150,7 @@ describe("sandbox ssh helpers", () => {
           "cat < input.txt > output.txt",
           "cat <in>out",
           "cat <input> output",
+          "cat = <input-file> output.txt",
           'cat <input-file> "output file"',
           "cat <<'EOF' > literal.txt",
           "<workflow-id>",
