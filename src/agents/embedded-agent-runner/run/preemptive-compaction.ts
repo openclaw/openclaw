@@ -184,13 +184,34 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
+// Per-message token pressure is a pure function of the message object's bytes.
+// Messages on the embedded-runner precheck path are append-only and are not
+// mutated in place once added to `activeSession.messages`, so memoize by object
+// identity. WeakMap entries are garbage-collected together with the message,
+// so the cache is bounded by the live transcript and cannot leak.
+const messageTokenPressureCache = new WeakMap<object, number>();
+
+function memoizedMessageTokenPressure(message: AgentMessage): number {
+  if (message !== null && typeof message === "object") {
+    const key = message as unknown as object;
+    const cached = messageTokenPressureCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const computed = estimateMessageTokenPressure(message);
+    messageTokenPressureCache.set(key, computed);
+    return computed;
+  }
+  return estimateMessageTokenPressure(message);
+}
+
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
 }): number {
   const historyTokens = params.messages.reduce(
-    (sum, message) => sum + estimateMessageTokenPressure(message),
+    (sum, message) => sum + memoizedMessageTokenPressure(message),
     0,
   );
   const systemTokens =

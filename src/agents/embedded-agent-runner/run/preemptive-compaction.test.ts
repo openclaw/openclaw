@@ -445,4 +445,146 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
   });
+
+  describe("per-message identity cache", () => {
+    it("returns the same boundary estimate on repeat scans of the same messages", () => {
+      const messages: AgentMessage[] = [
+        makeAssistantHistory("alpha bravo charlie ".repeat(8)),
+        makeToolResultMessage("result one ".repeat(6), "result two ".repeat(4)),
+        makeAssistantToolCall({ k: "v".repeat(200) }),
+      ];
+      const first = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const second = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      expect(second).toBe(first);
+    });
+
+    it("memoizes per message identity so post-call content mutation does not alter the estimate", () => {
+      // Demonstrates the cache: after the first scan, a later in-place mutation of
+      // a content block must NOT shift the boundary estimate, because the message
+      // identity is unchanged and the cache short-circuits the re-scan.
+      // (Production messages are append-only; this guards the cache invariant.)
+      const messages: AgentMessage[] = [
+        makeAssistantHistory("baseline content ".repeat(10)),
+        makeToolResultMessage("baseline tool result ".repeat(8)),
+      ];
+      const baseline = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const assistantContent = (
+        messages[0] as unknown as { content: { type: string; text: string }[] }
+      ).content;
+      assistantContent[0].text = `${assistantContent[0].text} ${"X".repeat(5_000)}`;
+      const afterMutation = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      expect(afterMutation).toBe(baseline);
+    });
+
+    it("re-counts when a brand-new message identity is appended", () => {
+      const transcript: AgentMessage[] = [makeAssistantHistory("seed message ".repeat(6))];
+      const before = estimateLlmBoundaryTokenPressure({
+        messages: transcript,
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const onlyNew = makeAssistantHistory("freshly appended ".repeat(6));
+      const onlyNewTokens = estimateLlmBoundaryTokenPressure({
+        messages: [onlyNew],
+        systemPrompt: "",
+        prompt: "",
+      });
+      const baseline = estimateLlmBoundaryTokenPressure({
+        messages: [],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const after = estimateLlmBoundaryTokenPressure({
+        messages: [...transcript, onlyNew],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      expect(after).toBeGreaterThan(before);
+      // The non-history overhead (system + prompt + SAFETY_MARGIN) is shared,
+      // so the delta lands within a SAFETY_MARGIN-bounded window of the
+      // standalone per-message estimate. Tight upper-bound check guards the
+      // cache from accidentally double-counting on append.
+      expect(after - before).toBeLessThanOrEqual(onlyNewTokens + baseline);
+    });
+
+    it("does not double-count when the same message identity appears twice", () => {
+      // An accidental dedup-failure (e.g. cache returning 0 on second hit) is
+      // structurally impossible here because the WeakMap value is the per-
+      // message cost, not a "seen" flag. Test makes that contract explicit.
+      const shared = makeAssistantHistory("shared content ".repeat(20));
+      const standalone = estimateLlmBoundaryTokenPressure({
+        messages: [shared],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const doubled = estimateLlmBoundaryTokenPressure({
+        messages: [shared, shared],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      const empty = estimateLlmBoundaryTokenPressure({
+        messages: [],
+        systemPrompt: "sys",
+        prompt: "ping",
+      });
+      // Each copy contributes once. With shared system + prompt + safety margin
+      // amortized once, `doubled - standalone` ≈ `standalone - empty` within
+      // Math.ceil rounding.
+      expect(doubled - standalone).toBeGreaterThanOrEqual(standalone - empty - 1);
+      expect(doubled - standalone).toBeLessThanOrEqual(standalone - empty + 1);
+    });
+
+    it("preserves precheck route decisions across repeat calls", () => {
+      const messages = [makeAssistantHistory("alpha ".repeat(120))];
+      const first = shouldPreemptivelyCompactBeforePrompt({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+        contextTokenBudget: 4_000,
+        reserveTokens: 256,
+      });
+      const second = shouldPreemptivelyCompactBeforePrompt({
+        messages,
+        systemPrompt: "sys",
+        prompt: "ping",
+        contextTokenBudget: 4_000,
+        reserveTokens: 256,
+      });
+      expect(second.route).toBe(first.route);
+      expect(second.estimatedPromptTokens).toBe(first.estimatedPromptTokens);
+      expect(second.overflowTokens).toBe(first.overflowTokens);
+    });
+
+    it("counts assistant tool-call argument bytes identically on repeat scans", () => {
+      const heavyArgs = { payload: "X".repeat(20_000) };
+      const messages = [makeAssistantToolCall(heavyArgs)];
+      const cold = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "",
+        prompt: "",
+      });
+      const warm = estimateLlmBoundaryTokenPressure({
+        messages,
+        systemPrompt: "",
+        prompt: "",
+      });
+      expect(warm).toBe(cold);
+    });
+  });
 });
