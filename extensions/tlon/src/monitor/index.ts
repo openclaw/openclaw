@@ -525,10 +525,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         kind: isGroup ? "group" : "direct",
         id: tlonConversationId,
         label: fromLabel,
-        routePeer: {
-          kind: isGroup ? "group" : "direct",
-          id: tlonConversationId,
-        },
       },
       route: {
         agentId: route.agentId,
@@ -545,7 +541,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         bodyForAgent: commandBody,
         rawBody: messageText,
         commandBody,
-        envelopeFrom: fromLabel,
       },
       extra: {
         GroupSubject: undefined,

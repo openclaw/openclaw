@@ -12,7 +12,6 @@ function createLegacyTurnParams(
     conversation: {
       kind: "group",
       id: "room-1",
-      routePeer: { kind: "group", id: "room-1" },
     },
     route: {
       agentId: "main",
@@ -20,11 +19,9 @@ function createLegacyTurnParams(
     },
     reply: {
       to: "test:room:room-1",
-      originatingTo: "test:room:room-1",
     },
     message: {
       rawBody: "side chatter",
-      envelopeFrom: "User One",
       inboundTurnKind: "room_event",
     },
     ...overrides,

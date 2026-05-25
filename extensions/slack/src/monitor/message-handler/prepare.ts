@@ -1236,8 +1236,6 @@ export async function prepareSlackMessage(params: {
 
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
-    provider: "slack",
-    surface: "slack",
     accountId: route.accountId,
     messageId: message.ts,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
@@ -1254,10 +1252,6 @@ export async function prepareSlackMessage(params: {
       spaceId: ctx.teamId || undefined,
       threadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
-      routePeer: {
-        kind: chatType,
-        id: message.channel,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -1267,7 +1261,6 @@ export async function prepareSlackMessage(params: {
     },
     reply: {
       to: slackTo,
-      originatingTo: slackTo,
       replyToId: threadContext.replyToId,
       messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
@@ -1278,7 +1271,6 @@ export async function prepareSlackMessage(params: {
       bodyForAgent: rawBody,
       rawBody,
       commandBody,
-      envelopeFrom,
       inboundHistory,
     },
     access: {
@@ -1294,9 +1286,6 @@ export async function prepareSlackMessage(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     media: toInboundMediaFacts(effectiveMedia),

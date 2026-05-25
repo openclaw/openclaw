@@ -10,7 +10,7 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
-import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
@@ -542,8 +542,51 @@ function buildCtxPayload(
 ): FinalizedMsgContext {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  const { context } = finalizeChannelInboundContext({
+  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  return buildChannelInboundEventContext({
     finalize: runtime.channel.reply.finalizeInboundContext,
+    channel: "qqbot",
+    accountId: inbound.route.accountId,
+    messageId: event.messageId,
+    timestamp: new Date(event.timestamp).getTime(),
+    from: inbound.fromAddress,
+    sender: {
+      id: event.senderId,
+      name: event.senderName,
+    },
+    conversation: {
+      kind: inbound.isGroupChat ? "group" : "direct",
+      id: inbound.peerId,
+    },
+    route: {
+      agentId: inbound.route.agentId ?? "main",
+      routeSessionKey: inbound.route.sessionKey,
+      accountId: inbound.route.accountId,
+    },
+    reply: {
+      to: inbound.fromAddress,
+    },
+    message: {
+      body: inbound.body,
+      bodyForAgent: inbound.agentBody,
+      rawBody: event.content,
+      commandBody: event.content,
+    },
+    access: {
+      commands: {
+        authorized: inbound.commandAuthorized,
+      },
+    },
+    command: commandSource
+      ? {
+          kind: "text-slash",
+          body: event.content,
+          authorized: inbound.commandAuthorized,
+        }
+      : undefined,
+    media: hasImageMedia
+      ? undefined
+      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
     supplemental: {
       quote: inbound.replyTo
         ? {
@@ -555,24 +598,7 @@ function buildCtxPayload(
         : undefined,
       groupSystemPrompt: inbound.groupSystemPrompt,
     },
-    context: {
-      Body: inbound.body,
-      BodyForAgent: inbound.agentBody,
-      RawBody: event.content,
-      CommandBody: event.content,
-      From: inbound.fromAddress,
-      To: inbound.fromAddress,
-      SessionKey: inbound.route.sessionKey,
-      AccountId: inbound.route.accountId,
-      ChatType: inbound.isGroupChat ? "group" : "direct",
-      SenderId: event.senderId,
-      SenderName: event.senderName,
-      Provider: "qqbot",
-      Surface: "qqbot",
-      MessageSid: event.messageId,
-      Timestamp: new Date(event.timestamp).getTime(),
-      OriginatingChannel: "qqbot",
-      OriginatingTo: inbound.fromAddress,
+    extra: {
       QQChannelId: event.channelId,
       QQGuildId: event.guildId,
       QQGroupOpenid: event.groupOpenid,
@@ -582,14 +608,7 @@ function buildCtxPayload(
       QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
       QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
       QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
-      CommandAuthorized: inbound.commandAuthorized,
       ...(commandSource ? { CommandSource: commandSource } : {}),
-      ...(inbound.voiceMediaTypes.length > 0
-        ? {
-            MediaTypes: inbound.voiceMediaTypes,
-            MediaType: inbound.voiceMediaTypes[0],
-          }
-        : {}),
       ...(inbound.localMediaPaths.length > 0
         ? {
             MediaPaths: inbound.localMediaPaths,
@@ -602,6 +621,5 @@ function buildCtxPayload(
         ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
         : {}),
     },
-  });
-  return context as FinalizedMsgContext;
+  }) as FinalizedMsgContext;
 }

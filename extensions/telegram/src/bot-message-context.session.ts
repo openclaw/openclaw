@@ -471,8 +471,6 @@ export async function buildTelegramInboundContextPayload(params: {
   const ctxPayload = sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     accountId: route.accountId,
-    provider: "telegram",
-    surface: "telegram",
     messageId: options?.messageIdOverride ?? String(msg.message_id),
     timestamp: msg.date ? msg.date * 1000 : undefined,
     from: telegramFrom,
@@ -486,10 +484,6 @@ export async function buildTelegramInboundContextPayload(params: {
       id: String(chatId),
       label: conversationLabel,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
-      routePeer: {
-        kind: conversationKind,
-        id: String(chatId),
-      },
     },
     route: {
       agentId: route.agentId,
@@ -499,7 +493,6 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     reply: {
       to: telegramTo,
-      originatingTo: telegramTo,
       replyToId: replyHead?.messageId ?? visibleReplyTarget?.id,
       messageThreadId: threadSpec.id,
     },
@@ -509,15 +502,11 @@ export async function buildTelegramInboundContextPayload(params: {
       rawBody,
       bodyForAgent: bodyText,
       commandBody,
-      envelopeFrom: conversationLabel,
       inboundHistory,
     },
     access: {
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands: true,
-        useAccessGroups: cfg.commands?.useAccessGroups !== false,
-        authorizers: [],
       },
     },
     command:

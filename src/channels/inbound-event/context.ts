@@ -28,6 +28,10 @@ import type {
 import type { InboundEventKind } from "./kind.js";
 import { buildChannelInboundMediaPayload } from "./media.js";
 
+type BuildAccessFacts = Omit<AccessFacts, "commands"> & {
+  commands?: Partial<NonNullable<AccessFacts["commands"]>>;
+};
+
 export type BuildChannelInboundEventContextParams = {
   channel: string;
   accountId?: string;
@@ -42,12 +46,14 @@ export type BuildChannelInboundEventContextParams = {
   route: RouteFacts;
   reply: ReplyPlanFacts;
   message: MessageFacts;
-  access?: AccessFacts;
+  access?: BuildAccessFacts;
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
+  finalize?: FinalizeInboundContextFn;
+  finalizeOptions?: FinalizeInboundContextOptions;
   extra?: Record<string, unknown>;
 };
 
@@ -157,6 +163,14 @@ export function filterChannelInboundQuoteContext(
   })?.quote;
 }
 
+function definedFields<T extends Record<string, unknown>>(fields: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(
+      (entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined,
+    ),
+  ) as Partial<T>;
+}
+
 export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
   params: FinalizeChannelInboundContextParams<T>,
 ): FinalizeChannelInboundContextResult<T> {
@@ -167,7 +181,9 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
     supplemental: rawSupplemental,
     contextVisibility: params.contextVisibility,
   });
-  const mediaPayload = params.media ? buildChannelInboundMediaPayload([...params.media]) : {};
+  const mediaPayload = params.media
+    ? definedFields(buildChannelInboundMediaPayload([...params.media]))
+    : {};
   const baseContext = {
     ...params.context,
     SupplementalContext: supplemental,
@@ -194,7 +210,9 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
   };
 }
 
-function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
+function resolveAccessFactsCommandAuthorized(
+  access: BuildAccessFacts | undefined,
+): boolean | undefined {
   const commands = access?.commands;
   return typeof commands?.authorized === "boolean"
     ? commands.authorized
@@ -240,7 +258,7 @@ function resolveChannelCommandContext(params: {
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
   message: MessageFacts;
-  access?: AccessFacts;
+  access?: BuildAccessFacts;
 }): CommandTurnContext | undefined {
   if (params.commandTurn) {
     return params.commandTurn;
@@ -272,6 +290,8 @@ export function buildChannelInboundEventContext(
   });
 
   const result = finalizeChannelInboundContext({
+    finalize: params.finalize,
+    finalizeOptions: params.finalizeOptions,
     supplemental: params.supplemental,
     contextVisibility: params.contextVisibility,
     media: params.media,
@@ -311,7 +331,7 @@ export function buildChannelInboundEventContext(
       MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
       NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
       OriginatingChannel: params.channel,
-      OriginatingTo: params.reply.originatingTo,
+      OriginatingTo: params.reply.originatingTo ?? params.reply.to,
       ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
       ...params.extra,
     },

@@ -591,10 +591,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       kind: isGroup ? "group" : "direct",
       id: chatId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -603,14 +599,12 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
     reply: {
       to: `zalo:${chatId}`,
-      originatingTo: `zalo:${chatId}`,
     },
     message: {
       body,
       bodyForAgent: rawBody,
       rawBody,
       commandBody: rawBody,
-      envelopeFrom: fromLabel,
     },
     media:
       mediaPath || mediaType

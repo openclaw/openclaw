@@ -636,10 +636,6 @@ async function processMessage(
       kind: isGroup ? "group" : "direct",
       id: chatId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -649,7 +645,6 @@ async function processMessage(
     },
     reply: {
       to: normalizedTo,
-      originatingTo: normalizedTo,
     },
     message: {
       body: combinedBody,
@@ -657,7 +652,6 @@ async function processMessage(
       rawBody,
       commandBody,
       inboundHistory,
-      envelopeFrom: fromLabel,
     },
     extra: {
       BodyForCommands: commandBody,

@@ -20,10 +20,6 @@ function createBaseContextParams(
     conversation: {
       kind: "group",
       id: "room-1",
-      routePeer: {
-        kind: "group",
-        id: "room-1",
-      },
     },
     route: {
       agentId: "main",
@@ -31,11 +27,9 @@ function createBaseContextParams(
     },
     reply: {
       to: "test:room:room-1",
-      originatingTo: "test:room:room-1",
     },
     message: {
       rawBody: "hello",
-      envelopeFrom: "User One",
     },
     ...overrides,
   };
@@ -64,10 +58,6 @@ describe("buildChannelInboundEventContext", () => {
         label: "Room One",
         spaceId: "workspace",
         threadId: "thread-1",
-        routePeer: {
-          kind: "group",
-          id: "room-1",
-        },
       },
       route: {
         agentId: "main",
@@ -87,13 +77,10 @@ describe("buildChannelInboundEventContext", () => {
         rawBody: "hello",
         bodyForAgent: "hello",
         commandBody: "/status",
-        envelopeFrom: "User One",
         inboundHistory: [{ sender: "Other", body: "previous", timestamp: 100 }],
       },
       access: {
         commands: {
-          allowTextCommands: true,
-          useAccessGroups: true,
           authorizers: [{ configured: true, allowed: true }],
         },
         mentions: {
@@ -222,7 +209,6 @@ describe("buildChannelInboundEventContext", () => {
         message: {
           inboundEventKind: "room_event",
           rawBody: "side chatter",
-          envelopeFrom: "User One",
         },
       }),
     );
@@ -302,10 +288,6 @@ describe("buildChannelInboundEventContext", () => {
           kind: "group",
           id: "room-1",
           threadId: "topic-42",
-          routePeer: {
-            kind: "group",
-            id: "room-1",
-          },
         },
         reply: {
           to: "test:room:room-1",
@@ -325,8 +307,6 @@ describe("buildChannelInboundEventContext", () => {
       createBaseContextParams({
         access: {
           commands: {
-            allowTextCommands: true,
-            useAccessGroups: true,
             authorizers: [{ configured: true, allowed: true }],
           },
         },
@@ -342,7 +322,6 @@ describe("buildChannelInboundEventContext", () => {
         message: {
           rawBody: "/status",
           commandBody: "/status",
-          envelopeFrom: "User One",
         },
         command: {
           kind: "text-slash",
@@ -351,9 +330,6 @@ describe("buildChannelInboundEventContext", () => {
         access: {
           commands: {
             authorized: true,
-            allowTextCommands: true,
-            useAccessGroups: true,
-            authorizers: [],
           },
         },
       }),
@@ -376,7 +352,6 @@ describe("buildChannelInboundEventContext", () => {
         message: {
           rawBody: "/status",
           commandBody: "/status",
-          envelopeFrom: "User One",
         },
         command: {
           kind: "native",

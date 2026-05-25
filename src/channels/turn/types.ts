@@ -68,7 +68,7 @@ export type ConversationFacts = {
   parentId?: string;
   threadId?: string;
   nativeChannelId?: string;
-  routePeer: {
+  routePeer?: {
     kind: "direct" | "group" | "channel";
     id: string;
   };
@@ -88,7 +88,7 @@ export type RouteFacts = {
 
 export type ReplyPlanFacts = {
   to: string;
-  originatingTo: string;
+  originatingTo?: string;
   nativeChannelId?: string;
   replyTarget?: string;
   deliveryTarget?: string;
@@ -188,7 +188,7 @@ export type MessageFacts = {
   rawBody: string;
   bodyForAgent?: string;
   commandBody?: string;
-  envelopeFrom: string;
+  envelopeFrom?: string;
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];

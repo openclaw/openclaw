@@ -97,10 +97,6 @@ async function processTwitchMessage(params: {
             kind: "group",
             id: message.channel,
             label: message.channel,
-            routePeer: {
-              kind: "group",
-              id: message.channel,
-            },
           },
           route: {
             agentId: route.agentId,
@@ -109,14 +105,12 @@ async function processTwitchMessage(params: {
           },
           reply: {
             to: `twitch:channel:${message.channel}`,
-            originatingTo: `twitch:channel:${message.channel}`,
           },
           message: {
             body,
             rawBody: input.rawText,
             bodyForAgent: input.textForAgent,
             commandBody: input.textForCommands,
-            envelopeFrom: fromLabel,
           },
         });
         const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {

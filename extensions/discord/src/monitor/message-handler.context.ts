@@ -343,8 +343,6 @@ export async function buildDiscordMessageProcessContext(params: {
 
   const ctxPayload = buildChannelInboundEventContext({
     channel: "discord",
-    provider: "discord",
-    surface: "discord",
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
     messageIdFull: canonicalMessageId && canonicalMessageId !== message.id ? message.id : undefined,
@@ -364,10 +362,6 @@ export async function buildDiscordMessageProcessContext(params: {
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-      routePeer: {
-        kind: isDirectMessage ? "direct" : "channel",
-        id: isDirectMessage ? author.id : messageChannelId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -380,7 +374,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
-      originatingTo,
+      ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {
       inboundEventKind: ctx.inboundEventKind,
@@ -388,7 +382,6 @@ export async function buildDiscordMessageProcessContext(params: {
       rawBody: preflightAudioTranscript ?? baseText,
       bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
       commandBody: preflightAudioTranscript ?? baseText,
-      envelopeFrom: fromLabel,
       inboundHistory,
     },
     access: {
@@ -401,9 +394,6 @@ export async function buildDiscordMessageProcessContext(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands: ctx.allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     commandTurn: {

@@ -104,10 +104,6 @@ export async function dispatchSynologyChatInboundEvent(params: {
             kind: chatKind,
             id: params.msg.from,
             label: params.msg.senderName || params.msg.from,
-            routePeer: {
-              kind: "direct",
-              id: params.msg.from,
-            },
           },
           route: {
             agentId: resolved.route.agentId,
@@ -117,13 +113,11 @@ export async function dispatchSynologyChatInboundEvent(params: {
           },
           reply: {
             to: `synology-chat:${params.msg.from}`,
-            originatingTo: `synology-chat:${params.msg.from}`,
           },
           message: {
             rawBody: input.rawText,
             commandBody: input.textForCommands,
             bodyForAgent: input.textForAgent,
-            envelopeFrom: params.msg.senderName,
           },
           extra: {
             ChatType: params.msg.chatType,
