@@ -298,6 +298,27 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("does not rotate harness-owned assistant timeouts", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        harnessOwnsTransport: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
   it("treats idle watchdog timeouts during tool execution as model silence", () => {
     expect(
       resolveRunFailoverDecision({
@@ -399,6 +420,45 @@ describe("resolveRunFailoverDecision", () => {
       }),
     ).toEqual({
       action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
+  it("does not fallback harness-owned LLM idle timeouts after profile rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: false,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
+  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
       reason: "timeout",
     });
   });

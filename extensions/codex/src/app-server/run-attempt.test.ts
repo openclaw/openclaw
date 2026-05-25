@@ -4149,7 +4149,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
+  it("interrupts but keeps the app-server client alive when a turn timeout fires", async () => {
     const close = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -4193,7 +4193,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       { timeoutMs: 5_000 },
     );
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
@@ -5508,6 +5508,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not treat global rate-limit notifications as turn progress", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
@@ -5549,6 +5550,10 @@ describe("runCodexAppServerAttempt", () => {
           { timeoutMs: 5_000 },
         ),
       { interval: 1 },
+    );
+    expect(warn).not.toHaveBeenCalledWith(
+      "codex app-server client retired after timed-out turn",
+      expect.anything(),
     );
   });
 

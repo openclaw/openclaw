@@ -3164,19 +3164,11 @@ export async function runCodexAppServerAttempt(
   touchTurnCompletionActivity("turn:start", { attemptProgress: true });
 
   const abortListener = () => {
-    const shouldRetireClient = timedOut;
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,
-      timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
+      timeoutMs: timedOut ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
-    if (shouldRetireClient) {
-      retireCodexAppServerClientAfterTimedOutTurn(client, {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        reason: String(runAbortController.signal.reason ?? "timeout"),
-      });
-    }
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -3987,29 +3979,6 @@ async function unsubscribeCodexThreadBestEffort(
       error,
     });
   }
-}
-
-function retireCodexAppServerClientAfterTimedOutTurn(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    reason: string;
-  },
-): void {
-  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
-  if (!clearedSharedClient) {
-    const close = (client as { close?: () => void }).close;
-    if (typeof close === "function") {
-      close.call(client);
-    }
-  }
-  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
-    threadId: params.threadId,
-    turnId: params.turnId,
-    reason: params.reason,
-    clearedSharedClient,
-  });
 }
 
 type DynamicToolBuildParams = {

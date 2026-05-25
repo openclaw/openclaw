@@ -45,6 +45,7 @@ type PromptDecisionParams = {
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
+  harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
 
@@ -60,6 +61,7 @@ type AssistantDecisionParams = {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
 
@@ -107,7 +109,11 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
-  return (!params.aborted && params.failoverFailure) || isAssistantTimeoutFailure(params);
+  const timeoutFailure = isAssistantTimeoutFailure(params);
+  if (timeoutFailure && params.harnessOwnsTransport) {
+    return false;
+  }
+  return (!params.aborted && params.failoverFailure) || timeoutFailure;
 }
 
 export function mergeRetryFailoverReason(params: {
@@ -141,6 +147,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
 
   if (params.stage === "prompt") {
     if (params.externalAbort) {
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
+    if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
       return {
         action: "surface_error",
         reason: params.failoverReason,
