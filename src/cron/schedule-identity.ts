@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import type { CronJob } from "./types.js";
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
@@ -7,7 +8,7 @@ function readString(record: Record<string, unknown>, key: string): string | unde
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function schedulePayloadFromRecord(

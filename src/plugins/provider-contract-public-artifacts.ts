@@ -1,3 +1,4 @@
+import { isRecord } from "../shared/record-coerce.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -5,10 +6,6 @@ type ProviderContractEntry = {
   pluginId: string;
   provider: ProviderPlugin;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isProviderPlugin(value: unknown): value is ProviderPlugin {
   return (

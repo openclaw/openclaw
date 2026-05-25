@@ -1,6 +1,7 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
 import { listPendingCommitmentsForScope, upsertInferredCommitments } from "./store.js";
@@ -27,7 +28,7 @@ function asString(value: unknown): string | undefined {
 }
 
 function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function parseCandidate(raw: unknown): CommitmentCandidate | undefined {

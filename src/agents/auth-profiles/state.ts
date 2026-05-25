@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -36,7 +37,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function normalizeEnumValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {

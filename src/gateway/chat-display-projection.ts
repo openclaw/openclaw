@@ -10,6 +10,7 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -215,7 +216,7 @@ function projectAssistantTextFromMixedToolContent(
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  return asFiniteNumber(x);
 }
 
 function sanitizeCost(raw: unknown): { total?: number } | undefined {

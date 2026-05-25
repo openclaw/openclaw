@@ -1,6 +1,7 @@
 import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { isRecord } from "../../utils.js";
@@ -107,10 +108,6 @@ function normalizeAssistantVisibility(
   return value === "visible" || value === "manual-only" ? value : undefined;
 }
 
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function normalizeAuthChoice(params: {
   providerId: string;
   providerName: string;
@@ -133,7 +130,7 @@ function normalizeAuthChoice(params: {
   const cliFlag = normalizeOptionalString(params.value.cliFlag);
   const cliOption = normalizeOptionalString(params.value.cliOption);
   const cliDescription = normalizeOptionalString(params.value.cliDescription);
-  const assistantPriority = normalizeFiniteNumber(params.value.assistantPriority);
+  const assistantPriority = asFiniteNumber(params.value.assistantPriority);
   const assistantVisibility = normalizeAssistantVisibility(params.value.assistantVisibility);
   const onboardingScopes = normalizeOnboardingScopes(params.value.onboardingScopes);
   return {

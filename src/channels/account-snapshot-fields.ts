@@ -1,4 +1,5 @@
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
@@ -23,7 +24,7 @@ function readBoolean(record: Record<string, unknown>, key: string): boolean | un
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function readNullableNumber(
