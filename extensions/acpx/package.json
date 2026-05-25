@@ -36,10 +36,6 @@
           "output": "mcp-proxy.mjs"
         },
         {
-          "source": "./src/runtime-internals/error-format.mjs",
-          "output": "error-format.mjs"
-        },
-        {
           "source": "./src/runtime-internals/mcp-command-line.mjs",
           "output": "mcp-command-line.mjs"
         }
