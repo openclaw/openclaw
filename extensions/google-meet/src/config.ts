@@ -4,6 +4,7 @@ import {
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  asRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -259,12 +260,6 @@ const GOOGLE_MEET_PREVIEW_ACK_KEYS = [
   "OPENCLAW_GOOGLE_MEET_PREVIEW_ACK",
   "GOOGLE_MEET_PREVIEW_ACK",
 ] as const;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;

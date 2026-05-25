@@ -16,7 +16,10 @@ import {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -80,16 +83,27 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
   Object.defineProperty(card, RENDERED_FEISHU_CARD, {
     value: true,
     enumerable: false,
   });
   return card;
+}
+
+function escapeFeishuCardMarkdownText(text: string): string {
+  return text.replace(/[&<>]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      default:
+        return char;
+    }
+  });
 }
 
 function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
@@ -179,18 +193,7 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
     return [
       {
         tag: "markdown",
-        content: element.content.replace(/[&<>]/g, (char) => {
-          switch (char) {
-            case "&":
-              return "&amp;";
-            case "<":
-              return "&lt;";
-            case ">":
-              return "&gt;";
-            default:
-              return char;
-          }
-        }),
+        content: escapeFeishuCardMarkdownText(element.content),
       },
     ];
   }
