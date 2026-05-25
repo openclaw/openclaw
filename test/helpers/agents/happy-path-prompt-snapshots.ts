@@ -34,11 +34,11 @@ const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
 const CODEX_PROMPT_PERSONALITY = "pragmatic";
-const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
+const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.posix.join(
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.instructions.md`,
 );
-const CODEX_MODEL_PROMPT_SOURCE_PATH = path.join(
+const CODEX_MODEL_PROMPT_SOURCE_PATH = path.posix.join(
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.source.json`,
 );
@@ -888,11 +888,11 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Codex model prompt fixtures:",
     "",
-    `- ${path.relative(
+    `- ${path.posix.relative(
       CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
       CODEX_MODEL_PROMPT_FIXTURE_PATH,
     )}`,
-    `- ${path.relative(
+    `- ${path.posix.relative(
       CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
       CODEX_MODEL_PROMPT_SOURCE_PATH,
     )}`,
