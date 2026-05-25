@@ -16,7 +16,10 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import {
+  appendUserTurnTranscriptMessage,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -95,6 +98,7 @@ type TranscriptUsage = {
 type PersistTextTurnTranscriptParams = {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -230,16 +234,23 @@ async function persistTextTurnTranscript(
     allowReentrant: true,
   });
   try {
-    if (promptText) {
-      await appendSessionTranscriptMessage({
+    const userMessage = params.userMessage;
+    if (userMessage || promptText) {
+      await appendUserTurnTranscriptMessage({
         transcriptPath: sessionFile,
         sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
         cwd: params.sessionCwd,
         config: params.config,
-        message: buildPersistedUserTurnMessage({
-          text: promptText,
-          timestamp: Date.now(),
-        }),
+        ...(userMessage
+          ? { message: userMessage }
+          : {
+              input: {
+                text: promptText,
+                timestamp: Date.now(),
+              },
+            }),
+        updateMode: "none",
       });
     }
 
@@ -324,6 +335,7 @@ export async function persistAcpTurnTranscript(params: {
 export async function persistCliTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   result: EmbeddedPiRunResult;
   sessionId: string;
   sessionKey: string;
@@ -344,6 +356,7 @@ export async function persistCliTurnTranscript(params: {
   return await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
     transcriptBody: gapFill ? undefined : params.transcriptBody,
+    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
