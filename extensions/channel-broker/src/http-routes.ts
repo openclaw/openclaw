@@ -9,6 +9,7 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import { isListedChannelBrokerProviderId, resolveChannelBrokerAccount } from "./accounts.js";
+import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
 import { receiveBrokerInboundEvent } from "./runtime.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
@@ -105,7 +106,9 @@ function normalizeInboundEventForAccount(params: {
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
 }): { ok: true; event: BrokerInboundEventV1 } | { ok: false; error: string; statusCode: number } {
-  const platform = params.account.platformAliases[params.event.platform] ?? params.event.platform;
+  const platform =
+    params.account.platformAliases[params.event.platform] ??
+    normalizeKnownChannelBrokerPlatformId(params.event.platform);
   if (params.account.platforms.length > 0 && !params.account.platforms.includes(platform)) {
     return { ok: false, statusCode: 403, error: "unsupported_platform" };
   }

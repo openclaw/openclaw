@@ -1763,6 +1763,39 @@ describe("channel-broker HTTP routes", () => {
     );
   });
 
+  it("applies built-in platform aliases before inbound platform allowlists and dedupe", async () => {
+    const cases = [
+      { alias: "teams", canonical: "microsoft-teams" },
+      { alias: "googlechat", canonical: "google-chat" },
+      { alias: "qq", canonical: "qqbot" },
+    ];
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+
+    for (const { alias, canonical } of cases) {
+      const body = inboundBody("user-1", { eventId: `evt-${alias}`, platform: alias });
+      const res = createResponse();
+
+      await handleChannelBrokerInboundHttpRequest({
+        cfg: brokerConfig("broker-secret", { platforms: [canonical] }),
+        req: createRequest({ body, signature: sign(body, "broker-secret") }),
+        res,
+      });
+
+      expect(res.statusCode).toBe(202);
+      expect(JSON.parse(res.body)).toMatchObject({
+        ok: true,
+        dedupeKey: `acme:bot-main:${canonical}:evt-${alias}`,
+      });
+      expect(receiveInboundEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          event: expect.objectContaining({ platform: canonical }),
+          dedupeKey: `acme:bot-main:${canonical}:evt-${alias}`,
+        }),
+      );
+    }
+  });
+
   it("rejects signed inbound events for a mismatched configured native account id", async () => {
     const body = inboundBody("user-1", { accountId: "bot-other" });
     const receiveInboundEvent = vi.fn();
