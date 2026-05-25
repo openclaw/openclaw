@@ -537,13 +537,14 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -712,7 +713,12 @@ async function emitToolResultOutput(params: {
   const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.trustedLocalMediaToolNames,
+      )
     : [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
@@ -730,6 +736,7 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
+          ctx.trustedLocalMediaToolNames,
         );
       }
     }

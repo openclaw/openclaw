@@ -124,6 +124,7 @@ import {
 } from "../../pi-embedded-helpers.js";
 import { countActiveToolExecutions } from "../../pi-embedded-subscribe.handlers.tools.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
+import { isCoreToolResultMediaTrustedName } from "../../pi-embedded-subscribe.tools.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import {
   applyPiAutoCompactionGuard,
@@ -447,6 +448,35 @@ export {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 };
+
+function collectTrustedPluginLocalMediaToolNames(params: {
+  tools: Array<{ name?: string }>;
+}): Set<string> {
+  const trusted = new Set<string>();
+  for (const tool of params.tools) {
+    const toolName = tool.name?.trim();
+    if (!toolName) {
+      continue;
+    }
+    const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+    if (meta?.trustedLocalMedia === true) {
+      trusted.add(toolName);
+    }
+  }
+  return trusted;
+}
+
+function collectTrustedLocalMediaToolNames(params: {
+  coreBuiltinToolNames: ReadonlySet<string>;
+  trustedPluginToolNames: ReadonlySet<string>;
+}): Set<string> {
+  return new Set([
+    ...[...params.coreBuiltinToolNames].filter((toolName) =>
+      isCoreToolResultMediaTrustedName(toolName),
+    ),
+    ...params.trustedPluginToolNames,
+  ]);
+}
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
@@ -1651,6 +1681,11 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     };
+    const pluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: process.env,
+      workspaceDir: effectiveWorkspace,
+    });
     const tools = normalizeAgentRuntimeTools({
       runtimePlan: params.runtimePlan,
       tools: toolsEnabled ? toolsRaw : [],
@@ -1720,6 +1755,9 @@ export async function runEmbeddedAttempt(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
       warn: (message) => log.warn(message),
+    });
+    const trustedPluginLocalMediaToolNames = collectTrustedPluginLocalMediaToolNames({
+      tools: toolsEnabled ? [...toolsRaw, ...filteredBundledTools] : [],
     });
     const normalizedBundledTools =
       filteredBundledTools.length > 0
@@ -2202,11 +2240,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot,
         contextTokenBudget: params.contextTokenBudget,
       });
       const piAutoCompactionGuardArgs = {
@@ -2285,10 +2319,8 @@ export async function runEmbeddedAttempt(
         cfg: params.config,
         agentId: sessionAgentId,
       });
-      // Exact raw names of every tool registered for this run, including
-      // bundled/plugin tools. Used as the raw-name set for the trusted local
-      // MEDIA: passthrough gate: a normalized alias is not sufficient — the
-      // emitted tool name must match an exact registration of this run.
+      // Exact raw names of every tool registered for this run. This remains
+      // available for diagnostics; local MEDIA: trust is narrower below.
       const builtinToolNames = new Set(
         uncompactedEffectiveTools.flatMap((tool) => {
           const name = (tool.name ?? "").trim();
@@ -2303,6 +2335,10 @@ export async function runEmbeddedAttempt(
       const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
         isPluginTool: (tool) =>
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+      });
+      const trustedLocalMediaToolNames = collectTrustedLocalMediaToolNames({
+        coreBuiltinToolNames,
+        trustedPluginToolNames: trustedPluginLocalMediaToolNames,
       });
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
@@ -3303,6 +3339,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
+          trustedLocalMediaToolNames,
           internalEvents: params.internalEvents,
         }),
       );

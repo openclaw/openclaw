@@ -11,6 +11,7 @@ function createMockContext(overrides?: {
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -44,6 +45,8 @@ function createMockContext(overrides?: {
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
+    trustedLocalMediaToolNames:
+      overrides?.trustedLocalMediaToolNames ?? overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -460,6 +463,37 @@ describe("handleToolExecutionEnd media emission", () => {
 
   it("does not queue structured media already emitted in plain verbose output", async () => {
     const ctx = await handleVerboseGeneratedImage("plain");
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("does not queue trusted bundled plugin media already emitted in plain verbose output", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      toolResultFormat: "plain",
+      trustedLocalMediaToolNames: new Set(["meeting_notes"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "meeting_notes",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Meeting audio attached.\nMEDIA:/tmp/meeting.wav",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/meeting.wav"],
+          },
+        },
+      },
+    });
 
     expect(ctx.emitToolOutput).toHaveBeenCalledTimes(1);
     expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
