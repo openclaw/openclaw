@@ -65,14 +65,26 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function extractStandaloneMessageToolText(text: string): string | undefined {
+function extractStandaloneMessageToolText(
+  text: string,
+  params: { allowCurrentSourceReply?: boolean } = {},
+): string | undefined {
   try {
     const record = asRecord(JSON.parse(text.trim()) as unknown);
     const args = asRecord(record?.arguments);
-    return normalizeOptionalString(record?.name) === "message" &&
-      normalizeOptionalString(args?.action) === "send"
-      ? normalizeOptionalString(args?.message)
-      : undefined;
+    const hasRoute =
+      normalizeOptionalString(args?.target) ||
+      normalizeOptionalString(args?.channel) ||
+      normalizeOptionalString(args?.accountId) ||
+      Array.isArray(args?.targets);
+    if (
+      normalizeOptionalString(record?.name) !== "message" ||
+      normalizeOptionalString(args?.action) !== "send" ||
+      (!hasRoute && !params.allowCurrentSourceReply)
+    ) {
+      return undefined;
+    }
+    return normalizeOptionalString(args?.message);
   } catch {
     return undefined;
   }
@@ -703,9 +715,10 @@ export function handleMessageEnd(
   });
   warnIfAssistantEmittedToolText(ctx, assistantMessage);
   const visibleText =
-    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     ctx.builtinToolNames?.has("message") === true
-      ? (extractStandaloneMessageToolText(rawVisibleText) ?? rawVisibleText)
+      ? (extractStandaloneMessageToolText(rawVisibleText, {
+          allowCurrentSourceReply: ctx.params.sourceReplyDeliveryMode === "message_tool_only",
+        }) ?? rawVisibleText)
       : rawVisibleText;
 
   const text = resolveSilentReplyFallbackText({

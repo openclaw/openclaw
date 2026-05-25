@@ -153,12 +153,13 @@ function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): un
   return firstMockCall(mock, label)[0];
 }
 
-function createMessageToolEnvelope(message: string): string {
+function createMessageToolEnvelope(message: string, args: Record<string, unknown> = {}): string {
   return JSON.stringify({
     name: "message",
     arguments: {
       action: "send",
       message,
+      ...args,
     },
   });
 }
@@ -679,13 +680,15 @@ describe("handleMessageEnd", () => {
     expect(metadata?.registeredTool).toBe(true);
   });
 
-  it("unwraps standalone message-tool JSON only for message-tool-only delivery", () => {
+  it("unwraps only source-routed or message-tool-only standalone message-tool JSON", () => {
     const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
-    const messageToolEnvelope = createMessageToolEnvelope(visibleReply);
+    const unroutedEnvelope = createMessageToolEnvelope(visibleReply);
+    const routedEnvelope = createMessageToolEnvelope(visibleReply, { target: "user:redacted" });
 
-    for (const [sourceReplyDeliveryMode, expected] of [
-      ["message_tool_only", visibleReply],
-      [undefined, messageToolEnvelope],
+    for (const [text, sourceReplyDeliveryMode, expected] of [
+      [unroutedEnvelope, "message_tool_only", visibleReply],
+      [routedEnvelope, undefined, visibleReply],
+      [unroutedEnvelope, undefined, unroutedEnvelope],
     ] as const) {
       const emitBlockReply = vi.fn();
       const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
@@ -700,7 +703,7 @@ describe("handleMessageEnd", () => {
         type: "message_end",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: messageToolEnvelope }],
+          content: [{ type: "text", text }],
         },
       } as never);
 
