@@ -282,7 +282,7 @@ function mergeDiscoveredModels(params: {
   }
 
   const merged = [...explicitModels];
-  const seen = new Set(explicitModels.map((model) => model.id.trim()).filter(Boolean));
+  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
   for (const model of discoveredModels) {
     const id = model.id.trim();
     if (!id || seen.has(id)) {
@@ -338,7 +338,7 @@ function mergeDiscoveredLmstudioAllowlistEntries(params: {
 function selectDefaultLmstudioModelId(
   discoveredModels: ModelDefinitionConfig[],
 ): string | undefined {
-  const ids = discoveredModels.map((model) => model.id.trim()).filter(Boolean);
+  const ids = normalizeStringEntries(discoveredModels.map((model) => model.id));
   if (ids.length === 0) {
     return undefined;
   }

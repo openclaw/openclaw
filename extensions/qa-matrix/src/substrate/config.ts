@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
 type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
@@ -167,7 +167,7 @@ type MatrixQaAccountExecApprovalsConfig = {
 };
 
 function normalizeMatrixQaAllowlist(entries?: string[]) {
-  return uniqueStrings((entries ?? []).map((entry) => entry.trim()).filter(Boolean));
+  return uniqueStrings(normalizeStringEntries(entries ?? []));
 }
 
 function resolveMatrixQaGroupSnapshots(params: {

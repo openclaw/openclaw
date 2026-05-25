@@ -1,6 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import {
   isRecord,
+  normalizeStringEntries,
   normalizeOptionalString,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -53,7 +54,7 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return sortUniqueStrings(scopes.map((scope) => scope.trim()).filter(Boolean));
+  return sortUniqueStrings(normalizeStringEntries(scopes));
 }
 
 function extractScopes(payload: unknown): string[] {

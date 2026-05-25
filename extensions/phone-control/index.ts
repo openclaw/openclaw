@@ -5,6 +5,7 @@ import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringEntries,
   sortUniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -45,7 +46,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
 };
 
 function uniqSorted(values: string[]): string[] {
-  return sortUniqueStrings(values.map((v) => v.trim()).filter(Boolean));
+  return sortUniqueStrings(normalizeStringEntries(values));
 }
 
 function resolveCommandsForGroup(group: ArmGroup): string[] {

@@ -448,7 +448,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           .filter((entry) => entry.resolved && entry.id)
           .map((entry) => entry.id as string);
         const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-        const keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+        const keys = [...resolvedIds, ...normalizeStringEntries(unresolved)];
         const resolution = formatResolvedUnresolvedNote({
           resolved: resolvedIds,
           unresolved,
@@ -462,7 +462,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           t("wizard.zalouser.groupLookupFailed", { error: String(err) }),
           ZALOUSER_GROUPS_TITLE,
         );
-        return entries.map((entry) => entry.trim()).filter(Boolean);
+        return normalizeStringEntries(entries);
       }
     },
     applyAllowlist: ({ cfg, accountId, resolved }) =>
