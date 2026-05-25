@@ -1235,7 +1235,15 @@ export async function readLightStagedKeys(params: {
   const store = await readPhaseSignalStore(workspaceDir, nowIso);
   const keys = new Set<string>();
   for (const [key, entry] of Object.entries(store.entries)) {
-    if (entry.lightHits > 0) {
+    if (entry.lightHits <= 0) {
+      continue;
+    }
+    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
+    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
+    const hasPendingLightSignal = Number.isFinite(lastLightMs)
+      ? !Number.isFinite(lastRemMs) || lastLightMs > lastRemMs
+      : !entry.lastRemAt;
+    if (hasPendingLightSignal) {
       keys.add(key);
     }
   }
