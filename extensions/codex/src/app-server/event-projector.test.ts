@@ -718,7 +718,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptError).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
