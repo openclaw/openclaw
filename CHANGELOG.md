@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Docker E2E: avoid rebuilding the Control UI twice while preparing the shared OpenClaw package tarball for package-backed scenario runs.
 - Tests: avoid rebuilding the Control UI twice during the installer Docker smoke now that `pnpm build` includes `ui:build`.
 - Build: route `scripts/ui.js` through the shared pnpm runner and keep Control UI chunking helpers in sparse-included source so native Windows Corepack builds can produce `dist/control-ui`.
+- Tests: give the memory fallback QA scenario enough turn budget to exercise native Windows gateway runs instead of failing on the client timeout while the mock agent is still dispatching.
 - Tests: collect QA gateway CPU/RSS metrics on native Windows and give the channel baseline enough turn budget to report slow gateway runs instead of timing out before proof.
 - Install/update: bypass npm `min-release-age` policies with `--min-release-age=0` instead of `--before` so hosted installers keep working on npm versions that reject the combined config. (#84749) Thanks @TeodoroRodrigo.
 - WebChat: keep message-tool replies visible in the chat while still summarizing internal tool results for the model. Fixes #86347. Thanks @shakkernerd.
