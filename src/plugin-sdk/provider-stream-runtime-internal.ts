@@ -21,19 +21,189 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   return new Set(names);
 }
 
-function couldStillBePlainTextToolCall(text: string): boolean {
+function couldStillBePlainTextToolCall(text: string, toolNames: Set<string>): boolean {
   if (text.length > 256_000) {
     return false;
   }
   const trimmed = text.trimStart();
   return (
     trimmed.length === 0 ||
-    trimmed.startsWith("[") ||
-    trimmed.startsWith("<|channel|>") ||
-    trimmed.startsWith("commentary") ||
-    trimmed.startsWith("analysis") ||
-    trimmed.startsWith("final")
+    couldStillBeBracketedToolCall(trimmed, toolNames) ||
+    couldStillBeHarmonyToolCall(trimmed, toolNames)
   );
+}
+
+function matchesLiteralPrefix(text: string, literal: string): boolean {
+  return literal.startsWith(text) || text.startsWith(literal);
+}
+
+function skipHorizontalWhitespace(text: string, start: number): number {
+  let cursor = start;
+  while (text[cursor] === " " || text[cursor] === "\t") {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function isToolNameChar(char: string | undefined): boolean {
+  return Boolean(char && /[A-Za-z0-9_-]/.test(char));
+}
+
+function hasToolNamePrefix(toolNames: Set<string>, prefix: string): boolean {
+  for (const toolName of toolNames) {
+    if (toolName.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function couldStillBeJsonPayload(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  return cursor >= text.length || text[cursor] === "{";
+}
+
+function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): boolean {
+  if (!text.startsWith("[")) {
+    return false;
+  }
+
+  const toolPrefix = "[tool:";
+  if (matchesLiteralPrefix(text, toolPrefix)) {
+    if (text.length <= toolPrefix.length) {
+      return true;
+    }
+    let cursor = toolPrefix.length;
+    while (isToolNameChar(text[cursor])) {
+      cursor += 1;
+    }
+    const name = text.slice(toolPrefix.length, cursor);
+    if (!name || !hasToolNamePrefix(toolNames, name)) {
+      return false;
+    }
+    if (cursor >= text.length) {
+      return true;
+    }
+    if (text[cursor] !== "]") {
+      return false;
+    }
+    return couldStillBeJsonPayload(text, cursor + 1);
+  }
+
+  let cursor = 1;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  const name = text.slice(1, cursor);
+  if (!name || !hasToolNamePrefix(toolNames, name)) {
+    return false;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+  if (text[cursor] !== "]") {
+    return false;
+  }
+
+  cursor = skipHorizontalWhitespace(text, cursor + 1);
+  if (cursor >= text.length) {
+    return true;
+  }
+  if (text[cursor] === "\r") {
+    if (cursor + 1 >= text.length) {
+      return true;
+    }
+    return couldStillBeJsonPayload(text, text[cursor + 1] === "\n" ? cursor + 2 : cursor + 1);
+  }
+  if (text[cursor] !== "\n") {
+    return false;
+  }
+  return couldStillBeJsonPayload(text, cursor + 1);
+}
+
+function couldStillBeHarmonyToolCall(text: string, toolNames: Set<string>): boolean {
+  const channelMarker = "<|channel|>";
+  let cursor = 0;
+  if (matchesLiteralPrefix(text, channelMarker)) {
+    if (text.length <= channelMarker.length) {
+      return true;
+    }
+    cursor = channelMarker.length;
+  }
+
+  const rest = text.slice(cursor);
+  const channel = ["commentary", "analysis", "final"].find((candidate) =>
+    matchesLiteralPrefix(rest, candidate),
+  );
+  if (!channel) {
+    return false;
+  }
+  if (rest.length <= channel.length) {
+    return true;
+  }
+
+  cursor += channel.length;
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (cursor >= text.length) {
+    return true;
+  }
+
+  const toMarker = "to=";
+  const toRest = text.slice(cursor);
+  if (!matchesLiteralPrefix(toRest, toMarker)) {
+    return false;
+  }
+  if (toRest.length <= toMarker.length) {
+    return true;
+  }
+
+  cursor += toMarker.length;
+  const nameStart = cursor;
+  while (isToolNameChar(text[cursor])) {
+    cursor += 1;
+  }
+  const name = text.slice(nameStart, cursor);
+  if (!name || !hasToolNamePrefix(toolNames, name)) {
+    return false;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+
+  cursor = skipHorizontalWhitespace(text, cursor);
+  if (cursor >= text.length) {
+    return true;
+  }
+  if (!toolNames.has(name)) {
+    return false;
+  }
+
+  const codeMarker = "code";
+  const codeRest = text.slice(cursor);
+  if (!matchesLiteralPrefix(codeRest, codeMarker)) {
+    return false;
+  }
+  if (codeRest.length <= codeMarker.length) {
+    return true;
+  }
+
+  cursor += codeMarker.length;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+
+  const messageMarker = "<|message|>";
+  const messageRest = text.slice(cursor);
+  if (matchesLiteralPrefix(messageRest, messageMarker)) {
+    return true;
+  }
+  return text[cursor] === "{";
 }
 
 function createSyntheticToolCallId(): string {
@@ -179,7 +349,7 @@ function wrapPlainTextToolCallStream(
           } else if (typeof record?.content === "string" && !bufferedText) {
             bufferedText = record.content;
           }
-          if (!couldStillBePlainTextToolCall(bufferedText)) {
+          if (!couldStillBePlainTextToolCall(bufferedText, toolNames)) {
             flushBufferedTextEvents();
           }
           continue;
