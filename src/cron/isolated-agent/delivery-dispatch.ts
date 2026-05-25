@@ -909,14 +909,14 @@ export async function dispatchCronDelivery(
         return null;
       }
       const deliverySessionKey = await resolveDirectCronDeliverySessionKey({
-        cfg: params.cfgWithAgentDefaults,
+        cfg: params.cfg,
         job: params.job,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
         delivery,
       });
       const deliverySession = buildOutboundSessionContext({
-        cfg: params.cfgWithAgentDefaults,
+        cfg: params.cfg,
         agentId: params.agentId,
         sessionKey: deliverySessionKey,
       });
@@ -947,7 +947,7 @@ export async function dispatchCronDelivery(
       const runDelivery = async () => {
         attemptedPayloadsForMirror.length = 0;
         const send = await sendDurableMessageBatch({
-          cfg: params.cfgWithAgentDefaults,
+          cfg: params.cfg,
           channel: delivery.channel,
           to: delivery.to,
           accountId: delivery.accountId,
