@@ -88,16 +88,16 @@ export function matchRealtimeVoiceActivationName(
       }
       const heardCompact = compactActivationName(candidate.heardName);
       const activationCompact = compactActivationName(normalizedActivationName);
-      if (
-        heardCompact === activationCompact ||
-        isFuzzyActivationNameMatch(candidate, activationName)
-      ) {
+      const exactMatch = heardCompact === activationCompact;
+      const fuzzyMatch =
+        candidate.edge === "leading" && isFuzzyActivationNameMatch(candidate, activationName);
+      if (exactMatch || fuzzyMatch) {
         return {
           allowed: true,
           text: stripEdgeActivationNameCandidate(text, candidate),
           activationName,
           heardName: candidate.heardName,
-          match: heardCompact === activationCompact ? "exact" : "fuzzy",
+          match: exactMatch ? "exact" : "fuzzy",
           edge: candidate.edge,
         };
       }
