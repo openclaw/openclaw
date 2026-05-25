@@ -10,7 +10,11 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isRecord } from "../shared/record-coerce.js";
-import { uniqueStrings, uniqueValues } from "../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+  uniqueValues,
+} from "../shared/string-normalization.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -877,11 +881,7 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
 }
 
 function tokenize(input: string): string[] {
-  return input
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9_./:-]+/u));
 }
 
 function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {

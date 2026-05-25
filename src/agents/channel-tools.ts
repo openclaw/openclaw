@@ -129,9 +129,7 @@ export function resolveChannelMessageToolHints(params: {
     return [];
   }
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return (resolve({ cfg, accountId: params.accountId }) ?? [])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(resolve({ cfg, accountId: params.accountId }));
 }
 
 export function resolveChannelPromptCapabilities(params: {

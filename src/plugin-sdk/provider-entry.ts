@@ -9,7 +9,7 @@ import type {
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
 } from "../plugins/types.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
   OpenClawPluginApi,
@@ -102,12 +102,10 @@ function resolveEnvVars(params: {
   envVars?: string[];
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
-  const combined = [
+  const combined = normalizeStringEntries([
     ...(params.envVars ?? []),
     ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
+  ]);
   return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
 

@@ -1,5 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -48,10 +48,7 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
     return undefined;
   }
   const supported = uniqueStrings(
-    raw
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean),
+    normalizeStringEntries(raw.filter((value) => typeof value === "string")),
   );
   return supported.length > 0 ? supported : undefined;
 }
