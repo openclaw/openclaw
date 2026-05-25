@@ -328,7 +328,7 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs);
+      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
       return { ok: true, restarted: true };
     }
   }

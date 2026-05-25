@@ -189,6 +189,34 @@ describe("qa suite gateway helpers", () => {
     expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
   });
 
+  it("uses the live timeout profile when config mutation races a restart", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: {} } };
+      }
+      throw new Error("service restart");
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    const result = await patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      restartDelayMs: 0,
+    });
+
+    expect(result).toEqual({ ok: true, restarted: true });
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: expect.any(Number),
+    });
+    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
+  });
+
   it("waits for transport readiness after gateway restart health", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
