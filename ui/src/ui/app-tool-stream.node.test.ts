@@ -361,6 +361,46 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it("marks result payloads with explicit error flags as failed activity", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-activity-3",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "exec",
+        toolCallId: "activity-tool-3",
+        result: { isError: true },
+      },
+    });
+
+    expect(host.activityEntries?.[0]?.status).toBe("error");
+  });
+
+  it("marks snake_case explicit error flags as failed activity", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-activity-4",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "exec",
+        toolCallId: "activity-tool-4",
+        result: { is_error: true },
+      },
+    });
+
+    expect(host.activityEntries?.[0]?.status).toBe("error");
+  });
+
   it("keeps activity entries in a bounded memory ring", () => {
     const host = createHost();
 

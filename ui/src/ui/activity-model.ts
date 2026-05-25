@@ -140,16 +140,24 @@ function countArgumentFields(value: unknown): number {
   return 1;
 }
 
+function hasExplicitErrorFlag(value: Record<string, unknown> | null): boolean {
+  return value?.isError === true || value?.is_error === true;
+}
+
 function resolveStatus(data: Record<string, unknown>): ActivityStatus {
   const phase = toTrimmedString(data.phase);
   if (phase !== "result") {
     return "running";
   }
-  const status = toTrimmedString(data.status) ?? toTrimmedString(readRecord(data.result)?.status);
+  const result = readRecord(data.result);
+  if (hasExplicitErrorFlag(data) || hasExplicitErrorFlag(result)) {
+    return "error";
+  }
+  const status = toTrimmedString(data.status) ?? toTrimmedString(result?.status);
   if (status && /error|fail|failed|failure/i.test(status)) {
     return "error";
   }
-  const exitCode = Number(readRecord(data.result)?.exitCode ?? data.exitCode);
+  const exitCode = Number(result?.exitCode ?? data.exitCode);
   if (Number.isFinite(exitCode) && exitCode !== 0) {
     return "error";
   }
@@ -161,10 +169,7 @@ function statusLabel(status: ActivityStatus): string {
 }
 
 function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: number): string {
-  const argText =
-    hiddenArgCount === 0
-      ? "arguments hidden"
-      : `${hiddenArgCount} argument${hiddenArgCount === 1 ? "" : "s"} hidden`;
+  const argText = `${hiddenArgCount} argument${hiddenArgCount === 1 ? "" : "s"} hidden`;
   return `${toolName} ${statusLabel(status)}; ${argText}`;
 }
 

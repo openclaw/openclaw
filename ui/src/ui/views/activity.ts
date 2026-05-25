@@ -46,8 +46,9 @@ function formatDuration(value: number): string {
   if (value < 60_000) {
     return t("activity.duration.seconds", { count: (value / 1_000).toFixed(1) });
   }
-  const minutes = Math.floor(value / 60_000);
-  const seconds = Math.round((value % 60_000) / 1_000);
+  const roundedSeconds = Math.round(value / 1_000);
+  const minutes = Math.floor(roundedSeconds / 60);
+  const seconds = roundedSeconds % 60;
   return t("activity.duration.minutes", {
     minutes: String(minutes),
     seconds: String(seconds),
@@ -63,6 +64,10 @@ function hiddenArgumentsLabel(count: number): string {
     return t("activity.argumentHiddenOne");
   }
   return t("activity.argumentsHidden", { count: String(count) });
+}
+
+function buildEntrySummary(entry: ActivityEntry): string {
+  return `${entry.toolName} ${statusLabel(entry.status)}; ${hiddenArgumentsLabel(entry.hiddenArgumentCount)}`;
 }
 
 function matchesEntry(entry: ActivityEntry, needle: string): boolean {
@@ -136,7 +141,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
             </span>
             <span class="activity-entry__tool mono">${entry.toolName}</span>
           </span>
-          <span class="activity-entry__text">${entry.summary}</span>
+          <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
         <span class="activity-entry__meta">
           <span>${formatTime(entry.updatedAt)}</span>
