@@ -19,7 +19,7 @@ import {
   finalizeHarnessContextEngineTurn,
   formatPrePromptPrecheckLog,
   formatErrorMessage,
-  hasBeforeToolCallPolicy,
+  getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
   isSubagentSessionKey,
   loadCodexBundleMcpThreadConfig,
@@ -946,6 +946,7 @@ export async function runCodexAppServerAttempt(
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -966,11 +967,21 @@ export async function runCodexAppServerAttempt(
     appServer: configuredAppServer,
     pluginConfig,
     env: process.env,
-    shouldPromote: hasBeforeToolCallPolicy(),
+    shouldPromote:
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0,
     canUseUntrustedApprovalPolicy:
       configuredAppServer.start.transport !== "stdio" ||
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
   });
+  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
+    embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
+      from: "never",
+      to: "untrusted",
+      beforeToolCallHook: beforeToolCallPolicy.hasBeforeToolCallHook,
+      trustedToolPolicies: beforeToolCallPolicy.trustedToolPolicies,
+    });
+  }
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,

@@ -6891,6 +6891,7 @@ describe("runCodexAppServerAttempt", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -6904,6 +6905,15 @@ describe("runCodexAppServerAttempt", () => {
     const startParams = startRequest?.params as Record<string, unknown> | undefined;
     expect(startParams?.approvalPolicy).toBe("untrusted");
     expect(startParams?.sandbox).toBe("danger-full-access");
+    expect(info).toHaveBeenCalledWith(
+      "codex app-server approval policy promoted for OpenClaw tool policy",
+      {
+        from: "never",
+        to: "untrusted",
+        beforeToolCallHook: true,
+        trustedToolPolicies: [],
+      },
+    );
   });
 
   it("keeps implicit Codex yolo approval policy when untrusted approvals are disallowed", () => {
