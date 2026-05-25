@@ -67,6 +67,7 @@ import {
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -130,7 +131,11 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { performGatewaySessionReset } from "../session-reset-service.js";
+import {
+  emitGatewaySessionEndPluginHook,
+  emitGatewaySessionStartPluginHook,
+  performGatewaySessionReset,
+} from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -157,6 +162,18 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+type AgentSendSessionLifecycleTransition = {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  sessionId: string;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  previousSessionId?: string;
+  previousSessionFile?: string;
+  previousEndReason?: PluginHookSessionEndReason;
+};
 
 function formatAttachmentFailureForLog(err: unknown): string {
   const primary = formatUncaughtError(err);
@@ -201,6 +218,36 @@ function resolveCanUseInternalRuntimeHandoff(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
   return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+}
+
+function emitAgentSendSessionLifecycleTransition(
+  transition: AgentSendSessionLifecycleTransition | undefined,
+): void {
+  if (!transition) {
+    return;
+  }
+  if (transition.previousSessionId) {
+    emitGatewaySessionEndPluginHook({
+      cfg: transition.cfg,
+      sessionKey: transition.sessionKey,
+      sessionId: transition.previousSessionId,
+      storePath: transition.storePath,
+      sessionFile: transition.previousSessionFile,
+      agentId: transition.agentId,
+      reason: transition.previousEndReason ?? "unknown",
+      nextSessionId: transition.sessionId,
+      nextSessionKey: transition.sessionKey,
+    });
+  }
+  emitGatewaySessionStartPluginHook({
+    cfg: transition.cfg,
+    sessionKey: transition.sessionKey,
+    sessionId: transition.sessionId,
+    resumedFrom: transition.previousSessionId,
+    storePath: transition.storePath,
+    sessionFile: transition.sessionFile,
+    agentId: transition.agentId,
+  });
 }
 
 async function runSessionResetFromAgent(params: {
@@ -1257,14 +1304,17 @@ export const agentHandlers: GatewayRequestHandlers = {
             channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
           }),
         });
+        const lifecycleTimestamps = entry
+          ? resolveSessionLifecycleTimestamps({
+              entry,
+              storePath,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
+            })
+          : undefined;
         const freshness = entry
           ? evaluateSessionFreshness({
               updatedAt: entry.updatedAt,
-              ...resolveSessionLifecycleTimestamps({
-                entry,
-                storePath,
-                agentId: resolveAgentIdFromSessionKey(canonicalKey),
-              }),
+              ...lifecycleTimestamps,
               now,
               policy: resetPolicy,
             })
@@ -1310,6 +1360,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupId: string | undefined;
           groupChannel: string | undefined;
           groupSpace: string | undefined;
+          freshSessionRotatedSinceLoad: boolean;
         };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
@@ -1447,6 +1498,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupId: nextGroup.groupId,
             groupChannel: nextGroup.groupChannel,
             groupSpace: nextGroup.groupSpace,
+            freshSessionRotatedSinceLoad,
           };
         };
         let patchBuild = buildSessionPatch(entry);
@@ -1521,6 +1573,32 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupId = patchBuild.groupId;
         resolvedGroupChannel = patchBuild.groupChannel;
         resolvedGroupSpace = patchBuild.groupSpace;
+        if (
+          !suppressVisibleSessionEffects &&
+          isNewSession &&
+          resolvedSessionId &&
+          storePath &&
+          !patchBuild.freshSessionRotatedSinceLoad
+        ) {
+          const previousSessionId = rotatedSessionId ? entry?.sessionId : undefined;
+          const sessionLifecycleTransition: AgentSendSessionLifecycleTransition = {
+            cfg,
+            sessionKey: canonicalSessionKey,
+            sessionId: resolvedSessionId,
+            storePath,
+            sessionFile: sessionEntry?.sessionFile,
+            agentId,
+            previousSessionId,
+            previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
+            previousEndReason: previousSessionId
+              ? (freshness?.staleReason ??
+                (usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId
+                  ? "new"
+                  : "unknown"))
+              : undefined,
+          };
+          emitAgentSendSessionLifecycleTransition(sessionLifecycleTransition);
+        }
         if (request.deliver === true) {
           const sendPolicy = resolveSendPolicy({
             cfg,
