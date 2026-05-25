@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK: keep legacy root diagnostic subscriptions connected when built plugin SDK aliases resolve diagnostic helpers through a separate module graph.
 - Tests: normalize macOS canonical temp paths in exec allowlists, fs-safe trash assertions, installed plugin matching, Telegram topic-name stores, and built ACPX MCP server expectations so native macOS proof runners cover the intended behavior.
 - Codex/app-server: preserve message-tool-only source reply delivery mode on active runs so sub-agent completion wakeups can steer the active Codex turn instead of being rejected. (#86287) Thanks @ferminquant.
+- Tests: sample the Windows kitchen-sink RPC gateway directly and serialize RSS probes so native runs keep the memory guard active.
 - Tests: normalize bundled plugin lifecycle probe paths and state-root lookup so native Windows release sweeps accept valid packaged plugin installs.
 - Config: keep benign legacy metadata write anomalies out of default doctor and config command output while preserving explicit anomaly logging for diagnostics.
 - Codex: log when implicit app-server `never` approvals are promoted for OpenClaw tool policy, including whether the trigger was a `before_tool_call` hook or trusted tool policy.

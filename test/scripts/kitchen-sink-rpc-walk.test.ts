@@ -3,6 +3,7 @@ import {
   assertResourceCeiling,
   fetchJson,
   sampleProcess,
+  sampleWindowsProcessByPort,
   summarizeProcessSamples,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
@@ -13,13 +14,45 @@ describe("kitchen-sink RPC process sampling", () => {
       platform: "win32",
       runCommand: async (command: string, args: string[]) => {
         calls.push({ command, args });
-        return { stdout: `${256 * 1024 * 1024} 1.5`, stderr: "" };
+        return { stdout: `${256 * 1024 * 1024} 1.5 5678`, stderr: "" };
       },
     });
 
-    expect(sample).toEqual({ cpuPercent: null, cpuSeconds: 1.5, rssMiB: 256 });
+    expect(sample).toEqual({
+      cpuPercent: null,
+      cpuSeconds: 1.5,
+      processId: 5678,
+      rssMiB: 256,
+    });
     expect(calls[0]?.command).toBe("powershell.exe");
     expect(calls[0]?.args.join(" ")).toContain("Get-Process -Id 1234");
+    expect(calls[0]?.args.join(" ")).not.toContain("ParentProcessId");
+  });
+
+  it("can locate a Windows gateway process by command line when the launcher is gone", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const sample = await sampleProcess(1234, {
+      platform: "win32",
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ command, args });
+        return { stdout: `${384 * 1024 * 1024} 2.25 6789`, stderr: "" };
+      },
+      windowsCommandLineNeedles: ["gateway", "--port", "19080"],
+    });
+
+    expect(sample).toEqual({
+      cpuPercent: null,
+      cpuSeconds: 2.25,
+      processId: 6789,
+      rssMiB: 384,
+    });
+    const command = calls[0]?.args.join(" ") ?? "";
+    expect(command).toContain("CommandLine");
+    expect(command).toContain("'gateway'");
+    expect(command).toContain("'19080'");
+    expect(command).toContain("ProcessId -eq $PID");
+    expect(command).toContain("ParentProcessId");
+    expect(command).toContain("Sort-Object WorkingSet64 -Descending");
   });
 
   it("falls back to the legacy powershell command name on Windows", async () => {
@@ -31,12 +64,48 @@ describe("kitchen-sink RPC process sampling", () => {
         if (command === "powershell.exe") {
           throw new Error("missing powershell.exe");
         }
-        return { stdout: `${96 * 1024 * 1024} 0`, stderr: "" };
+        return { stdout: `${96 * 1024 * 1024} 0 1234`, stderr: "" };
       },
     });
 
     expect(commands).toEqual(["powershell.exe", "powershell"]);
     expect(sample?.rssMiB).toBe(96);
+  });
+
+  it("samples the Windows gateway process by listening port", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const sample = await sampleWindowsProcessByPort(19675, {
+      runCommand: async (command: string, args: string[]) => {
+        calls.push({ command, args });
+        if (command === "netstat.exe") {
+          return {
+            stdout: [
+              "  Proto  Local Address          Foreign Address        State           PID",
+              "  TCP    127.0.0.1:19675        0.0.0.0:0              LISTENING       6789",
+            ].join("\r\n"),
+            stderr: "",
+          };
+        }
+        if (command === "powershell.exe") {
+          return { stdout: `${384 * 1024 * 1024} 2.25 6789`, stderr: "" };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    expect(sample).toEqual({
+      cpuPercent: null,
+      cpuSeconds: 2.25,
+      processId: 6789,
+      rssMiB: 384,
+    });
+    expect(calls).toEqual([
+      { command: "netstat.exe", args: ["-ano", "-p", "tcp"] },
+      {
+        command: "powershell.exe",
+        args: expect.arrayContaining(["-Command", expect.stringContaining("Get-Process -Id 6789")]),
+      },
+    ]);
   });
 
   it("samples RSS and CPU percent with ps on POSIX", async () => {
