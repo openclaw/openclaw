@@ -9705,6 +9705,59 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
+  it("clears over-token session bindings before scanning native rollout files", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    await fs.writeFile(
+      path.join(path.dirname(sessionFile), "sessions.json"),
+      JSON.stringify({
+        "agent:main:session-1": {
+          sessionFile,
+          totalTokens: 70_000,
+        },
+      }),
+    );
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              total_tokens: 12_000,
+            },
+          },
+        },
+      })}\n`,
+    );
+    const readdirSpy = vi.spyOn(fs, "readdir");
+
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "1mb",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(binding).toBeUndefined();
+    expect(readdirSpy).not.toHaveBeenCalled();
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding).toBeUndefined();
+  });
+
   it("streams rollout token scans without reading the whole file", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

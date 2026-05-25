@@ -853,6 +853,26 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
     return binding;
   }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
+  const sessionTokens =
+    sessionRecord?.totalTokensFresh !== false &&
+    typeof sessionRecord?.totalTokens === "number" &&
+    Number.isFinite(sessionRecord.totalTokens)
+      ? sessionRecord.totalTokens
+      : undefined;
+  if (sessionTokens !== undefined && sessionTokens >= CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS) {
+    embeddedAgentLog.warn(
+      "codex app-server native transcript exceeded active token limit; starting a fresh thread",
+      {
+        threadId: binding.threadId,
+        maxTokens: CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS,
+        sessionKey: sessionRecord?.sessionKey,
+        sessionTokens,
+        nativeTokens: undefined,
+      },
+    );
+    await clearCodexAppServerBinding(params.sessionFile);
+    return undefined;
+  }
   const maxBytes = parseCodexAppServerByteLimit(
     params.config?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
   );
@@ -881,12 +901,6 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
       rolloutFiles.map(async (file) => readCodexAppServerRolloutTokenUsage(file.path)),
     ),
   );
-  const sessionTokens =
-    sessionRecord?.totalTokensFresh !== false &&
-    typeof sessionRecord?.totalTokens === "number" &&
-    Number.isFinite(sessionRecord.totalTokens)
-      ? sessionRecord.totalTokens
-      : undefined;
   const tokenCount = maxFiniteNumber([sessionTokens, nativeTokens]);
   if (tokenCount !== undefined && tokenCount >= CODEX_APP_SERVER_NATIVE_THREAD_MAX_TOKENS) {
     embeddedAgentLog.warn(
