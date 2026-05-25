@@ -58,6 +58,7 @@ const mockState = vi.hoisted(() => ({
   dispatchErrorAfterDelivery: null as Error | null,
   triggerAgentRunStart: false,
   triggerUserMessagePersisted: false,
+  runtimeUserMessagePersistencePending: null as Promise<void> | null,
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -223,6 +224,11 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           role: "user",
           content: "persisted by runtime",
         });
+      }
+      if (mockState.runtimeUserMessagePersistencePending) {
+        params.replyOptions?.onUserMessagePersistencePending?.(
+          mockState.runtimeUserMessagePersistencePending,
+        );
       }
       if (mockState.dispatchErrorAfterAgentRunStart) {
         throw mockState.dispatchErrorAfterAgentRunStart;
@@ -739,6 +745,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.triggerUserMessagePersisted = false;
+    mockState.runtimeUserMessagePersistencePending = null;
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
@@ -4762,6 +4769,38 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(userUpdate?.sessionKey).toBe("main");
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello before agent error payload");
+    });
+  });
+
+  it("falls back to gateway user persistence when successful runtime persistence fails", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-success-runtime-persist-failed-");
+    mockState.triggerAgentRunStart = true;
+    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0),
+    );
+    mockState.finalPayload = { text: "agent still answered" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-success-runtime-persist-failed",
+      message: "hello before successful fallback",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        context.dedupe.get("chat:idem-user-transcript-success-runtime-persist-failed")?.ok,
+      ).toBe(true);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("hello before successful fallback");
+      expect(message?.idempotencyKey).toBe(
+        "idem-user-transcript-success-runtime-persist-failed:user",
+      );
     });
   });
 
