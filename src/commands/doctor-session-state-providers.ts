@@ -17,6 +17,7 @@ import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contr
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
+import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
@@ -37,7 +38,7 @@ function normalizeIdSet(values: readonly string[] | undefined): Set<string> {
 }
 
 function normalizePrefixList(values: readonly string[] | undefined): string[] {
-  return (values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return normalizeStringEntriesLower(values);
 }
 
 function ownsPrefixedValue(prefixes: readonly string[], value: unknown): boolean {

@@ -10,6 +10,7 @@ export {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
+  normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";

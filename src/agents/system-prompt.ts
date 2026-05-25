@@ -16,6 +16,7 @@ import {
 } from "../shared/string-coerce.js";
 import {
   normalizeStringEntries,
+  normalizeStringEntriesLower,
   normalizeUniqueStringEntries,
 } from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -898,9 +899,7 @@ export function buildAgentSystemPrompt(params: {
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
-  const runtimeCapabilitiesLower = new Set(
-    runtimeCapabilities.map((cap) => normalizeLowercaseStringOrEmpty(cap)).filter(Boolean),
-  );
+  const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const promptMode = params.promptMode ?? "full";
