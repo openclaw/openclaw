@@ -351,6 +351,72 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
   });
 
+  it("backs up and clears transient run/model fields from normal channel sessions when approved", async () => {
+    const cfg: OpenClawConfig = {};
+    const topicKey = "agent:main:telegram:group:-1001:thread:2";
+    const subagentKey = "agent:main:subagent:child";
+    writeSessionStore(cfg, {
+      [topicKey]: {
+        sessionId: "topic-session",
+        updatedAt: 0,
+        status: "running",
+        abortedLastRun: true,
+        replyTurnState: "running",
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+        fallbackNoticeActiveModel: "openai-codex/gpt-5.4",
+        fallbackNoticeReason: "auth",
+      },
+      "agent:main:telegram:group:-1001:thread:3": {
+        sessionId: "explicit-session",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        modelOverrideSource: "user",
+      },
+      [subagentKey]: {
+        sessionId: "subagent-session",
+        updatedAt: 0,
+        status: "running",
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+      },
+    });
+
+    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+      params.message.includes("clear transient run/model state"),
+    );
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const backupFiles = fs
+      .readdirSync(path.dirname(storePath))
+      .filter((name) => name.includes("pre-doctor-session-wedge-repair"));
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+
+    expect(backupFiles).toHaveLength(1);
+    expect(persisted[topicKey]?.status).toBeUndefined();
+    expect(persisted[topicKey]?.abortedLastRun).toBeUndefined();
+    expect(persisted[topicKey]?.replyTurnState).toBeUndefined();
+    expect(persisted[topicKey]?.providerOverride).toBeUndefined();
+    expect(persisted[topicKey]?.modelOverride).toBeUndefined();
+    expect(persisted[topicKey]?.modelProvider).toBeUndefined();
+    expect(persisted[topicKey]?.model).toBeUndefined();
+    expect(persisted["agent:main:telegram:group:-1001:thread:3"]?.modelOverrideSource).toBe("user");
+    expect(persisted[subagentKey]?.status).toBe("running");
+    expect(persisted[subagentKey]?.modelOverrideSource).toBe("auto");
+    expect(doctorChangesText()).toContain(
+      "Cleared transient run/model state from 1 channel session",
+    );
+  });
+
   it("warns when a case-mismatched agent dir does not resolve to the configured agent path", async () => {
     createAgentDir("Research");
 

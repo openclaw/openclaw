@@ -13,6 +13,7 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
 } from "../config/sessions/artifacts.js";
+import { scanNormalChannelSessionExecutionState } from "../config/sessions/execution-state-scope.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
@@ -21,6 +22,7 @@ import {
   resolveStorePath,
 } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
+import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -124,6 +126,12 @@ function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): stri
     return `${labels.join(", ")}, and ${remaining} more`;
   }
   return labels.join(", ");
+}
+
+function backupSessionStoreForDoctorRepair(storePath: string, now: () => number): string {
+  const backupPath = `${storePath}.pre-doctor-session-wedge-repair.${now()}.bak`;
+  fs.copyFileSync(storePath, backupPath);
+  return backupPath;
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
@@ -853,6 +861,43 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
+  const normalChannelSessionIssues = scanNormalChannelSessionExecutionState(
+    readSessionStoreReadOnly(absoluteStorePath),
+  );
+  if (normalChannelSessionIssues.length > 0) {
+    const issueCount = countLabel(normalChannelSessionIssues.length, "channel session");
+    warnings.push(
+      [
+        `- Found transient run/model state persisted on ${issueCount}.`,
+        "  This can make normal Telegram/forum topics look busy or keep them pinned to a fallback model after the primary route recovers.",
+        `  Examples: ${normalChannelSessionIssues
+          .slice(0, 3)
+          .map((issue) => `${issue.key} (${issue.reasons.join(", ")})`)
+          .join(", ")}`,
+      ].join("\n"),
+    );
+    const repairNormalChannelState = await prompter.confirmRuntimeRepair({
+      message: `Back up the session store and clear transient run/model state from ${issueCount}?`,
+      initialValue: true,
+    });
+    if (repairNormalChannelState) {
+      try {
+        const backupPath = backupSessionStoreForDoctorRepair(absoluteStorePath, Date.now);
+        await updateSessionStore(absoluteStorePath, () => undefined, { skipMaintenance: true });
+        changes.push(
+          `- Cleared transient run/model state from ${issueCount} (backup: ${shortenHomePath(
+            backupPath,
+          )}).`,
+        );
+      } catch (err) {
+        warnings.push(
+          `- Failed to repair transient channel session state; left the store unchanged: ${String(
+            err,
+          )}`,
+        );
+      }
+    }
+  }
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {

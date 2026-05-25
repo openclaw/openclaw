@@ -9,6 +9,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { stripNormalChannelExecutionState } from "./execution-state-scope.js";
 import {
   cloneSessionStoreRecord,
   cloneSessionStoreSnapshot,
@@ -335,10 +336,13 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizePluginExtensionSlotKeys(
-        normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(
-            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+      stripNormalChannelExecutionState(
+        key,
+        normalizePluginExtensionSlotKeys(
+          normalizePluginExtensions(
+            normalizePendingFinalDeliveryFields(
+              normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+            ),
           ),
         ),
       ),
