@@ -552,7 +552,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
   });
 
-  it("skips restart prompt when gateway is healthy after recent restart handoff", async () => {
+  it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
     setPlatform("linux");
@@ -574,7 +574,7 @@ describe("maybeRepairGatewayDaemon", () => {
       cfg: { gateway: {} },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       prompter: createPrompter(() => true),
-      options: { deep: true },
+      options: { deep: false },
       gatewayDetailsMessage: "details",
       healthOk: false,
     });
@@ -588,7 +588,7 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("prompts for restart when health probe fails despite recent restart handoff", async () => {
+  it("prompts for restart when health probe fails despite recent restart handoff in normal doctor flow", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(40_000);
     setPlatform("linux");
@@ -611,7 +611,7 @@ describe("maybeRepairGatewayDaemon", () => {
       cfg: { gateway: {} },
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       prompter: createPrompter(() => false),
-      options: { deep: true },
+      options: { deep: false },
       gatewayDetailsMessage: "details",
       healthOk: false,
     });
