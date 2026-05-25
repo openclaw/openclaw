@@ -760,6 +760,8 @@ function resolveContextWindowForCompactionHint(params: {
   }
   const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
   const sessionMatchesRuntimeRef = runtimeProvider === entryProvider && runtimeModel === entryModel;
+  const trustedSessionWindow =
+    !hasExplicitRuntimeRef || sessionMatchesRuntimeRef ? sessionWindow : undefined;
   if (modelWindow === undefined && sessionMatchesRuntimeRef && sessionWindow !== undefined) {
     modelWindow = sessionWindow;
   }
@@ -779,7 +781,7 @@ function resolveContextWindowForCompactionHint(params: {
       modelWindow = resolved;
     }
   }
-  const contextWindow = modelWindow ?? sessionWindow;
+  const contextWindow = modelWindow ?? trustedSessionWindow;
   const agentCap = resolveAgentContextTokensForHint({
     cfg: params.cfg,
     agentId: params.agentId,

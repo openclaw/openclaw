@@ -710,6 +710,28 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
+  it("does not use stale session contextTokens for explicit uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "qwen3.6-plus",
+        contextTokens: 1_000_000,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
