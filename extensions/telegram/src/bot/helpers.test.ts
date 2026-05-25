@@ -11,6 +11,7 @@ import {
   normalizeForwardedContext,
   renderTelegramTextEntities,
   resolveTelegramDirectPeerId,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resetTelegramForumFlagCacheForTest,
@@ -158,29 +159,40 @@ describe("buildTelegramThreadParams", () => {
 });
 
 describe("shouldUseTelegramDmThreadSession", () => {
-  it("keeps incidental DM thread ids flat by default", () => {
-    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
+  it("requires a DM thread id", () => {
+    expect(
+      shouldUseTelegramDmThreadSession({
+        botHasTopicsEnabled: true,
+      }),
+    ).toBe(false);
   });
 
-  it("uses DM thread sessions for explicit or topic-required configs", () => {
+  it("keeps DM thread ids flat when bot topics are not enabled", () => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
     expect(
       shouldUseTelegramDmThreadSession({
         dmThreadId: 42,
-        directConfig: { threadReplies: "inbound" },
+        botHasTopicsEnabled: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("uses DM thread sessions when Telegram reports bot topics enabled", () => {
     expect(
       shouldUseTelegramDmThreadSession({
         dmThreadId: 42,
-        directConfig: { requireTopic: true },
+        botHasTopicsEnabled: true,
       }),
     ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        topicConfig: { agentId: "support" },
-      }),
-    ).toBe(true);
+  });
+});
+
+describe("resolveTelegramBotHasTopicsEnabled", () => {
+  it("trusts only Telegram getMe has_topics_enabled=true", () => {
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: true })).toBe(true);
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: false })).toBe(false);
+    expect(resolveTelegramBotHasTopicsEnabled({ has_topics_enabled: "true" })).toBe(false);
+    expect(resolveTelegramBotHasTopicsEnabled(null)).toBe(false);
   });
 });
 

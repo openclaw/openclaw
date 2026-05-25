@@ -292,7 +292,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for Telegram replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
-- DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
+- DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Multi-account startup bounds concurrent Telegram `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Long polling is guarded inside each gateway process so only one active poller can use a bot token at a time. If you still see `getUpdates` 409 conflicts, another OpenClaw gateway, script, or external poller is likely using the same token.
@@ -663,7 +663,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly. OpenClaw pins the spawn confirmation in-topic. Requires `channels.telegram.threadBindings.spawnSessions` to remain enabled (default: `true`).
 
-    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep DM routing and reply metadata on flat sessions by default; they only use thread-aware session keys when configured with `threadReplies: "inbound"`, `threadReplies: "always"`, `requireTopic: true`, or a matching topic config. Use top-level `channels.telegram.dm.threadReplies` for the account default, or `direct.<chatId>.threadReplies` for one DM.
+    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata; they use thread-aware session keys only when Telegram `getMe` reports `has_topics_enabled: true` for the bot.
 
   </Accordion>
 
@@ -1078,7 +1078,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - topic defaults: `groups.<chatId>.topics."*"` applies to unmatched forum topics; exact topic IDs override it
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
-- threading/replies: `replyToMode`, `dm.threadReplies`, `direct.*.threadReplies`
+- threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`

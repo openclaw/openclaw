@@ -40,11 +40,7 @@ import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
-import {
-  deleteCachedTelegramBotInfo,
-  readCachedTelegramBotInfo,
-  writeCachedTelegramBotInfo,
-} from "./bot-info-cache.js";
+import { deleteCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -115,25 +111,6 @@ function resolveTelegramProbe() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
-}
-
-async function readStartupBotInfoCache(params: {
-  accountId: string;
-  token: string;
-  log?: { debug?: (message: string) => void };
-}): Promise<TelegramBotInfo | undefined> {
-  try {
-    const cached = await readCachedTelegramBotInfo({
-      accountId: params.accountId,
-      botToken: params.token,
-    });
-    return cached?.botInfo;
-  } catch (err) {
-    if (getTelegramRuntime().logging.shouldLogVerbose()) {
-      params.log?.debug?.(`[${params.accountId}] bot info cache read failed: ${String(err)}`);
-    }
-    return undefined;
-  }
 }
 
 async function writeStartupBotInfoCache(params: {
@@ -952,53 +929,43 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         let botInfo: TelegramBotInfo | undefined;
-        const cachedBotInfo = await readStartupBotInfoCache({
-          accountId: account.accountId,
-          token,
-          log: ctx.log,
-        });
-        if (cachedBotInfo) {
-          botInfo = cachedBotInfo;
-          telegramBotLabel = ` (@${cachedBotInfo.username})`;
-        } else {
-          try {
-            const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
-              resolveTelegramProbe()(
-                token,
-                resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
-                {
-                  accountId: account.accountId,
-                  proxyUrl: account.config.proxy,
-                  network: account.config.network,
-                  apiRoot: account.config.apiRoot,
-                  includeWebhookInfo: false,
-                },
-              ),
-            );
-            const username = probe.ok ? probe.bot?.username?.trim() : null;
-            if (username) {
-              telegramBotLabel = ` (@${username})`;
-            }
-            botInfo = probe.ok ? probe.botInfo : undefined;
-            if (probe.ok && probe.botInfo) {
-              await writeStartupBotInfoCache({
+        try {
+          const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
+            resolveTelegramProbe()(
+              token,
+              resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
+              {
                 accountId: account.accountId,
-                token,
-                botInfo: probe.botInfo,
-                log: ctx.log,
-              });
-            }
-            if (!probe.ok && probe.status === 401) {
-              await deleteStartupBotInfoCache(account.accountId);
-              unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
-            }
-          } catch (err) {
-            if (ctx.abortSignal.aborted) {
-              return;
-            }
-            if (getTelegramRuntime().logging.shouldLogVerbose()) {
-              ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
-            }
+                proxyUrl: account.config.proxy,
+                network: account.config.network,
+                apiRoot: account.config.apiRoot,
+                includeWebhookInfo: false,
+              },
+            ),
+          );
+          const username = probe.ok ? probe.bot?.username?.trim() : null;
+          if (username) {
+            telegramBotLabel = ` (@${username})`;
+          }
+          botInfo = probe.ok ? probe.botInfo : undefined;
+          if (probe.ok && probe.botInfo) {
+            await writeStartupBotInfoCache({
+              accountId: account.accountId,
+              token,
+              botInfo: probe.botInfo,
+              log: ctx.log,
+            });
+          }
+          if (!probe.ok && probe.status === 401) {
+            await deleteStartupBotInfoCache(account.accountId);
+            unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
+          }
+        } catch (err) {
+          if (ctx.abortSignal.aborted) {
+            return;
+          }
+          if (getTelegramRuntime().logging.shouldLogVerbose()) {
+            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
           }
         }
         if (unauthorizedTokenReason) {
