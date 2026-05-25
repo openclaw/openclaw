@@ -685,17 +685,18 @@ describe("handleMessageEnd", () => {
     const unroutedEnvelope = createMessageToolEnvelope(visibleReply);
     const routedEnvelope = createMessageToolEnvelope(visibleReply, { target: "user:redacted" });
 
-    for (const [text, sourceReplyDeliveryMode, expected] of [
-      [unroutedEnvelope, "message_tool_only", visibleReply],
-      [routedEnvelope, undefined, visibleReply],
-      [unroutedEnvelope, undefined, unroutedEnvelope],
+    for (const [text, api, builtinToolNames, sourceReplyDeliveryMode, expected] of [
+      [unroutedEnvelope, undefined, new Set(["message"]), "message_tool_only", visibleReply],
+      [routedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
+      [routedEnvelope, undefined, new Set<string>(), undefined, routedEnvelope],
+      [unroutedEnvelope, undefined, new Set(["message"]), undefined, unroutedEnvelope],
     ] as const) {
       const emitBlockReply = vi.fn();
       const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
       const ctx = createMessageEndContext({
         emitBlockReply,
         consumeReplyDirectives,
-        builtinToolNames: new Set(["message"]),
+        builtinToolNames,
         sourceReplyDeliveryMode,
       });
 
@@ -703,6 +704,7 @@ describe("handleMessageEnd", () => {
         type: "message_end",
         message: {
           role: "assistant",
+          ...(api ? { api } : {}),
           content: [{ type: "text", text }],
         },
       } as never);

@@ -59,6 +59,14 @@ function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): b
   return api === "openai-responses" || api === "azure-openai-responses";
 }
 
+function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -67,20 +75,21 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function extractStandaloneMessageToolText(
   text: string,
-  params: { allowCurrentSourceReply?: boolean } = {},
+  params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
 ): string | undefined {
   try {
     const record = asRecord(JSON.parse(text.trim()) as unknown);
     const args = asRecord(record?.arguments);
-    const hasRoute =
+    const hasRoute = Boolean(
       normalizeOptionalString(args?.target) ||
       normalizeOptionalString(args?.channel) ||
       normalizeOptionalString(args?.accountId) ||
-      Array.isArray(args?.targets);
+      Array.isArray(args?.targets),
+    );
     if (
       normalizeOptionalString(record?.name) !== "message" ||
       normalizeOptionalString(args?.action) !== "send" ||
-      (!hasRoute && !params.allowCurrentSourceReply)
+      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
     ) {
       return undefined;
     }
@@ -715,11 +724,12 @@ export function handleMessageEnd(
   });
   warnIfAssistantEmittedToolText(ctx, assistantMessage);
   const visibleText =
-    ctx.builtinToolNames?.has("message") === true
-      ? (extractStandaloneMessageToolText(rawVisibleText, {
-          allowCurrentSourceReply: ctx.params.sourceReplyDeliveryMode === "message_tool_only",
-        }) ?? rawVisibleText)
-      : rawVisibleText;
+    extractStandaloneMessageToolText(rawVisibleText, {
+      allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
+      allowCurrentSourceReply:
+        ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+        ctx.builtinToolNames?.has("message") === true,
+    }) ?? rawVisibleText;
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true }),
