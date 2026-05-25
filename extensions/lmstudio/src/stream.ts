@@ -2,7 +2,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPlainTextToolCallPromotionWrapper } from "openclaw/plugin-sdk/provider-stream-runtime-internal";
+import { createPlainTextToolCallPromotionWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
