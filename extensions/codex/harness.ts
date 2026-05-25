@@ -38,7 +38,8 @@ export function createCodexAppServerAgentHarness(options?: {
     label: options?.label ?? "Codex agent harness",
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
-      sourceVisibleReplies: "message_tool",
+      // Default to automatic delivery so direct chats behave as expected unless overridden by config.
+      sourceVisibleReplies: "automatic",
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
