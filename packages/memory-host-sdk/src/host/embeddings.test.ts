@@ -378,7 +378,7 @@ process.on("message", (message) => {
     await expect(provider.close?.()).resolves.toBeUndefined();
   });
 
-  it("does not pass inline-source exec args to the file-backed worker", async () => {
+  it("does not pass inline-source or inspector exec args to the file-backed worker", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
     const workerScript = path.join(tempDir, "worker.cjs");
     await fs.writeFile(
@@ -389,7 +389,7 @@ process.on("message", (message) => {
     process.send({ id: message.id, ok: true });
     return;
   }
-  process.send({ id: message.id, ok: true, value: [1, 0] });
+  process.send({ id: message.id, ok: true, value: [process.execArgv.length] });
 });
 `,
       "utf8",
@@ -405,6 +405,9 @@ process.on("message", (message) => {
         "--print",
         "1 + 1",
         "--input-type=module",
+        "--inspect-brk=127.0.0.1:0",
+        "--inspect-port",
+        "0",
       );
       provider = await createLocalEmbeddingWorkerProvider(
         {
@@ -415,7 +418,7 @@ process.on("message", (message) => {
         },
         { workerScriptPath: workerScript },
       );
-      await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+      await expect(provider.embedQuery("hello")).resolves.toEqual([0]);
     } finally {
       process.execArgv.splice(0, process.execArgv.length, ...originalExecArgv);
       await provider?.close?.();

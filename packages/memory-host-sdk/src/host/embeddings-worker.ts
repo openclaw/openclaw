@@ -106,15 +106,25 @@ function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: f
   return new Error(error.error || "Local embedding worker failed");
 }
 
+const WORKER_UNSAFE_EXEC_ARGV_FLAGS = new Set(["--inspect", "--inspect-brk"]);
+
 const WORKER_UNSAFE_EXEC_ARGV_FLAGS_WITH_VALUE = new Set([
   "--eval",
   "-e",
   "--print",
   "-p",
   "--input-type",
+  "--inspect-port",
 ]);
 
-const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = ["--eval=", "--print=", "--input-type="];
+const WORKER_UNSAFE_EXEC_ARGV_OPTION_PREFIXES = [
+  "--eval=",
+  "--print=",
+  "--input-type=",
+  "--inspect=",
+  "--inspect-brk=",
+  "--inspect-port=",
+];
 
 function resolveWorkerExecArgv(): string[] {
   const args: string[] = [];
@@ -122,6 +132,9 @@ function resolveWorkerExecArgv(): string[] {
   for (const arg of process.execArgv) {
     if (skipNext) {
       skipNext = false;
+      continue;
+    }
+    if (WORKER_UNSAFE_EXEC_ARGV_FLAGS.has(arg)) {
       continue;
     }
     if (WORKER_UNSAFE_EXEC_ARGV_FLAGS_WITH_VALUE.has(arg)) {
