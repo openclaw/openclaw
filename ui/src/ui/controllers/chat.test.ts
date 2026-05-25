@@ -1470,6 +1470,131 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("deduplicates final payload when same assistant message is already chat tail", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+      __openclaw: { seq: 1 },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existing],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+        timestamp: 200,
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toBe(existing);
+  });
+
+  it("deduplicates other-run final when same message is already chat tail", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Sub-agent result" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+      chatMessages: [existing],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Sub-agent result" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toBe(existing);
+    expect(state.chatStream).toBe("Working...");
+  });
+
+  it("deduplicates stream-fallback final when same text is already chat tail", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Streamed reply" }],
+      __openclaw: { seq: 5 },
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Streamed reply",
+      chatStreamStartedAt: 100,
+      chatMessages: [existing],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toBe(existing);
+  });
+
+  it("deduplicates aborted payload when same message is already chat tail", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Partial response" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial response",
+      chatStreamStartedAt: 100,
+      chatMessages: [existing],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Partial response" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toBe(existing);
+  });
+
+  it("allows final append when tail message has different text", () => {
+    const existing = {
+      role: "assistant",
+      content: [{ type: "text", text: "Previous reply" }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existing],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "New reply" }],
+      },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+  });
 });
 
 describe("loadChatHistory filtering", () => {
