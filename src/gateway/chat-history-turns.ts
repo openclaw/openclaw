@@ -411,7 +411,12 @@ function flattenTurnItemToMessages(item: ChatHistoryTurnItem): ChatHistoryRecord
 
 export function projectChatHistoryTurns(
   messages: unknown[],
-  options?: { dropLeadingPartialTurn?: boolean; maxTurns?: number; maxPreviewChars?: number },
+  options?: {
+    dropLeadingPartialTurn?: boolean;
+    maxTurns?: number;
+    maxPreviewChars?: number;
+    hasMoreBefore?: boolean;
+  },
 ): ChatHistoryTurnsResult {
   const maxTurns =
     typeof options?.maxTurns === "number" && Number.isFinite(options.maxTurns)
@@ -470,7 +475,7 @@ export function projectChatHistoryTurns(
       rawMessagesMatched: messages.filter((message) => Boolean(asRecord(message))).length,
       displayItemsReturned: turnItems.length,
       toolRecordsCollapsed,
-      hasMoreBefore: allItems.length > items.length,
+      hasMoreBefore: options?.hasMoreBefore === true || allItems.length > items.length,
     },
   };
 }

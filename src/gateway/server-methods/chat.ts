@@ -2236,6 +2236,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       historyMode === "turns"
         ? projectChatHistoryTurns(canvasAugmentedMessages, {
             dropLeadingPartialTurn: localMessages.length >= scanMax,
+            hasMoreBefore: localMessages.length >= scanMax,
             maxTurns: max,
             maxPreviewChars: effectiveMaxChars,
           })
