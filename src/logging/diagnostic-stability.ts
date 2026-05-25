@@ -440,6 +440,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.outcome = event.outcome;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "harness.selection":
+      record.source = event.selectedHarnessId;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.channel = event.channel;
+      record.mode = event.runtime;
+      record.outcome = event.selectedReason;
+      record.target = event.agentId;
+      assignReasonCode(record, event.runtimeReason ?? event.warning ?? event.selectedReason);
+      if (event.warning) {
+        record.level = "warning";
+      }
+      break;
     case "harness.run.started":
       record.source = event.harnessId;
       record.pluginId = event.pluginId;
