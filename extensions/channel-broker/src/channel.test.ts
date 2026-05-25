@@ -332,6 +332,28 @@ describe("channel-broker plugin", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it("preserves broker platform ids in session conversation targets", () => {
+    const messaging = channelBrokerPlugin.messaging;
+    const conversation = messaging?.resolveSessionConversation?.({
+      kind: "channel",
+      rawId: "telegram:-100123:thread:77",
+    });
+
+    expect(conversation).toEqual({
+      id: "telegram:-100123",
+      threadId: "77",
+      baseConversationId: "telegram:-100123",
+      parentConversationCandidates: ["telegram:-100123"],
+    });
+    expect(
+      messaging?.resolveSessionTarget?.({
+        kind: "channel",
+        id: conversation?.id ?? "",
+        threadId: conversation?.threadId,
+      }),
+    ).toBe("telegram:-100123?conversationType=thread&threadId=77");
+  });
+
   it("delivers text through the configured provider and maps the provider receipt", async () => {
     const controller = new AbortController();
     const sendOutboundRequest = vi.fn(async () =>

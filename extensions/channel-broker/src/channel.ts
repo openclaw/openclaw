@@ -1,4 +1,7 @@
-import { parseBrokerConversationTarget } from "openclaw/plugin-sdk/channel-broker";
+import {
+  buildBrokerConversationTarget,
+  parseBrokerConversationTarget,
+} from "openclaw/plugin-sdk/channel-broker";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -52,6 +55,25 @@ function resolveBrokerSessionConversation(rawId: string) {
     };
   } catch {
     return null;
+  }
+}
+
+function resolveBrokerSessionTarget(params: {
+  kind: "group" | "channel";
+  id: string;
+  threadId?: string | null;
+}): string | undefined {
+  try {
+    const parsed = parseBrokerConversationTarget(normalizeBrokerTarget(params.id) ?? params.id);
+    return buildBrokerConversationTarget({
+      platform: parsed.platform,
+      conversationId: parsed.conversationId,
+      conversationType:
+        parsed.conversationType ?? (params.threadId ? "thread" : params.kind),
+      threadId: parsed.threadId ?? params.threadId ?? undefined,
+    });
+  } catch {
+    return normalizeBrokerTarget(params.id);
   }
 }
 
@@ -172,6 +194,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
       targetPrefixes: CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES,
       normalizeTarget: normalizeBrokerTarget,
       inferTargetChatType: ({ to }) => inferChannelBrokerTargetChatType(to),
+      resolveSessionTarget: resolveBrokerSessionTarget,
       targetResolver: {
         looksLikeId: (raw) => Boolean(normalizeBrokerTarget(raw)),
         hint: "<platform>:<conversationId>[?threadId=<threadId>]",
