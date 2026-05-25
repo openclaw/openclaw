@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Control UI: add an ephemeral Activity tab for sanitized live tool activity summaries without persisting raw telemetry. Fixes #12831. Thanks @BunsDev.
 - Build: include `ui:build` in the `full` and `ciArtifacts` profiles of `scripts/build-all.mjs` so `pnpm build` always rebuilds `dist/control-ui` after `tsdown` cleans `dist`, removing the second-command requirement and the missing-asset failure mode for source/runtime installs and CI artifact uploads. (#85206)
+- Migrate: import supported Hermes, OpenCode, and Codex auth credentials into OpenClaw auth profiles when credential migration is selected, with explicit opt-out and non-interactive controls. (#85667) Thanks @fuller-stack-dev.
 
 ### Fixes
 
