@@ -40,6 +40,15 @@
 | `claworks-personal.env.example`                       | 环境变量示例（个人部署）                         |
 | `a2a-peer-mesh.openclaw.fragment.json`                | A2A 多机器人对等网格配置                         |
 | `a2a-peer-mesh.zh.md`                                 | A2A 对等网格架构说明（中文）                     |
+| `playbooks/patrol_pending_runs_alert.yaml`            | `robot.patrol` 巡逻积压告警示例 Playbook         |
+
+---
+
+## 自主巡逻 Playbook 示例
+
+Runtime 默认每 5 分钟发布 `robot.patrol` 事件（载荷含 `pending_runs`、`playbook_count`）。
+将 `playbooks/patrol_pending_runs_alert.yaml` 复制到 Pack 的 `ontology/playbooks/` 后 reload，
+即可在运行中 Playbook 超过阈值时推送通知并写入审计日志。
 
 ---
 

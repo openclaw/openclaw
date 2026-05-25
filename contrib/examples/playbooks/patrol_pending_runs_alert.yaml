@@ -1,0 +1,40 @@
+id: patrol_pending_runs_alert
+name: 巡逻待处理 Playbook 告警
+pack: examples
+priority: 20
+description: |
+  订阅 runtime 周期性发布的 robot.patrol 事件。
+  当 pending_runs 超过阈值时，推送运营通知并写入审计日志。
+
+  安装：将此文件复制到已加载 Pack 的 ontology/playbooks/ 目录后 reload。
+  阈值可在 condition 步骤中调整（默认 > 5）。
+
+trigger:
+  kind: event
+  pattern: robot.patrol
+
+steps:
+  - id: check_pending_threshold
+    kind: condition
+    if: "{{ (event.pending_runs | default(0) | int) > 5 }}"
+    then:
+      - id: alert_ops
+        kind: notification
+        message: |
+          ⚠️ Playbook 积压告警
+          机器人：{{ event.robot_id | default('unknown') }}
+          运行中：{{ event.pending_runs }} 个
+          已注册 Playbook：{{ event.playbook_count | default('?') }} 个
+          时间：{{ event.ts | default('now') }}
+
+      - id: audit_patrol_alert
+        kind: action
+        actionApiName: observe.audit_log
+        params:
+          event_type: robot.patrol.pending_runs_high
+          target: "{{ event.robot_id | default('runtime') }}"
+          detail:
+            pending_runs: "{{ event.pending_runs }}"
+            playbook_count: "{{ event.playbook_count }}"
+            threshold: 5
+        on_failure: continue
