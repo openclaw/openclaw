@@ -3,7 +3,7 @@ import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
+import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
 import { isRecord } from "../../utils.js";
 import { normalizeModelCatalog } from "../normalize.js";
 import { normalizeModelCatalogProviderId } from "../refs.js";
@@ -71,7 +71,7 @@ function normalizePlugin(value: unknown): OpenClawProviderIndexPlugin | undefine
 }
 
 function normalizeCategories(value: unknown): readonly string[] {
-  return [...new Set(normalizeTrimmedStringList(value))];
+  return normalizeUniqueTrimmedStringList(value);
 }
 
 function normalizePreviewCatalog(params: {
@@ -95,11 +95,11 @@ function normalizePreviewCatalog(params: {
 function normalizeOnboardingScopes(
   value: unknown,
 ): OpenClawProviderIndexProviderAuthChoice["onboardingScopes"] | undefined {
-  const scopes = normalizeTrimmedStringList(value).filter(
+  const scopes = normalizeUniqueTrimmedStringList(value).filter(
     (scope): scope is "text-inference" | "image-generation" | "music-generation" =>
       scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
   );
-  return scopes.length > 0 ? [...new Set(scopes)] : undefined;
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function normalizeAssistantVisibility(

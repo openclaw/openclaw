@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -421,7 +422,7 @@ export function resolvePluginSetupRegistry(params?: {
 }): PluginSetupRegistry {
   const env = params?.env ?? process.env;
   const scopedPluginIds = params?.pluginIds
-    ? new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean))
+    ? new Set(normalizeUniqueStringEntries(params.pluginIds))
     : null;
   if (scopedPluginIds && scopedPluginIds.size === 0) {
     const empty = {

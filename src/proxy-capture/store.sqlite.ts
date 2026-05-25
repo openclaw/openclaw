@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { normalizeNullableString as normalizeObservedValue } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { readCaptureBlobText, writeCaptureBlob } from "./blob-store.js";
 import type {
   CaptureBlobRecord,
@@ -387,7 +388,7 @@ export class DebugProxyCaptureStore {
   }
 
   deleteSessions(sessionIds: string[]): { sessions: number; events: number; blobs: number } {
-    const uniqueSessionIds = [...new Set(sessionIds.map((id) => id.trim()).filter(Boolean))];
+    const uniqueSessionIds = normalizeUniqueStringEntries(sessionIds);
     if (uniqueSessionIds.length === 0) {
       return { sessions: 0, events: 0, blobs: 0 };
     }

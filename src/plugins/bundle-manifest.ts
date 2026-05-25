@@ -7,7 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import type { PluginManifestActivation } from "./manifest.js";
@@ -44,7 +44,7 @@ type BundleManifestFileLoadResult =
   | { ok: false; error: string; manifestPath: string };
 
 export function normalizeBundlePathList(value: unknown): string[] {
-  return Array.from(new Set(normalizeSingleOrTrimmedStringList(value)));
+  return normalizeUniqueSingleOrTrimmedStringList(value);
 }
 
 export function mergeBundlePathLists(...groups: string[][]): string[] {

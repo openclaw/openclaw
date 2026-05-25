@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -155,9 +156,7 @@ function buildTrustedSafeBinCacheKey(
   targetDirs: readonly string[],
 ): string {
   const dirsKey = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
-  const binsKey = Array.from(new Set(safeBins.map((entry) => entry.trim()).filter(Boolean)))
-    .toSorted()
-    .join("\u0001");
+  const binsKey = normalizeSortedUniqueStringEntries(safeBins).join("\u0001");
   const targetDirsKey = targetDirs.join("\u0001");
   return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
 }

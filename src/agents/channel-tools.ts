@@ -16,6 +16,7 @@ import type {
 } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 type ChannelAgentToolMeta = {
   channelId: string;
@@ -154,7 +155,7 @@ export function resolveChannelPromptCapabilities(params: {
 }
 
 function normalizePromptCapabilities(capabilities?: readonly string[] | null): string[] {
-  return (capabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  return normalizeStringEntries(capabilities ?? []);
 }
 
 export function resolveChannelReactionGuidance(params: {

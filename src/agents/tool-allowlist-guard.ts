@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
@@ -10,7 +11,7 @@ export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
   return sources.flatMap((source) => {
-    const entries = (source.allow ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const entries = normalizeStringEntries(source.allow);
     if (entries.length === 0) {
       return [];
     }

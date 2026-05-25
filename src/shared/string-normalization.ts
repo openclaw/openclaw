@@ -8,12 +8,20 @@ export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
   return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
 }
 
+export function uniqueStrings(values: Iterable<string>): string[] {
+  return [...new Set(values)];
+}
+
 export function sortUniqueStrings(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return uniqueStrings(values).toSorted((left, right) => left.localeCompare(right));
+}
+
+export function normalizeUniqueStringEntries(values?: Iterable<unknown>): string[] {
+  return uniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
 }
 
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
-  return sortUniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
+  return sortUniqueStrings(normalizeUniqueStringEntries(values));
 }
 
 export function normalizeTrimmedStringList(value: unknown): string[] {
@@ -24,6 +32,10 @@ export function normalizeTrimmedStringList(value: unknown): string[] {
     const normalized = normalizeOptionalString(entry);
     return normalized ? [normalized] : [];
   });
+}
+
+export function normalizeUniqueTrimmedStringList(value: unknown): string[] {
+  return uniqueStrings(normalizeTrimmedStringList(value));
 }
 
 export function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
@@ -44,6 +56,10 @@ export function normalizeSingleOrTrimmedStringList(value: unknown): string[] {
   }
   const normalized = normalizeOptionalString(value);
   return normalized ? [normalized] : [];
+}
+
+export function normalizeUniqueSingleOrTrimmedStringList(value: unknown): string[] {
+  return uniqueStrings(normalizeSingleOrTrimmedStringList(value));
 }
 
 export function normalizeCsvOrLooseStringList(value: unknown): string[] {

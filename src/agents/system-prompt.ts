@@ -14,6 +14,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
@@ -384,7 +388,7 @@ function buildOwnerIdentityLine(
   ownerDisplay: OwnerIdDisplay,
   ownerDisplaySecret?: string,
 ) {
-  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(ownerNumbers);
   if (normalized.length === 0) {
     return undefined;
   }
@@ -822,8 +826,8 @@ export function buildAgentSystemPrompt(params: {
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
-  const nativeCommandGuidanceLines = Array.from(
-    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
+  const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
+    params.nativeCommandGuidanceLines,
   );
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
@@ -955,7 +959,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {

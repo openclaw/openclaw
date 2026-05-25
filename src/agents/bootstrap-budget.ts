@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -345,7 +346,7 @@ export function appendBootstrapPromptWarning(
     preserveExactPrompt?: string;
   },
 ): string {
-  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
+  const normalizedLines = normalizeStringEntries(warningLines);
   if (normalizedLines.length === 0) {
     return prompt;
   }
