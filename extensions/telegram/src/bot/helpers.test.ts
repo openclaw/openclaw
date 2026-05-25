@@ -158,7 +158,7 @@ describe("buildTelegramThreadParams", () => {
 });
 
 describe("shouldUseTelegramDmThreadSession", () => {
-  it.each([
+  const cases = [
     { name: "keeps omitted auto flat without bot capability", params: {}, expected: false },
     {
       name: "uses bot topic capability for auto",
@@ -227,7 +227,13 @@ describe("shouldUseTelegramDmThreadSession", () => {
       params: { topicConfig: { agentId: "support" } },
       expected: true,
     },
-  ])("$name", ({ params, expected }) => {
+  ] satisfies Array<{
+    name: string;
+    params: Parameters<typeof shouldUseTelegramDmThreadSession>[0];
+    expected: boolean;
+  }>;
+
+  it.each(cases)("$name", ({ params, expected }) => {
     expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42, ...params })).toBe(expected);
   });
 });

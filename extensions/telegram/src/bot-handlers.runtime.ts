@@ -89,6 +89,7 @@ import {
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
   loadTelegramPairingStoreIfNeeded,
+  resolveTelegramBotHasTopicsEnabled,
   TelegramPairingStoreReadError,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
@@ -2424,7 +2425,7 @@ export const registerTelegramHandlers = ({
             isForum,
             messageThreadId,
             resolvedThreadId,
-            botHasTopicsEnabled: ctx.me?.has_topics_enabled === true,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
             senderId,
           });
           modelData = await telegramDeps.buildModelsProviderData(runtimeCfg, sessionState.agentId);
@@ -2871,7 +2872,7 @@ export const registerTelegramHandlers = ({
           isForum: event.isForum,
           messageThreadId: event.messageThreadId,
           resolvedThreadId,
-          botHasTopicsEnabled: event.ctx.me?.has_topics_enabled === true,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
           senderId: event.senderId,
           runtimeCfg: cfg,
         }).sessionEntry?.sessionStartedAt,

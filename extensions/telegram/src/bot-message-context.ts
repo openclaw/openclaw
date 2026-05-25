@@ -33,6 +33,7 @@ import {
   buildTypingThreadParams,
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -406,7 +407,7 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
-    botHasTopicsEnabled: primaryCtx.me?.has_topics_enabled === true,
+    botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(primaryCtx.me),
     allowAutoThreadSession: route.matchedBy === "default",
     accountConfig: telegramCfg,
     directConfig,

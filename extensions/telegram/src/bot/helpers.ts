@@ -118,9 +118,18 @@ export function shouldUseTelegramDmThreadSession(params: {
     return false;
   }
   if (threadReplies === "auto") {
-    return params.botHasTopicsEnabled === true && params.allowAutoThreadSession !== false;
+    return Boolean(params.botHasTopicsEnabled) && params.allowAutoThreadSession !== false;
   }
   return true;
+}
+
+export function resolveTelegramBotHasTopicsEnabled(me: unknown): boolean {
+  return (
+    me !== null &&
+    typeof me === "object" &&
+    "has_topics_enabled" in me &&
+    me.has_topics_enabled === true
+  );
 }
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {

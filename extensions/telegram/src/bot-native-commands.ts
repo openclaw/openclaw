@@ -76,6 +76,7 @@ import {
   resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -1097,7 +1098,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             groupConfig,
             topicConfig,
-            botHasTopicsEnabled: ctx.me?.has_topics_enabled === true,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
             resolveThreadSessionKeys: (await resolveNativeCommandRuntime())
               .resolveThreadSessionKeys,
           });
@@ -1406,7 +1407,7 @@ export const registerTelegramNativeCommands = ({
           threadSpec,
           groupConfig,
           topicConfig,
-          botHasTopicsEnabled: ctx.me?.has_topics_enabled === true,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
           resolveThreadSessionKeys: nativeCommandRuntime.resolveThreadSessionKeys,
         });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
