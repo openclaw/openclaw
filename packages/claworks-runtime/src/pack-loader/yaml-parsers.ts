@@ -226,6 +226,7 @@ function parseStep(raw: Record<string, unknown>, index: number): PlaybookStep {
       kind: "condition",
       id,
       if: String(raw.if ?? "true"),
+      // oxlint-disable-next-line unicorn/no-thenable -- Playbook condition branch field name, not a Promise.
       then: thenRaw.map((s, i) => parseStep(s as Record<string, unknown>, i)),
       else: elseRaw.map((s, i) => parseStep(s as Record<string, unknown>, i + 100)),
     };

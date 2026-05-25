@@ -65,4 +65,33 @@ describe("product-surface", () => {
       "https://docs.claworks.ai/showcase",
     );
   });
+
+  it("rewrites dev profile help copy", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyProductSurfaceCopy(
+        "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
+        env,
+      ),
+    ).toContain("~/.claworks-dev");
+    expect(
+      applyProductSurfaceCopy(
+        "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+        env,
+      ),
+    ).toContain("~/.claworks-<name>");
+  });
+
+  it("rewrites config-cli dry-run and schema help copy", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyProductSurfaceCopy(
+        "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
+        env,
+      ),
+    ).toContain("claworks.json");
+    expect(applyProductSurfaceCopy("Print the JSON schema for openclaw.json", env)).toContain(
+      "claworks.json",
+    );
+  });
 });

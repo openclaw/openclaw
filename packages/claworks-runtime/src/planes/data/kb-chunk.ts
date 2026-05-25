@@ -38,7 +38,7 @@ export function inferKbLayer(params: {
 
 export function inferDocType(source?: string, text?: string): string | undefined {
   const hay = `${source ?? ""}\n${text ?? ""}`.toLowerCase();
-  if (/\.pdf$/.test(source ?? "") && /gb|api|iso|sy\/t/.test(hay)) {
+  if ((source ?? "").endsWith(".pdf") && /gb|api|iso|sy\/t/.test(hay)) {
     return "standard";
   }
   if (/manual|手册|oem/.test(hay)) {

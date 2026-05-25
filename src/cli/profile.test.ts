@@ -166,6 +166,32 @@ describe("applyCliProfileEnv", () => {
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
   });
 
+  it("fills env defaults for dev profile in ClaWorks product mode", () => {
+    const env: Record<string, string | undefined> = { CLAWORKS_PRODUCT: "1" };
+    applyCliProfileEnv({
+      profile: "dev",
+      env,
+      homedir: () => "/home/peter",
+    });
+    const expectedStateDir = path.join(path.resolve("/home/peter"), ".claworks-dev");
+    expect(env.OPENCLAW_PROFILE).toBe("dev");
+    expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "claworks.json"));
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19001");
+  });
+
+  it("uses ClaWorks profile state dir for named profiles in product mode", () => {
+    const env: Record<string, string | undefined> = { CLAWORKS_PRODUCT: "1" };
+    applyCliProfileEnv({
+      profile: "work",
+      env,
+      homedir: () => "/home/peter",
+    });
+    const expectedStateDir = path.join(path.resolve("/home/peter"), ".claworks-work");
+    expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "claworks.json"));
+  });
+
   it("does not override explicit env values", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_STATE_DIR: "/custom",

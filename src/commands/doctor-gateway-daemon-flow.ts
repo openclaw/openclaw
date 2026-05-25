@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -104,29 +105,33 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 }
 
 function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): string {
-  return [
-    "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
-    ...services.map((svc) => `- ${svc.label} (${svc.detail})`),
-    "OpenClaw will not install a second user-level gateway service automatically.",
-    "Run `openclaw gateway status --deep` or `openclaw doctor --deep` to inspect duplicate services.",
-    `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
-  ].join("\n");
+  return productizeUserCopy(
+    [
+      "System-level OpenClaw gateway service detected while the user gateway service is not installed.",
+      ...services.map((svc) => `- ${svc.label} (${svc.detail})`),
+      "OpenClaw will not install a second user-level gateway service automatically.",
+      `Run \`${formatCliCommand("openclaw gateway status --deep")}\` or \`${formatCliCommand("openclaw doctor --deep")}\` to inspect duplicate services.`,
+      `Set ${SERVICE_REPAIR_POLICY_ENV}=external if a system supervisor owns the gateway lifecycle.`,
+    ].join("\n"),
+  );
 }
 
 function renderEstablishedGatewayConnections(connections: PortConnection[]): string {
-  return [
-    "Established Gateway TCP clients detected:",
-    ...connections.slice(0, 8).map((connection) => {
-      const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
-      const direction = connection.direction;
-      const command = connection.command ? ` ${connection.command}` : "";
-      const address = connection.address ? ` ${connection.address}` : "";
-      const commandLine = connection.commandLine ? ` cmd=${connection.commandLine}` : "";
-      return `- ${pid} ${direction}${command}${address}${commandLine}`;
-    }),
-    ...(connections.length > 8 ? [`- ... ${connections.length - 8} more connection(s)`] : []),
-    "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and rerun doctor.",
-  ].join("\n");
+  return productizeUserCopy(
+    [
+      "Established Gateway TCP clients detected:",
+      ...connections.slice(0, 8).map((connection) => {
+        const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+        const direction = connection.direction;
+        const command = connection.command ? ` ${connection.command}` : "";
+        const address = connection.address ? ` ${connection.address}` : "";
+        const commandLine = connection.commandLine ? ` cmd=${connection.commandLine}` : "";
+        return `- ${pid} ${direction}${command}${address}${commandLine}`;
+      }),
+      ...(connections.length > 8 ? [`- ... ${connections.length - 8} more connection(s)`] : []),
+      "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and rerun doctor.",
+    ].join("\n"),
+  );
 }
 
 async function maybeReportEstablishedGatewayClients(params: {

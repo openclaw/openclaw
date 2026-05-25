@@ -37,6 +37,7 @@ vi.mock("../../infra/git-commit.js", () => ({
 vi.mock("../cli-name.js", () => ({
   resolveCliName: () => "openclaw",
   replaceCliName: (cmd: string) => cmd,
+  resolveCliProductTitle: (cliName: string) => (cliName === "claworks" ? "ClaWorks" : "OpenClaw"),
 }));
 
 vi.mock("./command-registry.js", () => ({

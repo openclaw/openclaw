@@ -3,6 +3,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatCliCommand } from "../command-format.js";
 
 export function registerMaintenanceCommands(program: Command) {
   program
@@ -62,7 +63,7 @@ export function registerMaintenanceCommands(program: Command) {
       }
       if (hasLintOnlyDoctorOptions(opts)) {
         defaultRuntime.error(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+          `doctor lint options require --lint. Use \`${formatCliCommand("openclaw doctor --lint ...")}\`.`,
         );
         defaultRuntime.exit(2);
         return;

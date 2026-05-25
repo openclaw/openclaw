@@ -8,6 +8,7 @@ import {
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy, resolveProductStateDirHint } from "../cli/product-surface.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
@@ -643,8 +644,8 @@ export async function noteStateIntegrity(
       [
         `- State directory is under macOS cloud-synced storage (${displayStateDir}; ${cloudSyncedStateDir.storage}).`,
         "- This can cause slow I/O and sync/lock races for sessions and credentials.",
-        "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
-        `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
+        `- Prefer a local non-synced state dir (for example: ${resolveProductStateDirHint()}).`,
+        `  Set locally: OPENCLAW_STATE_DIR=${resolveProductStateDirHint()} ${formatCliCommand("openclaw doctor")}`,
       ].join("\n"),
     );
   }
@@ -1061,11 +1062,13 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (fs.existsSync(gitMarker)) {
     return null;
   }
-  return [
-    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-    "- Details: /concepts/agent-workspace#git-backup-recommended",
-  ].join("\n");
+  return productizeUserCopy(
+    [
+      "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+      `- Keep ${resolveProductStateDirHint()} out of git; it contains credentials and session history.`,
+      "- Details: /concepts/agent-workspace#git-backup-recommended",
+    ].join("\n"),
+  );
 }
 
 export function noteWorkspaceBackupTip(workspaceDir: string) {

@@ -72,7 +72,9 @@ export class MetricsCollector {
 
   getHistogramStats(name: string, labels?: Record<string, string>): HistogramStats | undefined {
     const values = this.histograms.get(makeKey(name, labels));
-    if (!values || values.length === 0) return undefined;
+    if (!values || values.length === 0) {
+      return undefined;
+    }
     return computeStats(values);
   }
 
@@ -104,16 +106,18 @@ export class MetricsCollector {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function makeKey(name: string, labels?: Record<string, string>): string {
-  if (!labels || Object.keys(labels).length === 0) return name;
+  if (!labels || Object.keys(labels).length === 0) {
+    return name;
+  }
   const labelStr = Object.entries(labels)
-    .sort(([a], [b]) => a.localeCompare(b))
+    .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${k}="${v}"`)
     .join(",");
   return `${name}{${labelStr}}`;
 }
 
 function computeStats(values: number[]): HistogramStats {
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = [...values].toSorted((a, b) => a - b);
   const sum = sorted.reduce((acc, v) => acc + v, 0);
   const percentile = (p: number): number => sorted[Math.floor(sorted.length * p)] ?? 0;
 

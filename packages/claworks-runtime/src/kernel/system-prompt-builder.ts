@@ -134,14 +134,24 @@ export class SystemPromptBuilder {
     notes?: string;
   }): this {
     const lines: string[] = [];
-    if (profile.name) lines.push(`User: ${profile.name}`);
-    if (profile.language) lines.push(`Language: ${profile.language}`);
-    if (profile.style) lines.push(`Preferred response style: ${profile.style}`);
-    if (profile.topics?.length)
+    if (profile.name) {
+      lines.push(`User: ${profile.name}`);
+    }
+    if (profile.language) {
+      lines.push(`Language: ${profile.language}`);
+    }
+    if (profile.style) {
+      lines.push(`Preferred response style: ${profile.style}`);
+    }
+    if (profile.topics?.length) {
       lines.push(`Recent topics: ${profile.topics.slice(0, 5).join(", ")}`);
-    if (profile.interactionCount != null && profile.interactionCount > 0)
+    }
+    if (profile.interactionCount != null && profile.interactionCount > 0) {
       lines.push(`Prior interactions: ${profile.interactionCount}`);
-    if (profile.notes) lines.push(`Notes: ${profile.notes}`);
+    }
+    if (profile.notes) {
+      lines.push(`Notes: ${profile.notes}`);
+    }
     if (lines.length === 0) {
       this.removeSection("user");
       return this;
@@ -252,10 +262,12 @@ export class SystemPromptBuilder {
    * 每段格式：`## {heading}\n{content}\n`（有 heading 时）；无 heading 直接输出 content。
    */
   build(): string {
-    const sorted = [...this._sections.values()].sort((a, b) => a.priority - b.priority);
+    const sorted = [...this._sections.values()].toSorted((a, b) => a.priority - b.priority);
     const parts: string[] = [];
     for (const section of sorted) {
-      if (!section.content) continue;
+      if (!section.content) {
+        continue;
+      }
       if (section.heading) {
         parts.push(`## ${section.heading}\n${section.content}`);
       } else {
@@ -269,7 +281,7 @@ export class SystemPromptBuilder {
    * 导出当前所有段的快照（调试 / 测试用）。
    */
   sections(): ReadonlyArray<PromptSection> {
-    return [...this._sections.values()].sort((a, b) => a.priority - b.priority);
+    return [...this._sections.values()].toSorted((a, b) => a.priority - b.priority);
   }
 
   /**

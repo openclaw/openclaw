@@ -40,10 +40,11 @@ export function hashApiKey(key: string): string {
  *   - 存储值长度 >= 32：视为 SHA-256 哈希，对 token 哈希后比对
  */
 function matchesKey(token: string, stored: string): boolean {
-  if (stored.length < 32) {
-    return token === stored;
+  // SHA-256 hex digests are 64 chars; shorter values are plaintext keys (incl. 32-char base64url from init).
+  if (/^[0-9a-f]{64}$/i.test(stored)) {
+    return hashApiKey(token) === stored.toLowerCase();
   }
-  return hashApiKey(token) === stored;
+  return token === stored;
 }
 
 /**
@@ -53,10 +54,14 @@ function matchesKey(token: string, stored: string): boolean {
 function collectValidKeys(runtime: ClaworksRuntime): string[] {
   const keys: string[] = [];
   const primary = runtime.config.api?.api_key?.trim();
-  if (primary) keys.push(primary);
+  if (primary) {
+    keys.push(primary);
+  }
   for (const k of runtime.config.api?.api_keys ?? []) {
     const t = k?.trim();
-    if (t && !keys.includes(t)) keys.push(t);
+    if (t && !keys.includes(t)) {
+      keys.push(t);
+    }
   }
   return keys;
 }

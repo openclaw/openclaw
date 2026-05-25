@@ -249,7 +249,7 @@ export function createStructuredOutputEngine(
       }
 
       // 取得票最多的结果（相同时取先出现的）
-      const winner = Object.entries(voteCounts).sort((a, b) => b[1] - a[1])[0][0];
+      const winner = Object.entries(voteCounts).toSorted((a, b) => b[1] - a[1])[0][0];
       const winnerResult =
         results.find((r) => String((r.data as Record<string, unknown>)[voteField]) === winner) ??
         results[0];

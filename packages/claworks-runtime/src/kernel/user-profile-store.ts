@@ -76,7 +76,9 @@ function rowToProfile(row: DbRow): UserProfile {
   let recentTopics: string[] = [];
   try {
     const parsed = JSON.parse(row.recent_topics);
-    if (Array.isArray(parsed)) recentTopics = parsed as string[];
+    if (Array.isArray(parsed)) {
+      recentTopics = parsed as string[];
+    }
   } catch {
     // ignore malformed JSON
   }
@@ -124,14 +126,18 @@ export function createUserProfileStore(db?: UserProfileDb): UserProfileStore {
   function pruneIdle(): void {
     const cutoff = Date.now() - PROFILE_IDLE_MS;
     for (const [id, p] of cache) {
-      if (p._lastSeen < cutoff) cache.delete(id);
+      if (p._lastSeen < cutoff) {
+        cache.delete(id);
+      }
     }
   }
 
   /** 从内存缓存读取；缺失时尝试从 DB 加载；都没有则创建默认值。 */
   function getOrCreate(userId: string): UserProfile & { _lastSeen: number } {
     const cached = cache.get(userId);
-    if (cached) return cached;
+    if (cached) {
+      return cached;
+    }
 
     // 尝试从 DB 恢复
     if (stmts) {
@@ -159,7 +165,9 @@ export function createUserProfileStore(db?: UserProfileDb): UserProfileStore {
 
   /** 将画像写入 DB（幂等）。 */
   function persist(p: UserProfile): void {
-    if (!stmts) return;
+    if (!stmts) {
+      return;
+    }
     try {
       stmts.upsert.run(
         p.userId,
@@ -222,8 +230,12 @@ export function createUserProfileStore(db?: UserProfileDb): UserProfileStore {
     toPromptHint(userId) {
       const p = getOrCreate(userId);
       const parts: string[] = [];
-      if (p.name) parts.push(`用户名：${p.name}`);
-      if (p.preferredLanguage) parts.push(`语言：${p.preferredLanguage}`);
+      if (p.name) {
+        parts.push(`用户名：${p.name}`);
+      }
+      if (p.preferredLanguage) {
+        parts.push(`语言：${p.preferredLanguage}`);
+      }
       parts.push(`偏好风格：${p.preferredResponseStyle}`);
       if (p.recentTopics.length > 0) {
         parts.push(`近期话题：${p.recentTopics.slice(0, 3).join("、")}`);
@@ -231,7 +243,9 @@ export function createUserProfileStore(db?: UserProfileDb): UserProfileStore {
       if (p.interactionCount > 0) {
         parts.push(`历史交互次数：${p.interactionCount}`);
       }
-      if (p.customNotes) parts.push(`备注：${p.customNotes}`);
+      if (p.customNotes) {
+        parts.push(`备注：${p.customNotes}`);
+      }
       return parts.join("；");
     },
 

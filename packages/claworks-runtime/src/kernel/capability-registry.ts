@@ -248,7 +248,9 @@ export function createCapabilityRegistry(): CapabilityRegistry {
 
   function recordSuccess(id: string) {
     const cb = circuitBreakers.get(id);
-    if (!cb) return;
+    if (!cb) {
+      return;
+    }
     cb.failureCount = 0;
     cb.state = "closed";
     cb.openUntil = 0;
@@ -267,7 +269,9 @@ export function createCapabilityRegistry(): CapabilityRegistry {
 
   function checkCircuitBreaker(id: string): "allow" | "open" | "half-open" {
     const cb = circuitBreakers.get(id);
-    if (!cb || cb.state === "closed") return "allow";
+    if (!cb || cb.state === "closed") {
+      return "allow";
+    }
 
     const now = Date.now();
     if (cb.state === "open") {
@@ -307,7 +311,9 @@ export function createCapabilityRegistry(): CapabilityRegistry {
     register,
 
     registerAll(descriptors) {
-      for (const d of descriptors) register(d);
+      for (const d of descriptors) {
+        register(d);
+      }
     },
 
     unregisterPack(packId) {

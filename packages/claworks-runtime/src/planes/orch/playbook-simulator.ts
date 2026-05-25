@@ -22,7 +22,9 @@ export function createMockObjectStore(): ObjectStore & { dumpAll(): Record<strin
   const store = new Map<string, Map<string, MockEntry>>();
 
   function getTypeMap(typeName: string): Map<string, MockEntry> {
-    if (!store.has(typeName)) store.set(typeName, new Map());
+    if (!store.has(typeName)) {
+      store.set(typeName, new Map());
+    }
     return store.get(typeName)!;
   }
 

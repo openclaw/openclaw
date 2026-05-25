@@ -23,7 +23,9 @@ export function createPlaybookMatcher(): PlaybookMatcher {
     exactIndex.clear();
     wildcardRules = [];
     for (const rule of newRules) {
-      if (rule.trigger.kind !== "event") continue;
+      if (rule.trigger.kind !== "event") {
+        continue;
+      }
       const p = rule.trigger.pattern;
       if (!p.includes("*") && !p.includes("?")) {
         const bucket = exactIndex.get(p);
@@ -62,12 +64,19 @@ export function createPlaybookMatcher(): PlaybookMatcher {
       const hotCandidates = exactHits.length > 0 ? [...exactHits, ...wildcardRules] : wildcardRules;
 
       for (const rule of hotCandidates) {
-        if (rule.trigger.kind !== "event") continue;
-        const globHit = exactHitSet.has(rule) || matchGlob(rule.trigger.pattern, event.type);
-        if (!globHit) continue;
-        if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) continue;
-        if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload))
+        if (rule.trigger.kind !== "event") {
           continue;
+        }
+        const globHit = exactHitSet.has(rule) || matchGlob(rule.trigger.pattern, event.type);
+        if (!globHit) {
+          continue;
+        }
+        if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) {
+          continue;
+        }
+        if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload)) {
+          continue;
+        }
         matches.push({
           event,
           playbookId: rule.playbookId,
@@ -79,13 +88,22 @@ export function createPlaybookMatcher(): PlaybookMatcher {
       // 语义回退：仅在无 glob 命中时，扫描全量规则寻找语义近似匹配
       if (matches.length === 0) {
         for (const rule of rules) {
-          if (rule.trigger.kind !== "event") continue;
-          if (matchGlob(rule.trigger.pattern, event.type)) continue; // 已被热路径处理
-          const score = semanticFallbackScore(rule.trigger.pattern, event.type);
-          if (score < 0.5) continue;
-          if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) continue;
-          if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload))
+          if (rule.trigger.kind !== "event") {
             continue;
+          }
+          if (matchGlob(rule.trigger.pattern, event.type)) {
+            continue;
+          } // 已被热路径处理
+          const score = semanticFallbackScore(rule.trigger.pattern, event.type);
+          if (score < 0.5) {
+            continue;
+          }
+          if (rule.trigger.filter && !matchesFilter(rule.trigger.filter, event.payload)) {
+            continue;
+          }
+          if (rule.trigger.condition && !evaluateCondition(rule.trigger.condition, event.payload)) {
+            continue;
+          }
           semanticCandidates.push({
             event,
             playbookId: rule.playbookId,

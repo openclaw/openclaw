@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
@@ -309,12 +310,14 @@ export async function collectLegacyWhatsAppCrontabHealthWarning(
     return null;
   }
 
-  return [
-    "Legacy WhatsApp crontab health check detected.",
-    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
-    `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
-    `Matched ${pluralize(legacyLines.length, "entry")}.`,
-  ].join("\n");
+  return productizeUserCopy(
+    [
+      "Legacy WhatsApp crontab health check detected.",
+      "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+      `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
+      `Matched ${pluralize(legacyLines.length, "entry")}.`,
+    ].join("\n"),
+  );
 }
 
 export async function noteLegacyWhatsAppCrontabHealthCheck(

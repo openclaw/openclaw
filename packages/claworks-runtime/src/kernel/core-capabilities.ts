@@ -227,7 +227,9 @@ function makeKbSearchDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor 
 
       if (kbSearchCache.size >= KB_SEARCH_CACHE_MAX) {
         const firstKey = kbSearchCache.keys().next().value;
-        if (firstKey !== undefined) kbSearchCache.delete(firstKey);
+        if (firstKey !== undefined) {
+          kbSearchCache.delete(firstKey);
+        }
       }
       kbSearchCache.set(cacheKey, { result, expiresAt: Date.now() + KB_SEARCH_CACHE_TTL_MS });
 
@@ -995,7 +997,9 @@ function makePerceiveIntentDescriptor(runtime: ClaworksRuntime): CapabilityDescr
   function cacheIntentResult(key: string, result: Record<string, unknown>): void {
     if (intentCache.size >= INTENT_CACHE_MAX) {
       const firstKey = intentCache.keys().next().value;
-      if (firstKey !== undefined) intentCache.delete(firstKey);
+      if (firstKey !== undefined) {
+        intentCache.delete(firstKey);
+      }
     }
     intentCache.set(key, { result, expiresAt: Date.now() + INTENT_CACHE_TTL_MS });
   }
@@ -1449,7 +1453,7 @@ function makeTimeParsDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor 
       // 提取小时
       const hourMatch = text.match(/(\d{1,2})[点:时]/);
       if (hourMatch && baseDate) {
-        baseDate.setHours(Number.parseInt(hourMatch[1]), 0, 0, 0);
+        baseDate.setHours(Number.parseInt(hourMatch[1], 10), 0, 0, 0);
         if (text.includes("下午") || text.includes("晚上")) {
           const h = baseDate.getHours();
           if (h < 12) {
@@ -2784,10 +2788,18 @@ const VALID_FIELD_TYPES = new Set<string>(["string", "number", "boolean", "date"
 
 function normalizeFieldType(raw: string): FieldDefinition["type"] {
   const t = raw.toLowerCase();
-  if (t === "integer" || t === "int" || t === "float" || t === "double") return "number";
-  if (t === "bool") return "boolean";
-  if (t === "datetime" || t === "timestamp") return "date";
-  if (VALID_FIELD_TYPES.has(t)) return t as FieldDefinition["type"];
+  if (t === "integer" || t === "int" || t === "float" || t === "double") {
+    return "number";
+  }
+  if (t === "bool") {
+    return "boolean";
+  }
+  if (t === "datetime" || t === "timestamp") {
+    return "date";
+  }
+  if (VALID_FIELD_TYPES.has(t)) {
+    return t as FieldDefinition["type"];
+  }
   return "string";
 }
 
@@ -2810,10 +2822,14 @@ function makeOntologyBootstrapFromCsvDescriptor(runtime: ClaworksRuntime): Capab
     handler: async (_ctx, params) => {
       const csvText = String(params.csv_text ?? "");
       const typeName = String(params.type_name ?? "").trim();
-      if (!typeName || !csvText) return { status: "error", reason: "type_name / csv_text 必填" };
+      if (!typeName || !csvText) {
+        return { status: "error", reason: "type_name / csv_text 必填" };
+      }
 
       const lines = csvText.trim().split(/\r?\n/);
-      if (lines.length < 2) return { status: "error", reason: "CSV 至少需要表头行 + 1 行数据" };
+      if (lines.length < 2) {
+        return { status: "error", reason: "CSV 至少需要表头行 + 1 行数据" };
+      }
 
       const headers = lines[0]!.split(",").map((h) => h.trim());
       const sample = lines[1]!.split(",").map((v) => v.trim());
@@ -2821,8 +2837,11 @@ function makeOntologyBootstrapFromCsvDescriptor(runtime: ClaworksRuntime): Capab
       const fields: FieldDefinition[] = headers.map((name, i) => {
         const val = sample[i] ?? "";
         let type: FieldDefinition["type"] = "string";
-        if (!Number.isNaN(Number(val)) && val !== "") type = "number";
-        else if (val.toLowerCase() === "true" || val.toLowerCase() === "false") type = "boolean";
+        if (!Number.isNaN(Number(val)) && val !== "") {
+          type = "number";
+        } else if (val.toLowerCase() === "true" || val.toLowerCase() === "false") {
+          type = "boolean";
+        }
         return { name, type, required: false };
       });
 
@@ -2891,7 +2910,9 @@ function makeOntologyBootstrapFromOpenApiDescriptor(
 
       const registered: string[] = [];
       for (const [schemaName, schemaDef] of Object.entries(schemasRaw)) {
-        if (only.length > 0 && !only.includes(schemaName)) continue;
+        if (only.length > 0 && !only.includes(schemaName)) {
+          continue;
+        }
         const schema = schemaDef as Record<string, unknown>;
         const propsRaw = (schema.properties as Record<string, Record<string, string>>) ?? {};
         const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
@@ -2899,14 +2920,19 @@ function makeOntologyBootstrapFromOpenApiDescriptor(
         const fields: FieldDefinition[] = Object.entries(propsRaw).map(([fieldName, fieldDef]) => {
           const rawType = String((fieldDef.type ?? fieldDef["$ref"]) ? "ref" : "string");
           const type = normalizeFieldType(rawType);
-          return {
-            name: fieldName,
-            type,
-            required: required.includes(fieldName),
-            ...(Array.isArray(fieldDef.enum)
-              ? { enumValues: fieldDef.enum as string[], type: "enum" as const }
-              : {}),
-          };
+          return Object.assign(
+            {
+              name: fieldName,
+              type,
+              required: required.includes(fieldName),
+            },
+            Array.isArray(fieldDef.enum)
+              ? {
+                  enumValues: fieldDef.enum as string[],
+                  type: "enum" as const,
+                }
+              : {},
+          );
         });
 
         const def: ObjectTypeDefinition = {
@@ -2950,14 +2976,18 @@ function makeOntologyBootstrapFromDescriptionDescriptor(
     handler: async (_ctx, params) => {
       const description = String(params.description ?? "");
       const packName = String(params.pack ?? "runtime");
-      if (!description) return { status: "error", reason: "description 不能为空" };
+      if (!description) {
+        return { status: "error", reason: "description 不能为空" };
+      }
 
       if (!runtime.ontology?.registerType) {
         return { status: "error", reason: "OntologyEngine 未初始化" };
       }
 
       const llmFn = runtime.bridges?.get(BRIDGE_LLM)?.complete ?? runtime.llmComplete;
-      if (!llmFn) return { status: "error", reason: "LLM 未配置，无法从描述生成本体" };
+      if (!llmFn) {
+        return { status: "error", reason: "LLM 未配置，无法从描述生成本体" };
+      }
 
       const schema = {
         type: "object" as const,

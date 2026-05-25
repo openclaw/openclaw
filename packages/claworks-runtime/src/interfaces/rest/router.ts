@@ -229,10 +229,9 @@ export function createClaworksRestHandler(
       if (method === "GET" && parts[1] === "audit_log") {
         const url = new URL(req.url ?? "/", "http://localhost");
         const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
-        const memEntries = listDecisionLog(limit).map((e) => ({
-          ...e,
-          source: "decision_log",
-        }));
+        const memEntries = listDecisionLog(limit).map((e) =>
+          Object.assign({}, e, { source: "decision_log" }),
+        );
         let dbEntries: unknown[] = [];
         try {
           const auditCap = runtime.capabilities.get("security.audit_log");
@@ -1009,13 +1008,13 @@ export function createClaworksRestHandler(
         if (!(await requireWrite("evolution:import"))) {
           return true;
         }
-        const pack = (await readJsonBody(req)) as Parameters<
-          typeof runtime.evolutionSync.importEvolutionPack
-        >[0] & { sandbox?: boolean; simulate_only?: boolean };
         if (!runtime.evolutionSync) {
           sendJson(res, 503, { error: "evolutionSync 未初始化" });
           return true;
         }
+        const pack = (await readJsonBody(req)) as Parameters<
+          typeof runtime.evolutionSync.importEvolutionPack
+        >[0] & { sandbox?: boolean; simulate_only?: boolean };
         const { sandbox, simulate_only, ...packBody } = pack;
         const result = await runtime.evolutionSync.importEvolutionPack(packBody, {
           sandbox: sandbox === true || simulate_only === true,

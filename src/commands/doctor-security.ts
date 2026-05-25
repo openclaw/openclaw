@@ -2,7 +2,12 @@ import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-st
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveProductDocUrl } from "../cli/product-surface.js";
+import {
+  productizeUserCopy,
+  resolveProductDefaultGatewayPort,
+  resolveProductDocUrl,
+  resolveProductStateDirHint,
+} from "../cli/product-surface.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
@@ -190,7 +195,7 @@ export async function collectSecurityWarnings(
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
       "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Host exec gating still comes from ${resolveProductStateDirHint()}/exec-approvals.json.`,
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }
@@ -237,7 +242,7 @@ export async function collectSecurityWarnings(
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
   const saferRemoteAccessLines = [
     "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
-    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    `  Example tunnel: ssh -N -L ${resolveProductDefaultGatewayPort()}:127.0.0.1:${resolveProductDefaultGatewayPort()} user@gateway-host`,
     `  Docs: ${resolveProductDocUrl("/gateway/remote")}`,
   ];
 
@@ -387,7 +392,9 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings = await collectSecurityWarnings(cfg);
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
-  const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
-  lines.push(auditHint);
+  const lines = (warnings.length > 0 ? warnings : ["- No channel security warnings detected."]).map(
+    (line) => productizeUserCopy(line),
+  );
+  lines.push(productizeUserCopy(auditHint));
   note(lines.join("\n"), "Security");
 }

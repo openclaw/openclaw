@@ -199,6 +199,12 @@
   ],
   "overrides": [
     {
+      "files": ["packages/claworks-runtime/**"],
+      "rules": {
+        "eslint/no-underscore-dangle": "off"
+      }
+    },
+    {
       "files": ["src/security/**"],
       "rules": {
         "eslint/no-warning-comments": "off",

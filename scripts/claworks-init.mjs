@@ -284,7 +284,7 @@ if (existsSync(packsDir)) {
 }
 console.log(`ClaWorks config written: ${configPath}`);
 console.log(`State directory: ${stateDir}`);
-console.log(`Gateway port: ${port} (OpenClaw default 18789 — no conflict)`);
+console.log(`Gateway port: ${port} (ClaWorks 标准端口 ${port})`);
 console.log(`Packs path: ${packsDir}`);
 console.log(
   `Init profile: ${process.env.CLAWORKS_INIT_PROFILE?.trim() || "enterprise"} (packs: ${defaultInstalledPacks().join(", ")})`,

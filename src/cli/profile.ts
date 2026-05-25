@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { isClaworksProduct } from "../config/paths.js";
 import { isValueToken } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -74,13 +75,28 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   return { ok: true, profile, argv: scanned.argv };
 }
 
+function resolveProfileStateBasename(
+  profile: string,
+  env: Record<string, string | undefined>,
+): string {
+  const productDir = isClaworksProduct(env as NodeJS.ProcessEnv) ? ".claworks" : ".openclaw";
+  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
+  return `${productDir}${suffix}`;
+}
+
+function resolveProfileConfigFilename(env: Record<string, string | undefined>): string {
+  return isClaworksProduct(env as NodeJS.ProcessEnv) ? "claworks.json" : "openclaw.json";
+}
+
 function resolveProfileStateDir(
   profile: string,
   env: Record<string, string | undefined>,
   homedir: () => string,
 ): string {
-  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
-  return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
+  return path.join(
+    resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir),
+    resolveProfileStateBasename(profile, env),
+  );
 }
 
 export function applyCliProfileEnv(params: {
@@ -105,7 +121,7 @@ export function applyCliProfileEnv(params: {
   }
 
   if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
-    env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+    env.OPENCLAW_CONFIG_PATH = path.join(stateDir, resolveProfileConfigFilename(env));
   }
 
   if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {

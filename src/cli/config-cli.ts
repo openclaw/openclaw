@@ -63,6 +63,7 @@ import {
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
+import { productizeUserCopy } from "./product-surface.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 type PathSegment = string;
@@ -300,6 +301,11 @@ const CONFIG_PATCH_DESCRIPTION = [
   CONFIG_PATCH_EXAMPLE_FILE,
   CONFIG_PATCH_EXAMPLE_STDIN,
 ].join("\n");
+const CONFIG_SET_DRY_RUN_DESCRIPTION =
+  "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)";
+const CONFIG_PATCH_DRY_RUN_DESCRIPTION =
+  "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)";
+const CONFIG_SCHEMA_DESCRIPTION = "Print the JSON schema for openclaw.json";
 const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -713,7 +719,9 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   if (snapshot.valid) {
     return snapshot;
   }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(
+    productizeUserCopy(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
+  );
   for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
@@ -1626,11 +1634,13 @@ function findAutoManagedMetaUnsetTargets(
 function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   const targets = paths.map((path) => toDotPath(path));
   const subject = targets.length === 1 ? targets[0] : targets.join(", ");
-  return [
-    `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
-    "",
-    "These fields are stamped on every config write to record the OpenClaw version and timestamp that produced the file.",
-  ].join("\n");
+  return productizeUserCopy(
+    [
+      `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
+      "",
+      "These fields are stamped on every config write to record the OpenClaw version and timestamp that produced the file.",
+    ].join("\n"),
+  );
 }
 
 function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
@@ -2176,7 +2186,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
-        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
+        runtime.error(danger(productizeUserCopy(`OpenClaw config is invalid: ${shortPath}`)));
         for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
           runtime.error(`  ${line}`);
         }
@@ -2240,11 +2250,7 @@ export function registerConfigCli(program: Command) {
     .argument("[value]", "Value (JSON/JSON5 or raw string)")
     .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
-    .option(
-      "--dry-run",
-      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
-      false,
-    )
+    .option("--dry-run", productizeUserCopy(CONFIG_SET_DRY_RUN_DESCRIPTION), false)
     .option(
       "--allow-exec",
       "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
@@ -2323,11 +2329,7 @@ export function registerConfigCli(program: Command) {
     .description(CONFIG_PATCH_DESCRIPTION)
     .option("--file <path>", "Read a JSON5 config patch object from file")
     .option("--stdin", "Read a JSON5 config patch object from stdin", false)
-    .option(
-      "--dry-run",
-      "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
-      false,
-    )
+    .option("--dry-run", productizeUserCopy(CONFIG_PATCH_DRY_RUN_DESCRIPTION), false)
     .option(
       "--allow-exec",
       "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
@@ -2364,7 +2366,7 @@ export function registerConfigCli(program: Command) {
 
   cmd
     .command("schema")
-    .description("Print the JSON schema for openclaw.json")
+    .description(productizeUserCopy(CONFIG_SCHEMA_DESCRIPTION))
     .action(async () => {
       await runConfigSchema({});
     });

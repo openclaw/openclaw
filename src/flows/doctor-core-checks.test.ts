@@ -235,4 +235,26 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
       }),
     );
   });
+
+  it("productizes gateway-config fix hints in ClaWorks mode", async () => {
+    const previous = process.env.CLAWORKS_PRODUCT;
+    process.env.CLAWORKS_PRODUCT = "1";
+    try {
+      const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-config");
+      const findings = await check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {},
+        cwd: process.cwd(),
+      });
+      expect(findings?.[0]?.fixHint).toContain("claworks configure");
+      expect(findings?.[0]?.fixHint).not.toContain("openclaw configure");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAWORKS_PRODUCT;
+      } else {
+        process.env.CLAWORKS_PRODUCT = previous;
+      }
+    }
+  });
 });

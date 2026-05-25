@@ -88,17 +88,27 @@ function extractText(payload: Record<string, unknown>): string {
 
 /** 根据事件类型前缀快速推断领域 */
 function domainFromEventType(eventType: string): InferredDomain | undefined {
-  if (eventType.startsWith("alarm.")) return "alarm";
-  if (eventType.startsWith("work_order.")) return "production";
-  if (eventType.startsWith("task.")) return undefined; // 不确定，继续看内容
-  if (eventType.startsWith("report.")) return undefined;
+  if (eventType.startsWith("alarm.")) {
+    return "alarm";
+  }
+  if (eventType.startsWith("work_order.")) {
+    return "production";
+  }
+  if (eventType.startsWith("task.")) {
+    return undefined;
+  } // 不确定，继续看内容
+  if (eventType.startsWith("report.")) {
+    return undefined;
+  }
   return undefined;
 }
 
 /** 从文本内容推断领域 */
 function domainFromText(text: string): InferredDomain | undefined {
   for (const { re, domain } of DOMAIN_PATTERNS) {
-    if (re.test(text)) return domain;
+    if (re.test(text)) {
+      return domain;
+    }
   }
   return undefined;
 }
@@ -106,9 +116,15 @@ function domainFromText(text: string): InferredDomain | undefined {
 /** 推断情感/严重程度 */
 function inferSentiment(payload: Record<string, unknown>, text: string): ContextSentiment {
   const severity = String(payload["severity"] ?? payload["level"] ?? payload["priority"] ?? "");
-  if (/critical|p0|high|紧急|严重/i.test(severity) || CRITICAL_RE.test(text)) return "critical";
-  if (/warning|p1|medium|警告|异常/i.test(severity) || WARNING_RE.test(text)) return "warning";
-  if (RECOVERY_RE.test(text) || RECOVERY_RE.test(severity)) return "recovery";
+  if (/critical|p0|high|紧急|严重/i.test(severity) || CRITICAL_RE.test(text)) {
+    return "critical";
+  }
+  if (/warning|p1|medium|警告|异常/i.test(severity) || WARNING_RE.test(text)) {
+    return "warning";
+  }
+  if (RECOVERY_RE.test(text) || RECOVERY_RE.test(severity)) {
+    return "recovery";
+  }
   return "normal";
 }
 
@@ -198,16 +214,36 @@ export function buildEventContext(
         : undefined;
 
   const ctx: ContextPacket = {};
-  if (inferred_domain) ctx.inferred_domain = inferred_domain;
-  if (sentiment !== "normal") ctx.sentiment = sentiment;
-  if (source_id) ctx.source_id = source_id;
-  if (event_ts) ctx.event_ts = event_ts;
-  if (entities.length) ctx.entities = entities;
-  if (keywords.length) ctx.keywords = keywords;
+  if (inferred_domain) {
+    ctx.inferred_domain = inferred_domain;
+  }
+  if (sentiment !== "normal") {
+    ctx.sentiment = sentiment;
+  }
+  if (source_id) {
+    ctx.source_id = source_id;
+  }
+  if (event_ts) {
+    ctx.event_ts = event_ts;
+  }
+  if (entities.length) {
+    ctx.entities = entities;
+  }
+  if (keywords.length) {
+    ctx.keywords = keywords;
+  }
   const meta: Record<string, unknown> = {};
-  if (pendingRuns !== undefined) meta.pending_runs = pendingRuns;
-  if (playbookCount !== undefined) meta.playbook_count = playbookCount;
-  if (robotId) meta.robot_id = robotId;
-  if (Object.keys(meta).length) ctx.meta = meta;
+  if (pendingRuns !== undefined) {
+    meta.pending_runs = pendingRuns;
+  }
+  if (playbookCount !== undefined) {
+    meta.playbook_count = playbookCount;
+  }
+  if (robotId) {
+    meta.robot_id = robotId;
+  }
+  if (Object.keys(meta).length) {
+    ctx.meta = meta;
+  }
   return ctx;
 }

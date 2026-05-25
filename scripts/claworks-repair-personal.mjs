@@ -36,5 +36,6 @@ if (process.env.CLAWORKS_SKIP_RUNTIME_BUILD !== "1") {
   }
 }
 
-console.log("\nRestart gateway after repair: node claworks.mjs gateway restart");
-console.log("Verify: pnpm claworks:personal:verify");
+console.log("\nRestart gateway after repair: pnpm claworks:start");
+console.log("Verify personal profile: pnpm claworks:personal:verify");
+console.log("Verify vector KB: pnpm claworks:kb-smoke");

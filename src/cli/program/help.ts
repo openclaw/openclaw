@@ -7,6 +7,7 @@ import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName, resolveCliProductTitle } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
+import { productizeUserCopy } from "../product-surface.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
@@ -54,11 +55,15 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     )
     .option(
       "--dev",
-      "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
+      productizeUserCopy(
+        "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
+      ),
     )
     .option(
       "--profile <name>",
-      "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+      productizeUserCopy(
+        "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+      ),
     )
     .option(
       "--log-level <level>",
@@ -133,7 +138,8 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   });
 
   const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
+    ([cmd, desc]) =>
+      `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(productizeUserCopy(desc))}`,
   ).join("\n");
 
   program.addHelpText("afterAll", ({ command }) => {

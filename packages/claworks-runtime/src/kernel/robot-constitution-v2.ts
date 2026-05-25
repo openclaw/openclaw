@@ -240,7 +240,9 @@ export type ConstitutionV2 = {
 };
 
 function matchesPattern(pattern: string, value: string): boolean {
-  if (pattern === value) return true;
+  if (pattern === value) {
+    return true;
+  }
   if (pattern.endsWith(".*")) {
     const prefix = pattern.slice(0, -2);
     return value === prefix || value.startsWith(`${prefix}.`);

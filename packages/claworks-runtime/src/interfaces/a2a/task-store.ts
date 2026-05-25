@@ -51,7 +51,9 @@ export class A2aTaskStore {
   /** 推送流式 delta（不修改任务状态，只通知观察者） */
   pushDelta(taskId: string, delta: { type: string; data: unknown }): void {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task) {
+      return;
+    }
     this._notifyObservers(taskId, task, delta);
   }
 
@@ -71,7 +73,9 @@ export class A2aTaskStore {
     set.add(observer);
     return () => {
       set?.delete(observer);
-      if (set?.size === 0) this.observers.delete(taskId);
+      if (set?.size === 0) {
+        this.observers.delete(taskId);
+      }
     };
   }
 
@@ -81,7 +85,9 @@ export class A2aTaskStore {
     delta?: { type: string; data: unknown },
   ): void {
     const set = this.observers.get(taskId);
-    if (!set) return;
+    if (!set) {
+      return;
+    }
     for (const obs of set) {
       try {
         obs(task, delta);

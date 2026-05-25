@@ -42,6 +42,35 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
 }
 
+/** When argv includes `-- <paths>`, lint only explicit paths (pnpm pass-through convention). */
+export function narrowOxlintArgsToExplicitTargets(args) {
+  const separatorIndex = args.indexOf("--");
+  if (separatorIndex === -1 || separatorIndex >= args.length - 1) {
+    return args;
+  }
+
+  const before = args.slice(0, separatorIndex);
+  const after = args.slice(separatorIndex + 1);
+  const kept = [];
+
+  for (let index = 0; index < before.length; index += 1) {
+    const arg = before[index];
+    if (!arg.startsWith("-")) {
+      continue;
+    }
+    kept.push(arg);
+    if (!arg.includes("=") && OXLINT_VALUE_FLAGS.has(arg)) {
+      const value = before[index + 1];
+      if (value !== undefined && !value.startsWith("-")) {
+        kept.push(value);
+        index += 1;
+      }
+    }
+  }
+
+  return [...kept, ...after];
+}
+
 export function filterSparseMissingOxlintTargets(
   args,
   {
@@ -185,10 +214,12 @@ async function prepareExtensionPackageBoundaryArtifacts(env) {
 }
 
 export async function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
-  const { args: policyArgs, env } = applyLocalOxlintPolicy(
-    argv,
-    resolveLocalHeavyCheckEnv(runtimeEnv),
-  );
+  const narrowedArgv = narrowOxlintArgsToExplicitTargets(argv);
+  const env = resolveLocalHeavyCheckEnv(runtimeEnv);
+  if (argv.includes("--")) {
+    env.OPENCLAW_OXLINT_SKIP_TYPE_AWARE = "1";
+  }
+  const { args: policyArgs } = applyLocalOxlintPolicy(narrowedArgv, env);
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
   if (sparseTargets.skippedTargets.length > 0) {

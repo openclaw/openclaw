@@ -5,7 +5,9 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { resolveProductStateDirHint } from "../product-surface.js";
 
 export function registerSetupCommand(program: Command) {
   program
@@ -15,15 +17,15 @@ export function registerSetupCommand(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n` +
-        `  ${theme.command("openclaw setup")}\n` +
+        `  ${theme.command(formatCliCommand("openclaw setup"))}\n` +
         `    ${theme.muted("Create config, workspace, and session folders.")}\n` +
-        `  ${theme.command("openclaw setup --wizard")}\n` +
+        `  ${theme.command(formatCliCommand("openclaw setup --wizard"))}\n` +
         `    ${theme.muted("Run full onboarding for auth, models, Gateway, and channels.")}\n\n` +
         `${theme.muted("Docs:")} ${formatDocsLink("/cli/setup", "docs.openclaw.ai/cli/setup")}\n`,
     )
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
+      `Agent workspace directory (default: ${resolveProductStateDirHint()}/workspace; stored as agents.defaults.workspace)`,
     )
     .option("--wizard", "Run interactive onboarding", false)
     .option("--non-interactive", "Run onboarding without prompts", false)

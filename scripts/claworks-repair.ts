@@ -30,5 +30,8 @@ for (const warn of repair.warnings) {
 console.log("");
 console.log("Restart gateway: pnpm claworks:start");
 console.log("Vector KB: CLAWORKS_VECTOR_KB=1 pnpm claworks:repair");
+console.log(
+  "Personal work (self-hosted Qwen): cp contrib/examples/claworks-personal.env.example ~/.claworks/personal.env && pnpm claworks:repair:personal",
+);
 console.log("PostgreSQL: CLAWORKS_DATABASE_URL=postgresql://... pnpm claworks:migrate");
 console.log('Verify: curl -H "Authorization: Bearer <api_key>" http://127.0.0.1:18800/v1/health');

@@ -3154,7 +3154,7 @@ export function makeNotifyCapabilities(runtime: ClaworksRuntime): CapabilityDesc
           title: params.title ? String(params.title) : undefined,
           message,
           metadata: {
-            ...((params.metadata as Record<string, unknown> | undefined) ?? {}),
+            ...(params.metadata as Record<string, unknown> | undefined),
             ...cardPayload,
           },
         });
@@ -3852,7 +3852,7 @@ export function makeSkillCapabilities(runtime: ClaworksRuntime): CapabilityDescr
         const localScript = runtime.scriptLibrary?.get(skillId);
         if (localScript) {
           const { skill_id: _, input: _input, ...rest } = params;
-          const mergedInput = { ...((params.input as Record<string, unknown>) ?? {}), ...rest };
+          const mergedInput = { ...(params.input as Record<string, unknown>), ...rest };
           try {
             const result = await runtime.scriptLibrary?.invoke(skillId, mergedInput);
             return {
@@ -4076,10 +4076,11 @@ export function makeGovernanceCapabilities(runtime: ClaworksRuntime): Capability
           active_count: active.length,
           open: active
             .filter((b) => b.state === "open")
-            .map((b) => ({
-              ...b,
-              reopens_in_ms: b.openUntil ? Math.max(0, b.openUntil - now) : 0,
-            })),
+            .map((b) =>
+              Object.assign({}, b, {
+                reopens_in_ms: b.openUntil ? Math.max(0, b.openUntil - now) : 0,
+              }),
+            ),
           half_open: active.filter((b) => b.state === "half-open"),
         };
       },

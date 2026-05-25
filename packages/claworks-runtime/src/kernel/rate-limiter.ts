@@ -70,7 +70,9 @@ export function createRateLimiter(config: RateLimitConfig = {}): RateLimiter {
     if (!existing && buckets.size >= maxBuckets) {
       // 驱逐最旧的条目（FIFO 近似）
       const oldest = buckets.keys().next().value;
-      if (oldest !== undefined) buckets.delete(oldest);
+      if (oldest !== undefined) {
+        buckets.delete(oldest);
+      }
     }
     const bucket: Bucket = { count: 0, windowStartMs: nowMs };
     buckets.set(key, bucket);

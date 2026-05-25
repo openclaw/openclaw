@@ -150,15 +150,14 @@ export function createDocumentKnowledgeBase(
         if (!doc) {
           return result;
         }
-        return {
-          ...result,
+        return Object.assign({}, result, {
           document_id: doc.document.id,
           chunk_id: doc.chunk.id,
           layer: doc.document.layer,
           citation: doc.chunk.citation,
           revision: doc.document.revision,
           title: doc.document.title,
-        };
+        });
       });
       return mergeResults(enrichedVector, structuredResults, limit);
     },

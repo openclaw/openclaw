@@ -16,11 +16,15 @@ export function evaluatePlaybookCondition(
   const interpolated = interpolate(condition.trim(), variables);
   // 如果插值后不含 {{ 说明是纯值结果——按 truthy/falsy 直接判断
   if (!interpolated.includes("{{")) {
-    if (interpolated === "" || interpolated === "false" || interpolated === "0") return false;
+    if (interpolated === "" || interpolated === "false" || interpolated === "0") {
+      return false;
+    }
     // 若插值后是非空非 false 的普通值（如频道 ID "feishu"），说明字段存在 → true
     // 若原 condition 本身是纯值表达式（没有 {{ 模板），继续走条件解析
     // 注意：插值结果若含比较运算符（如 "5 > 3"），不能直接 return true，要继续解析
-    if (condition.trim().startsWith("{{") && !/[><=!]/.test(interpolated)) return true;
+    if (condition.trim().startsWith("{{") && !/[><=!]/.test(interpolated)) {
+      return true;
+    }
   }
   const expr = interpolated.trim();
   const payload = (variables.payload ?? variables) as Record<string, unknown>;
@@ -66,12 +70,24 @@ export function evaluatePlaybookCondition(
     const left = Number.parseFloat(String(raw ?? fallback));
     const op = floatCmp[4];
     const right = Number.parseFloat(floatCmp[5]);
-    if (op === ">") return left > right;
-    if (op === ">=") return left >= right;
-    if (op === "<") return left < right;
-    if (op === "<=") return left <= right;
-    if (op === "==") return left === right;
-    if (op === "!=") return left !== right;
+    if (op === ">") {
+      return left > right;
+    }
+    if (op === ">=") {
+      return left >= right;
+    }
+    if (op === "<") {
+      return left < right;
+    }
+    if (op === "<=") {
+      return left <= right;
+    }
+    if (op === "==") {
+      return left === right;
+    }
+    if (op === "!=") {
+      return left !== right;
+    }
   }
 
   const stepsStatus = expr.match(
@@ -106,15 +122,31 @@ export function evaluatePlaybookCondition(
     const lNum = Number(lhs);
     const rNum = Number(rhs);
     if (!Number.isNaN(lNum) && !Number.isNaN(rNum)) {
-      if (op === ">") return lNum > rNum;
-      if (op === ">=") return lNum >= rNum;
-      if (op === "<") return lNum < rNum;
-      if (op === "<=") return lNum <= rNum;
-      if (op === "==") return lNum === rNum;
-      if (op === "!=") return lNum !== rNum;
+      if (op === ">") {
+        return lNum > rNum;
+      }
+      if (op === ">=") {
+        return lNum >= rNum;
+      }
+      if (op === "<") {
+        return lNum < rNum;
+      }
+      if (op === "<=") {
+        return lNum <= rNum;
+      }
+      if (op === "==") {
+        return lNum === rNum;
+      }
+      if (op === "!=") {
+        return lNum !== rNum;
+      }
     }
-    if (op === "==") return lhs === rhs;
-    if (op === "!=") return lhs !== rhs;
+    if (op === "==") {
+      return lhs === rhs;
+    }
+    if (op === "!=") {
+      return lhs !== rhs;
+    }
   }
 
   if (expr.includes("payload.")) {

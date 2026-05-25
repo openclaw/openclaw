@@ -51,6 +51,10 @@ if (!existsSync(configPath)) {
 
 run(onboardArgs, "Interactive setup (onboard)");
 
-console.log("\n[claworks:setup] Done. Start the gateway with:");
-console.log("  pnpm claworks:start");
-console.log("  # or: node claworks.mjs start\n");
+console.log("\n[claworks:setup] Done. Recommended path:");
+console.log("  pnpm claworks:start              # Gateway on port 18800");
+console.log("  pnpm claworks:doctor             # health check");
+console.log("  CLAWORKS_INIT_SECURE=1 pnpm claworks:init --force   # production hardening");
+console.log("  # personal/self-hosted Qwen + vector KB:");
+console.log("  cp contrib/examples/claworks-personal.env.example ~/.claworks/personal.env");
+console.log("  source ~/.claworks/personal.env && pnpm claworks:repair:personal\n");

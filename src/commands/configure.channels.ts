@@ -80,7 +80,7 @@ export async function removeChannelConfigWizard(
         productizeUserCopy(
           [
             `No channel config found in ${resolveProductConfigPathHint()}.`,
-            `Tip: \`${formatCliCommand("claworks channels status")}\` shows what is configured and enabled.`,
+            `Tip: \`${formatCliCommand("openclaw channels status")}\` shows what is configured and enabled.`,
           ].join("\n"),
         ),
         "Remove channel",

@@ -25,7 +25,7 @@ export function createOntologyEngine(): OntologyEngine {
     },
 
     async reloadPack(packId, pack) {
-      for (const [name, def] of [...types.entries()]) {
+      for (const [name, def] of types.entries()) {
         if (def.pack === packId) {
           types.delete(name);
         }

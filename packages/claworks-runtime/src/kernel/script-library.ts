@@ -161,7 +161,6 @@ export function registerBuiltinScripts(library: ScriptLibrary, runtime: Claworks
         return { result: 0, expression: expr, error: "表达式为空或包含非法字符" };
       }
       try {
-        // eslint-disable-next-line no-new-func
         const result = Function(`"use strict"; return (${safe})`)() as number;
         return { result, expression: expr };
       } catch (err) {
@@ -350,7 +349,7 @@ export function registerBuiltinScripts(library: ScriptLibrary, runtime: Claworks
         const idxMatch = head.match(/^(.+)\[(\d+)\]$/);
         if (idxMatch) {
           const key = idxMatch[1];
-          const idx = Number.parseInt(idxMatch[2]);
+          const idx = Number.parseInt(idxMatch[2], 10);
           const sub = key ? (obj as Record<string, unknown>)[key] : obj;
           return Array.isArray(sub) ? queryPath(sub[idx], rest) : [];
         }
@@ -464,9 +463,15 @@ export function registerBuiltinScripts(library: ScriptLibrary, runtime: Claworks
       const unix_s = Math.floor(unix_ms / 1000);
       const iso = now.toISOString();
 
-      if (format === "iso") return { timestamp: iso };
-      if (format === "unix_ms") return { timestamp: unix_ms };
-      if (format === "unix_s") return { timestamp: unix_s };
+      if (format === "iso") {
+        return { timestamp: iso };
+      }
+      if (format === "unix_ms") {
+        return { timestamp: unix_ms };
+      }
+      if (format === "unix_s") {
+        return { timestamp: unix_s };
+      }
 
       return {
         iso,

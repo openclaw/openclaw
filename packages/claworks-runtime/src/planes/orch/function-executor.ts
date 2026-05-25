@@ -184,7 +184,9 @@ export async function executeFunction(
     for (const [oldKey, newKey] of Object.entries(mappings)) {
       if (oldKey in source) {
         result[newKey] = source[oldKey];
-        if (newKey !== oldKey) delete result[oldKey];
+        if (newKey !== oldKey) {
+          delete result[oldKey];
+        }
       }
     }
     return { status: "ok", result, mapped: Object.keys(mappings).length };
@@ -205,7 +207,9 @@ export async function executeFunction(
     const keys = Array.isArray(params.keys) ? (params.keys as string[]) : [];
     const result: Record<string, unknown> = {};
     for (const k of keys) {
-      if (k in source) result[k] = source[k];
+      if (k in source) {
+        result[k] = source[k];
+      }
     }
     return { status: "ok", result };
   }
@@ -216,7 +220,9 @@ export async function executeFunction(
     const keys = new Set(Array.isArray(params.keys) ? (params.keys as string[]) : []);
     const result: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(source)) {
-      if (!keys.has(k)) result[k] = v;
+      if (!keys.has(k)) {
+        result[k] = v;
+      }
     }
     return { status: "ok", result };
   }

@@ -128,7 +128,9 @@ function notifyPolicyWrite(opts: ObjectStoreOptions | undefined, typeName: strin
 
 function periodKey(ts: string | Date, granularity: AggregationPeriod): string {
   const d = ts instanceof Date ? ts : new Date(ts);
-  if (Number.isNaN(d.getTime())) return "unknown";
+  if (Number.isNaN(d.getTime())) {
+    return "unknown";
+  }
   const y = d.getUTCFullYear();
   const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
   const da = String(d.getUTCDate()).padStart(2, "0");
@@ -152,7 +154,9 @@ function periodKey(ts: string | Date, granularity: AggregationPeriod): string {
 }
 
 function applyAggFn(fn: AggregationFn, values: number[]): number {
-  if (values.length === 0) return 0;
+  if (values.length === 0) {
+    return 0;
+  }
   switch (fn) {
     case "count":
       return values.length;
@@ -174,10 +178,16 @@ function withinTimeRange(
   to: string | undefined,
 ): boolean {
   const raw = timeField === "_createdAt" ? obj._createdAt : obj[timeField];
-  if (raw == null) return false;
+  if (raw == null) {
+    return false;
+  }
   const ts = raw instanceof Date ? raw.toISOString() : String(raw);
-  if (from && ts < from) return false;
-  if (to && ts > to) return false;
+  if (from && ts < from) {
+    return false;
+  }
+  if (to && ts > to) {
+    return false;
+  }
   return true;
 }
 
@@ -341,7 +351,9 @@ export function createObjectStore(db: CwDatabase, opts?: ObjectStoreOptions): Ob
         const stateValue = (() => {
           // look for common state field names
           for (const key of ["status", "state", "fsm_state"]) {
-            if (typeof obj[key] === "string") return { field: key, value: obj[key] as string };
+            if (typeof obj[key] === "string") {
+              return { field: key, value: obj[key] as string };
+            }
           }
           return null;
         })();
@@ -413,15 +425,19 @@ export function createObjectStore(db: CwDatabase, opts?: ObjectStoreOptions): Ob
       const bucketMap = new Map<string, number[]>();
       for (const obj of items) {
         const raw = timeField === "_createdAt" ? obj._createdAt : obj[timeField];
-        if (raw == null) continue;
+        if (raw == null) {
+          continue;
+        }
         const key = periodKey(raw instanceof Date ? raw : String(raw), granularity);
-        if (!bucketMap.has(key)) bucketMap.set(key, []);
+        if (!bucketMap.has(key)) {
+          bucketMap.set(key, []);
+        }
         const numVal = aggFn === "count" ? 1 : aggField ? Number(obj[aggField] ?? 0) : 1;
         bucketMap.get(key)!.push(numVal);
       }
 
       const buckets: TimeSeriesBucket[] = [...bucketMap.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
+        .toSorted(([a], [b]) => a.localeCompare(b))
         .map(([period, vals]) => ({
           period,
           value: applyAggFn(aggFn, vals),

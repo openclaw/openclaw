@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
+import { productizeUserCopy } from "../cli/product-surface.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -20,6 +21,10 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+
+function doctorFixHint(value: string): string {
+  return productizeUserCopy(value);
+}
 
 export function configValidationIssuesToHealthFindings(
   issues: readonly ConfigValidationIssue[],
@@ -47,8 +52,9 @@ const gatewayConfigCheck: HealthCheck = {
         severity: "warning",
         message: "gateway.mode is unset; gateway start will be blocked.",
         path: "gateway.mode",
-        fixHint:
+        fixHint: doctorFixHint(
           "Run `openclaw configure` and set Gateway mode (local/remote), or `openclaw config set gateway.mode local`.",
+        ),
       });
     }
     if (ctx.cfg.gateway?.mode !== "remote" && hasAmbiguousGatewayAuthModeConfig(ctx.cfg)) {
@@ -58,8 +64,9 @@ const gatewayConfigCheck: HealthCheck = {
         message:
           "gateway.auth.token and gateway.auth.password are both configured while gateway.auth.mode is unset; auth selection is ambiguous.",
         path: "gateway.auth.mode",
-        fixHint:
+        fixHint: doctorFixHint(
           "Set an explicit mode: `openclaw config set gateway.auth.mode token` or `... password`.",
+        ),
       });
     }
     return findings;
@@ -82,8 +89,9 @@ const commandOwnerCheck: HealthCheck = {
         message:
           "No command owner is configured. Owner-only commands (/diagnostics, /export-trajectory, /config, exec approvals) have no allowed sender.",
         path: "commands.ownerAllowFrom",
-        fixHint:
+        fixHint: doctorFixHint(
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
+        ),
       },
     ];
   },
@@ -135,7 +143,9 @@ const gatewayAuthCheck: HealthCheck = {
         severity: "warning",
         message: "Gateway auth is off or missing a token.",
         path: "gateway.auth",
-        fixHint: "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
+        fixHint: doctorFixHint(
+          "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
+        ),
       },
     ];
   },
@@ -218,7 +228,7 @@ const legacyStateCheck: HealthCheck = {
         severity: "warning",
         message: line.replace(/^- /, ""),
         path: detected.stateDir,
-        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+        fixHint: doctorFixHint("Run `openclaw doctor --fix` to migrate legacy state."),
       }),
     );
   },
@@ -299,7 +309,7 @@ function noteTextToFinding(params: {
     checkId: params.checkId,
     severity: params.severity,
     message: first,
-    ...(rest ? { fixHint: rest } : {}),
+    ...(rest ? { fixHint: doctorFixHint(rest) } : {}),
   };
 }
 
@@ -506,8 +516,9 @@ const workspaceStatusCheck: HealthCheck = {
           legacy.legacyDirs.length === 1 ? "y" : "ies"
         } alongside the active workspace.`,
         path: workspaceDir,
-        fixHint:
+        fixHint: doctorFixHint(
           "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
+        ),
       },
     ];
   },
@@ -553,8 +564,9 @@ function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
     severity: "warning",
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
-    fixHint:
+    fixHint: doctorFixHint(
       "Install/configure the missing requirement, or run `openclaw doctor --fix` to disable unused unavailable skills.",
+    ),
   };
 }
 
@@ -584,8 +596,9 @@ function browserResidueFinding(residue: LegacyClawdBrowserProfileResidue): Healt
     message: `Legacy managed browser profile residue was found at ${residue.legacyProfileDir}.`,
     path: residue.legacyProfileDir,
     ocPath: "oc://state/browser/clawd",
-    fixHint:
+    fixHint: doctorFixHint(
       "Run `openclaw doctor --fix` to archive the stale clawd profile safely instead of deleting it in place.",
+    ),
   };
 }
 

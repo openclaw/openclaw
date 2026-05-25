@@ -38,7 +38,9 @@ export class A2aClient {
       return await this.fetchFn(url, { ...init, signal: controller.signal });
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
-        throw new Error(`A2A request timed out after ${this.requestTimeoutMs}ms: ${url}`);
+        throw new Error(`A2A request timed out after ${this.requestTimeoutMs}ms: ${url}`, {
+          cause: err,
+        });
       }
       throw err;
     } finally {

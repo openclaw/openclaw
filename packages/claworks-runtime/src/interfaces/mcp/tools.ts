@@ -389,8 +389,12 @@ export async function callClaworksMcpTool(
         const verb = args.verb ? String(args.verb) : undefined;
         const ownerKind = args.owner_kind ? String(args.owner_kind) : undefined;
         const filtered = all.filter((c) => {
-          if (verb && c.verb !== verb) return false;
-          if (ownerKind && c.owner.kind !== ownerKind) return false;
+          if (verb && c.verb !== verb) {
+            return false;
+          }
+          if (ownerKind && c.owner.kind !== ownerKind) {
+            return false;
+          }
           return true;
         });
         return { capabilities: filtered, total: filtered.length };
@@ -414,12 +418,15 @@ export async function callClaworksMcpTool(
           });
           return { status: "ok", result };
         } catch (err) {
-          if (err instanceof CapabilityNotFound)
+          if (err instanceof CapabilityNotFound) {
             return { status: "not_found", capability_id: capId };
-          if (err instanceof CapabilityDenied)
+          }
+          if (err instanceof CapabilityDenied) {
             return { status: "denied", reason: err.message, tier: err.tier };
-          if (err instanceof CapabilityHitlRequired)
+          }
+          if (err instanceof CapabilityHitlRequired) {
             return { status: "hitl_required", reason: err.message, tier: err.tier };
+          }
           throw err;
         }
       }
@@ -576,7 +583,7 @@ export async function callClaworksMcpTool(
       }
       const messages = (args.messages ?? []) as Array<{ role?: string; content?: string }>;
       const lastUser = [...messages]
-        .reverse()
+        .toReversed()
         .find((m) => m.role === "user")
         ?.content?.trim();
       if (!lastUser) {

@@ -25,7 +25,9 @@ export async function createRestServer(
         path.startsWith("/a2a/") || path === "/a2a" || path === "/.well-known/agent.json";
       if (isA2a) {
         const handled = await a2aHandler(req, res);
-        if (handled) return;
+        if (handled) {
+          return;
+        }
       }
 
       const handled = await handler(req, res);

@@ -100,6 +100,10 @@ describe("gateway port resolution", () => {
       DEFAULT_GATEWAY_PORT,
     );
   });
+
+  it("defaults to ClaWorks gateway port in product mode", () => {
+    expect(resolveGatewayPort({}, envWith({ CLAWORKS_PRODUCT: "1" }))).toBe(18_800);
+  });
 });
 
 describe("state + config path candidates", () => {

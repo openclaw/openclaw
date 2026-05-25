@@ -83,8 +83,12 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   const nextEnv = { ...env };
   const nextArgs = [...args];
 
-  insertBeforeSeparator(nextArgs, "--type-aware");
-  insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
+  if (nextEnv.OPENCLAW_OXLINT_SKIP_TYPE_AWARE !== "1") {
+    insertBeforeSeparator(nextArgs, "--type-aware");
+  }
+  if (!hasFlag(nextArgs, "--tsconfig")) {
+    insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
+  }
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")

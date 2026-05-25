@@ -759,9 +759,7 @@ export class EvolutionSyncManager {
     // 将 Playbook 对象序列化为 YAML 字符串。
     // 优先使用 js-yaml（如已安装），降级为简单的 JSON 序列化（playbookEngine.loadFromYaml 支持 JSON 超集）。
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
       const yaml = require("js-yaml");
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       return yaml.dump(playbook, { indent: 2, lineWidth: 120, noRefs: true }) as string;
     } catch {
       // js-yaml 不可用时退回 JSON（playbookEngine.loadFromYaml 可解析 JSON）

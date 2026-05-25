@@ -61,17 +61,23 @@ export function tfidfSimilarity(
   caseTokens: string[],
   allCases: Map<string, CbrCase>,
 ): number {
-  if (queryTokens.length === 0 || caseTokens.length === 0) return 0;
+  if (queryTokens.length === 0 || caseTokens.length === 0) {
+    return 0;
+  }
 
   const N = allCases.size || 1;
 
   // 计算 query 的 TF（归一化词频）
   const queryTf = new Map<string, number>();
-  for (const t of queryTokens) queryTf.set(t, (queryTf.get(t) ?? 0) + 1);
+  for (const t of queryTokens) {
+    queryTf.set(t, (queryTf.get(t) ?? 0) + 1);
+  }
 
   // 计算 case 的 TF（归一化词频）
   const caseTf = new Map<string, number>();
-  for (const t of caseTokens) caseTf.set(t, (caseTf.get(t) ?? 0) + 1);
+  for (const t of caseTokens) {
+    caseTf.set(t, (caseTf.get(t) ?? 0) + 1);
+  }
 
   // 仅对两者共同出现的词计算（优化：只在共现词上做点积）
   const queryTerms = new Set(queryTf.keys());
@@ -86,7 +92,9 @@ export function tfidfSimilarity(
     // IDF: log((N+1) / (df+1)) — 平滑处理，防止除零
     let df = 0;
     for (const c of allCases.values()) {
-      if (c.similarity_keys.includes(term)) df++;
+      if (c.similarity_keys.includes(term)) {
+        df++;
+      }
     }
     const idf = Math.log((N + 1) / (df + 1)) + 1;
 
@@ -98,7 +106,9 @@ export function tfidfSimilarity(
     caseMagSq += cw * cw;
   }
 
-  if (queryMagSq === 0 || caseMagSq === 0) return 0;
+  if (queryMagSq === 0 || caseMagSq === 0) {
+    return 0;
+  }
   return dotProduct / (Math.sqrt(queryMagSq) * Math.sqrt(caseMagSq));
 }
 

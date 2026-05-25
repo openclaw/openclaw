@@ -167,10 +167,9 @@ export function createRobotIdentityManager(
       `;
       const data = JSON.stringify({
         identity,
-        relations: Array.from(relations.values()).map((r) => ({
-          ...r,
-          joinedAt: r.joinedAt.toISOString(),
-        })),
+        relations: Array.from(relations.values()).map((r) =>
+          Object.assign({}, r, { joinedAt: r.joinedAt.toISOString() }),
+        ),
       });
       try {
         db.prepare(sql).run("singleton", data, Date.now());

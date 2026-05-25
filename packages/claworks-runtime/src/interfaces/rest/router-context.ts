@@ -1,10 +1,18 @@
 export function extractReplyText(
   output: Record<string, unknown> | undefined | null,
 ): string | null {
-  if (!output) return null;
-  if (typeof output.text === "string") return output.text;
-  if (typeof output.reply === "string") return output.reply;
-  if (typeof output.message === "string") return output.message;
+  if (!output) {
+    return null;
+  }
+  if (typeof output.text === "string") {
+    return output.text;
+  }
+  if (typeof output.reply === "string") {
+    return output.reply;
+  }
+  if (typeof output.message === "string") {
+    return output.message;
+  }
   return null;
 }
 

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   filterSparseMissingOxlintTargets,
+  narrowOxlintArgsToExplicitTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
 
@@ -108,5 +109,19 @@ describe("run-oxlint", () => {
       skippedTargets: [],
       skippedConfigs: [],
     });
+  });
+
+  it("narrows lint targets to paths after --", () => {
+    expect(
+      narrowOxlintArgsToExplicitTargets([
+        "--tsconfig",
+        "config/tsconfig/oxlint.core.json",
+        "src",
+        "ui",
+        "packages",
+        "--",
+        "packages/claworks-runtime",
+      ]),
+    ).toEqual(["--tsconfig", "config/tsconfig/oxlint.core.json", "packages/claworks-runtime"]);
   });
 });
