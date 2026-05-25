@@ -36,8 +36,6 @@ export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupPa
   });
 }
 
-export const PROVIDER_ENV_API_KEY_CANDIDATES = resolveProviderEnvApiKeyCandidates();
-
 export function listKnownProviderEnvApiKeyNames(): string[] {
   return listKnownProviderAuthEnvVarNames();
 }

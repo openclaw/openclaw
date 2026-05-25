@@ -129,18 +129,28 @@ function resolveProviderMetadataSnapshot(
   if (params?.metadataSnapshot) {
     return params.metadataSnapshot;
   }
-  const config = params?.config ?? {};
+  const config = params?.config;
   const env = params?.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
-    config,
-    env,
-    ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    allowWorkspaceScopedSnapshot: true,
-  });
+  let current: PluginMetadataSnapshot | undefined;
+  if (config) {
+    current = getCurrentPluginMetadataSnapshot({
+      config,
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+    });
+  } else {
+    current = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+  }
   if (current) {
     return current;
   }
-  if (normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+  if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
     const unscopedCurrent = getCurrentPluginMetadataSnapshot({
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -152,7 +162,7 @@ function resolveProviderMetadataSnapshot(
     }
   }
   return loadPluginMetadataSnapshot({
-    config,
+    config: config ?? {},
     workspaceDir: params?.workspaceDir,
     env,
     preferPersisted: false,
@@ -179,7 +189,10 @@ function resolveManifestProviderAuthEnvVarCandidates(
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
+  });
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -210,7 +223,10 @@ function resolveManifestProviderAuthEvidence(
       appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
+  });
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {

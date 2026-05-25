@@ -21,7 +21,6 @@ vi.mock("./model-auth-env-vars.js", () => {
     moonshot: ["MOONSHOT_API_KEY"],
   } as const;
   return {
-    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
     resolveProviderEnvAuthEvidence: () => ({}),
