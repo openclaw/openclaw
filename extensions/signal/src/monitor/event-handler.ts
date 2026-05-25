@@ -442,12 +442,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    if (params.accessDecision.decision !== "allow") {
-      logVerbose(
-        `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
-      );
-      return true;
-    }
     const messageId = params.reaction.targetSentTimestamp
       ? String(params.reaction.targetSentTimestamp)
       : "unknown";
@@ -468,6 +462,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         logVerboseMessage: logVerbose,
       }))
     ) {
+      return true;
+    }
+    if (params.accessDecision.decision !== "allow") {
+      logVerbose(
+        `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
+      );
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);

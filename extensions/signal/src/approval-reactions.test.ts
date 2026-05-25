@@ -287,6 +287,64 @@ describe("Signal approval reactions", () => {
     });
   });
 
+  it("authorizes reactions using Signal defaultTo approvers", async () => {
+    registerSignalApprovalReactionTarget({
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000008",
+      approvalId: "exec-default-to",
+      allowedDecisions: ["allow-once"],
+      targetAuthorKeys: ["+15550009999"],
+      route: approvalRoute,
+      routeAllowed: true,
+    });
+
+    const handled = await maybeResolveSignalApprovalReaction({
+      cfg: {
+        channels: {
+          signal: {
+            allowFrom: [],
+            defaultTo: "+15551230000",
+          },
+        },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "session",
+          },
+        },
+      },
+      accountId: "default",
+      conversationKey: "+15551230000",
+      messageId: "1700000000008",
+      reactionKey: "👍",
+      actorId: "+15551230000",
+      targetAuthor: "+15550009999",
+    });
+
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveSignalApproval).toHaveBeenCalledWith({
+      cfg: {
+        channels: {
+          signal: {
+            allowFrom: [],
+            defaultTo: "+15551230000",
+          },
+        },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "session",
+          },
+        },
+      },
+      approvalId: "exec-default-to",
+      decision: "allow-once",
+      senderId: "+15551230000",
+      gatewayUrl: undefined,
+    });
+  });
+
   it("requires explicit approvers for approval reactions", async () => {
     registerSignalApprovalReactionTarget({
       accountId: "default",

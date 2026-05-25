@@ -13,7 +13,6 @@ Docs: https://docs.openclaw.ai
 - Migrate: import supported Hermes, OpenCode, and Codex auth credentials into OpenClaw auth profiles when credential migration is selected, with explicit opt-out and non-interactive controls. (#85667) Thanks @fuller-stack-dev.
 - iOS: improve Talk mode with direct realtime voice sessions, compact toolbar status, and responsive voice waveform feedback. (#86355) Thanks @ngutman.
 - Media: replace the Sharp image backend with Photon for metadata, resizing, EXIF orientation, and PNG alpha-preserving optimization so OpenClaw no longer installs Sharp or the WhatsApp Jimp fallback for image processing. (#86437)
-- Signal: support native exec and plugin approval prompts with 👍 allow-once and 👎 deny reactions, while keeping `allow-always` on the `/approve` command path.
 
 ### Fixes
 
@@ -87,7 +86,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/perf: fail startup benchmark samples when the Gateway process exits before benchmark teardown, including signal deaths after readiness probes.
 - Gateway/perf: fail restart benchmark samples when the Gateway exits before benchmark teardown, including clean exits and signal deaths after successful restart probes.
 - Agents/tests: keep model catalog visibility on static selection helpers so catalog visibility checks avoid the broad model-selection barrel import.
-- Signal: suppress duplicate direct exec approval fallback messages after native approval delivery succeeds.
 - Agents/commitments: serialize commitment store load-modify-save writes so concurrent heartbeat and CLI updates no longer lose dismissal, sent, or attempt state. (#81153) Thanks @ai-hpc.
 - xAI/LM Studio: promote plain-text tool-call fallbacks into structured tool calls and strip leaked internal tool syntax before user-facing delivery. (#86222) Thanks @fuller-stack-dev.
 - CLI: suppress benign self-update version-skew warnings during package post-update finalization.
