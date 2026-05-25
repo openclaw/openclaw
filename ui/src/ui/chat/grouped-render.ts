@@ -1627,7 +1627,7 @@ function renderGroupedMessage(
                           </details>`
                         : markdown
                           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown, role))}
                             </div>`
                           : nothing}
                       ${hasToolCards
@@ -1689,7 +1689,7 @@ function renderGroupedMessage(
                 </details>`
               : markdown
                 ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown, role))}
                   </div>`
                 : nothing}
             ${hasToolCards
