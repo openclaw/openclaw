@@ -2,6 +2,7 @@ import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isSuppressedControlReplyText } from "../gateway/control-reply-text.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -94,6 +95,20 @@ async function deliverCronAnnouncePayload(params: {
   message: string;
   abortSignal: AbortSignal;
 }): Promise<void> {
+  const trimmedMessage = params.message.trim();
+  if (isSuppressedControlReplyText(trimmedMessage)) {
+    cronDeliveryLogger.debug(
+      {
+        jobId: params.deps.jobId,
+        agentId: params.deps.agentId,
+        channel: params.delivery.resolvedTarget.channel,
+        to: params.delivery.resolvedTarget.to,
+      },
+      "cron: suppressed control reply token detected, skipping announce delivery",
+    );
+    return;
+  }
+
   const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.delivery.resolvedTarget.channel,
