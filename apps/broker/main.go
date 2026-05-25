@@ -56,6 +56,8 @@ var allowedBinaries = map[string]struct{}{
 	"bash":   {},
 }
 
+var commandContext = exec.CommandContext
+
 func brokerToken() string {
 	return os.Getenv("BROKER_TENANT_TOKEN")
 }
@@ -455,11 +457,10 @@ type chatRequest struct {
 	History []chatTurn `json:"history"`
 	Cwd     string     `json:"cwd"`     // optional; defaults to $HOME
 	Timeout int        `json:"timeout"` // optional seconds; default 600
-	// SessionID, when set, causes claude to resume that session instead
-	// of starting a fresh one. Preserves slash-command + MCP + skill
-	// state + conversation history across turns. The first turn omits
-	// it; the response's `system.subtype=init` event carries the new
-	// session_id which the client threads back on subsequent turns.
+	// SessionID, when set, lets session-capable binaries resume instead
+	// of starting fresh. The first turn omits it; the binary's stream
+	// carries the new session/thread id which the client threads back on
+	// subsequent turns.
 	SessionID string `json:"session_id"`
 }
 
@@ -470,8 +471,8 @@ type chatTurn struct {
 
 // flattenHistory builds a single string prompt from prior turns + the
 // current prompt. Both `claude -p` and `codex exec` accept a single
-// prompt string in non-interactive mode; richer multi-turn session
-// support (--continue / --resume) is a v2 concern.
+// prompt string in fresh non-interactive mode; resumed turns pass only
+// the latest prompt so history is not duplicated.
 func flattenHistory(history []chatTurn, current string) string {
 	if len(history) == 0 {
 		return current
@@ -532,6 +533,17 @@ func codexChatArgs(promptArg string) []string {
 		"--json",
 		"--sandbox", "danger-full-access",
 		"--skip-git-repo-check",
+		promptArg,
+	}
+}
+
+func codexResumeChatArgs(sessionID, promptArg string) []string {
+	return []string{
+		"exec",
+		"resume",
+		"--json",
+		"--skip-git-repo-check",
+		sessionID,
 		promptArg,
 	}
 }
@@ -617,10 +629,10 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// When SessionID is set, claude resumes that session — flat-prompt
-	// flattening would duplicate history. Pass just the new turn's
-	// prompt instead. Otherwise fall back to flattening for the
-	// no-session case.
+	// When SessionID is set, session-capable binaries resume that
+	// session. Flat-prompt flattening would duplicate history, so pass
+	// just the new turn's prompt. Otherwise fall back to flattening for
+	// the no-session case.
 	var promptArg string
 	if req.SessionID != "" {
 		promptArg = req.Prompt
@@ -637,20 +649,22 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		// content_block_delta tokens as they stream.
 		args = claudeChatArgs(promptArg, req.SessionID)
 	case "codex":
-		// Codex CLI: `exec` is the headless invocation. `--json`
-		// emits structured stream-json that CodexBrokerBackend's
-		// translator parses. `--skip-git-repo-check` is required —
-		// /home/runtime is not a git repo, so codex refuses to start
-		// without this flag (verified live: "Not inside a trusted
-		// directory and --skip-git-repo-check was not specified").
-		args = codexChatArgs(promptArg)
+		// Codex CLI: fresh turns use `exec`; resumed turns use
+		// `exec resume`. `--json` emits structured stream-json that
+		// CodexBrokerBackend's translator parses. `--skip-git-repo-check`
+		// is required because /home/runtime is not a git repo.
+		if req.SessionID != "" {
+			args = codexResumeChatArgs(req.SessionID, promptArg)
+		} else {
+			args = codexChatArgs(promptArg)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(),
 		time.Duration(req.Timeout)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := commandContext(ctx, binary, args...)
 	cmd.Dir = req.Cwd
 	cmd.Env = ownedChildEnv()
 

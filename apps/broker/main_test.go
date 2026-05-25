@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +56,18 @@ func TestClaudeChatArgsHasAutoExecute(t *testing.T) {
 	}
 }
 
-func TestCodexChatArgsUsesTenantMachineNetwork(t *testing.T) {
+func TestCodexChatArgsUsesFreshExecWhenNoSession(t *testing.T) {
 	args := codexChatArgs("publish to hf")
 	joined := strings.Join(args, " ")
+	if len(args) == 0 || args[0] != "exec" {
+		t.Fatalf("expected fresh codex exec args, got %v", args)
+	}
+	if strings.Contains(joined, " resume ") {
+		t.Fatalf("fresh exec args must not use resume, got %q", joined)
+	}
+	if !strings.Contains(joined, "--json") {
+		t.Fatalf("expected --json for stream-json output, got %q", joined)
+	}
 	if !strings.Contains(joined, "--sandbox danger-full-access") {
 		t.Fatalf("expected danger-full-access sandbox for tenant runtime network, got %q", joined)
 	}
@@ -64,6 +76,30 @@ func TestCodexChatArgsUsesTenantMachineNetwork(t *testing.T) {
 	}
 	if got := args[len(args)-1]; got != "publish to hf" {
 		t.Fatalf("expected prompt as final arg, got %q", got)
+	}
+}
+
+func TestCodexResumeChatArgsUsesExecResumeJSON(t *testing.T) {
+	args := codexResumeChatArgs("sess-1", "next turn")
+	want := []string{"exec", "resume", "--json", "--skip-git-repo-check", "sess-1", "next turn"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("resume args mismatch:\n got: %v\nwant: %v", args, want)
+	}
+	if got := strings.Count(strings.Join(args, "\x00"), "next turn"); got != 1 {
+		t.Fatalf("expected prompt exactly once, got %d occurrences in %v", got, args)
+	}
+	if strings.Contains(strings.Join(args, "\n"), "old history") {
+		t.Fatalf("resume args unexpectedly embedded history: %v", args)
+	}
+}
+
+func TestCodexResumeChatArgsForbidUnsupportedFlags(t *testing.T) {
+	args := codexResumeChatArgs("sess-1", "next turn")
+	joined := strings.Join(args, " ")
+	for _, forbidden := range []string{"--sandbox", "danger-full-access", "--dangerously-bypass-approvals-and-sandbox"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("resume args must not contain %q, got %v", forbidden, args)
+		}
 	}
 }
 
@@ -206,6 +242,126 @@ func TestChatRejectsEmptyPrompt(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
+}
+
+func TestCodexChatHandlerSelectsFreshAndResumeArgs(t *testing.T) {
+	first := runCodexChatWithRecordedCommand(t, `{"prompt":"fresh","history":[{"role":"user","content":"old history"}],"timeout":1}`)
+	if first.Name != "codex" {
+		t.Fatalf("expected codex binary, got %q", first.Name)
+	}
+	wantFirst := codexChatArgs(flattenHistory([]chatTurn{{Role: "user", Content: "old history"}}, "fresh"))
+	if !slices.Equal(first.Args, wantFirst) {
+		t.Fatalf("fresh handler args mismatch:\n got: %v\nwant: %v", first.Args, wantFirst)
+	}
+
+	resumed := runCodexChatWithRecordedCommand(t, `{"prompt":"next turn","history":[{"role":"user","content":"old history"}],"session_id":"sess-1","timeout":1}`)
+	wantResume := codexResumeChatArgs("sess-1", "next turn")
+	if !slices.Equal(resumed.Args, wantResume) {
+		t.Fatalf("resume handler args mismatch:\n got: %v\nwant: %v", resumed.Args, wantResume)
+	}
+	if strings.Contains(strings.Join(resumed.Args, "\n"), "old history") {
+		t.Fatalf("resumed handler args embedded history: %v", resumed.Args)
+	}
+}
+
+func TestCodexChatHandlerPassesThroughResumeJSONL(t *testing.T) {
+	record, body := runCodexChatWithRecordedCommandAndBody(t, `{"prompt":"next turn","session_id":"sess-1","timeout":1}`)
+	wantResume := codexResumeChatArgs("sess-1", "next turn")
+	if !slices.Equal(record.Args, wantResume) {
+		t.Fatalf("resume handler args mismatch:\n got: %v\nwant: %v", record.Args, wantResume)
+	}
+	if !strings.Contains(body, `{"type":"thread.started","thread_id":"thread-1"}`) {
+		t.Fatalf("missing passthrough thread.started frame: %s", body)
+	}
+	if !strings.Contains(body, `{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}`) {
+		t.Fatalf("missing passthrough item.completed frame: %s", body)
+	}
+	if strings.Contains(body, `"id":"item_0"`) {
+		t.Fatalf("default resume path must not synthesize text-wrap frames: %s", body)
+	}
+}
+
+type recordedCommand struct {
+	Name string   `json:"name"`
+	Args []string `json:"args"`
+}
+
+func runCodexChatWithRecordedCommand(t *testing.T, requestBody string) recordedCommand {
+	t.Helper()
+	record, _ := runCodexChatWithRecordedCommandAndBody(t, requestBody)
+	return record
+}
+
+func runCodexChatWithRecordedCommandAndBody(t *testing.T, requestBody string) (recordedCommand, string) {
+	t.Helper()
+	withTempHome(t)
+	writeAuthFile(t, "codex")
+	setBrokerTestEnv(t, "tt")
+
+	recordPath := t.TempDir() + "/command.json"
+	output := strings.Join([]string{
+		`{"type":"thread.started","thread_id":"thread-1"}`,
+		`{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}`,
+		`{"type":"turn.completed"}`,
+		"",
+	}, "\n")
+
+	original := commandContext
+	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		helperArgs := []string{"-test.run=TestBrokerCommandHelperProcess", "--", recordPath, output, name}
+		helperArgs = append(helperArgs, args...)
+		return exec.CommandContext(ctx, os.Args[0], helperArgs...)
+	}
+	t.Cleanup(func() { commandContext = original })
+
+	req := httptest.NewRequest(http.MethodPost,
+		"/chat?binary=codex&token=tt",
+		strings.NewReader(requestBody))
+	rec := httptest.NewRecorder()
+	chatHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	raw, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("read recorded command: %v", err)
+	}
+	var record recordedCommand
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("decode recorded command: %v raw=%s", err, raw)
+	}
+	return record, rec.Body.String()
+}
+
+func TestBrokerCommandHelperProcess(t *testing.T) {
+	sep := -1
+	for i, arg := range os.Args {
+		if arg == "--" {
+			sep = i
+			break
+		}
+	}
+	if sep == -1 {
+		return
+	}
+	helperArgs := os.Args[sep+1:]
+	if len(helperArgs) < 3 {
+		os.Exit(2)
+	}
+	record := recordedCommand{
+		Name: helperArgs[2],
+		Args: append([]string(nil), helperArgs[3:]...),
+	}
+	bs, err := json.Marshal(record)
+	if err != nil {
+		os.Exit(2)
+	}
+	if err := os.WriteFile(helperArgs[0], bs, 0o600); err != nil {
+		os.Exit(2)
+	}
+	_, _ = os.Stdout.WriteString(helperArgs[1])
+	os.Exit(0)
 }
 
 func TestFlattenHistory(t *testing.T) {
