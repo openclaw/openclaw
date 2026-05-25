@@ -3,7 +3,7 @@ import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agen
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../shared/record-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeUniqueStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -87,7 +87,7 @@ export function buildPluginToolMetadataKey(pluginId: string, toolName: string): 
 }
 
 function normalizeAllowlist(list?: string[]) {
-  return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
+  return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolName)));
 }
 
 function normalizeDenylist(list?: string[]) {

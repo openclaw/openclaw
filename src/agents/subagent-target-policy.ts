@@ -1,5 +1,5 @@
 import { normalizeAgentId } from "../routing/session-key.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { normalizeUniqueStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
@@ -30,7 +30,7 @@ function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
 function normalizeConfiguredAgentIds(
   configuredAgentIds: readonly string[] | undefined,
 ): Set<string> {
-  return new Set((configuredAgentIds ?? []).map((id) => normalizeAgentId(id)).filter(Boolean));
+  return new Set(normalizeUniqueStringEntries((configuredAgentIds ?? []).map(normalizeAgentId)));
 }
 
 function filterConfiguredAllowedIds(params: {
