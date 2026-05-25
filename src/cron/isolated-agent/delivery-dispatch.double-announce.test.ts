@@ -745,6 +745,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       synthesizedText: "Custom main session briefing complete.",
       runStartedAt: 1_000,
     });
+    params.cfg = {
+      session: { mainKey: "work" },
+    } as never;
     params.cfgWithAgentDefaults = {
       session: { mainKey: "work" },
     } as never;
@@ -787,6 +790,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       synthesizedText: "Threaded custom main session briefing complete.",
       runStartedAt: 1_000,
     });
+    params.cfg = {
+      session: { mainKey: "work" },
+    } as never;
     params.cfgWithAgentDefaults = {
       session: { mainKey: "work" },
     } as never;
