@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  isPairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -71,6 +72,28 @@ describe("device bootstrap profile", () => {
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
+  });
+
+  test("recognizes only the current setup profile", () => {
+    expect(isPairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.pairing", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
+    expect(
+      isPairingSetupBootstrapProfile({
+        roles: ["node", "operator"],
+        scopes: ["operator.admin", "operator.approvals", "operator.read", "operator.write"],
+      }),
+    ).toBe(false);
   });
 
   test("bootstrap handoff operator allowlist stays bounded", () => {

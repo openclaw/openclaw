@@ -27,6 +27,22 @@ export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
+export function isPairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  if (profile.roles.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.roles.length) {
+    return false;
+  }
+  if (profile.scopes.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes.length) {
+    return false;
+  }
+  return (
+    profile.roles.every((role, index) => role === PAIRING_SETUP_BOOTSTRAP_PROFILE.roles[index]) &&
+    profile.scopes.every((scope, index) => scope === PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes[index])
+  );
+}
+
 export function resolveBootstrapProfileScopesForRole(
   role: string,
   scopes: readonly string[],
