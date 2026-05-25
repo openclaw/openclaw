@@ -15,6 +15,38 @@ function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
   return `openclaw-anthropic-vertex-simple:${suffix}`;
 }
 
+function normalizeCodexResponsesBaseUrlForOpenAISdk(baseUrl?: string): string {
+  const normalized = baseUrl?.trim().replace(/\/+$/u, "") || "https://chatgpt.com/backend-api";
+  try {
+    const parsed = new URL(normalized);
+    const path = parsed.pathname.replace(/\/+$/u, "").toLowerCase();
+    if (
+      parsed.hostname.toLowerCase() === "chatgpt.com" &&
+      [
+        "/backend-api",
+        "/backend-api/v1",
+        "/backend-api/codex",
+        "/backend-api/codex/v1",
+        "/backend-api/codex/responses",
+      ].includes(path)
+    ) {
+      parsed.pathname = "/backend-api/codex";
+      parsed.search = "";
+      parsed.hash = "";
+      return parsed.toString().replace(/\/$/u, "");
+    }
+  } catch {
+    // Keep non-URL custom values on the same suffix contract pi-ai accepts.
+  }
+  if (normalized.endsWith("/codex/responses")) {
+    return normalized.slice(0, -"/responses".length);
+  }
+  if (normalized.endsWith("/codex")) {
+    return normalized;
+  }
+  return `${normalized}/codex`;
+}
+
 function prepareCodexSimpleTransportModel<TApi extends Api>(
   model: Model<TApi>,
   cfg?: OpenClawConfig,
@@ -25,15 +57,19 @@ function prepareCodexSimpleTransportModel<TApi extends Api>(
 
   // Static Codex provider catalogs intentionally omit credentials; the simple
   // completion path must use OpenClaw's transport so resolved request auth is applied.
+  const transportModel = {
+    ...model,
+    baseUrl: normalizeCodexResponsesBaseUrlForOpenAISdk(model.baseUrl),
+  } as Model<Api>;
   const api = resolveTransportAwareSimpleApi(model.api);
-  const streamFn = createOpenClawTransportStreamFnForModel(model as Model<Api>, { cfg });
+  const streamFn = createOpenClawTransportStreamFnForModel(transportModel, { cfg });
   if (!api || !streamFn) {
     return undefined;
   }
 
   ensureCustomApiRegistered(api, streamFn);
   return {
-    ...model,
+    ...transportModel,
     api,
   };
 }

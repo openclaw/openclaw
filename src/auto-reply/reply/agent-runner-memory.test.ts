@@ -98,7 +98,6 @@ type CompactEmbeddedPiSessionParams = {
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;
-  contextTokenBudget?: number;
   sessionFile?: string;
   sessionId?: string;
   trigger?: string;
@@ -955,12 +954,12 @@ describe("runMemoryFlushIfNeeded", () => {
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
-        authProfileId: "openai-codex:claude@martian.engineering",
-        provider: "openai",
-        model: "gpt-5.5",
+        authProfileId: "anthropic:claude@martian.engineering",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
         sessionKey: "agent:main:main",
       }),
-      defaultModel: "openai/gpt-5.5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 258_000,
       sessionEntry,
       sessionStore: { "agent:main:main": sessionEntry },
@@ -970,7 +969,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     const compactCall = requireCompactEmbeddedPiSessionCall();
-    expect(compactCall.authProfileId).toBe("openai-codex:claude@martian.engineering");
+    expect(compactCall.authProfileId).toBe("anthropic:claude@martian.engineering");
     expect(compactCall.contextTokenBudget).toBe(258_000);
   });
 

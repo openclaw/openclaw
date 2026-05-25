@@ -169,35 +169,56 @@ describe("prepareModelForSimpleCompletion", () => {
     });
   });
 
-  it("uses OpenClaw transport for OpenAI Codex simple completions without static provider credentials", () => {
-    const model: Model<"openai-codex-responses"> = {
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-    };
+  it.each([
+    ["https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/codex"],
+    ["https://chatgpt.com/backend-api/v1", "https://chatgpt.com/backend-api/codex"],
+    ["https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex"],
+    ["https://chatgpt.com/backend-api/codex/v1", "https://chatgpt.com/backend-api/codex"],
+    ["https://chatgpt.com/backend-api/codex/responses", "https://chatgpt.com/backend-api/codex"],
+    ["https://proxy.example.test/openai", "https://proxy.example.test/openai/codex"],
+    [
+      "https://proxy.example.test/openai/codex/responses",
+      "https://proxy.example.test/openai/codex",
+    ],
+  ])(
+    "uses OpenClaw transport for OpenAI Codex simple completions with baseUrl %s",
+    (baseUrl, expectedBaseUrl) => {
+      const model: Model<"openai-codex-responses"> = {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      };
 
-    resolveProviderStreamFn.mockReturnValueOnce(undefined);
-    createOpenClawTransportStreamFnForModel.mockReturnValueOnce("codex-transport-stream");
-    resolveTransportAwareSimpleApi.mockReturnValueOnce("openclaw-openai-responses-transport");
+      resolveProviderStreamFn.mockReturnValueOnce(undefined);
+      createOpenClawTransportStreamFnForModel.mockReturnValueOnce("codex-transport-stream");
+      resolveTransportAwareSimpleApi.mockReturnValueOnce("openclaw-openai-responses-transport");
 
-    const result = prepareModelForSimpleCompletion({ model });
+      const result = prepareModelForSimpleCompletion({ model });
 
-    expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(model, { cfg: undefined });
-    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
-      "openclaw-openai-responses-transport",
-      "codex-transport-stream",
-    );
-    expect(result).toEqual({
-      ...model,
-      api: "openclaw-openai-responses-transport",
-    });
-    expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
-  });
+      expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(
+        {
+          ...model,
+          baseUrl: expectedBaseUrl,
+        },
+        { cfg: undefined },
+      );
+      expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+        "openclaw-openai-responses-transport",
+        "codex-transport-stream",
+      );
+      expect(result).toEqual({
+        ...model,
+        baseUrl: expectedBaseUrl,
+        api: "openclaw-openai-responses-transport",
+      });
+      expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
+    },
+  );
 });
