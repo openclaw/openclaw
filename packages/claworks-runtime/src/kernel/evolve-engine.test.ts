@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCbrStore } from "../planes/data/cbr-store.js";
-import { createEvolveEngine, parseEvolutionDraftText } from "./evolve-engine.js";
+import {
+  createEvolveEngine,
+  cacheDraftSimulation,
+  clearDraftSimulationCache,
+  parseEvolutionDraftText,
+} from "./evolve-engine.js";
 
 function makeMockKernel() {
   const handlers = new Map<string, Array<(payload: Record<string, unknown>) => void>>();
@@ -124,6 +129,10 @@ async function waitForPublished(
 }
 
 describe("EvolveEngine", () => {
+  beforeEach(() => {
+    clearDraftSimulationCache();
+  });
+
   it("startAutoLearning 在 playbook.run.failed 时将失败案例写入 CbrStore", () => {
     const runtime = makeEvolveRuntime();
     const engine = createEvolveEngine(runtime as never);
@@ -225,6 +234,7 @@ describe("EvolveEngine", () => {
     runtime.playbookEngine.loadFromPacks = vi.fn(async () => undefined);
     const engine = createEvolveEngine(runtime as never);
     const proposal = await engine.proposeDraft({ description: "deploy me" });
+    cacheDraftSimulation(proposal.id, { passed: true, yaml_valid: true, status: "ok" });
 
     const result = await engine.promoteDraft({
       proposalId: proposal.id,
@@ -247,6 +257,7 @@ describe("EvolveEngine", () => {
     runtime.playbookEngine.loadFromPacks = vi.fn(async () => undefined);
     const engine = createEvolveEngine(runtime as never);
     const proposal = await engine.proposeDraft({ description: "verify me" });
+    cacheDraftSimulation(proposal.id, { passed: true, yaml_valid: true, status: "ok" });
 
     const origPublish = runtime.kernel.publish;
     runtime.kernel.publish = vi.fn(
@@ -267,6 +278,64 @@ describe("EvolveEngine", () => {
     });
     expect(result.status).toBe("deployed");
     expect(result.deploy?.test_passed).toBe(true);
+  });
+
+  it("promoteDraft simulation.passed=false 时 fail-closed 拒绝 deploy", async () => {
+    const runtime = makeEvolveRuntime();
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "blocked promote" });
+    cacheDraftSimulation(proposal.id, { passed: false, yaml_valid: true, status: "error" });
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: true,
+      verifyAfterDeploy: false,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toMatch(/simulation did not pass/i);
+    expect(result.deployed).toBeUndefined();
+    expect(runtime.packLoader.load).not.toHaveBeenCalled();
+  });
+
+  it("promoteDraft 缺少 simulation 时 fail-closed 拒绝 deploy", async () => {
+    const runtime = makeEvolveRuntime();
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "no simulation yet" });
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: true,
+      verifyAfterDeploy: false,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toMatch(/simulation required/i);
+    expect(runtime.packLoader.load).not.toHaveBeenCalled();
+  });
+
+  it("promoteDraft simulation.passed=true 时允许 deploy", async () => {
+    const runtime = makeEvolveRuntime();
+    runtime.packLoader.load = vi.fn(async () => ({
+      manifest: { id: "user_evolved" },
+      path: "/tmp",
+      objectTypes: [],
+      playbooks: [],
+    }));
+    runtime.playbookEngine.loadFromPacks = vi.fn(async () => undefined);
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "simulation passed" });
+    cacheDraftSimulation(proposal.id, { passed: true, yaml_valid: true, status: "ok" });
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: true,
+      verifyAfterDeploy: false,
+    });
+
+    expect(result.status).toBe("deployed_unverified");
+    expect(result.deployed).toBe(true);
+    expect(runtime.packLoader.load).toHaveBeenCalled();
   });
 
   it("startDraftReviewPipeline 在 evolve.playbook_drafted 后发布 evolve.suggestions_ready", async () => {

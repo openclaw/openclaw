@@ -173,6 +173,10 @@ export function createDocumentKnowledgeBase(
         namespace: opts?.namespace,
         layer: opts?.layer as KbLayer | undefined,
         title: opts?.title,
+        metadata:
+          opts?.metadata && typeof opts.metadata === "object" && !Array.isArray(opts.metadata)
+            ? (opts.metadata as Record<string, unknown>)
+            : undefined,
         auto_publish: true,
       });
     },
@@ -208,6 +212,9 @@ export function createDocumentKnowledgeBase(
     },
     async listDocuments(params?: KbListDocumentsParams) {
       return store.listDocuments(params);
+    },
+    async patchDocumentMetadata(id: string, patch: Record<string, unknown>) {
+      return store.patchDocumentMetadata(id, patch);
     },
     async publishDocument(id) {
       const doc = store.getDocument(id);

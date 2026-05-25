@@ -1051,6 +1051,25 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // GET /v1/evolve/drafts/:id — 读取单个进化草稿（含 simulation）
+      if (method === "GET" && parts[1] === "evolve" && parts[2] === "drafts" && parts[3]) {
+        if (!(await requireRead())) {
+          return true;
+        }
+        const engine = runtime.evolveEngine;
+        if (!engine?.getDraft) {
+          sendJson(res, 503, { error: "evolveEngine 未初始化" });
+          return true;
+        }
+        const draft = await engine.getDraft(decodeURIComponent(parts[3]));
+        if (!draft) {
+          sendJson(res, 404, { error: "draft not found", proposal_id: parts[3] });
+          return true;
+        }
+        sendJson(res, 200, { status: "ok", draft });
+        return true;
+      }
+
       // GET /v1/evolve/drafts — 列出待审核的进化草稿（KB evolution_drafts）
       if (method === "GET" && parts[1] === "evolve" && parts[2] === "drafts") {
         if (!(await requireRead())) {

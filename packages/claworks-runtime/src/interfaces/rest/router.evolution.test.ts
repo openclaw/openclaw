@@ -6,7 +6,10 @@ import { createIngressRouter } from "../../kernel/ingress.js";
 import { createClaworksRestHandler } from "./router.js";
 
 function buildMockRuntime(
-  overrides: Partial<{ listDrafts: () => Promise<unknown[]> }> = {},
+  overrides: Partial<{
+    listDrafts: () => Promise<unknown[]>;
+    getDraft: (id: string) => Promise<unknown | null>;
+  }> = {},
 ): ClaworksRuntime & { kernelPublish: ReturnType<typeof vi.fn> } {
   const publish = vi.fn().mockResolvedValue(["evolution_simulation_pipeline"]);
   const runtime = {
@@ -56,6 +59,20 @@ function buildMockRuntime(
             updated_at: "2026-05-25T00:00:00.000Z",
           },
         ]),
+      getDraft:
+        overrides.getDraft ??
+        vi.fn(async (id: string) =>
+          id === "evolved_1"
+            ? {
+                proposal_id: "evolved_1",
+                title: "OEE 查询",
+                status: "pending_review",
+                created_at: "2026-05-25T00:00:00.000Z",
+                updated_at: "2026-05-25T00:00:00.000Z",
+                simulation: { passed: true, status: "ok", yaml_valid: true },
+              }
+            : null,
+        ),
     },
     contextEngine: { append: vi.fn() },
     logger: () => undefined,
@@ -122,6 +139,36 @@ describe("GET /v1/evolve/drafts", () => {
       expect(body.status).toBe("ok");
       expect(body.count).toBe(1);
       expect(body.drafts[0].proposal_id).toBe("evolved_1");
+    });
+  });
+});
+
+describe("GET /v1/evolve/drafts/:id", () => {
+  it("returns a single draft with simulation metadata", async () => {
+    const runtime = buildMockRuntime();
+    await withTestServer(runtime, async (port) => {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/evolve/drafts/evolved_1`);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.status).toBe("ok");
+      expect(body.draft.proposal_id).toBe("evolved_1");
+      expect(body.draft.simulation).toEqual(
+        expect.objectContaining({ passed: true, status: "ok", yaml_valid: true }),
+      );
+    });
+  });
+
+  it("returns 404 when draft is missing", async () => {
+    const runtime = buildMockRuntime({
+      getDraft: vi.fn(async () => null),
+    });
+    await withTestServer(runtime, async (port) => {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/evolve/drafts/missing`);
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toMatch(/not found/i);
     });
   });
 });

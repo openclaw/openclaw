@@ -94,6 +94,10 @@ export interface DocumentKnowledgeBase extends KnowledgeBase {
   ingestDocument(params: KbIngestDocumentParams): Promise<KbDocumentRecord>;
   getDocument(id: string): Promise<(KbDocumentRecord & { chunks?: KbChunkRecord[] }) | null>;
   listDocuments(params?: KbListDocumentsParams): Promise<KbDocumentRecord[]>;
+  patchDocumentMetadata?(
+    id: string,
+    patch: Record<string, unknown>,
+  ): Promise<KbDocumentRecord | null>;
   publishDocument(id: string): Promise<KbDocumentRecord>;
   lintDocument(id: string): KbLintResult;
   createIngestJob(params: KbCreateIngestJobParams): KbIngestJobRecord;

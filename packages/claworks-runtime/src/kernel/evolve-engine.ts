@@ -154,6 +154,99 @@ export type PromoteDraftResult = {
 
 export const EVOLUTION_DRAFTS_NAMESPACE = "evolution_drafts";
 
+export type DraftSimulationSnapshot = {
+  passed: boolean;
+  yaml_valid?: boolean;
+  status?: string;
+  reason?: string;
+  error?: string;
+  duration_ms?: number;
+  step_count?: number;
+  simulated_at?: string;
+};
+
+const draftSimulationCache = new Map<string, DraftSimulationSnapshot>();
+
+export function cacheDraftSimulation(
+  proposalId: string,
+  simulation: Record<string, unknown>,
+): DraftSimulationSnapshot {
+  const snapshot = normalizeSimulationSnapshot(simulation);
+  draftSimulationCache.set(proposalId, snapshot);
+  return snapshot;
+}
+
+export function getDraftSimulation(proposalId: string): DraftSimulationSnapshot | undefined {
+  return draftSimulationCache.get(proposalId);
+}
+
+export function clearDraftSimulationCache(): void {
+  draftSimulationCache.clear();
+}
+
+function normalizeSimulationSnapshot(sim: Record<string, unknown>): DraftSimulationSnapshot {
+  return {
+    passed: sim.passed === true,
+    yaml_valid: typeof sim.yaml_valid === "boolean" ? sim.yaml_valid : undefined,
+    status: typeof sim.status === "string" ? sim.status : undefined,
+    reason: typeof sim.reason === "string" ? sim.reason : undefined,
+    error: typeof sim.error === "string" ? sim.error : undefined,
+    duration_ms: typeof sim.duration_ms === "number" ? sim.duration_ms : undefined,
+    step_count: typeof sim.step_count === "number" ? sim.step_count : undefined,
+    simulated_at:
+      typeof sim.simulated_at === "string" ? sim.simulated_at : new Date().toISOString(),
+  };
+}
+
+async function resolveDraftSimulation(
+  runtime: ClaworksRuntime,
+  proposalId: string,
+): Promise<DraftSimulationSnapshot | undefined> {
+  const cached = getDraftSimulation(proposalId);
+  if (cached) {
+    return cached;
+  }
+  if (!isDocumentKnowledgeBase(runtime.kb)) {
+    return undefined;
+  }
+  const docs = await runtime.kb.listDocuments({
+    namespace: EVOLUTION_DRAFTS_NAMESPACE,
+    limit: 100,
+  });
+  const doc = docs.find((entry) => entry.metadata?.proposal_id === proposalId);
+  const simulation = doc?.metadata?.simulation;
+  if (simulation && typeof simulation === "object" && !Array.isArray(simulation)) {
+    return normalizeSimulationSnapshot(simulation as Record<string, unknown>);
+  }
+  return undefined;
+}
+
+async function persistDraftSimulation(
+  runtime: ClaworksRuntime,
+  proposalId: string,
+  simulation: Record<string, unknown>,
+): Promise<void> {
+  const snapshot = cacheDraftSimulation(proposalId, simulation);
+  if (!isDocumentKnowledgeBase(runtime.kb) || !runtime.kb.patchDocumentMetadata) {
+    return;
+  }
+  const docs = await runtime.kb.listDocuments({
+    namespace: EVOLUTION_DRAFTS_NAMESPACE,
+    limit: 100,
+  });
+  const doc = docs.find((entry) => entry.metadata?.proposal_id === proposalId);
+  if (!doc) {
+    return;
+  }
+  try {
+    await runtime.kb.patchDocumentMetadata(doc.id, { simulation: snapshot });
+  } catch (err) {
+    runtime.logger?.(
+      `[EvolveEngine] draft simulation metadata persist failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 /** 运行时是否具备 LLM 桥（structuredOutput / bridge / llmComplete） */
 export function hasEvolveLlmBridge(runtime: ClaworksRuntime): boolean {
   if (runtime.structuredOutput) {
@@ -199,8 +292,21 @@ export interface EvolveEngine {
       source?: string;
       created_at: string;
       updated_at: string;
+      simulation?: DraftSimulationSnapshot;
     }>
   >;
+  /** 读取单个 KB 草稿（含最近一次沙盒 simulation） */
+  getDraft(proposalId: string): Promise<{
+    proposal_id: string;
+    title: string;
+    status: string;
+    confidence?: number;
+    signal?: string;
+    source?: string;
+    created_at: string;
+    updated_at: string;
+    simulation?: DraftSimulationSnapshot;
+  } | null>;
   /** 移除一个进化的 Playbook */
   remove(playbookId: string): Promise<void>;
   /**
@@ -325,6 +431,7 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
     let playbookYaml: string | undefined;
     let yamlValid = false;
     let yamlError: string | undefined;
+    let testPayload: Record<string, unknown> | undefined;
 
     try {
       const hits = await runtime.kb.search(proposalId, {
@@ -333,6 +440,17 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       });
       const draftDoc = hits.find((h) => h.text.includes(`proposal_id: ${proposalId}`));
       const parsed = draftDoc ? parseEvolutionDraftText(draftDoc.text) : null;
+      if (isDocumentKnowledgeBase(runtime.kb)) {
+        const docs = await runtime.kb.listDocuments({
+          namespace: EVOLUTION_DRAFTS_NAMESPACE,
+          limit: 100,
+        });
+        const metaDoc = docs.find((entry) => entry.metadata?.proposal_id === proposalId);
+        const rawPayload = metaDoc?.metadata?.test_payload;
+        if (rawPayload && typeof rawPayload === "object" && !Array.isArray(rawPayload)) {
+          testPayload = rawPayload as Record<string, unknown>;
+        }
+      }
       if (parsed?.playbookYaml) {
         playbookYaml = parsed.playbookYaml;
         draftConfidence = parsed.confidence;
@@ -364,6 +482,7 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
           playbookYaml,
           playbookId,
           proposalId,
+          testPayload,
         });
       } catch (err) {
         simulation = {
@@ -381,6 +500,8 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
         reason: "missing_playbook_yaml",
       };
     }
+
+    await persistDraftSimulation(runtime, proposalId, simulation);
 
     const title = typeof payload.title === "string" ? payload.title : proposalId;
     await runtime.kernel.publish(CW_EVENTS.EVOLVE_SUGGESTIONS_READY, "evolve.draft_review", {
@@ -509,6 +630,8 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
             proposal_id: proposal.id,
             signal: opts.signal,
             confidence: proposal.confidence,
+            test_event: proposal.test_event,
+            test_payload: proposal.test_payload,
           },
         });
       } catch (err) {
@@ -571,6 +694,17 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
         },
         draftHit.title ?? proposalId,
       );
+
+      const simulation = await resolveDraftSimulation(runtime, proposalId);
+      if (simulation?.passed !== true) {
+        return {
+          status: "error",
+          reason: simulation
+            ? "sandbox simulation did not pass; re-run draft review before promote"
+            : "sandbox simulation required before promote (fail-closed)",
+          proposal,
+        };
+      }
 
       const deployResult = await this.deploy(proposal, { packId: req.packId });
       if (req.verifyAfterDeploy !== false && proposal.test_event) {
@@ -804,6 +938,10 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
             : typeof doc.source === "string"
               ? doc.source
               : doc.id;
+        const simulation =
+          meta.simulation && typeof meta.simulation === "object" && !Array.isArray(meta.simulation)
+            ? normalizeSimulationSnapshot(meta.simulation as Record<string, unknown>)
+            : getDraftSimulation(proposalId);
         return {
           proposal_id: proposalId,
           title: doc.title,
@@ -813,8 +951,63 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
           source: doc.source,
           created_at: new Date(doc.created_at).toISOString(),
           updated_at: new Date(doc.updated_at).toISOString(),
+          simulation,
         };
       });
+    },
+
+    async getDraft(proposalId: string) {
+      const trimmed = proposalId.trim();
+      if (!trimmed) {
+        return null;
+      }
+      if (!isDocumentKnowledgeBase(runtime.kb)) {
+        const simulation = getDraftSimulation(trimmed);
+        return simulation
+          ? {
+              proposal_id: trimmed,
+              title: trimmed,
+              status: "pending_review",
+              created_at: simulation.simulated_at ?? new Date().toISOString(),
+              updated_at: simulation.simulated_at ?? new Date().toISOString(),
+              simulation,
+            }
+          : null;
+      }
+      const docs = await runtime.kb.listDocuments({
+        namespace: EVOLUTION_DRAFTS_NAMESPACE,
+        limit: 100,
+      });
+      const doc = docs.find((entry) => entry.metadata?.proposal_id === trimmed);
+      if (!doc) {
+        const simulation = getDraftSimulation(trimmed);
+        return simulation
+          ? {
+              proposal_id: trimmed,
+              title: trimmed,
+              status: "pending_review",
+              created_at: simulation.simulated_at ?? new Date().toISOString(),
+              updated_at: simulation.simulated_at ?? new Date().toISOString(),
+              simulation,
+            }
+          : null;
+      }
+      const meta = doc.metadata ?? {};
+      const simulation =
+        meta.simulation && typeof meta.simulation === "object" && !Array.isArray(meta.simulation)
+          ? normalizeSimulationSnapshot(meta.simulation as Record<string, unknown>)
+          : getDraftSimulation(trimmed);
+      return {
+        proposal_id: trimmed,
+        title: doc.title,
+        status: typeof meta.status === "string" ? meta.status : doc.status,
+        confidence: typeof meta.confidence === "number" ? meta.confidence : undefined,
+        signal: typeof meta.signal === "string" ? meta.signal : undefined,
+        source: doc.source,
+        created_at: new Date(doc.created_at).toISOString(),
+        updated_at: new Date(doc.updated_at).toISOString(),
+        simulation,
+      };
     },
 
     // ── remove ─────────────────────────────────────────────────────────────

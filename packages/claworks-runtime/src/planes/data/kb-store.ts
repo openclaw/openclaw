@@ -203,6 +203,20 @@ export function createKbStore(db: CwDatabase) {
       return this.getDocument(id);
     },
 
+    patchDocumentMetadata(id: string, patch: Record<string, unknown>): KbDocumentRecord | null {
+      const existing = this.getDocument(id);
+      if (!existing) {
+        return null;
+      }
+      const now = Date.now();
+      const metadata = { ...existing.metadata, ...patch };
+      const revision = existing.revision + 1;
+      db.prepare(
+        `UPDATE cw_kb_documents SET metadata = ?, revision = ?, updated_at = ? WHERE id = ?`,
+      ).run(JSON.stringify(metadata), revision, now, id);
+      return this.getDocument(id);
+    },
+
     deleteChunksForDocument(documentId: string): void {
       db.prepare("DELETE FROM cw_kb_chunks WHERE document_id = ?").run(documentId);
     },
