@@ -351,3 +351,4 @@ private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDel
         self.continuation.resume(returning: outputFileURL)
     }
 }
+

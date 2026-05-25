@@ -559,3 +559,4 @@ private struct CameraFlashOverlay: View {
             }
     }
 }
+
