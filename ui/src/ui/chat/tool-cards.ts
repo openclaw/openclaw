@@ -70,6 +70,11 @@ function readToolErrorFlag(value: Record<string, unknown>): boolean | undefined 
 
 const TOOL_NOT_FOUND_PATTERN = /^tool not found\.?$/i;
 const MAX_ERROR_DETECT_CHARS = 20_000;
+const TOOL_ERROR_STATUSES = new Set(["error", "failed", "timeout"]);
+
+function hasToolErrorStatus(value: unknown): boolean {
+  return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
+}
 
 export function isToolErrorOutput(outputText: string | undefined): boolean {
   if (!outputText) {
@@ -113,9 +118,8 @@ export function isToolErrorOutput(outputText: string | undefined): boolean {
     if (value && typeof value === "object") {
       return true;
     }
-    return false;
   }
-  return false;
+  return hasToolErrorStatus(obj.status);
 }
 
 export function isToolCardError(card: ToolCard): boolean {

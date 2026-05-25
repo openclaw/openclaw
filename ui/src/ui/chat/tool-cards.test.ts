@@ -352,6 +352,14 @@ describe("tool-cards", () => {
       expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
     });
 
+    it("flags JSON payloads with top-level failure statuses", () => {
+      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
+      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
+    });
+
     it("does not flag successful payloads or strings without a tool error signal", () => {
       expect(isToolErrorOutput(undefined)).toBe(false);
       expect(isToolErrorOutput("")).toBe(false);
@@ -395,6 +403,26 @@ describe("tool-cards", () => {
     const expandedCard = container.querySelector(".chat-tool-card--expanded");
     expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(container.querySelector(".chat-tool-card__status-badge")).not.toBeNull();
+  });
+
+  it("renders a Tool error label when output has a status-only error payload", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:status-only",
+          name: "sessions_spawn",
+          outputText: JSON.stringify({ status: "error" }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool error");
+    expect(container.textContent).not.toMatch(/\bTool output\b/);
+    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
   });
 
   it("renders a Tool error label when output is the literal 'Tool not found'", () => {
@@ -496,6 +524,27 @@ describe("tool-cards", () => {
           id: "msg:err:sidebar-tool-not-found",
           name: "Unknown",
           outputText: "Tool not found",
+        },
+        vi.fn(),
+      ),
+      container,
+    );
+
+    const action = container.querySelector(".chat-tool-card__action");
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+    expect(action?.textContent).toContain("View error");
+    expect(action?.textContent).toContain("✕");
+    expect(action?.textContent).not.toContain("✓");
+  });
+
+  it("marks status-only sidebar output as an error instead of View with a checkmark", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCardSidebar(
+        {
+          id: "msg:err:sidebar-status",
+          name: "sessions_wait",
+          outputText: JSON.stringify({ status: "timeout" }),
         },
         vi.fn(),
       ),

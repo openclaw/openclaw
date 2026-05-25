@@ -1148,6 +1148,46 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
   });
 
+  it("marks status-only standalone tool-result summaries as errors", () => {
+    const container = document.createElement("div");
+    const groups = [
+      createMessageGroup(
+        {
+          id: "tool-status-error",
+          role: "toolResult",
+          toolCallId: "call-status-error",
+          toolName: "sessions_spawn",
+          content: JSON.stringify({ status: "error" }, null, 2),
+          timestamp: Date.now(),
+        },
+        "tool",
+      ),
+    ];
+
+    renderMessageGroups(container, groups, {
+      isToolMessageExpanded: () => false,
+    });
+
+    let summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
+      "sessions_spawn",
+    );
+    expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+
+    renderMessageGroups(container, groups, {
+      isToolMessageExpanded: () => true,
+    });
+
+    summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+    expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
+    expect(
+      JSON.parse(container.querySelector(".chat-json-content code")?.textContent ?? "{}"),
+    ).toEqual({ status: "error" });
+  });
+
   it("collapses an inline tool call while keeping matching tool output visible", () => {
     const container = document.createElement("div");
     const groups = [
