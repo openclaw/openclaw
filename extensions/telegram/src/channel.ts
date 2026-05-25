@@ -19,7 +19,7 @@ import {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -157,6 +157,14 @@ async function writeStartupBotInfoCache(params: {
 
 async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
   await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
+}
+
+function usesAutoTelegramDmThreadReplies(config: TelegramAccountConfig): boolean {
+  const dmThreadReplies = config.dm?.threadReplies;
+  if (dmThreadReplies === undefined || dmThreadReplies === "auto") {
+    return true;
+  }
+  return Object.values(config.direct ?? {}).some((entry) => entry.threadReplies === "auto");
 }
 
 function resolveTelegramAuditCollector() {
@@ -952,11 +960,14 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         let botInfo: TelegramBotInfo | undefined;
-        const cachedBotInfo = await readStartupBotInfoCache({
-          accountId: account.accountId,
-          token,
-          log: ctx.log,
-        });
+        const usesAutoDmThreads = usesAutoTelegramDmThreadReplies(account.config);
+        const cachedBotInfo = usesAutoDmThreads
+          ? undefined
+          : await readStartupBotInfoCache({
+              accountId: account.accountId,
+              token,
+              log: ctx.log,
+            });
         if (cachedBotInfo) {
           botInfo = cachedBotInfo;
           telegramBotLabel = ` (@${cachedBotInfo.username})`;

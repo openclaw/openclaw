@@ -586,6 +586,7 @@ export const registerTelegramHandlers = ({
     isForum: boolean;
     messageThreadId?: number;
     resolvedThreadId?: number;
+    botHasTopicsEnabled?: boolean;
     senderId?: string | number;
     runtimeCfg?: OpenClawConfig;
   }): {
@@ -631,8 +632,14 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
     });
     const threadKeys =
-      shouldUseTelegramDmThreadSession({ dmThreadId, accountConfig, directConfig, topicConfig }) &&
-      dmThreadId != null
+      shouldUseTelegramDmThreadSession({
+        dmThreadId,
+        botHasTopicsEnabled: params.botHasTopicsEnabled,
+        allowAutoThreadSession: route.matchedBy === "default",
+        accountConfig,
+        directConfig,
+        topicConfig,
+      }) && dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
@@ -2417,6 +2424,7 @@ export const registerTelegramHandlers = ({
             isForum,
             messageThreadId,
             resolvedThreadId,
+            botHasTopicsEnabled: ctx.me?.has_topics_enabled === true,
             senderId,
           });
           modelData = await telegramDeps.buildModelsProviderData(runtimeCfg, sessionState.agentId);
@@ -2863,6 +2871,7 @@ export const registerTelegramHandlers = ({
           isForum: event.isForum,
           messageThreadId: event.messageThreadId,
           resolvedThreadId,
+          botHasTopicsEnabled: event.ctx.me?.has_topics_enabled === true,
           senderId: event.senderId,
           runtimeCfg: cfg,
         }).sessionEntry?.sessionStartedAt,

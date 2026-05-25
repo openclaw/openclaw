@@ -406,6 +406,8 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
+    botHasTopicsEnabled: primaryCtx.me?.has_topics_enabled === true,
+    allowAutoThreadSession: route.matchedBy === "default",
     accountConfig: telegramCfg,
     directConfig,
     topicConfig,

@@ -406,7 +406,7 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toMatchObject({ botInfo: startupBotInfo });
   });
 
-  it("uses cached startup botInfo without calling getMe", async () => {
+  it("uses cached startup botInfo without calling getMe when DM thread auto is disabled", async () => {
     await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
@@ -416,11 +416,50 @@ describe("telegramPlugin gateway startup", () => {
     });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
-    const { task } = startTelegramAccount("ops");
+    const { task } = startTelegramAccount("ops", { dm: { threadReplies: "off" } });
 
     await expect(task).resolves.toBeUndefined();
     expect(probeTelegram).not.toHaveBeenCalled();
     expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
+  });
+
+  it("refreshes cached startup botInfo when DM thread replies use auto", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    const freshBotInfo = {
+      ...startupBotInfo,
+      username: "fresh_openclaw_bot",
+      has_topics_enabled: true,
+    };
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: freshBotInfo.id,
+        username: freshBotInfo.username,
+      },
+      botInfo: freshBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledTimes(1);
+    expect(latestMonitorOptions().botInfo).toEqual(freshBotInfo);
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: freshBotInfo });
   });
 
   it("deletes cached startup botInfo when the account token changes", async () => {

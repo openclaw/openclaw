@@ -20,6 +20,7 @@ type TopicNameEntryForTest = {
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
+  me?: Record<string, unknown>;
   allMedia?: TelegramMediaRef[];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
@@ -105,7 +106,7 @@ export async function buildTelegramMessageContextForTest(
         from: { id: 42, first_name: "Alice" },
         ...params.message,
       },
-      me: { id: 7, username: "bot" },
+      me: { id: 7, username: "bot", ...params.me },
     } as never,
     allMedia: params.allMedia ?? [],
     storeAllowFrom: [],

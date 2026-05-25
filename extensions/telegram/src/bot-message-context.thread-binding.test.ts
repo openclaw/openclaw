@@ -164,6 +164,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
 
     const ctx = await buildTelegramMessageContextForTest({
       sessionRuntime: threadBindingSessionRuntime,
+      me: { has_topics_enabled: true },
       message: {
         message_id: 1,
         message_thread_id: 77,
@@ -180,5 +181,42 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.resolvedThreadId).toBeUndefined();
     expect(routeArgs.replyThreadId).toBe(77);
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm-topic");
+  });
+
+  it("lets explicit DM thread config isolate topics on bound routes", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
+        accountId: "default",
+        sessionKey: "agent:codex-acp:session-dm",
+        agentId: "codex-acp",
+      }),
+    );
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      cfg: {
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            dm: { threadReplies: "inbound" },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: [] } },
+      },
+      message: {
+        message_id: 1,
+        message_thread_id: 77,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+    });
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm:thread:1234:77");
   });
 });

@@ -131,7 +131,7 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
-  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  /** Direct-message threading behavior. Defaults to bot-capability auto detection. */
   dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
@@ -234,10 +234,10 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
-export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+export type TelegramDmThreadReplies = "auto" | "off" | "inbound" | "always";
 
 export type TelegramDmConfig = {
-  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  /** DM-only session threading override for message_thread_id (auto|off|inbound|always). Default: auto. */
   threadReplies?: TelegramDmThreadReplies;
 };
 
@@ -304,8 +304,8 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
-  /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
-  threadReplies?: "off" | "inbound" | "always";
+  /** Controls whether Telegram DM message_thread_id values split sessions. Default: auto unless topic config requires it. */
+  threadReplies?: TelegramDmThreadReplies;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

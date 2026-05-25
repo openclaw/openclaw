@@ -59,6 +59,14 @@ afterEach(() => {
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
+  const dmThreadMessage = {
+    message_id: 1,
+    chat: { id: 1234, type: "private" },
+    date: 1700000000,
+    text: "hello",
+    message_thread_id: 42,
+    from: { id: 42, first_name: "Alice" },
+  };
   const buildContext = async (
     message: Record<string, unknown>,
     params?: Pick<
@@ -71,14 +79,44 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       ...params,
     });
 
-  it("keeps incidental dm message_thread_id on the main session by default", async () => {
-    const ctx = await buildContext({
-      message_id: 1,
-      chat: { id: 1234, type: "private" },
-      date: 1700000000,
-      text: "hello",
-      message_thread_id: 42,
-      from: { id: 42, first_name: "Alice" },
+  it.each([
+    {
+      name: "keeps incidental dm message_thread_id on the main session by default",
+      params: {},
+      expected: "agent:main:main",
+    },
+    {
+      name: "uses thread session key by default when bot DM topics are enabled",
+      params: { me: { has_topics_enabled: true } },
+      expected: "agent:main:main:thread:1234:42",
+    },
+    {
+      name: "keeps auto DM thread replies flat when bot topic capability is false",
+      params: { me: { has_topics_enabled: false } },
+      expected: "agent:main:main",
+    },
+  ])("$name", async ({ params, expected }) => {
+    const ctx = await buildTelegramMessageContextForTest({ message: dmThreadMessage, ...params });
+
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe(expected);
+  });
+
+  it("lets explicit off override a topic-enabled bot", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      me: { has_topics_enabled: true },
+      cfg: {
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            dm: { threadReplies: "off" },
+          },
+        },
+        messages: { groupChat: { mentionPatterns: [] } },
+      },
+      message: dmThreadMessage,
     });
 
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);

@@ -108,10 +108,10 @@ describe("telegram custom commands schema", () => {
 
   it("accepts DM thread reply policy overrides", () => {
     const res = TelegramConfigSchema.safeParse({
-      dm: { threadReplies: "off" },
+      dm: { threadReplies: "auto" },
       direct: {
         "123456789": {
-          threadReplies: "inbound",
+          threadReplies: "off",
         },
       },
       accounts: {
@@ -123,8 +123,8 @@ describe("telegram custom commands schema", () => {
 
     expect(res.success).toBe(true);
     if (res.success) {
-      expect(res.data.dm?.threadReplies).toBe("off");
-      expect(res.data.direct?.["123456789"]?.threadReplies).toBe("inbound");
+      expect(res.data.dm?.threadReplies).toBe("auto");
+      expect(res.data.direct?.["123456789"]?.threadReplies).toBe("off");
       expect(res.data.accounts?.ops?.dm?.threadReplies).toBe("always");
     }
   });

@@ -91,22 +91,15 @@ export type TelegramThreadSpec = {
 };
 
 function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
-  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
-}
-
-export function resolveTelegramDmThreadReplies(params: {
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-}): TelegramDmThreadReplies {
-  return (
-    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
-    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
-    "off"
-  );
+  return value === "auto" || value === "off" || value === "inbound" || value === "always"
+    ? value
+    : undefined;
 }
 
 export function shouldUseTelegramDmThreadSession(params: {
   dmThreadId?: number;
+  botHasTopicsEnabled?: boolean;
+  allowAutoThreadSession?: boolean;
   accountConfig?: TelegramAccountConfig;
   directConfig?: TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
@@ -117,7 +110,17 @@ export function shouldUseTelegramDmThreadSession(params: {
   if (params.directConfig?.requireTopic === true || params.topicConfig) {
     return true;
   }
-  return resolveTelegramDmThreadReplies(params) !== "off";
+  const threadReplies =
+    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
+    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
+    "auto";
+  if (threadReplies === "off") {
+    return false;
+  }
+  if (threadReplies === "auto") {
+    return params.botHasTopicsEnabled === true && params.allowAutoThreadSession !== false;
+  }
+  return true;
 }
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {

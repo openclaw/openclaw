@@ -19,11 +19,11 @@ export const telegramChannelConfigUiHints = {
   },
   "dm.threadReplies": {
     label: "Telegram DM Thread Replies",
-    help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off", default) or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
+    help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off"), bot-capability detection ("auto", default), or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
   },
   "direct.*.threadReplies": {
     label: "Telegram Per-DM Thread Replies",
-    help: 'Per-DM override for message_thread_id session threading. Use "inbound" only when a specific direct chat intentionally uses Telegram DM topics as separate sessions.',
+    help: 'Per-DM override for message_thread_id session threading. Use "off" or "inbound" only when a specific direct chat needs fixed behavior instead of "auto".',
   },
   configWrites: {
     label: "Telegram Config Writes",

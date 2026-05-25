@@ -158,29 +158,77 @@ describe("buildTelegramThreadParams", () => {
 });
 
 describe("shouldUseTelegramDmThreadSession", () => {
-  it("keeps incidental DM thread ids flat by default", () => {
-    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
-  });
-
-  it("uses DM thread sessions for explicit or topic-required configs", () => {
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        directConfig: { threadReplies: "inbound" },
-      }),
-    ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        directConfig: { requireTopic: true },
-      }),
-    ).toBe(true);
-    expect(
-      shouldUseTelegramDmThreadSession({
-        dmThreadId: 42,
-        topicConfig: { agentId: "support" },
-      }),
-    ).toBe(true);
+  it.each([
+    { name: "keeps omitted auto flat without bot capability", params: {}, expected: false },
+    {
+      name: "uses bot topic capability for auto",
+      params: { botHasTopicsEnabled: true },
+      expected: true,
+    },
+    {
+      name: "keeps explicit auto flat when capability is absent",
+      params: { accountConfig: { dm: { threadReplies: "auto" } } },
+      expected: false,
+    },
+    {
+      name: "keeps auto flat when the route owns an explicit session",
+      params: { botHasTopicsEnabled: true, allowAutoThreadSession: false },
+      expected: false,
+    },
+    {
+      name: "lets off override a topic-enabled bot",
+      params: { botHasTopicsEnabled: true, accountConfig: { dm: { threadReplies: "off" } } },
+      expected: false,
+    },
+    {
+      name: "lets inbound override a topic-disabled bot",
+      params: {
+        botHasTopicsEnabled: false,
+        allowAutoThreadSession: false,
+        accountConfig: { dm: { threadReplies: "inbound" } },
+      },
+      expected: true,
+    },
+    {
+      name: "lets always override a topic-disabled bot",
+      params: { botHasTopicsEnabled: false, accountConfig: { dm: { threadReplies: "always" } } },
+      expected: true,
+    },
+    {
+      name: "lets direct off override account inbound",
+      params: {
+        botHasTopicsEnabled: true,
+        accountConfig: { dm: { threadReplies: "inbound" } },
+        directConfig: { threadReplies: "off" },
+      },
+      expected: false,
+    },
+    {
+      name: "keeps direct auto tied to bot capability",
+      params: {
+        botHasTopicsEnabled: false,
+        accountConfig: { dm: { threadReplies: "off" } },
+        directConfig: { threadReplies: "auto" },
+      },
+      expected: false,
+    },
+    {
+      name: "uses direct inbound",
+      params: { directConfig: { threadReplies: "inbound" } },
+      expected: true,
+    },
+    {
+      name: "uses required topics",
+      params: { directConfig: { requireTopic: true } },
+      expected: true,
+    },
+    {
+      name: "uses configured topics",
+      params: { topicConfig: { agentId: "support" } },
+      expected: true,
+    },
+  ])("$name", ({ params, expected }) => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42, ...params })).toBe(expected);
   });
 });
 

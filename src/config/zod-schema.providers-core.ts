@@ -175,7 +175,7 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
-const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]);
+const TelegramDmThreadRepliesSchema = z.enum(["auto", "off", "inbound", "always"]);
 
 const TelegramDmSchema = z
   .object({
@@ -198,7 +198,7 @@ const AutoTopicLabelSchema = z
 export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
-    threadReplies: z.enum(["off", "inbound", "always"]).optional(),
+    threadReplies: TelegramDmThreadRepliesSchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
