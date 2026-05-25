@@ -263,28 +263,29 @@ const isDirectModuleNotFoundError = (err, specifier) => {
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
   const expectedPath = fileURLToPath(expectedUrl);
   const launcherPath = fileURLToPath(import.meta.url);
-  if (isModuleNotFoundError(err)) {
-    return (
-      ("url" in err && err.url === expectedUrl.href) ||
-      quotedCannotFindModule(message, expectedPath)
-    );
-  }
-
   const errorSpecifier =
     "specifier" in err && typeof err.specifier === "string" ? err.specifier : "";
   const errorReferrer = "referrer" in err && typeof err.referrer === "string" ? err.referrer : "";
   const hasLauncherReferrer =
     !errorReferrer || errorReferrer === import.meta.url || errorReferrer === launcherPath;
   const hasRawSpecifierMiss = quotedCannotFindModule(message, specifier);
-  return (
+  const hasRawSpecifierReferrer =
     hasRawSpecifierMiss &&
     hasLauncherReferrer &&
     (errorSpecifier === specifier ||
       message.includes(`from '${launcherPath}'`) ||
       message.includes(`from "${launcherPath}"`) ||
       message.includes(`from '${import.meta.url}'`) ||
-      message.includes(`from "${import.meta.url}"`))
-  );
+      message.includes(`from "${import.meta.url}"`));
+  if (isModuleNotFoundError(err)) {
+    return (
+      ("url" in err && err.url === expectedUrl.href) ||
+      quotedCannotFindModule(message, expectedPath) ||
+      hasRawSpecifierReferrer
+    );
+  }
+
+  return hasRawSpecifierReferrer;
 };
 
 const installProcessWarningFilter = async () => {
