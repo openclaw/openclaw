@@ -10,7 +10,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoLocal = resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
-  repoLocal ?? pathLocal ?? resolveGitCommonCrabboxBinary(process.env, process.platform) ?? "crabbox";
+  repoLocal ??
+  pathLocal ??
+  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
+  "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -470,6 +473,21 @@ function absolutizeLocalRunPaths(commandArgs) {
   return normalizedArgs;
 }
 
+function shellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function shellJoin(commandArgs) {
+  return commandArgs.map(shellQuote).join(" ");
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -511,20 +529,60 @@ function isChangedGateCommand(commandArgs) {
   );
 }
 
-function headInRemoteRefs() {
-  const refs = gitOutput([
-    "for-each-ref",
-    "--contains",
-    "HEAD",
-    "--format=%(refname)",
-    "refs/remotes",
-  ]);
-  return refs.status === 0 && refs.stdout !== "";
-}
-
 function mergeBaseForChangedGate() {
   const base = gitOutput(["merge-base", "origin/main", "HEAD"]);
   return base.status === 0 && base.stdout ? base.stdout : "origin/main";
+}
+
+function remoteGitBootstrapForChangedGate(changedGateBase) {
+  const quotedBase = shellQuote(changedGateBase);
+  return [
+    "if ! git rev-parse --git-dir >/dev/null 2>&1; then",
+    "git init -q;",
+    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
+    `git fetch -q --depth=1 origin ${quotedBase}:refs/remotes/origin/main;`,
+    "git reset --mixed --quiet refs/remotes/origin/main;",
+    "git add -A;",
+    "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
+    "fi",
+  ].join(" ");
+}
+
+function isWindowsRemoteTarget(commandArgs) {
+  return (
+    optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
+  );
+}
+
+function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
+  if (!changedGateBase || commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase)} && ${originalShellCommand}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
 }
 
 function isSparseCheckout() {
@@ -544,10 +602,7 @@ function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName
   if (commandArgs[0] !== "run" || isLocalContainerProvider(providerName)) {
     return false;
   }
-  if (
-    hasOption(commandArgs, "--no-sync") ||
-    hasOption(commandArgs, "--id")
-  ) {
+  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--id")) {
     return false;
   }
 
@@ -738,13 +793,14 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
+let remoteChangedGateBase = "";
 if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
   const runWords = runCommandArgs(normalizedArgs);
-  const changedGateBase =
-    isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
+  const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
   const checkout = prepareFullCheckoutForSync({ changedGateBase });
   childCwd = checkout.dir;
   cleanupChildCwd = () => checkout.cleanup();
+  remoteChangedGateBase = checkout.changedGateBase;
   console.error(
     `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
   );
@@ -797,7 +853,13 @@ if (
   );
 }
 
-const childArgs = childCwd === repoRoot ? normalizedArgs : absolutizeLocalRunPaths(normalizedArgs);
+const childArgs =
+  childCwd === repoRoot
+    ? normalizedArgs
+    : injectRemoteChangedGateGitBootstrap(
+        absolutizeLocalRunPaths(normalizedArgs),
+        remoteChangedGateBase,
+      );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
