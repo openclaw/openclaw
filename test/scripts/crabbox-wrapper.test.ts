@@ -104,6 +104,17 @@ function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): {
   return JSON.parse(result.stdout.trim()) as { args: string[]; cwd: string };
 }
 
+function normalizeShellLineEndings(value: string): string {
+  return value.replace(/\r\n/g, "\n");
+}
+
+function expectGroupedShellCommand(remoteCommand: string, command: string): void {
+  expect(remoteCommand).toContain(`&& { ${command}`);
+  if (process.platform !== "win32") {
+    expect(remoteCommand).toContain(`${command}\n}`);
+  }
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -215,7 +226,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain(
@@ -228,7 +239,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain('return "$status"');
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("&& { pnpm --version\n}");
+    expectGroupedShellCommand(remoteCommand, "pnpm --version");
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
@@ -238,11 +249,11 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("&& { pnpm check:changed\n}");
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
   });
 
   it("groups shell commands so fallbacks cannot mask AWS macOS bootstrap failures", () => {
@@ -261,10 +272,10 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js && {");
-    expect(remoteCommand).toContain("pnpm check:changed || true\n}");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed || true");
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
@@ -541,7 +552,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
@@ -569,16 +580,14 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain(
-      "openclaw_crabbox_bootstrap_macos_js && { pnpm check:changed\n}",
-    );
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
   });
 
   it("preserves existing shell changed-gate commands after remote Git bootstrap", () => {
@@ -595,7 +604,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(
