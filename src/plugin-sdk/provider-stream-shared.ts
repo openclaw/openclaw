@@ -292,6 +292,8 @@ function wrapPlainTextToolCallStream(
  * Some providers occasionally return tool-use syntax as assistant text even when
  * native tool calling is enabled. This keeps that text out of user-facing chat
  * surfaces and lets the normal tool runner handle it.
+ *
+ * @deprecated Bundled provider stream helper; do not use from third-party plugins.
  */
 export function createPlainTextToolCallPromotionWrapper(
   baseStreamFn: StreamFn | undefined,
