@@ -972,7 +972,10 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
-        if (params.providerAuthPrewarm?.enabled !== false) {
+        if (
+          !isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDER_AUTH_PREWARM) &&
+          params.providerAuthPrewarm?.enabled !== false
+        ) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
               getConfig: params.providerAuthPrewarm?.getConfig ?? (() => params.cfgAtStart),
