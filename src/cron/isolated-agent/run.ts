@@ -486,11 +486,16 @@ type CronPreparationResult =
   | { ok: false; result: RunCronAgentTurnResult };
 
 function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (!runtimeConfig || !runtimeSourceConfig) {
+    return cfg;
+  }
   return (
     selectApplicableRuntimeConfig({
       inputConfig: cfg,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+      runtimeConfig,
+      runtimeSourceConfig,
     }) ?? cfg
   );
 }
