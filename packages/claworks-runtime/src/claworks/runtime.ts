@@ -48,6 +48,7 @@ import type {
   SubagentRunFn,
 } from "../planes/orch/step-executor.js";
 import { createDirectLlmBridge } from "./direct-llm-bridge.js";
+import { registerEvolutionAutoPromoteHandler } from "./evolution-auto-promote.js";
 import { discoverHarnessSkillsFromConfig } from "./harness-sync.js";
 import { applyIngressPublish } from "./ingress-publish.js";
 import { createRuntimeLogger } from "./logger.js";
@@ -672,6 +673,7 @@ export async function startClaworksRuntime(runtime: ClaworksRuntime): Promise<vo
   const { wireEvolutionSimulationRegressionChain } =
     await import("../kernel/evolution-regression-chain.js");
   wireEvolutionSimulationRegressionChain(runtime);
+  registerEvolutionAutoPromoteHandler(runtime);
 
   runtime.kernel.bus.subscribe("autonomy.learn_opportunity", async (event) => {
     try {
