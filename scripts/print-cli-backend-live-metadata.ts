@@ -22,21 +22,10 @@ if (provider === "codex-cli") {
   );
   process.exitCode = 0;
 } else {
-  async function loadFallbackBackend(id: string) {
-    switch (id) {
-      case "claude-cli": {
-        const mod = await import("../extensions/anthropic/cli-backend.ts");
-        return mod.buildAnthropicCliBackend();
-      }
-      case "google-gemini-cli": {
-        const mod = await import("../extensions/google/cli-backend.ts");
-        return mod.buildGoogleGeminiCliBackend();
-      }
-      default:
-        return null;
-    }
-  }
+  await printBackendMetadata(provider);
+}
 
+async function printBackendMetadata(provider: string) {
   const resolved = resolveCliBackendConfig(provider);
   const liveTest = resolveCliBackendLiveTest(provider);
   const fallbackBackend =
@@ -76,4 +65,19 @@ if (provider === "codex-cli") {
       2,
     ),
   );
+}
+
+async function loadFallbackBackend(id: string) {
+  switch (id) {
+    case "claude-cli": {
+      const mod = await import("../extensions/anthropic/cli-backend.ts");
+      return mod.buildAnthropicCliBackend();
+    }
+    case "google-gemini-cli": {
+      const mod = await import("../extensions/google/cli-backend.ts");
+      return mod.buildGoogleGeminiCliBackend();
+    }
+    default:
+      return null;
+  }
 }
