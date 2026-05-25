@@ -14,7 +14,6 @@ import {
   hasGatewayTokenEnvCandidate,
   trimToUndefined,
 } from "./credentials.js";
-import { findGatewayAuthLabelMatchingHooksToken } from "./hooks-token-auth-reuse.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 export { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
@@ -233,14 +232,15 @@ export function assertHooksTokenSeparateFromGatewayAuth(params: {
   if (!hooksToken) {
     return;
   }
-  const reusedGatewayAuthLabel = findGatewayAuthLabelMatchingHooksToken({
-    hooksToken,
-    auth: params.auth,
-  });
-  if (!reusedGatewayAuthLabel) {
+  const gatewayToken =
+    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
+  if (!gatewayToken) {
+    return;
+  }
+  if (hooksToken !== gatewayToken) {
     return;
   }
   throw new Error(
-    `Invalid config: hooks.token must not match ${reusedGatewayAuthLabel}. Set a distinct hooks.token for hook ingress.`,
+    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
   );
 }
