@@ -13,6 +13,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
   readStringValue,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -49,10 +50,7 @@ function parseHeaderList(value: unknown): string[] {
   if (typeof value !== "string") {
     return [];
   }
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(value.split(","));
 }
 
 function mergeAnthropicBetaHeader(

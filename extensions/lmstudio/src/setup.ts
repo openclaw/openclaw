@@ -23,6 +23,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
@@ -328,10 +329,9 @@ function mergeDiscoveredLmstudioAllowlistEntries(params: {
 }) {
   return withAgentModelAliases(
     params.existing,
-    params.discoveredModels
-      .map((model) => model.id.trim())
-      .filter(Boolean)
-      .map((id) => `${PROVIDER_ID}/${id}`),
+    normalizeStringEntries(params.discoveredModels.map((model) => model.id)).map(
+      (id) => `${PROVIDER_ID}/${id}`,
+    ),
   );
 }
 
