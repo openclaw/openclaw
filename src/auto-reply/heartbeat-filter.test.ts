@@ -935,17 +935,16 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ).toEqual(meaningfulMessages);
   });
 
-  it("removes trailing heartbeat response without HEARTBEAT_OK token", () => {
+  it("preserves trailing heartbeat response without HEARTBEAT_OK token", () => {
     const messages = [
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "I checked your notifications and there is nothing new." },
     ];
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi there!" },
-    ]);
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
+      messages,
+    );
   });
 
   it("preserves trailing heartbeat with tool activity even without user follow-up", () => {
