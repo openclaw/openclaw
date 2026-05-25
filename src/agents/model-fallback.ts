@@ -400,6 +400,21 @@ async function assertModelFallbackCandidateHarnessAvailable(
   }
 }
 
+function resolveCandidateAttemptError(
+  described: ReturnType<typeof describeFailoverError>,
+  candidate: ModelCandidate,
+): string {
+  if (
+    described.rawError &&
+    (!described.provider ||
+      (described.provider === candidate.provider &&
+        (!described.model || described.model === candidate.model)))
+  ) {
+    return described.rawError;
+  }
+  return described.message;
+}
+
 function recordFailedCandidateAttempt(params: {
   attempts: FallbackAttempt[];
   candidate: ModelCandidate;
@@ -417,10 +432,11 @@ function recordFailedCandidateAttempt(params: {
   fallbackConfigured: boolean;
 }): ModelFallbackStepFields | undefined {
   const described = describeFailoverError(params.error);
+  const error = resolveCandidateAttemptError(described, params.candidate);
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
@@ -438,7 +454,7 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.rawError ?? described.message,
+    error,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
@@ -455,7 +471,7 @@ function appendFailedCandidateAttempt(params: {
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.rawError ?? described.message,
+    error: resolveCandidateAttemptError(described, params.candidate),
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
