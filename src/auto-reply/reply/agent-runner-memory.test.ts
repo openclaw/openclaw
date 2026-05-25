@@ -2355,4 +2355,141 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(flushCall.bootstrapPromptWarningSignature).toBe("sig-b");
   });
+
+  it("skips memory flush when agentRuntimeOverride pins the session to claude-cli", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("skips preflight compaction when agentRuntimeOverride pins the session to claude-cli", async () => {
+    const sessionFile = path.join(rootDir, "cli-override-preflight.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("runs memory flush when agentRuntimeOverride is 'pi' even though auth.order prefers a CLI profile", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "pi",
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+        auth: {
+          profiles: {
+            "direct-api": { provider: "anthropic" },
+            "cli-profile": { provider: "claude-cli" },
+          },
+          order: {
+            anthropic: ["cli-profile", "direct-api"],
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // agentRuntimeOverride: "pi" forces canonical-provider routing, so the
+    // CLI gate should NOT fire even when auth.order prefers a CLI profile.
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
 });

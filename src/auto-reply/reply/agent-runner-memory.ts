@@ -713,14 +713,28 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.followupRun.run,
     params.followupRun.run.provider,
   );
+  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path:
+  //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
+  //      so the gate does NOT short-circuit (preflight runs).
+  //   2. agentRuntimeOverride that is itself a CLI provider for the cfg
+  //      pins the session to that CLI runtime — short-circuit applies.
+  //   3. Fall through to the auth-profile-aware resolver, which inspects
+  //      models.providers.<provider>.agentRuntime and auth-order routing.
+  const sessionRuntimeOverride = normalizeLowercaseStringOrEmpty(entry.agentRuntimeOverride);
   const cliExecutionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.followupRun.run.provider,
-      cfg: params.cfg,
-      agentId: params.followupRun.run.agentId,
-      modelId: params.followupRun.run.model ?? params.defaultModel,
-      authProfileId,
-    }) ?? params.followupRun.run.provider;
+    sessionRuntimeOverride === "pi"
+      ? params.followupRun.run.provider
+      : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+          ? sessionRuntimeOverride
+          : undefined) ??
+        resolveCliRuntimeExecutionProvider({
+          provider: params.followupRun.run.provider,
+          cfg: params.cfg,
+          agentId: params.followupRun.run.agentId,
+          modelId: params.followupRun.run.model ?? params.defaultModel,
+          authProfileId,
+        }) ??
+        params.followupRun.run.provider);
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
@@ -1008,23 +1022,37 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
+  let entry =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const { authProfileId: flushAuthProfileId } = resolveRunAuthProfile(
     params.followupRun.run,
     params.followupRun.run.provider,
   );
+  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path:
+  //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
+  //      so the gate does NOT short-circuit (memory flush runs).
+  //   2. agentRuntimeOverride that is itself a CLI provider for the cfg
+  //      pins the session to that CLI runtime — short-circuit applies.
+  //   3. Fall through to the auth-profile-aware resolver, which inspects
+  //      models.providers.<provider>.agentRuntime and auth-order routing.
+  const sessionRuntimeOverride = normalizeLowercaseStringOrEmpty(entry?.agentRuntimeOverride);
   const cliExecutionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.followupRun.run.provider,
-      cfg: params.cfg,
-      agentId: params.followupRun.run.agentId,
-      modelId: params.followupRun.run.model ?? params.defaultModel,
-      authProfileId: flushAuthProfileId,
-    }) ?? params.followupRun.run.provider;
+    sessionRuntimeOverride === "pi"
+      ? params.followupRun.run.provider
+      : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
+          ? sessionRuntimeOverride
+          : undefined) ??
+        resolveCliRuntimeExecutionProvider({
+          provider: params.followupRun.run.provider,
+          cfg: params.cfg,
+          agentId: params.followupRun.run.agentId,
+          modelId: params.followupRun.run.model ?? params.defaultModel,
+          authProfileId: flushAuthProfileId,
+        }) ??
+        params.followupRun.run.provider);
   const isCli = isCliProvider(cliExecutionProvider, params.cfg);
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
-  let entry =
-    params.sessionEntry ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
