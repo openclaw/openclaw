@@ -55,7 +55,7 @@ describe("image ops external backend security", () => {
     delete process.env.OPENCLAW_IMAGE_BACKEND;
     resolveSystemBinMock.mockReturnValue("/usr/bin/magick");
     createRastermillMock.mockReturnValue({
-      toJpeg: vi.fn(async () => {
+      encode: vi.fn(async () => {
         throw new Error("corrupt image payload");
       }),
     });

@@ -1840,7 +1840,7 @@
     "playwright-core": "1.60.0",
     "qrcode": "1.5.4",
     "quickjs-wasi": "2.2.0",
-    "rastermill": "0.1.0",
+    "rastermill": "https://codeload.github.com/openclaw/rastermill/tar.gz/5ffce4f9f534a41f9ec1cb61ea19668bc1d93565",
     "tar": "7.5.15",
     "tokenjuice": "0.7.1",
     "tree-sitter-bash": "0.25.1",

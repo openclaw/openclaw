@@ -55,7 +55,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
-  - "rastermill@0.1.0"
+  - "rastermill"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
