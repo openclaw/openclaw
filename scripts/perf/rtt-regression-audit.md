@@ -71,6 +71,10 @@ Status: branch-local checkpoint, not release notes.
   `CI=1 OPENCLAW_TESTBOX=1 corepack pnpm check:changed` after fetching
   `origin/main`; the command exited 0 after typecheck, lint, and runtime
   import-cycle checks.
+- After rebasing on `origin/main`, Testbox
+  `tbx_01ksgbx1x9pv8pxxzf8bg31k55` reran the same `check:changed` command
+  against head `696dae73cdbe0b4630b8513c1b46e98686efe28c`; typecheck, lint,
+  and runtime import-cycle checks passed.
 
 ## Still weak
 
@@ -90,3 +94,10 @@ Status: branch-local checkpoint, not release notes.
   fingerprint `a8ebbdf4bbdd` and SUT archive fingerprint `c9a96833bbc0`, then
   failed before scenario completion after the harness rejected the repeated
   lease.
+- A post-refresh CI-role retry on rebased head
+  `696dae73cdbe0b4630b8513c1b46e98686efe28c` (`26417931799`) still returned
+  the same logged-out credential `6b2d34243bac` with driver archive fingerprint
+  `a8ebbdf4bbdd` and SUT archive fingerprint `c9a96833bbc0`; the
+  `whatsapp-canary-rtt` scenario failed before startup because the Convex pool
+  returned no usable WhatsApp lease after rejecting the repeated logged-out
+  session.
