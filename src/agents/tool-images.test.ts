@@ -1,6 +1,6 @@
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
-import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { __testing, sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
   const unavailableImageBackend = process.platform === "win32" ? "sips" : "windows-native";
@@ -18,6 +18,10 @@ describe("tool image sanitizing", () => {
       }
     }
   }
+
+  beforeEach(() => {
+    __testing.resetResizeCache();
+  });
 
   const getImageBlock = (
     blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>,
@@ -166,5 +170,280 @@ describe("tool image sanitizing", () => {
         text: "[test] omitted image payload: invalid base64",
       },
     ]);
+  });
+
+  describe("resize cache (#64418)", () => {
+    it("reuses the resize result for the same image across repeated calls", async () => {
+      // Simulates session history being re-sanitized on every turn.
+      const png = await createWidePng();
+      const block = {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      const firstCall = await sanitizeContentBlocksImages([block], "turn-1");
+      const statsAfterFirst = __testing.getResizeCacheStats();
+      expect(statsAfterFirst.misses).toBe(1);
+      expect(statsAfterFirst.hits).toBe(0);
+      expect(statsAfterFirst.entryCount).toBe(1);
+
+      const secondCall = await sanitizeContentBlocksImages([block], "turn-2");
+      const statsAfterSecond = __testing.getResizeCacheStats();
+      expect(statsAfterSecond.misses).toBe(1);
+      expect(statsAfterSecond.hits).toBe(1);
+
+      const first = getImageBlock(firstCall);
+      const second = getImageBlock(secondCall);
+      expect(second.data).toBe(first.data);
+      expect(second.mimeType).toBe(first.mimeType);
+    }, 20_000);
+
+    it("keys on the full base64 payload so long shared prefixes do not collide (#64514 P1)", () => {
+      // Direct regression guard against the #64514 P1 bug: hashing only a
+      // prefix of the base64 payload (e.g. `base64.slice(0, 1000)`) causes
+      // two distinct images that share a long leading prefix to produce the
+      // same key, silently substituting one image's bytes for another in
+      // the session context. We build two payloads whose first 1024 chars
+      // are byte-identical and assert that `computeResizeCacheKey` still
+      // distinguishes them. Any key strategy that truncates the base64 at
+      // 1000 chars or fewer will fail this.
+      const sharedPrefix = "A".repeat(1024);
+      const base64A = `${sharedPrefix}aaaaBBBBcccc`;
+      const base64B = `${sharedPrefix}aaaaDDDDcccc`;
+      expect(base64A.slice(0, 1024)).toBe(base64B.slice(0, 1024));
+      expect(base64A).not.toBe(base64B);
+
+      const maxDimensionPx = 1200;
+      const maxBytes = 5 * 1024 * 1024;
+      const keyA = __testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes);
+      const keyB = __testing.computeResizeCacheKey(base64B, maxDimensionPx, maxBytes);
+      expect(keyA).not.toBe(keyB);
+
+      // Sanity: the same payload hashes to the same key and limits are part
+      // of the key space.
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes)).toBe(keyA);
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx + 1, maxBytes)).not.toBe(keyA);
+      expect(__testing.computeResizeCacheKey(base64A, maxDimensionPx, maxBytes + 1)).not.toBe(keyA);
+    });
+
+    it("preserves the caller's mimeType on a no-op cache hit (#68677 review feedback)", async () => {
+      // Regression guard for the cache-identity bug ClawSweeper flagged on
+      // the original PR submission: the resize cache key is computed from
+      // (base64, maxDimensionPx, maxBytes), but cached values include a
+      // mimeType. For formats not canonicalized by `inferMimeTypeFromBase64`
+      // (WebP, HEIC, other ISO BMFF formats), the same base64 can legitimately
+      // arrive with different declared MIME types across calls. Returning the
+      // cached MIME on every hit would silently swap the caller's declared
+      // MIME for the first caller's MIME on every later cache hit —
+      // corrupting downstream context for any future caller that trusts the
+      // helper's mimeType field on no-op returns.
+      //
+      // Note: the public `sanitizeContentBlocksImages` wrapper already
+      // overrides the helper's no-op mimeType in its output selector, so the
+      // user-visible behavior on the current call sites is not affected.
+      // This test therefore probes the resize helper *directly* via the
+      // `__testing.resizeImageBase64IfNeeded` export so the cache-return
+      // contract is verified independently of the wrapper. This is the only
+      // way to lock in the cache contract; going through the wrapper would
+      // silently pass even if the helper's contract regressed.
+      //
+      // We use WebP because (a) it falls outside `inferMimeTypeFromBase64`'s
+      // canonicalization list (so the caller's declared MIME is the input
+      // the helper actually sees) and (b) sharp can generate it without
+      // extra dependencies. A small WebP that fits under default size and
+      // dimension limits exercises the no-op return path that this bug
+      // lives on.
+      const webp = await sharp({
+        create: { width: 16, height: 16, channels: 3, background: "#336699" },
+      })
+        .webp({ quality: 80 })
+        .toBuffer();
+      const base64 = webp.toString("base64");
+      const limits = { maxDimensionPx: 1200, maxBytes: 5 * 1024 * 1024 };
+
+      const firstResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/webp",
+        ...limits,
+      });
+      expect(firstResult.resized).toBe(false);
+      expect(firstResult.mimeType).toBe("image/webp");
+
+      const firstStats = __testing.getResizeCacheStats();
+      expect(firstStats.misses).toBe(1);
+      expect(firstStats.hits).toBe(0);
+
+      // Second call: same bytes + same limits, different declared MIME. The
+      // cache key (base64 + limits) is identical, so this is a cache hit.
+      // After the fix, the helper returns the caller's declared MIME on a
+      // no-op hit; before the fix, the cached "image/webp" would be
+      // returned instead, swapping the caller's MIME silently.
+      const secondResult = await __testing.resizeImageBase64IfNeeded({
+        base64,
+        mimeType: "image/heic",
+        ...limits,
+      });
+      const secondStats = __testing.getResizeCacheStats();
+      expect(secondStats.hits).toBe(1);
+      expect(secondStats.misses).toBe(1);
+      expect(secondResult.resized).toBe(false);
+      // The actual bug fix: caller's MIME wins on a no-op cache hit.
+      expect(secondResult.mimeType).toBe("image/heic");
+      // And the no-op cache hit returns the original bytes unchanged.
+      expect(secondResult.base64).toBe(base64);
+    }, 20_000);
+
+    it("records separate cache entries for two distinct valid images (#64418 end-to-end)", async () => {
+      // Behavior-level guard that the outer wrapper actually routes distinct
+      // images through distinct cache entries. Two different JPEGs share
+      // their leading JPEG headers (SOI/APP0/DQT) but diverge in the
+      // compressed data; if the wrapper ever keyed on only the prefix, we
+      // would see 1 miss + 1 hit instead of 2 misses + 2 entries.
+      const width = 400;
+      const height = 400;
+      const redRaw = Buffer.alloc(width * height * 3);
+      const blueRaw = Buffer.alloc(width * height * 3);
+      for (let i = 0; i < redRaw.length; i += 3) {
+        redRaw[i] = 0xff;
+        blueRaw[i + 2] = 0xff;
+      }
+      const jpegA = await sharp(redRaw, { raw: { width, height, channels: 3 } })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      const jpegB = await sharp(blueRaw, { raw: { width, height, channels: 3 } })
+        .jpeg({ quality: 80 })
+        .toBuffer();
+      expect(jpegA.equals(jpegB)).toBe(false);
+
+      await sanitizeContentBlocksImages(
+        [{ type: "image" as const, data: jpegA.toString("base64"), mimeType: "image/jpeg" }],
+        "A",
+      );
+      await sanitizeContentBlocksImages(
+        [{ type: "image" as const, data: jpegB.toString("base64"), mimeType: "image/jpeg" }],
+        "B",
+      );
+
+      const stats = __testing.getResizeCacheStats();
+      // Two distinct payloads, two distinct misses, two distinct entries.
+      // With a colliding key this would be 1 miss + 1 hit + 1 entry.
+      expect(stats.misses).toBe(2);
+      expect(stats.hits).toBe(0);
+      expect(stats.entryCount).toBe(2);
+    }, 20_000);
+
+    it("keys the cache by maxBytes so different limits do not share results", async () => {
+      const png = await createWidePng();
+      const block = {
+        type: "image" as const,
+        data: png.toString("base64"),
+        mimeType: "image/png",
+      };
+
+      await sanitizeContentBlocksImages([block], "small-limit", { maxBytes: 64 * 1024 });
+      await sanitizeContentBlocksImages([block], "large-limit", { maxBytes: 256 * 1024 });
+      const stats = __testing.getResizeCacheStats();
+      expect(stats.misses).toBe(2);
+      expect(stats.hits).toBe(0);
+      expect(stats.entryCount).toBe(2);
+    }, 20_000);
+
+    describe("OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES parsing", () => {
+      const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
+      const envKey = "OPENCLAW_IMAGE_RESIZE_CACHE_MAX_BYTES";
+      const originalEnv = process.env[envKey];
+
+      function applyEnv(value: string | undefined): void {
+        if (value === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = value;
+        }
+        // resetResizeCache re-reads the env to recompute maxBytes.
+        __testing.resetResizeCache();
+      }
+
+      function restoreEnv(): void {
+        if (originalEnv === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = originalEnv;
+        }
+        __testing.resetResizeCache();
+      }
+
+      it("accepts bare positive integer byte counts", () => {
+        try {
+          applyEnv("12345");
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(12345);
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default for human-readable suffixes like '64M' (prevents silent 64-byte cap)", () => {
+        try {
+          for (const bad of ["64M", "64MiB", "64MB", "1G", "1GiB", "5k"]) {
+            applyEnv(bad);
+            expect(
+              __testing.getResizeCacheStats().maxBytes,
+              `value ${JSON.stringify(bad)} should fall back to default`,
+            ).toBe(DEFAULT_MAX_BYTES);
+          }
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default for non-integer, non-positive, or junk values", () => {
+        try {
+          for (const bad of ["0", "-5", "64.5", "1e6", "abc", "  ", "12 34"]) {
+            applyEnv(bad);
+            expect(
+              __testing.getResizeCacheStats().maxBytes,
+              `value ${JSON.stringify(bad)} should fall back to default`,
+            ).toBe(DEFAULT_MAX_BYTES);
+          }
+        } finally {
+          restoreEnv();
+        }
+      });
+
+      it("falls back to default when the env var is unset or empty", () => {
+        try {
+          applyEnv(undefined);
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(DEFAULT_MAX_BYTES);
+          applyEnv("");
+          expect(__testing.getResizeCacheStats().maxBytes).toBe(DEFAULT_MAX_BYTES);
+        } finally {
+          restoreEnv();
+        }
+      });
+    });
+
+    it("bounds cache memory by evicting past the byte cap", async () => {
+      // Size the cap at 1 byte so every insert forces immediate eviction;
+      // this deterministically proves the eviction loop runs regardless of
+      // what sharp happens to produce for a given input.
+      __testing.setResizeCacheMaxBytes(1);
+      const png = await createWidePng();
+      const base64 = png.toString("base64");
+
+      for (const limit of [64 * 1024, 96 * 1024, 128 * 1024]) {
+        await sanitizeContentBlocksImages(
+          [{ type: "image" as const, data: base64, mimeType: "image/png" }],
+          `limit-${limit}`,
+          { maxBytes: limit },
+        );
+      }
+
+      const stats = __testing.getResizeCacheStats();
+      expect(stats.totalBytes).toBeLessThanOrEqual(stats.maxBytes);
+      // All three inserts happened (three distinct keys) but each was evicted
+      // immediately because the new entry's own size exceeded the 1-byte cap.
+      expect(stats.misses).toBe(3);
+      expect(stats.entryCount).toBe(0);
+    }, 30_000);
   });
 });

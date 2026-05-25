@@ -22,7 +22,7 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
-import { sanitizeContentBlocksImages } from "./tool-images.js";
+import { __testing, sanitizeContentBlocksImages } from "./tool-images.js";
 
 async function createLargePng(): Promise<Buffer> {
   const width = 2001;
@@ -45,6 +45,10 @@ describe("tool-images log context", () => {
   beforeEach(() => {
     infoMock.mockClear();
     warnMock.mockClear();
+    // The resize cache is module-level state that persists between tests.
+    // Without a reset, the second test would hit the cache from the first
+    // (both use the same source PNG) and skip the log we are asserting on.
+    __testing.resetResizeCache();
   });
 
   it("includes filename from MEDIA text", async () => {
