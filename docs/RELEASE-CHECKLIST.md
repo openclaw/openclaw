@@ -1,8 +1,8 @@
 # ClaWorks Release Checklist
 
 **用途**：客户交付 / 生产签收前的验收清单。  
-**更新**：2026-05-25（发布前收尾：smoke + gateway:e2e 回归全绿）  
-**相关文档**：[`OPERATOR-CHECKLIST.md`](OPERATOR-CHECKLIST.md)、[`DEPLOYMENT.md`](../DEPLOYMENT.md)、[`PRODUCTION-READINESS.md`](design/PRODUCTION-READINESS.md)、[`QUICKSTART.md`](../QUICKSTART.md)
+**更新**：2026-05-25（P1 签收验证：P0 #7–#9 运行态 + evolution/ot-dry-run/audit）  
+**相关文档**：[`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)、[`OPERATOR-CHECKLIST.md`](OPERATOR-CHECKLIST.md)、[`DEPLOYMENT.md`](../DEPLOYMENT.md)、[`PRODUCTION-READINESS.md`](design/PRODUCTION-READINESS.md)、[`QUICKSTART.md`](../QUICKSTART.md)
 
 ---
 
@@ -18,6 +18,7 @@
 | API 规范                  | `docs/design/API-SPEC.md`                                     |  ✅  |
 | 许可证                    | `LICENSE` + `LICENSE-COMMERCIAL.md`                           |  ✅  |
 | OpenClaw 桥接扩展（可选） | `openclaw-claworks-extension`                                 | 按需 |
+| 客户交付指南              | `docs/CUSTOMER-DELIVERY.md`                                   |  ✅  |
 
 ---
 
@@ -31,9 +32,9 @@
 | 4   | Runtime lint/类型 | `pnpm lint:core -- packages/claworks-runtime` → 0 error                            | ✅   |
 | 5   | Doctor 可运行     | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor` → 无阻塞 Invalid config              | ✅   |
 | 6   | 生产 Compose 有效 | `docker compose -f docker-compose.prod.yml config`                                 | ✅   |
-| 7   | 健康端点          | `curl -s http://127.0.0.1:18800/v1/health` → 可达；`planes.*=ok`；无 `error` check | ⚠️   |
-| 8   | 生产模式          | `production_mode: true` fail-closed（单测 + repair）；本地 dev 未启用              | ⚠️   |
-| 9   | Gateway 令牌      | `CLAWORKS_INIT_SECURE=1` 写入 api_key + gateway token；REST 401/200 验证           | ⚠️   |
+| 7   | 健康端点          | `curl -s http://127.0.0.1:18800/v1/health` → 可达；`planes.*=ok`；无 `error` check | ✅   |
+| 8   | 生产模式          | `production_mode: true` fail-closed（单测 + repair）；本地 dev 未启用              | ✅   |
+| 9   | Gateway 令牌      | `CLAWORKS_INIT_SECURE=1` 写入 api_key + gateway token；REST 401/200 验证           | ✅   |
 | 10  | Release 干净      | `git status` 无未提交阻塞项；已打 tag                                              | ✅   |
 
 ### P0 备注（2026-05-25）
@@ -49,6 +50,7 @@
 - **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。本地 `~/.claworks/claworks.json` 仍为 dev（`production_mode` 未设）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
 - **#9 令牌（2026-05-25）**：临时目录 `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 生成 api_key + `gateway.auth.token`；in-process REST：`/v1/health` 无 Bearer → `200`；`/v1/identity` 无/错 Bearer → `401`；正确 Bearer → `200`。修复 `matchesKey` 对 32 字符 plaintext key 的误判。本地长期 Gateway 仍无 api_key（dev 开放）— 签收前需 secure init。MCP RBAC 单测：`mcp-auth.test.ts` 5/5。
 - **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；P0 验收全绿（runtime test 420+/420+、smoke 27/27、lint 0 error、doctor 无阻塞 Invalid config）；工作区已分组 conventional commit；本地 tag `v2026.5.19`（未 push）。打 tag 步骤见 [`RELEASE-NOTES-2026-05-24.md`](RELEASE-NOTES-2026-05-24.md)。
+- **#7–#9 运行态补验（2026-05-25）**：临时目录 `CLAWORKS_PACKS_DIR=/Users/power/Projects/claworks-packs` + `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` → `production_mode=true`、`require_api_key=true`、api_key 32 字符。禁用 echo 后 Gateway 冷启动 ~100s：`GET /v1/health` → `200`，`status=degraded`（仅 warn：LLM/Notify/PG/A2A/connectors），`planes.kernel/data/orch=ok`，无 error check。若保留 echo → `connectors_echo_demo:error` → `status=unavailable`（fail-closed 符合预期）。REST：`/v1/identity` 无/错 Bearer → `401`，正确 Bearer → `200`；`/v1/health` 无 token → `200`。生产单测（step-executor.production、product-config-repair、auth）440/440。详见 [`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)。
 
 ---
 
@@ -57,14 +59,22 @@
 | #   | 检查项         | 说明                                                                                                                                                   | 状态 |
 | --- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
 | 1   | PostgreSQL     | `DATABASE_URL=postgresql://...` + `pnpm claworks:migrate`                                                                                              | ☐    |
-| 2   | OT 连接器实机  | 关闭 `simulate`；mqtt/opcua/modbus 现场联调报告（见 [`QUICKSTART.md`](../QUICKSTART.md#ot-连接器实机验证预生产)）；dry-run：`pnpm claworks:ot-dry-run` | ☐    |
-| 3   | 依赖 audit     | `pnpm audit --registry=https://registry.npmjs.org` 或 SBOM                                                                                             | ☐    |
+| 2   | OT 连接器实机  | 关闭 `simulate`；mqtt/opcua/modbus 现场联调报告（见 [`QUICKSTART.md`](../QUICKSTART.md#ot-连接器实机验证预生产)）；dry-run：`pnpm claworks:ot-dry-run` | ⚠️   |
+| 3   | 依赖 audit     | `pnpm audit --registry=https://registry.npmjs.org` 或 SBOM                                                                                             | ⚠️   |
 | 4   | Extension 裁剪 | `pnpm claworks:prune-extensions:apply`（生产白名单）                                                                                                   | ☐    |
 | 5   | 备份策略       | `ecosystem-backup.sh` + `claworks-data` 卷定期备份                                                                                                     | ☐    |
 | 6   | 监控           | Prometheus scrape `/v1/metrics`；OTEL 可选                                                                                                             | ☐    |
 | 7   | CI 绿          | `.github/workflows/claworks-smoke.yml` 在 release 分支通过                                                                                             | ☐    |
 | 8   | Gateway E2E    | `pnpm claworks:gateway:e2e`（本地/预发布；2026-05-25 回归全绿）                                                                                        | ✅   |
 | 9   | Evolution 烟测 | `pnpm claworks:evolution:smoke`（进化链 + `weak_model_regression_suite` 完成 + drafts REST + pending 持久化）                                          | ✅   |
+
+### P1 备注（2026-05-25 签收验证）
+
+- **#2 OT**：`pnpm claworks:ot-dry-run` → ALL OT DRY-RUN CHECKS PASSED（mqtt/opcua simulate）。实机关 `simulate` 仍待现场报告 → ⚠️。
+- **#3 audit**：`pnpm audit --registry=https://registry.npmjs.org` → **2 moderate**（`protobufjs`、`qs` 传递依赖）→ ⚠️。
+- **#9 evolution**：`CLAWORKS_PACKS_DIR=…/claworks-packs pnpm claworks:evolution:smoke` → ALL EVOLUTION CHAIN CHECKS PASSED。
+- **#6 compose**：`docker compose -f docker-compose.prod.yml config` → 语法有效（P0 #6 已覆盖）。
+- **签收文档**：[`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)。
 
 ### Gateway E2E 与 CI
 
