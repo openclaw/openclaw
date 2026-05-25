@@ -462,6 +462,26 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
+  it("skips the restart prompt on macOS update repairs when the gateway is already running", async () => {
+    setPlatform("darwin");
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+
+    const prompter = createPrompter(() => true);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter,
+      options: { deep: false, repair: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("skips gateway restart during non-interactive update repairs", async () => {
     setPlatform("linux");
 

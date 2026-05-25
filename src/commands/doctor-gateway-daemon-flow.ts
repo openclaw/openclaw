@@ -388,6 +388,9 @@ export async function maybeRepairGatewayDaemon(params: {
       note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
       return;
     }
+    if (process.platform === "darwin" && process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1") {
+      return;
+    }
     const restart = await confirmDoctorServiceRepair(
       params.prompter,
       {
