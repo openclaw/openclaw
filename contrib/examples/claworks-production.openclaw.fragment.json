@@ -27,8 +27,10 @@
       "claworks-robot": {
         "enabled": true,
         "config": {
+          "production_mode": true,
           "api": {
-            "api_key": "CHANGE_ME"
+            "api_key": "CHANGE_ME",
+            "require_api_key": true
           },
           "robot": {
             "name": "plant-a-robot",
@@ -84,7 +86,7 @@
                 "CLAWORKS_MODBUS_PORT": "502"
               }
             },
-            "echo": { "preset": "echo", "enabled": true }
+            "echo": { "preset": "echo", "enabled": false }
           }
         }
       }

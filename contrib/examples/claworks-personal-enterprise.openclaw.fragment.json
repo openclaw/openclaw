@@ -1,5 +1,5 @@
 {
-  "_doc": "Reference only — apply with: CLAWORKS_PRODUCT_PROFILE=personal_work CLAWORKS_VECTOR_KB=1 pnpm claworks:repair. Self-hosted Qwen uses models.providers.qwen-local (openai plugin), NOT plugins/qwen.",
+  "_doc": "Reference only — apply with: CLAWORKS_PRODUCT_PROFILE=personal_work CLAWORKS_VECTOR_KB=1 pnpm claworks:repair. Production: append contrib/examples/claworks-personal-production.env.example. Self-hosted Qwen uses models.providers.qwen-local (openai plugin), NOT plugins/qwen.",
   "agents": {
     "defaults": {
       "model": { "primary": "qwen-local/qwen3" }
