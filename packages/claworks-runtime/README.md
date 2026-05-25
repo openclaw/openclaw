@@ -29,7 +29,7 @@ pnpm claworks:runtime:dist-smoke  # 验证 dist 可加载
 pnpm claworks:smoke               # build + dist-smoke + e2e + http-smoke
 ```
 
-npm 发布时使用 `publishConfig.exports`（仅 `dist/`）；仓内 workspace 默认仍解析 `src/` 便于 Vitest。
+npm 发布时使用 `publishConfig.exports`（仅 `dist/`）；仓内 workspace 默认仍解析 `src/` 便于 Vitest。发布清单见 [`docs/claworks/npm-publish.md`](../../docs/claworks/npm-publish.md)。
 
 运行时源码仅在 `packages/claworks-runtime/`；新代码请用 `@claworks/runtime` 或子路径 `@claworks/runtime/kernel` 等。
 

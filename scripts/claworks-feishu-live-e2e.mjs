@@ -9,20 +9,18 @@
  *
  * Usage:
  *   pnpm claworks:feishu:live-e2e
+ *
+ * Env template: contrib/examples/feishu-live-e2e.env.example
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildFeishuIngressPayload,
+  evaluateFeishuLiveE2eGate,
+} from "./lib/claworks-feishu-live-e2e-gate.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const gatewayUrl = (process.env.CLAWORKS_GATEWAY_URL ?? "http://127.0.0.1:18800").replace(
-  /\/$/,
-  "",
-);
-const appId = process.env.FEISHU_APP_ID?.trim();
-const appSecret = process.env.FEISHU_APP_SECRET?.trim();
-const chatId = process.env.FEISHU_TEST_CHAT_ID?.trim();
-const openId = process.env.FEISHU_TEST_OPEN_ID?.trim();
 
 function log(msg) {
   console.log(`[feishu-live-e2e] ${msg}`);
@@ -34,14 +32,11 @@ function skip(msg) {
 }
 
 async function main() {
-  if (!appId || !appSecret) {
-    skip(
-      "FEISHU_APP_ID / FEISHU_APP_SECRET not set — live E2E requires real Feishu app credentials",
-    );
+  const gate = evaluateFeishuLiveE2eGate();
+  if (gate.skip) {
+    skip(gate.reason);
   }
-  if (!chatId && !openId) {
-    skip("FEISHU_TEST_CHAT_ID or FEISHU_TEST_OPEN_ID required for message roundtrip");
-  }
+  const { gatewayUrl, chatId, openId } = gate.env;
 
   log(`probing Gateway health at ${gatewayUrl}/v1/health`);
   const healthRes = await fetch(`${gatewayUrl}/v1/health`);
@@ -52,24 +47,12 @@ async function main() {
   const health = await healthRes.json();
   log(`Gateway status: ${health.status ?? "unknown"}`);
 
-  const probeText = `ClaWorks live E2E probe ${Date.now()}`;
+  const ingress = buildFeishuIngressPayload({ chatId, openId });
   log("injecting IM message via REST /v1/events (feishu channel simulation)");
   const eventRes = await fetch(`${gatewayUrl}/v1/events`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-ClaWorks-Channel-User": openId ? `feishu:${openId}` : `feishu:live-e2e-user`,
-    },
-    body: JSON.stringify({
-      type: "im.message.received",
-      source: "feishu-live-e2e",
-      payload: {
-        channel: "feishu",
-        channel_id: chatId ?? openId,
-        text: probeText,
-        user_id: openId ?? "live-e2e-user",
-      },
-    }),
+    headers: ingress.headers,
+    body: JSON.stringify(ingress.body),
   });
 
   if (!eventRes.ok) {

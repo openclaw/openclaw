@@ -16,8 +16,12 @@
 | evolve HITL           | 草稿 → 沙盒 → `evolution.promote_sandbox`                                                     |
 | auto_promote（dev）   | `evolution.auto_promote_sandbox`（production_mode 强制 false）                                |
 | 可观测性文档          | `docs/OBSERVABILITY.md`                                                                       |
+| OTEL 桥接             | EventKernel → `trace-otel-bridge` → `diagnostics-otel` span                                   |
 | npm dry-run           | `pnpm claworks:publish:dry-run` + `pnpm claworks:runtime:publish:dry-run`                     |
 | 发布前收尾            | runtime-store 加固、gateway e2e 全绿、`docs/claworks/install.md`、`pnpm claworks:ot-dry-run`  |
+| GitHub required checks | `docs/GITHUB-BRANCH-PROTECTION.md`（维护者启用 branch protection）                           |
+| OT 连接器生产         | `ot-production.claworks.fragment.json` + modbus dry-run + 单测                               |
+| Feishu live E2E       | gate 单测 + `contrib/examples/feishu-live-e2e.env.example`；live 需凭证                      |
 
 ## B 类 — 明确不提交
 
@@ -26,18 +30,18 @@
 | `packages/claworks-runtime/dist/*` | 构建输出 |
 | `.env` / credentials               | 密钥     |
 
-## 待办（P2 — 需凭证/硬件/审批）
+## 待办（需凭证/硬件/审批）
 
 | 项                     | 说明                                  |
 | ---------------------- | ------------------------------------- |
-| Feishu live E2E        | 需 `FEISHU_APP_ID/SECRET` + 测试群    |
-| OT 连接器实机          | MQTT broker / OPC UA 现场联调         |
-| OTEL EventKernel 桥接  | diagnostics-otel span 与 runtime 统一 |
+| Feishu live 回环       | 需 `FEISHU_*` + 公网 webhook + feishu 渠道 |
+| OT 连接器实机          | MQTT broker / OPC UA / Modbus 现场联调 |
 | npm 公开发布           | dry-run 就绪；组织审批 + npm org      |
-| GitHub required checks | branch protection 启用弱模型 job      |
-| Studio React 编辑器    | 全功能 UI 未做                        |
+| GitHub branch protection | 文档就绪；维护者在 Settings 启用 required checks |
+| Studio React 编辑器    | 全功能 UI 未做（明确跳过）            |
 
 ## 当前状态
 
-- **测试**：`pnpm claworks:smoke` + `pnpm claworks:gateway:e2e` + `pnpm test extensions/claworks-robot` → 全绿（2026-05-25）
+- **测试**：`pnpm claworks:smoke` + `pnpm claworks:gateway:e2e` + `pnpm test extensions/claworks-robot` → 签收前复跑
 - **可观测性**：见 [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)
+- **npm 发布**：见 [`docs/claworks/npm-publish.md`](docs/claworks/npm-publish.md)

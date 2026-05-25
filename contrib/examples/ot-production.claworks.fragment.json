@@ -1,4 +1,5 @@
 {
+  "_comment": "OT production connector fragment — merge into plugins.entries.claworks-robot.config",
   "production_mode": true,
   "connectors": {
     "plant-mqtt": {
@@ -7,8 +8,30 @@
       "simulate": false,
       "env": {
         "CLAWORKS_MQTT_URL": "mqtt://broker.plant.local:1883",
-        "CLAWORKS_MQTT_TOPIC": "plant/alarms/#",
-        "CLAWORKS_MQTT_EVENT_TYPE": "alarm.created"
+        "CLAWORKS_MQTT_TOPIC": "plant/line3/alarms/#",
+        "CLAWORKS_MQTT_EVENT_TYPE": "alarm.created",
+        "CLAWORKS_MQTT_USERNAME": "CHANGE_ME",
+        "CLAWORKS_MQTT_PASSWORD": "CHANGE_ME"
+      }
+    },
+    "plant-opcua": {
+      "preset": "opcua",
+      "enabled": true,
+      "simulate": false,
+      "env": {
+        "CLAWORKS_OPCUA_ENDPOINT": "opc.tcp://plc.plant.local:4840",
+        "CLAWORKS_OPCUA_NAMESPACE": "2",
+        "CLAWORKS_OPCUA_POLL_INTERVAL_MS": "5000"
+      }
+    },
+    "plant-modbus": {
+      "preset": "modbus",
+      "enabled": false,
+      "simulate": false,
+      "env": {
+        "CLAWORKS_MODBUS_HOST": "192.168.1.50",
+        "CLAWORKS_MODBUS_PORT": "502",
+        "CLAWORKS_MODBUS_UNIT_ID": "1"
       }
     },
     "echo": { "preset": "echo", "enabled": false }

@@ -43,6 +43,7 @@ async function main() {
   const configs = resolveConnectorConfigs({
     mqtt: { preset: "mqtt", simulate: true, enabled: true },
     opcua: { preset: "opcua", simulate: true, enabled: true },
+    modbus: { preset: "modbus", simulate: true, enabled: true },
   });
 
   const manager = new ConnectorManager({ logger: (msg) => log(msg) });
@@ -68,6 +69,15 @@ async function main() {
 
     const mqttMsg = await manager.invoke("mqtt", "simulate_message");
     log(`mqtt simulate_message → ${JSON.stringify(mqttMsg)}`);
+
+    const modbusConnect = await manager.invoke("modbus", "connect");
+    log(`modbus connect → ${JSON.stringify(modbusConnect)}`);
+
+    const modbusRead = await manager.invoke("modbus", "read_holding", { address: 0, count: 2 });
+    log(`modbus read_holding → ${JSON.stringify(modbusRead)}`);
+
+    const modbusAlarm = await manager.invoke("modbus", "simulate_alarm");
+    log(`modbus simulate_alarm → ${JSON.stringify(modbusAlarm)}`);
 
     log("ALL OT DRY-RUN CHECKS PASSED");
   } finally {

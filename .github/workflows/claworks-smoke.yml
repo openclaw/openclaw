@@ -9,6 +9,8 @@ on:
       - "connectors/**"
       - "scripts/claworks-*.mjs"
       - "scripts/claworks-*.ts"
+      - "scripts/lib/claworks-feishu-live-e2e-gate.mjs"
+      - "test/scripts/claworks-feishu-live-e2e-gate.test.ts"
       - "claworks.mjs"
       - "src/cli/product-surface.ts"
       - "src/daemon/constants.ts"
@@ -48,6 +50,11 @@ jobs:
 
       - name: ClaWorks connector unit tests
         run: pnpm test packages/claworks-runtime/src/interfaces/connectors --reporter=verbose
+        env:
+          CLAWORKS_PRODUCT: "1"
+
+      - name: Feishu live E2E gate (mock, no credentials)
+        run: pnpm test test/scripts/claworks-feishu-live-e2e-gate.test.ts
         env:
           CLAWORKS_PRODUCT: "1"
 

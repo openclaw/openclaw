@@ -51,4 +51,21 @@ describe("connector presets", () => {
     expect(resolved.ot.env?.CLAWORKS_MQTT_TOPIC).toBe("plant/alarms/#");
     expect(resolved.ot.env?.CLAWORKS_MQTT_SIMULATE).toBe("1");
   });
+
+  it("production mqtt/opcua/modbus presets omit simulate env", () => {
+    const resolved = resolveConnectorConfigs(
+      {
+        mqtt: { preset: "mqtt", simulate: false, enabled: true },
+        opcua: { preset: "opcua", simulate: false, enabled: true },
+        modbus: { preset: "modbus", simulate: false, enabled: true },
+      },
+      root,
+    );
+    expect(resolved.mqtt.env?.CLAWORKS_MQTT_SIMULATE).toBeUndefined();
+    expect(resolved.opcua.env?.CLAWORKS_OPCUA_SIMULATE).toBeUndefined();
+    expect(resolved.modbus.env?.CLAWORKS_MODBUS_SIMULATE).toBeUndefined();
+    expect(resolved.mqtt.args?.[0]).toContain("mqtt-bridge.mjs");
+    expect(resolved.opcua.args?.[0]).toContain("opcua-bridge.py");
+    expect(resolved.modbus.args?.[0]).toContain("modbus-bridge.py");
+  });
 });

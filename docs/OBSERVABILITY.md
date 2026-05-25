@@ -86,12 +86,14 @@ export OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production
 | ClaWorks REST `/v1/events` | W3C traceparent → EventKernel          |
 | Playbook 步骤              | 子 span traceparent                    |
 
-**当前限制**：ClaWorks EventKernel span **尚未自动注入** `diagnostics-otel` 上下文。运维可通过日志中的 `traceId` / REST 响应中的 `traceparent` 做跨层关联；完整统一 trace 待 P2 桥接层。
+**当前行为（P2 已桥接）**：ClaWorks EventKernel 每次 publish 经 `claworks-robot` → `emitClaworksTraceToOtel` 发出 trusted `diagnostic.phase.completed`，`diagnostics-otel` 导出 span `claworks.event.published`（含 W3C traceparent 属性）。REST observation `claworks.trace.event_published` 仍可用于无 OTEL 场景。
 
-验证 Gateway OTEL 烟测：
+验证：
 
 ```bash
-pnpm qa:otel:smoke
+pnpm test packages/claworks-runtime/src/kernel/trace-diagnostics.test.ts
+pnpm test extensions/claworks-robot/trace-otel-bridge.test.ts
+pnpm qa:otel:smoke   # Gateway + diagnostics-otel
 ```
 
 文档：[OpenClaw OpenTelemetry](https://docs.openclaw.ai/gateway/opentelemetry)（fork 内见 `docs/gateway/opentelemetry.md`）。
@@ -122,7 +124,7 @@ export LOG_LEVEL=debug   # runtime Playbook / EventKernel 详细日志
 CLAWORKS_PACKS_DIR=../claworks-packs pnpm claworks:weak-model-regression
 ```
 
-**PR merge 门禁**：在 GitHub 仓库 Settings → Branch protection 中将 `ClaWorks Weak Model Regression / weak_model_regression` 设为 required check。
+**PR merge 门禁**：见 [`docs/GITHUB-BRANCH-PROTECTION.md`](GITHUB-BRANCH-PROTECTION.md) — 在 GitHub 仓库 Settings → Branch protection 中将 `ClaWorks Weak Model Regression / weak_model_regression` 设为 required check。
 
 ---
 
@@ -136,6 +138,10 @@ pnpm claworks:feishu:live-e2e
 ```
 
 无凭证时脚本 **SKIP**（exit 0）。有凭证时验证 Gateway `/v1/events` IM 入站路径；完整飞书 API 回环需 OpenClaw feishu 渠道 + 公网 webhook。
+
+凭证模板：`contrib/examples/feishu-live-e2e.env.example`
+
+CI（无凭证）：`pnpm test test/scripts/claworks-feishu-live-e2e-gate.test.ts`
 
 ---
 
@@ -151,6 +157,6 @@ pnpm claworks:release:preflight
 
 ## 8. 路线图（P2）
 
-- [ ] EventKernel span → diagnostics-otel 自动注入（当前 REST observation 已可关联）
+- [x] EventKernel span → diagnostics-otel 自动注入（`trace-otel-bridge.ts` + `claworks.event.published` span）
 - [ ] Playbook step 耗时 histogram 导出 OTLP
 - [ ] 统一 Grafana dashboard（metrics + traces + playbook runs）
