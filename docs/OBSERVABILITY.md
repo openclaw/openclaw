@@ -139,7 +139,8 @@ pnpm claworks:feishu:live-e2e
 
 无凭证时脚本 **SKIP**（exit 0）。有凭证时验证 Gateway `/v1/events` IM 入站路径；完整飞书 API 回环需 OpenClaw feishu 渠道 + 公网 webhook。
 
-凭证模板：`contrib/examples/feishu-live-e2e.env.example`
+凭证模板：`contrib/examples/feishu-live-e2e.env.example`  
+Runbook：[`docs/claworks/feishu-live-e2e.md`](claworks/feishu-live-e2e.md)
 
 CI（无凭证）：`pnpm test test/scripts/claworks-feishu-live-e2e-gate.test.ts`
 
