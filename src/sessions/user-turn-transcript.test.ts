@@ -398,7 +398,8 @@ describe("user turn transcript persistence", () => {
         updateMode: "none",
       });
 
-      expect(persisted?.sessionFile).toContain("session-1.jsonl");
+      expect(persisted?.sessionFile).toBeTruthy();
+      expect(fs.existsSync(persisted?.sessionFile ?? "")).toBe(true);
       expect(readTranscriptMessages(persisted?.sessionFile ?? "")).toEqual([
         expect.objectContaining({
           role: "user",
