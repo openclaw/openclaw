@@ -22,6 +22,7 @@ import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
 export const MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+export const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
 
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
@@ -34,17 +35,58 @@ type ForkedCompactionCheckpointTranscript = {
   sessionFile: string;
 };
 
-function trimSessionCheckpoints(checkpoints: SessionCompactionCheckpoint[] | undefined): {
+function checkpointSnapshotPath(checkpoint: SessionCompactionCheckpoint): string | undefined {
+  return checkpoint.preCompaction.sessionFile?.trim() || undefined;
+}
+
+function checkpointSnapshotBytes(
+  checkpoint: SessionCompactionCheckpoint,
+  snapshotBytesByPath: ReadonlyMap<string, number>,
+): number {
+  const sessionFile = checkpointSnapshotPath(checkpoint);
+  if (!sessionFile) {
+    return 0;
+  }
+  const bytes = snapshotBytesByPath.get(sessionFile);
+  return typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+}
+
+function trimSessionCheckpoints(
+  checkpoints: SessionCompactionCheckpoint[] | undefined,
+  snapshotBytesByPath: ReadonlyMap<string, number> = new Map(),
+): {
   kept: SessionCompactionCheckpoint[] | undefined;
   removed: SessionCompactionCheckpoint[];
 } {
   if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
     return { kept: undefined, removed: [] };
   }
-  const kept = checkpoints.slice(-MAX_COMPACTION_CHECKPOINTS_PER_SESSION);
+  const countTrimmed = checkpoints.slice(-MAX_COMPACTION_CHECKPOINTS_PER_SESSION);
+  const countRemoved = checkpoints.slice(0, Math.max(0, checkpoints.length - countTrimmed.length));
+  const keptNewestFirst: SessionCompactionCheckpoint[] = [];
+  const byteRemovedNewestFirst: SessionCompactionCheckpoint[] = [];
+  let retainedBytes = 0;
+  for (let index = countTrimmed.length - 1; index >= 0; index -= 1) {
+    const checkpoint = countTrimmed[index];
+    if (!checkpoint) {
+      continue;
+    }
+    const checkpointBytes = checkpointSnapshotBytes(checkpoint, snapshotBytesByPath);
+    const keepNewestCheckpoint = keptNewestFirst.length === 0;
+    if (
+      keepNewestCheckpoint ||
+      retainedBytes + checkpointBytes <= MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION
+    ) {
+      keptNewestFirst.push(checkpoint);
+      retainedBytes += checkpointBytes;
+    } else {
+      byteRemovedNewestFirst.push(checkpoint);
+    }
+  }
+  const kept = keptNewestFirst.toReversed();
   return {
-    kept,
-    removed: checkpoints.slice(0, Math.max(0, checkpoints.length - kept.length)),
+    kept: kept.length > 0 ? kept : undefined,
+    removed: [...countRemoved, ...byteRemovedNewestFirst.toReversed()],
   };
 }
 
@@ -52,6 +94,27 @@ function sessionStoreCheckpoints(
   entry: Pick<SessionEntry, "compactionCheckpoints"> | undefined,
 ): SessionCompactionCheckpoint[] {
   return Array.isArray(entry?.compactionCheckpoints) ? [...entry.compactionCheckpoints] : [];
+}
+
+async function statCheckpointSnapshotBytes(
+  checkpoints: readonly SessionCompactionCheckpoint[],
+): Promise<Map<string, number>> {
+  const bytesByPath = new Map<string, number>();
+  await Promise.all(
+    checkpoints.map(async (checkpoint) => {
+      const sessionFile = checkpointSnapshotPath(checkpoint);
+      if (!sessionFile || bytesByPath.has(sessionFile)) {
+        return;
+      }
+      try {
+        const stat = await fs.stat(sessionFile);
+        bytesByPath.set(sessionFile, stat.isFile() ? stat.size : 0);
+      } catch {
+        bytesByPath.set(sessionFile, 0);
+      }
+    }),
+  );
+  return bytesByPath;
 }
 
 export function resolveSessionCompactionCheckpointReason(params: {
@@ -443,14 +506,15 @@ export async function persistSessionCompactionCheckpoint(params: {
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
-  await updateSessionStore(target.storePath, (store) => {
+  await updateSessionStore(target.storePath, async (store) => {
     const existing = store[target.canonicalKey];
     if (!existing?.sessionId) {
       return;
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
-    trimmedCheckpoints = trimSessionCheckpoints(checkpoints);
+    const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
+    trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
     store[target.canonicalKey] = {
       ...existing,
       updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
