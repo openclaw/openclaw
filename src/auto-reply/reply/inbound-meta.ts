@@ -444,11 +444,8 @@ export function buildInboundUserContextPrefix(
   }
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
-  const directChannelValue = resolveInboundChannel(ctx);
-  const includeDirectConversationInfo = Boolean(
-    directChannelValue && directChannelValue !== "webchat",
-  );
-  const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+  const needsDirectDeliveryContext = options?.sourceReplyDeliveryMode === "message_tool_only";
+  const shouldIncludeConversationInfo = !isDirect || needsDirectDeliveryContext;
 
   const messageId = normalizePromptMetadataString(ctx.MessageSid);
   const messageIdFull = normalizePromptMetadataString(ctx.MessageSidFull);
@@ -536,7 +533,7 @@ export function buildInboundUserContextPrefix(
     tag: normalizePromptMetadataString(ctx.SenderTag),
     e164: normalizePromptMetadataString(ctx.SenderE164),
   };
-  if (senderInfo?.label) {
+  if (senderInfo?.label && (!isDirect || needsDirectDeliveryContext)) {
     blocks.push(formatUntrustedJsonBlock("Sender (untrusted metadata):", senderInfo));
   }
 

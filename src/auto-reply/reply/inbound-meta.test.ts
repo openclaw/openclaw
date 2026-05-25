@@ -269,7 +269,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("includes message identifiers for direct external-channel chats", () => {
+  it("omits routine metadata blocks for automatic direct external-channel chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "whatsapp",
@@ -279,12 +279,7 @@ describe("buildInboundUserContextPrefix", () => {
       SenderE164: " +15551234567 ",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["chat_id"]).toBe("whatsapp:+15551230000");
-    expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
-    expect(conversationInfo["sender"]).toBe("+15551234567");
-    expect(conversationInfo["conversation_label"]).toBeUndefined();
+    expect(text).toBe("");
   });
 
   it("adds delivery guidance beside inbound source context for message-tool-only turns", () => {
@@ -305,7 +300,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain("Conversation info (untrusted metadata):");
   });
 
-  it("does not add delivery guidance for automatic source delivery", () => {
+  it("does not add delivery guidance or routine metadata for automatic direct source delivery", () => {
     const text = buildInboundUserContextPrefix(
       {
         ChatType: "direct",
@@ -317,19 +312,17 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "automatic" },
     );
 
-    expect(text).not.toContain("Delivery: to send a message");
-    expect(text).toContain("Conversation info (untrusted metadata):");
+    expect(text).toBe("");
   });
 
-  it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
+  it("omits message identifiers for automatic direct chats when channel is inferred from Provider", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       Provider: "whatsapp",
       MessageSid: "provider-only-id",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("provider-only-id");
+    expect(text).toBe("");
   });
 
   it("does not treat group chats as direct based on sender id", () => {
@@ -403,16 +396,14 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["sender"]).toBe("Tyler");
   });
 
-  it("includes sender metadata block for direct chats", () => {
+  it("omits sender metadata block for automatic direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       SenderName: "Tyler",
       SenderId: "+15551234567",
     } as TemplateContext);
 
-    const senderInfo = parseSenderInfoPayload(text);
-    expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
-    expect(senderInfo["id"]).toBe("+15551234567");
+    expect(text).toBe("");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {
