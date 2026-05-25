@@ -132,9 +132,13 @@ describe("runMessageAction send validation", () => {
       target: "current-run",
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "hello from codex",
+      },
+      message: "hello from codex",
       dryRun: false,
     });
-    expect(JSON.stringify(result.toolResult)).not.toContain("hello from codex");
+    expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {
