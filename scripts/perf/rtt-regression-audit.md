@@ -75,6 +75,16 @@ Status: branch-local checkpoint, not release notes.
   `tbx_01ksgbx1x9pv8pxxzf8bg31k55` reran the same `check:changed` command
   against head `696dae73cdbe0b4630b8513c1b46e98686efe28c`; typecheck, lint,
   and runtime import-cycle checks passed.
+- After rebasing onto `origin/main` `c51fa0d127c`, focused local wrapper proof
+  against head `20cf1d093ad` passed:
+  `node scripts/run-vitest.mjs extensions/whatsapp/src/send.test.ts extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts extensions/whatsapp/src/auto-reply/monitor/process-message.test.ts extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test-support.ts extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts src/plugins/manifest-contract-eligibility.test.ts src/plugins/provider-runtime.synthetic-auth-discovery.test.ts src/auto-reply/reply/get-reply-run.media-only.test.ts src/auto-reply/reply/get-reply.fast-path.test.ts src/auto-reply/reply/model-selection.test.ts`
+  passed 277 tests.
+- Direct AWS Crabbox `cbx_b9b51ba1de42` (`run_9f69ee5db7bb`, `c7a.8xlarge`)
+  ran `pnpm check:changed` against `20cf1d093ad` over `origin/main`
+  `c51fa0d127c`. The command exited 0 after changed-gate markers, attribution,
+  guard checks, `tsgo`, oxlint, and runtime import-cycle checks. Remote timing:
+  sync `42.195s`, command `3m37.34s`, total `5m42.476s`; the lease stopped
+  cleanly.
 
 ## Still weak
 
@@ -101,3 +111,15 @@ Status: branch-local checkpoint, not release notes.
   `whatsapp-canary-rtt` scenario failed before startup because the Convex pool
   returned no usable WhatsApp lease after rejecting the repeated logged-out
   session.
+- Current post-refresh live retries still cannot produce before/after WhatsApp
+  RTT because the credential pool is not returning a usable logged-in session.
+  Maintainer-role workflow attempts `26419407629` and `26419416564` failed
+  before credential acquisition because `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
+  is not exposed in the GitHub environment. CI-role branch run `26419662925`
+  on `20cf1d093ad` failed `whatsapp-canary` after rejecting every returned
+  WhatsApp lease as logged out. CI-role main baseline run `26419661390` on
+  `f6a49a4e8a1` failed the same scenario with Baileys `401 Unauthorized /
+  Connection Failure`. The only valid perf numbers from this checkpoint are
+  harness/check timings, not WhatsApp message RTT: branch Crabbox changed gate
+  sync `42.195s`, command `3m37.34s`, total `5m42.476s`; live WhatsApp before
+  and after remain `blocked-before-scenario`.
