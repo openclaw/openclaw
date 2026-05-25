@@ -7523,6 +7523,90 @@ module.exports = {
     expect(getMemoryRuntime()).toBeUndefined();
   });
 
+  it("invalidates the plugin loader cache when only an agent memory slot changes", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const core = writePlugin({
+      id: "agent-cache-memory-core",
+      filename: "agent-cache-memory-core.cjs",
+      body: `module.exports = {
+        id: "agent-cache-memory-core",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "core" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const honcho = writePlugin({
+      id: "agent-cache-honcho",
+      filename: "agent-cache-honcho.cjs",
+      body: `module.exports = {
+        id: "agent-cache-honcho",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "honcho" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
+        },
+      };`,
+    });
+    const baseConfig = {
+      plugins: {
+        load: { paths: [core.file, honcho.file] },
+        slots: { "memory.recall": "agent-cache-memory-core" },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.recall": "agent-cache-memory-core" },
+            },
+          },
+        ],
+      },
+    } satisfies PluginLoadConfig;
+    const variantConfig = {
+      ...baseConfig,
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: { "memory.recall": "agent-cache-honcho" },
+            },
+          },
+        ],
+      },
+    } satisfies PluginLoadConfig;
+
+    const first = loadOpenClawPlugins({ config: baseConfig });
+    const second = loadOpenClawPlugins({ config: variantConfig });
+    const third = loadOpenClawPlugins({ config: variantConfig });
+
+    expect(second).not.toBe(first);
+    expect(third).toBe(second);
+    expect(
+      first.plugins.find((entry) => entry.id === "agent-cache-honcho")?.memoryRolesSelected ?? [],
+    ).not.toContain("recall");
+    expect(
+      second.plugins.find((entry) => entry.id === "agent-cache-honcho")?.memoryRolesSelected,
+    ).toEqual(["recall"]);
+    expect(getMemoryRuntimeForPlugin("agent-cache-honcho")).toBeDefined();
+  });
+
   it("keeps recall runtimes addressable by plugin id for global and per-agent owners", async () => {
     useNoBundledPlugins();
     const core = writePlugin({
