@@ -1,5 +1,6 @@
 export {
   BufferJSON,
+  Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearStalePhoneCodePairingAuthIfNeeded } from "./auth-store.js";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
@@ -39,12 +40,23 @@ vi.mock("./session.js", async () => {
   };
 });
 
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    clearStalePhoneCodePairingAuthIfNeeded: vi.fn(async () => false),
+  };
+});
+
 vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
   renderQrPngDataUrl: vi.fn(async (input: string) => `data:image/png;base64,encoded:${input}`),
 }));
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const clearStalePhoneCodePairingAuthIfNeededMock = vi.mocked(
+  clearStalePhoneCodePairingAuthIfNeeded,
+);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
@@ -90,6 +102,7 @@ describe("login-qr", () => {
         },
       );
     waitForWaConnectionMock.mockReset();
+    clearStalePhoneCodePairingAuthIfNeededMock.mockReset().mockResolvedValue(false);
     readWebAuthExistsForDecisionMock.mockReset().mockResolvedValue({
       outcome: "stable",
       exists: false,

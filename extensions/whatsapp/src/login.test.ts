@@ -8,6 +8,8 @@ vi.mock("./session.js", async () => {
   const ev = new EventEmitter();
   const sock = {
     ev,
+    authState: { creds: { registered: false } },
+    requestPairingCode: vi.fn(async () => "ABCD1234"),
     ws: { close: vi.fn() },
     sendPresenceUpdate: vi.fn(),
     sendMessage: vi.fn(),
@@ -23,20 +25,28 @@ vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
   return {
     ...actual,
+    clearStalePhoneCodePairingAuthIfNeeded: vi.fn(async () => false),
+    hasWebCredsSync: vi.fn(() => false),
     restoreCredsFromBackupIfNeeded: vi.fn(async () => false),
   };
 });
 
 import type { waitForWaConnection } from "./session.js";
 let loginWeb: typeof import("./login.js").loginWeb;
+let loginWebWithPhoneCode: typeof import("./login.js").loginWebWithPhoneCode;
+let normalizeWhatsAppPairingPhoneNumber: typeof import("./login.js").normalizeWhatsAppPairingPhoneNumber;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let clearStalePhoneCodePairingAuthIfNeeded: typeof import("./auth-store.js").clearStalePhoneCodePairingAuthIfNeeded;
+let hasWebCredsSync: typeof import("./auth-store.js").hasWebCredsSync;
 let restoreCredsFromBackupIfNeeded: typeof import("./auth-store.js").restoreCredsFromBackupIfNeeded;
 
 describe("web login", () => {
   beforeAll(async () => {
-    ({ loginWeb } = await import("./login.js"));
+    ({ loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } =
+      await import("./login.js"));
     ({ createWaSocket } = await import("./session.js"));
-    ({ restoreCredsFromBackupIfNeeded } = await import("./auth-store.js"));
+    ({ clearStalePhoneCodePairingAuthIfNeeded, hasWebCredsSync, restoreCredsFromBackupIfNeeded } =
+      await import("./auth-store.js"));
   });
 
   beforeEach(() => {
@@ -77,6 +87,76 @@ describe("web login", () => {
       success("✅ Recovered from creds.json.bak; web session ready."),
     );
     consoleLog.mockRestore();
+  });
+
+  it("loginWebWithPhoneCode requests a pairing code and waits for connection", async () => {
+    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const pendingLogin = loginWebWithPhoneCode(false, "+44 7123-456-789", waiter, runtime);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const sock = (await vi.mocked(createWaSocket).mock.results[0]?.value) as {
+      ev: EventEmitter;
+      requestPairingCode: ReturnType<typeof vi.fn>;
+    };
+    sock.ev.emit("connection.update", { qr: "pairing-ready" });
+    await pendingLogin;
+
+    expect(vi.mocked(createWaSocket)).toHaveBeenCalledWith(
+      false,
+      false,
+      expect.objectContaining({ browser: expect.any(Array) }),
+    );
+    expect(sock.requestPairingCode).toHaveBeenCalledWith("447123456789");
+    expect(runtime.log).toHaveBeenCalledWith("WhatsApp pairing code: ABCD 1234");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "On your phone, open WhatsApp → Linked Devices → Link with phone number, then enter this code.",
+    );
+  });
+
+  it("does not request a pairing code when usable linked creds already exist", async () => {
+    vi.mocked(hasWebCredsSync).mockReturnValueOnce(true);
+    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await loginWebWithPhoneCode(false, "+44 7123-456-789", waiter, runtime);
+
+    const sock = (await vi.mocked(createWaSocket).mock.results[0]?.value) as {
+      requestPairingCode: ReturnType<typeof vi.fn>;
+    };
+    expect(sock.requestPairingCode).not.toHaveBeenCalled();
+    expect(waiter).toHaveBeenCalled();
+  });
+
+  it("clears partial phone-code credentials after a failed pairing attempt", async () => {
+    const waiter: typeof waitForWaConnection = vi.fn().mockRejectedValue({
+      output: { statusCode: 428 },
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    const pendingLogin = loginWebWithPhoneCode(false, "+44 7123-456-789", waiter, runtime);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const sock = (await vi.mocked(createWaSocket).mock.results[0]?.value) as {
+      ev: EventEmitter;
+    };
+    sock.ev.emit("connection.update", { qr: "pairing-ready" });
+
+    await expect(pendingLogin).rejects.toThrow(/status=428/);
+    expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledTimes(2);
+  });
+
+  it("normalizes phone-code login numbers for Baileys", () => {
+    expect(normalizeWhatsAppPairingPhoneNumber(" +44 7123-456-789 ")).toBe("447123456789");
+    expect(() => normalizeWhatsAppPairingPhoneNumber("not a number")).toThrow(
+      /requires --phone-number/,
+    );
+    expect(() => normalizeWhatsAppPairingPhoneNumber("+44 (0) 7123-456-789")).toThrow(
+      /omit optional trunk prefixes/,
+    );
   });
 });
 

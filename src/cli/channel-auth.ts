@@ -22,6 +22,7 @@ import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-
 type ChannelAuthOptions = {
   channel?: string;
   account?: string;
+  phoneNumber?: string;
   verbose?: boolean;
 };
 
@@ -249,6 +250,7 @@ export async function runChannelLogin(
     runtime,
     verbose: Boolean(opts.verbose),
     channelInput,
+    phoneNumber: normalizeOptionalString(opts.phoneNumber),
   });
   await reconcileGatewayRuntimeAfterLocalLogin({
     cfg,

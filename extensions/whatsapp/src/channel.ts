@@ -180,14 +180,23 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       approvalCapability: whatsappApprovalCapability,
       auth: {
-        login: async ({ cfg, accountId, runtime, verbose }) => {
+        login: async ({ cfg, accountId, runtime, verbose, phoneNumber }) => {
           const resolvedAccountId =
             accountId?.trim() ||
             whatsappPlugin.config.defaultAccountId?.(cfg) ||
             DEFAULT_ACCOUNT_ID;
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          const channelRuntime = await loadWhatsAppChannelRuntime();
+          if (phoneNumber?.trim()) {
+            await channelRuntime.loginWebWithPhoneCode(
+              Boolean(verbose),
+              phoneNumber,
+              undefined,
+              runtime,
+              resolvedAccountId,
+            );
+            return;
+          }
+          await channelRuntime.loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
         },
       },
       lifecycle: {

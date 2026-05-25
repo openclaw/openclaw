@@ -60,7 +60,7 @@ fallback. Pin an exact version only when you need a reproducible install.
 
   </Step>
 
-  <Step title="Link WhatsApp (QR)">
+  <Step title="Link WhatsApp">
 
 ```bash
 openclaw channels login --channel whatsapp
@@ -74,6 +74,12 @@ openclaw channels login --channel whatsapp
 
 ```bash
 openclaw channels login --channel whatsapp --account work
+```
+
+    If the phone cannot scan a QR code, request a phone-code login instead. Use the full phone number with country code; punctuation is accepted and normalized before OpenClaw asks WhatsApp for the code. Omit optional national trunk prefixes such as `(0)`.
+
+```bash
+openclaw channels login --channel whatsapp --account work --phone-number 15551234567
 ```
 
     To attach an existing/custom WhatsApp Web auth directory before login:
@@ -590,15 +596,28 @@ Behavior notes:
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Not linked (QR required)">
+  <Accordion title="Not linked (QR or phone code required)">
     Symptom: channel status reports not linked.
 
     Fix:
 
     ```bash
     openclaw channels login --channel whatsapp
+    # or, when QR scanning is unavailable:
+    openclaw channels login --channel whatsapp --phone-number 15551234567
     openclaw channels status
     ```
+
+  </Accordion>
+
+  <Accordion title="QR scanner unavailable">
+    Use WhatsApp's phone-code linked-device flow:
+
+    ```bash
+    openclaw channels login --channel whatsapp --phone-number 15551234567
+    ```
+
+    Open WhatsApp on the phone, go to _Linked Devices_, choose _Link with phone number_, then enter the code printed by OpenClaw. After the phone accepts it, OpenClaw saves the same WhatsApp Web credentials used by QR login. Enter the international number only, without optional trunk-prefix notation such as `(0)`.
 
   </Accordion>
 

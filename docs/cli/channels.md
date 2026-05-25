@@ -100,10 +100,12 @@ If your config was already in a mixed state (named accounts present and top-leve
 
 ```bash
 openclaw channels login --channel whatsapp
+openclaw channels login --channel whatsapp --phone-number 15551234567
 openclaw channels logout --channel whatsapp
 ```
 
 - `channels login` supports `--verbose`.
+- Channels that support phone-code login can also consume `--phone-number <number>`. WhatsApp normalizes punctuation and sends digits with country code to WhatsApp's linked-device code flow. Omit optional national trunk prefixes such as `(0)`.
 - `channels login` and `logout` can infer the channel when only one supported login target is configured.
 - `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup.
 - Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
