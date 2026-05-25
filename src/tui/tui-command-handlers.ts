@@ -162,14 +162,22 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const title = session.derivedTitle ?? session.displayName;
         const formattedKey = formatSessionKey(session.key);
         // Avoid redundant "title (key)" when title matches key
-        const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
+        const label =
+          title && title !== formattedKey
+            ? `${title} (${formattedKey})`
+            : formattedKey;
         // Build description: time + message preview
         const timePart = session.updatedAt
-          ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
+          ? formatRelativeTimestamp(session.updatedAt, {
+              dateFallback: true,
+              fallback: "",
+            })
           : "";
         const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
         const description =
-          timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+          timePart && preview
+            ? `${timePart} · ${preview}`
+            : (preview ?? timePart);
         return {
           value: session.key,
           label,
@@ -347,7 +355,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "fast":
         if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
+          chatLog.addSystem(
+            `fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`,
+          );
           break;
         }
         if (args !== "on" && args !== "off") {
@@ -359,7 +369,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             key: state.currentSessionKey,
             fastMode: args === "on",
           });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
+          chatLog.addSystem(
+            `fast mode ${args === "on" ? "enabled" : "disabled"}`,
+          );
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {
@@ -392,7 +404,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         const currentRaw = state.sessionInfo.responseUsage;
         const current = resolveResponseUsageMode(currentRaw);
         const next =
-          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+          normalized ??
+          (current === "off"
+            ? "tokens"
+            : current === "tokens"
+              ? "full"
+              : "off");
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
@@ -459,7 +476,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           await setSession(uniqueKey);
           chatLog.addSystem(`new session: ${uniqueKey}`);
         } catch (err) {
-          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(
+            `new session failed: ${sanitizeRenderableText(String(err))}`,
+          );
         }
         break;
       case "reset":
@@ -474,7 +493,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
+          chatLog.addSystem(
+            `reset failed: ${sanitizeRenderableText(String(err))}`,
+          );
         }
         break;
       case "abort":
