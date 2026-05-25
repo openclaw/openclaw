@@ -524,11 +524,11 @@ function valuesForKey(value, key) {
   return values;
 }
 
-function extractPluginCommandNames(payload) {
+export function extractPluginCommandNames(payload) {
   const commands = Array.isArray(payload?.commands) ? payload.commands : [];
   const names = [];
   for (const entry of commands) {
-    if (entry?.source !== "plugin" && entry?.pluginId !== PLUGIN_ID) {
+    if (entry?.source !== "plugin") {
       continue;
     }
     names.push(entry?.name, entry?.nativeName);
@@ -539,6 +539,7 @@ function extractPluginCommandNames(payload) {
   return names
     .filter(isNonEmptyString)
     .map((name) => name.replace(/^\//u, ""))
+    .filter((name, index, all) => all.indexOf(name) === index)
     .toSorted((left, right) => left.localeCompare(right));
 }
 

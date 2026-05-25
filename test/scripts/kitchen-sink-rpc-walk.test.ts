@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertResourceCeiling,
+  extractPluginCommandNames,
   fetchJson,
   findDistCallGatewayModuleFiles,
   sampleProcess,
@@ -44,6 +45,27 @@ describe("kitchen-sink RPC caller loading", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("kitchen-sink RPC command catalog assertions", () => {
+  it("keeps plugin commands and deduplicates aliases", () => {
+    expect(
+      extractPluginCommandNames({
+        commands: [
+          {
+            source: "core",
+            name: "/kitchen-sink",
+          },
+          {
+            source: "plugin",
+            name: "/kitchen",
+            nativeName: "kitchen",
+            textAliases: ["/kitchen-sink", "kitchen-sink"],
+          },
+        ],
+      }),
+    ).toEqual(["kitchen", "kitchen-sink"]);
   });
 });
 
