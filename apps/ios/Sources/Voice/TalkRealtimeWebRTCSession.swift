@@ -18,7 +18,8 @@ protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
 @MainActor
 final class TalkRealtimeWebRTCSession: NSObject {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "TalkRealtimeWebRTC")
-    private static let toolName = "openclaw_agent_consult"
+    private static let consultToolName = "openclaw_agent_consult"
+    private static let controlToolName = "openclaw_agent_control"
     private static let defaultOfferURL = "https://api.openai.com/v1/realtime/calls"
     private static let mediaStreamID = "openclaw-ios-realtime"
     private static let audioTrackID = "openclaw-ios-audio"
@@ -74,7 +75,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         super.init()
     }
 
-    func start(model: String?, voice: String?, prefetchedSession: TalkRealtimeClientSession? = nil) async throws {
+    func start(
+        provider: String?,
+        model: String?,
+        voice: String?,
+        prefetchedSession: TalkRealtimeClientSession? = nil) async throws
+    {
         self.timelineStartedAt = ProcessInfo.processInfo.systemUptime
         self.seenRealtimeEventTypes.removeAll()
         self.loggedFirstServerSpeech = false
@@ -83,7 +89,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         self.stopped = false
-        self.trace("start model=\(model ?? "default") voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
+        self.trace(
+            "start provider=\(provider ?? "default") model=\(model ?? "default") "
+                + "voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
         self.delegate?.realtimeSession(self, didChangeStatus: "Connecting")
         let session: TalkRealtimeClientSession
         if let prefetchedSession {
@@ -93,7 +101,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     + "voice=\(prefetchedSession.voice ?? "unknown")")
             session = prefetchedSession
         } else {
-            session = try await self.createClientSession(model: model, voice: voice)
+            session = try await self.createClientSession(provider: provider, model: model, voice: voice)
         }
         let sessionModel = session.model ?? "unknown"
         let sessionVoice = session.voice ?? "unknown"
@@ -211,10 +219,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private func createClientSession(model: String?, voice: String?) async throws -> TalkRealtimeClientSession {
+    private func createClientSession(
+        provider: String?,
+        model: String?,
+        voice: String?) async throws -> TalkRealtimeClientSession
+    {
         self.trace("gateway talk.client.create start")
         let startedAt = ProcessInfo.processInfo.systemUptime
-        let params = TalkRealtimeClientCreateParams(model: model, voice: voice)
+        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
@@ -429,7 +441,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private func bufferToolMetadata(_ event: TalkRealtimeServerEvent) {
-        guard event.resolvedName == Self.toolName, let key = toolBufferKey(for: event) else { return }
+        guard Self.isSupportedToolName(event.resolvedName), let key = toolBufferKey(for: event) else { return }
         var buffer = self.toolBuffers[key] ?? ToolBuffer(name: "", callId: "", args: "")
         buffer.name = event.resolvedName ?? buffer.name
         buffer.callId = event.resolvedCallId ?? buffer.callId
@@ -457,26 +469,36 @@ final class TalkRealtimeWebRTCSession: NSObject {
         let name = buffered?.name.isEmpty == false ? buffered?.name : event.resolvedName
         let callId = buffered?.callId.isEmpty == false ? buffered?.callId : event.resolvedCallId
         let args = buffered?.args.isEmpty == false ? buffered?.args : event.resolvedArguments
-        guard name == Self.toolName, let callId, !callId.isEmpty else { return }
+        guard Self.isSupportedToolName(name), let callId, !callId.isEmpty else { return }
         guard args?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             self.bufferToolMetadata(event)
             return
         }
         guard self.activeToolTasks[callId] == nil else { return }
         self.toolBuffers.removeValue(forKey: key)
-        self.trace("tool call ready callId=\(callId) argsBytes=\((args ?? "").utf8.count)")
+        self.trace("tool call ready name=\(name ?? "unknown") callId=\(callId) argsBytes=\((args ?? "").utf8.count)")
         self.assistantAudioActive = false
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
-        self.delegate?.realtimeSession(self, didChangeStatus: "Asking OpenClaw")
+        self.delegate?.realtimeSession(
+            self,
+            didChangeStatus: name == Self.controlToolName ? "Updating OpenClaw" : "Asking OpenClaw")
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.submitToolCall(callId: callId, argsJSON: args ?? "{}")
+            if name == Self.controlToolName {
+                await self.submitControlToolCall(callId: callId, argsJSON: args ?? "{}")
+            } else {
+                await self.submitConsultToolCall(callId: callId, argsJSON: args ?? "{}")
+            }
         }
         self.activeToolTasks[callId] = task
     }
 
-    private func submitToolCall(callId: String, argsJSON: String) async {
+    private static func isSupportedToolName(_ name: String?) -> Bool {
+        name == self.consultToolName || name == self.controlToolName
+    }
+
+    private func submitConsultToolCall(callId: String, argsJSON: String) async {
         self.trace("tool call submit start callId=\(callId) argsBytes=\(argsJSON.utf8.count)")
         let statusTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.stillWorkingDelaySeconds) * 1_000_000_000)
@@ -493,7 +515,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             let params: [String: Any] = [
                 "sessionKey": sessionKey,
                 "callId": callId,
-                "name": Self.toolName,
+                "name": Self.consultToolName,
                 "args": args,
             ]
             let historySince = Date().timeIntervalSince1970
@@ -554,6 +576,75 @@ final class TalkRealtimeWebRTCSession: NSObject {
         if !self.assistantAudioActive {
             self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
         }
+    }
+
+    private func submitControlToolCall(callId: String, argsJSON: String) async {
+        self.trace("control tool submit start callId=\(callId) argsBytes=\(argsJSON.utf8.count)")
+        defer { self.activeToolTasks[callId] = nil }
+        do {
+            let params = try Self.controlParams(sessionKey: self.sessionKey, argsJSON: argsJSON)
+            let data = try JSONSerialization.data(withJSONObject: params)
+            guard let json = String(data: data, encoding: .utf8) else {
+                throw NSError(domain: "TalkRealtimeWebRTC", code: 19, userInfo: [
+                    NSLocalizedDescriptionKey: "Failed to encode realtime control call",
+                ])
+            }
+            let res = try await gateway.request(
+                method: "talk.client.steer",
+                paramsJSON: json,
+                timeoutSeconds: Self.toolCallTimeoutSeconds)
+            let message = Self.controlResultMessage(from: res) ?? "OpenClaw updated the active run."
+            self.trace("control tool gateway request done callId=\(callId) messageBytes=\(message.utf8.count)")
+            self.submitToolResult(callId: callId, result: ["result": message])
+        } catch is CancellationError {
+            return
+        } catch {
+            if Task.isCancelled || self.stopped { return }
+            Self.logger.error("realtime control tool failed: \(error.localizedDescription, privacy: .public)")
+            self.trace("control tool failed callId=\(callId) error=\(error.localizedDescription)")
+            self.submitToolResult(callId: callId, result: [
+                "error": "OpenClaw could not update the active run.",
+            ])
+        }
+        guard !Task.isCancelled, !self.stopped else { return }
+        if !self.assistantAudioActive {
+            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+        }
+    }
+
+    private static func controlParams(sessionKey: String, argsJSON: String) throws -> [String: Any] {
+        let args = try Self.decodeJSONObject(argsJSON)
+        let record = args as? [String: Any] ?? [:]
+        let text = Self.nonEmptyString(record["text"])
+            ?? Self.nonEmptyString(record["message"])
+            ?? Self.nonEmptyString(record["request"])
+            ?? Self.nonEmptyString(record["query"])
+        guard let text else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 20, userInfo: [
+                NSLocalizedDescriptionKey: "OpenClaw control tool call missing text",
+            ])
+        }
+        var params: [String: Any] = [
+            "sessionKey": sessionKey,
+            "text": text,
+        ]
+        if let mode = Self.nonEmptyString(record["mode"]) {
+            params["mode"] = mode
+        }
+        return params
+    }
+
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let raw = value as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func controlResultMessage(from data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let record = object as? [String: Any]
+        else { return nil }
+        return Self.nonEmptyString(record["message"])
     }
 
     private func abortChatRun(runId: String) async {

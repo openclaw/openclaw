@@ -163,6 +163,7 @@ final class TalkModeManager: NSObject {
     private var defaultOutputFormat: String?
     private var activeTalkProvider: String = TalkModeManager.defaultTalkProvider
     private var executionMode: TalkModeExecutionMode = .native
+    private var realtimeWebRTCEnabled: Bool = false
     private var realtimeProvider: String?
     private var realtimeModelId: String?
     private var realtimeVoiceId: String?
@@ -303,7 +304,7 @@ final class TalkModeManager: NSObject {
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway permission")
             return
         }
-        if await self.startRealtimeIfAvailable() {
+        if self.realtimeWebRTCEnabled, await self.startRealtimeIfAvailable() {
             return
         }
 
@@ -1014,7 +1015,11 @@ final class TalkModeManager: NSObject {
             delegate: self)
         self.realtimeSession = session
         do {
-            try await session.start(model: nil, voice: nil, prefetchedSession: prefetchedSession)
+            try await session.start(
+                provider: self.realtimeProvider,
+                model: self.realtimeModelId,
+                voice: self.realtimeVoiceId,
+                prefetchedSession: prefetchedSession)
             guard self.realtimeSession === session, self.isEnabled else {
                 session.stop()
                 return true
@@ -1043,6 +1048,7 @@ final class TalkModeManager: NSObject {
 
     func prefetchRealtimeSessionIfReady(reason: String) async {
         guard self.gatewayConnected, self.realtimeSession == nil, !self.isEnabled else { return }
+        guard self.realtimeWebRTCEnabled else { return }
         guard self.gatewayTalkPermissionState == .ready else { return }
         guard self.consumePrefetchedRealtimeSession(peekOnly: true) == nil else { return }
         guard self.realtimePrefetchTask == nil else { return }
@@ -1052,7 +1058,10 @@ final class TalkModeManager: NSObject {
             guard let self else { return }
             let startedAt = Self.nowSeconds()
             do {
-                let session = try await self.createRealtimeClientSession(model: nil, voice: nil)
+                let session = try await self.createRealtimeClientSession(
+                    provider: self.realtimeProvider,
+                    model: self.realtimeModelId,
+                    voice: self.realtimeVoiceId)
                 guard !Task.isCancelled else { return }
                 self.prefetchedRealtimeSession = session
                 GatewayDiagnostics.log(
@@ -1068,13 +1077,17 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func createRealtimeClientSession(model: String?, voice: String?) async throws -> TalkRealtimeClientSession {
+    private func createRealtimeClientSession(
+        provider: String?,
+        model: String?,
+        voice: String?) async throws -> TalkRealtimeClientSession
+    {
         guard let gateway else {
             throw NSError(domain: "TalkMode", code: 8, userInfo: [
                 NSLocalizedDescriptionKey: "Gateway not connected",
             ])
         }
-        let params = TalkRealtimeClientCreateParams(model: model, voice: voice)
+        let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
@@ -2283,17 +2296,18 @@ extension TalkModeManager {
             }
 
             let config: [String: Any]
+            var redactedFallbackMissingScope: String?
             do {
                 guard let fetched = try await fetchConfig(includeSecrets: true) else { return }
                 config = fetched
             } catch {
-                let message = String(describing: error)
-                guard message.contains("operator.talk.secrets"),
+                guard let missingScope = Self.missingTalkScope(from: error),
                       let fetched = try await fetchConfig(includeSecrets: false)
                 else {
                     throw error
                 }
                 config = fetched
+                redactedFallbackMissingScope = missingScope
                 GatewayDiagnostics.log("talk config secrets unavailable; loaded redacted config")
             }
             let parsed = TalkModeGatewayConfigParser.parse(
@@ -2327,9 +2341,10 @@ extension TalkModeManager {
                 realtimeProvider = realtimeProvider ?? "openai"
                 realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
             }
-            let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider
+            let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider || executionMode == .realtimeRelay
             self.activeTalkProvider = activeProvider
             self.executionMode = executionMode
+            self.realtimeWebRTCEnabled = usesRealtimeConfig
             self.realtimeProvider = realtimeProvider
             self.realtimeModelId = realtimeModelId
             self.realtimeVoiceId = realtimeVoiceId
@@ -2353,11 +2368,12 @@ extension TalkModeManager {
             } else {
                 self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
             }
-            let gatewayOwnedVoiceProvider = activeProvider != Self.defaultTalkProvider
+            let gatewayOwnedVoiceProvider = usesRealtimeConfig
             if gatewayOwnedVoiceProvider {
                 self.apiKey = nil
+                let credentialProvider = realtimeProvider ?? activeProvider
                 GatewayDiagnostics.log(
-                    "talk provider '\(activeProvider)' uses gateway-owned realtime credentials")
+                    "talk realtime provider '\(credentialProvider)' uses gateway-owned credentials")
             }
             self.gatewayTalkDefaultVoiceId = usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId
             self.gatewayTalkDefaultModelId = usesRealtimeConfig ? realtimeModelId : self.defaultModelId
@@ -2372,9 +2388,16 @@ extension TalkModeManager {
             self.gatewayTalkApiKeyConfigured = gatewayOwnedVoiceProvider || (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
             self.talkConfigLoadedAt = Date()
-            self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
-                ? .ready
-                : .apiKeyMissing
+            if let missingScope = redactedFallbackMissingScope,
+               gatewayOwnedVoiceProvider || self.apiKey == nil
+            {
+                self.gatewayTalkPermissionState = .missingScope(missingScope)
+                GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
+            } else {
+                self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
+                    ? .ready
+                    : .apiKeyMissing
+            }
             if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
@@ -2387,6 +2410,7 @@ extension TalkModeManager {
         } catch {
             self.activeTalkProvider = Self.defaultTalkProvider
             self.executionMode = .native
+            self.realtimeWebRTCEnabled = false
             self.realtimeProvider = nil
             self.realtimeModelId = nil
             self.realtimeVoiceId = nil
