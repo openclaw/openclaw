@@ -81,7 +81,10 @@ type TelegramCachedMessageObservation = {
 type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
 
 const DEFAULT_MAX_MESSAGES = 5000;
-export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 1000;
+// Plugin state has a 1,000-row plugin-wide cap; keep room for sibling Telegram caches.
+const TELEGRAM_MESSAGE_CACHE_PERSISTENT_RESERVED_PLUGIN_STATE_ROWS = 200;
+export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES =
+  1000 - TELEGRAM_MESSAGE_CACHE_PERSISTENT_RESERVED_PLUGIN_STATE_ROWS;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const COMPACT_THRESHOLD_RATIO = 2;

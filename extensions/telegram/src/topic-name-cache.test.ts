@@ -5,6 +5,7 @@ import {
   getTopicName,
   resetTopicNameCacheForTest,
   setTelegramTopicNameStoreFactoryForTest,
+  TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
   topicNameCacheSize,
   updateTopicName,
 } from "./topic-name-cache.js";
@@ -107,26 +108,28 @@ describe("topic-name-cache", () => {
     await expect(getTopicName("-100123", "42")).resolves.toBe("StringKeys");
   });
 
-  it("evicts the oldest entry when cache exceeds 2048", async () => {
-    for (let i = 0; i < 2049; i++) {
+  it("evicts the oldest entry when cache exceeds the Telegram topic row budget", async () => {
+    for (let i = 0; i <= TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES; i++) {
       await updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicNameCacheSize()).toBe(TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES);
     await expect(getTopicName(-100000, 0)).resolves.toBeUndefined();
-    await expect(getTopicName(-100000, 2048)).resolves.toBe("Topic 2048");
+    await expect(getTopicName(-100000, TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)).resolves.toBe(
+      `Topic ${TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES}`,
+    );
   });
 
   it("refreshes recency on read so active topics survive eviction", async () => {
     vi.useFakeTimers();
     await updateTopicName(-100000, 1, { name: "Active" });
     await vi.advanceTimersByTimeAsync(10);
-    for (let i = 2; i <= 2048; i++) {
+    for (let i = 2; i <= TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES; i++) {
       await updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
     await getTopicName(-100000, 1);
     await updateTopicName(-100000, 9999, { name: "Newcomer" });
     await expect(getTopicName(-100000, 1)).resolves.toBe("Active");
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicNameCacheSize()).toBe(TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES);
   });
 
   it("reloads persisted entries from plugin state", async () => {
