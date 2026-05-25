@@ -395,7 +395,7 @@ describe("feishuPlugin actions", () => {
     expect(details.chatId).toBe("oc_group_1");
   });
 
-  it("renders presentation buttons as native Feishu card actions", async () => {
+  it("renders presentation buttons as native Feishu card buttons", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
     await feishuPlugin.actions?.handleAction?.({
@@ -421,7 +421,8 @@ describe("feishuPlugin actions", () => {
       "send card args",
     );
     const card = requireRecord(sendCardArgs.card, "card");
-    expect(requireRecord(card.body, "card body").elements).toEqual([
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([
       {
         tag: "button",
         text: { tag: "plain_text", content: "Run help" },
@@ -439,6 +440,9 @@ describe("feishuPlugin actions", () => {
         ],
       },
     ]);
+    expect(
+      elements.some((element) => requireRecord(element, "card element").tag === "action"),
+    ).toBe(false);
   });
 
   it("does not duplicate title-only presentation cards in the body fallback", async () => {

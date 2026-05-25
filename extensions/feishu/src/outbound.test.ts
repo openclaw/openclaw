@@ -447,9 +447,31 @@ describe("feishuOutbound.sendPayload native cards", () => {
       tag: "markdown",
       content: "Approve the request?",
     });
+    expect(renderedCard?.body?.elements).toEqual([
+      {
+        tag: "markdown",
+        content: "Approve the request?",
+      },
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Approve" },
+        type: "primary",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              oc: "ocf1",
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "/approve req_1 allow-once",
+            },
+          },
+        ],
+      },
+    ]);
     expect(
-      renderedCard?.body?.elements?.some((element: { tag?: string }) => element.tag === "button"),
-    ).toBe(true);
+      renderedCard?.body?.elements?.some((element: { tag?: string }) => element.tag === "action"),
+    ).toBe(false);
     const { presentation: _presentation, ...coreRenderedPayload } = rendered;
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
@@ -538,21 +560,48 @@ describe("feishuOutbound.sendPayload native cards", () => {
       tag: "markdown",
       content: "Approve the request?",
     });
-    const buttonElements = card.body.elements.filter(
-      (element: { tag?: string }) => element.tag === "button",
+    expect(card.body.elements).toEqual([
+      { tag: "markdown", content: "Choose an action" },
+      {
+        tag: "markdown",
+        content: "Approve the request?",
+      },
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Approve" },
+        type: "primary",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              oc: "ocf1",
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "/approve req_1 allow-once",
+            },
+          },
+        ],
+      },
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Deny" },
+        type: "danger",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              oc: "ocf1",
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "/approve req_1 deny",
+            },
+          },
+        ],
+      },
+    ]);
+    expect(card.body.elements.some((element: { tag?: string }) => element.tag === "action")).toBe(
+      false,
     );
-    expect(buttonElements[0]?.text).toEqual({ tag: "plain_text", content: "Approve" });
-    expect(buttonElements[0]?.type).toBe("primary");
-    expect(buttonElements[0]?.behaviors?.[0]?.type).toBe("callback");
-    expect(buttonElements[0]?.behaviors?.[0]?.value?.oc).toBe("ocf1");
-    expect(buttonElements[0]?.behaviors?.[0]?.value?.k).toBe("quick");
-    expect(buttonElements[0]?.behaviors?.[0]?.value?.q).toBe("/approve req_1 allow-once");
-    expect(buttonElements[1]?.text).toEqual({ tag: "plain_text", content: "Deny" });
-    expect(buttonElements[1]?.type).toBe("danger");
-    expect(buttonElements[1]?.behaviors?.[0]?.type).toBe("callback");
-    expect(buttonElements[1]?.behaviors?.[0]?.value?.oc).toBe("ocf1");
-    expect(buttonElements[1]?.behaviors?.[0]?.value?.k).toBe("quick");
-    expect(buttonElements[1]?.behaviors?.[0]?.value?.q).toBe("/approve req_1 deny");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "native_card_msg");
   });
