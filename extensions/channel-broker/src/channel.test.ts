@@ -13,6 +13,14 @@ import {
   type ChannelBrokerRuntime,
 } from "./runtime.js";
 
+function requireChannelBrokerMessageAdapter(): NonNullable<typeof channelBrokerPlugin.message> {
+  const adapter = channelBrokerPlugin.message;
+  if (!adapter) {
+    throw new Error("channel-broker message adapter is required for this test");
+  }
+  return adapter;
+}
+
 describe("channel-broker plugin", () => {
   beforeEach(() => {
     resetChannelBrokerRuntimeForTest();
@@ -66,7 +74,7 @@ describe("channel-broker plugin", () => {
   });
 
   it("backs declared durable final capabilities with send adapter proofs", async () => {
-    const adapter = channelBrokerPlugin.message;
+    const adapter = requireChannelBrokerMessageAdapter();
 
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "channelBrokerMessageAdapter",
@@ -95,7 +103,7 @@ describe("channel-broker plugin", () => {
   });
 
   it("backs declared live capabilities with provider-mode proofs", async () => {
-    const adapter = channelBrokerPlugin.message;
+    const adapter = requireChannelBrokerMessageAdapter();
 
     await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "channelBrokerMessageAdapter",
