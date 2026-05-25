@@ -241,6 +241,7 @@ describe("overview view rendering", () => {
 
   it("promotes provider quota into a dedicated overview card", async () => {
     const container = document.createElement("div");
+    const now = Date.now();
     const props = createOverviewProps({
       connected: true,
       usageResult: {
@@ -257,8 +258,8 @@ describe("overview view rendering", () => {
             profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
             usage: {
               windows: [
-                { label: "3h", usedPercent: 18 },
-                { label: "Week", usedPercent: 72 },
+                { label: "3h", usedPercent: 18, resetAt: now + 3 * 60 * 60_000 },
+                { label: "Week", usedPercent: 72, resetAt: now + 5 * 24 * 60 * 60_000 },
               ],
             },
           },
@@ -283,9 +284,11 @@ describe("overview view rendering", () => {
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
       "Provider Usage Compact view of model usage, costs, and quota signals.",
     );
-    expect(compactText(container.querySelector(".ov-usage-windows"))).toBe(
-      "Codex · Week 28% left Codex · 3h 82% left",
+    expect(container.querySelectorAll(".ov-usage-window__reset")).toHaveLength(2);
+    expect(compactText(container.querySelector(".ov-usage-windows"))).toContain(
+      "Codex · Week reset",
     );
+    expect(compactText(container.querySelector(".ov-usage-card"))).not.toContain("quota resets");
     expect(container.querySelector(".ov-usage-note")).toBeNull();
   });
 
