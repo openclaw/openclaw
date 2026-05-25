@@ -107,6 +107,27 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["held"]);
   });
 
+  it("defensively releases the coarse attempt lock on sessions_yield abort cleanup", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("cleanup-release")) });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    await controller.releaseHeldLockForAbort();
+    await controller.withSessionWriteLock(async () => {
+      events.push("yield-cleanup-write");
+    });
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["prep-release", "yield-cleanup-write", "cleanup-release"]);
+  });
+
   it("runs post-prompt transcript writes under a short reacquired lock", async () => {
     const events: string[] = [];
     const acquireSessionWriteLock = vi

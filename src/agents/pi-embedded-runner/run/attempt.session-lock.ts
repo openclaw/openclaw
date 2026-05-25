@@ -616,6 +616,7 @@ export function installSessionExternalHookWriteLock(params: {
 
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
+  releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
@@ -765,6 +766,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           ? ownedWrite.generation
           : (trustedGeneration ?? fenceGeneration);
       fenceActive = true;
+      await lock.release();
+    },
+    async releaseHeldLockForAbort(): Promise<void> {
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
       await lock.release();
     },
     refreshAfterOwnedSessionWrite(): void {
