@@ -30,6 +30,7 @@ const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown
   rewrittenEntries: 2,
 }));
 let buildContextEngineMaintenanceRuntimeContext: typeof import("./context-engine-maintenance.js").buildContextEngineMaintenanceRuntimeContext;
+let cancelActiveDeferredTurnMaintenanceRunsForCliExit: typeof import("./context-engine-maintenance.js").cancelActiveDeferredTurnMaintenanceRunsForCliExit;
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.js").resetDeferredTurnMaintenanceStateForTest;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
@@ -98,6 +99,7 @@ vi.mock("./transcript-rewrite.js", () => ({
 async function loadFreshContextEngineMaintenanceModuleForTest() {
   ({
     buildContextEngineMaintenanceRuntimeContext,
+    cancelActiveDeferredTurnMaintenanceRunsForCliExit,
     createDeferredTurnMaintenanceAbortSignal,
     resetDeferredTurnMaintenanceStateForTest,
     runContextEngineMaintenance,
@@ -659,6 +661,387 @@ describe("runContextEngineMaintenance", () => {
         await foregroundTurn;
       } finally {
         vi.useRealTimers();
+      }
+    });
+  });
+
+  it("cancels queued deferred turn maintenance during short-lived CLI shutdown", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-cli-exit-queued";
+        const sessionLane = resolveSessionLane(sessionKey);
+        let releaseForeground: (() => void) | undefined;
+        const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
+          await new Promise<void>((resolve) => {
+            releaseForeground = resolve;
+          });
+        });
+        await Promise.resolve();
+
+        const maintain = vi.fn(async () => ({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+        }));
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-cli-exit-queued",
+          sessionKey,
+          sessionFile: "/tmp/session-cli-exit-queued.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        expect(deferredPromises).toHaveLength(1);
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await deferredPromises[0];
+
+        expect(maintain).not.toHaveBeenCalled();
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+        expect(String(tasks[0].terminalSummary)).toContain("CLI command completed");
+
+        if (!releaseForeground) {
+          throw new Error("Expected foreground turn release callback to be initialized");
+        }
+        releaseForeground();
+        await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("aborts active deferred turn maintenance during short-lived CLI shutdown", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-cli-exit-active";
+        let observedAbortSignal: AbortSignal | undefined;
+        const maintain = vi.fn(
+          async (params?: {
+            sessionId?: string;
+            sessionKey?: string;
+            sessionFile?: string;
+            runtimeContext?: ContextEngineRuntimeContext;
+          }) => {
+            expect(Object.keys(params ?? {}).toSorted()).toEqual([
+              "runtimeContext",
+              "sessionFile",
+              "sessionId",
+              "sessionKey",
+            ]);
+            observedAbortSignal = params?.runtimeContext?.abortSignal;
+            await new Promise<void>((resolve) => {
+              observedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            return {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+            };
+          },
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-cli-exit-active",
+          sessionKey,
+          sessionFile: "/tmp/session-cli-exit-active.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await flushAsyncWork();
+        expect(maintain).toHaveBeenCalledTimes(1);
+
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await deferredPromises[0];
+
+        expect(observedAbortSignal?.aborted).toBe(true);
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+      } finally {
+        resetCommandQueueStateForTest();
+      }
+    });
+  });
+
+  it("blocks deferred transcript rewrites after short-lived CLI shutdown aborts maintenance", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        rewriteTranscriptEntriesInSessionFileMock.mockClear();
+
+        const sessionKey = "agent:main:session-cli-exit-rewrite";
+        let observedAbortSignal: AbortSignal | undefined;
+        const maintain = vi.fn(
+          async (params?: { runtimeContext?: ContextEngineRuntimeContext }) => {
+            observedAbortSignal = params?.runtimeContext?.abortSignal;
+            await new Promise<void>((resolve) => {
+              observedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            await expect(
+              params?.runtimeContext?.rewriteTranscriptEntries?.({
+                replacements: [
+                  {
+                    entryId: "entry-after-abort",
+                    message: castAgentMessage({
+                      role: "assistant",
+                      content: [{ type: "text", text: "late rewrite" }],
+                      timestamp: 3,
+                    }),
+                  },
+                ],
+              }),
+            ).rejects.toThrow(/short-lived CLI command completed/);
+            return {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+            };
+          },
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-cli-exit-rewrite",
+          sessionKey,
+          sessionFile: "/tmp/session-cli-exit-rewrite.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await flushAsyncWork();
+        expect(maintain).toHaveBeenCalledTimes(1);
+
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await deferredPromises[0];
+
+        expect(observedAbortSignal?.aborted).toBe(true);
+        expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+      } finally {
+        resetCommandQueueStateForTest();
+      }
+    });
+  });
+
+  it("clears host progress timers when active deferred maintenance ignores shutdown abort", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-cli-exit-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const sessionKey = "agent:main:session-cli-exit-ignored-abort";
+        const maintain = vi.fn(async () => await new Promise<never>(() => {}));
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-cli-exit-ignored-abort",
+          sessionKey,
+          sessionFile: "/tmp/session-cli-exit-ignored-abort.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await flushAsyncWork();
+        expect(maintain).toHaveBeenCalledTimes(1);
+        expect(deferredPromises).toHaveLength(1);
+        const timerCountBeforeCancel = vi.getTimerCount();
+        expect(timerCountBeforeCancel).toBeGreaterThan(0);
+
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+
+        expect(vi.getTimerCount()).toBeLessThan(timerCountBeforeCancel);
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(peekSystemEvents(sessionKey).join("\n")).not.toContain(
+          "Deferred maintenance is still running.",
+        );
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+      } finally {
+        vi.useRealTimers();
+        resetCommandQueueStateForTest();
+      }
+    });
+  });
+
+  it("drops requested deferred maintenance reruns during short-lived CLI shutdown", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-rerun-cli-exit-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-rerun-cli-exit";
+        let observedAbortSignal: AbortSignal | undefined;
+        const maintain = vi.fn(
+          async (params?: { runtimeContext?: ContextEngineRuntimeContext }) => {
+            observedAbortSignal = params?.runtimeContext?.abortSignal;
+            await new Promise<void>((resolve) => {
+              observedAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
+            });
+            return {
+              changed: false,
+              bytesFreed: 0,
+              rewrittenEntries: 0,
+            };
+          },
+        );
+
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const deferredPromises: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun-cli-exit",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun-cli-exit.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-rerun-cli-exit",
+          sessionKey,
+          sessionFile: "/tmp/session-rerun-cli-exit.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+        expect(deferredPromises).toHaveLength(2);
+        let secondDeferredSettled = false;
+        const secondDeferred = deferredPromises[1].then(() => {
+          secondDeferredSettled = true;
+        });
+
+        await cancelActiveDeferredTurnMaintenanceRunsForCliExit({ drainMs: 0 });
+        await Promise.all(deferredPromises);
+        await secondDeferred;
+
+        expect(observedAbortSignal?.aborted).toBe(true);
+        expect(secondDeferredSettled).toBe(true);
+        expect(maintain).toHaveBeenCalledTimes(1);
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        expect(tasks[0].status).toBe("cancelled");
+      } finally {
+        vi.useRealTimers();
+        resetCommandQueueStateForTest();
       }
     });
   });

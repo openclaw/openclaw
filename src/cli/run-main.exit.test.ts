@@ -20,6 +20,9 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const cancelActiveDeferredTurnMaintenanceRunsForCliExitMock = vi.hoisted(() =>
+  vi.fn(async () => {}),
+);
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -171,6 +174,11 @@ vi.mock("../plugins/memory-state.js", () => ({
 vi.mock("../agents/harness/registry.js", () => ({
   listAgentHarnessIds: listAgentHarnessIdsMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
+vi.mock("../agents/pi-embedded-runner/context-engine-maintenance.js", () => ({
+  cancelActiveDeferredTurnMaintenanceRunsForCliExit:
+    cancelActiveDeferredTurnMaintenanceRunsForCliExitMock,
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -344,6 +352,7 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
+    expect(cancelActiveDeferredTurnMaintenanceRunsForCliExitMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -362,6 +371,26 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "agent", "--local"]);
 
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
+    expect(cancelActiveDeferredTurnMaintenanceRunsForCliExitMock).toHaveBeenCalledTimes(1);
+    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues CLI cleanup when deferred maintenance cancellation fails", async () => {
+    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    cancelActiveDeferredTurnMaintenanceRunsForCliExitMock.mockRejectedValueOnce(
+      new Error("maintenance cleanup failed"),
+    );
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "agent", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "agent", "--local"]);
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
+    expect(cancelActiveDeferredTurnMaintenanceRunsForCliExitMock).toHaveBeenCalledTimes(1);
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
   });
 

@@ -197,6 +197,11 @@ export type ContextEnginePromptCacheInfo = {
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /**
+   * Optional host-owned cancellation signal for best-effort shutdown of
+   * background context-engine work.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
    */

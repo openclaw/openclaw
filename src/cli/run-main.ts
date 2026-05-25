@@ -229,6 +229,17 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
+async function cancelCliDeferredContextEngineMaintenance(): Promise<void> {
+  try {
+    const { cancelActiveDeferredTurnMaintenanceRunsForCliExit } =
+      await import("../agents/pi-embedded-runner/context-engine-maintenance.js");
+    await cancelActiveDeferredTurnMaintenanceRunsForCliExit();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. Deferred maintenance
+    // must not hide the command's real outcome.
+  }
+}
+
 const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
 
 function isUnconfiguredConfigSnapshot(
@@ -534,6 +545,7 @@ export async function runCli(argv: string[] = process.argv) {
   let onSigterm: (() => void) | null = null;
   let onSigint: (() => void) | null = null;
   let onExit: (() => void) | null = null;
+  let parsedFullCliCommand = false;
   if (proxyHandle) {
     const shutdown = (exitCode: number) => {
       if (onSigterm) {
@@ -850,6 +862,7 @@ export async function runCli(argv: string[] = process.argv) {
       stopStartupProgress();
 
       try {
+        parsedFullCliCommand = true;
         await startupTrace.measure("parse", () => program.parseAsync(parseArgv));
       } catch (error) {
         if (!isCommanderParseExit(error)) {
@@ -871,6 +884,9 @@ export async function runCli(argv: string[] = process.argv) {
       process.off("exit", onExit);
     }
     await stopStartedProxy();
+    if (parsedFullCliCommand) {
+      await cancelCliDeferredContextEngineMaintenance();
+    }
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
