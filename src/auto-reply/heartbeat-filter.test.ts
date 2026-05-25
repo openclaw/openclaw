@@ -914,14 +914,16 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
-  it("removes trailing heartbeat output when no user message follows", () => {
+  it("preserves trailing middle-token heartbeat alert even without following user message", () => {
+    // Middle-token alerts like "Status HEARTBEAT_OK due to watchdog failure"
+    // are meaningful and should not be trimmed, even when trailing.
     const trailingMessages = [
       { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "Status HEARTBEAT_OK due to watchdog failure" },
     ];
     expect(
       filterHeartbeatTranscriptArtifacts(trailingMessages, undefined, HEARTBEAT_PROMPT),
-    ).toEqual([]);
+    ).toEqual(trailingMessages);
   });
 
   it("preserves meaningful heartbeat output when user interacts afterward", () => {
