@@ -8,6 +8,7 @@ import {
   createRealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceBridgeSession,
   matchRealtimeVoiceActivationName,
+  matchRealtimeVoiceConsultQuestions,
   normalizeSupportedRealtimeVoiceActivationName,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
@@ -308,10 +309,6 @@ function extractDiscordExactSpeechConsultText(args: unknown): string | undefined
   );
 }
 
-function normalizeRealtimeConsultMatchText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -354,14 +351,7 @@ function resolveDiscordRealtimeWakeNames(params: {
 }
 
 function matchesPendingAgentProxyQuestion(consultMessage: string, question: string): boolean {
-  const normalizedConsult = normalizeRealtimeConsultMatchText(consultMessage);
-  const normalizedQuestion = normalizeRealtimeConsultMatchText(question);
-  if (!normalizedConsult || !normalizedQuestion) {
-    return false;
-  }
-  return (
-    normalizedConsult.includes(normalizedQuestion) || normalizedQuestion.includes(normalizedConsult)
-  );
+  return matchRealtimeVoiceConsultQuestions(consultMessage, question);
 }
 
 export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
