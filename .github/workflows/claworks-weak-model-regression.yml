@@ -1,6 +1,15 @@
 name: ClaWorks Weak Model Regression
 
 on:
+  pull_request:
+    paths:
+      - "packages/claworks-runtime/**"
+      - "scripts/claworks-weak-model-regression.mjs"
+      - "scripts/lib/claworks-weak-model-regression-gate.mjs"
+      - "test/scripts/claworks-weak-model-regression-gate.test.ts"
+      - ".github/workflows/claworks-weak-model-regression.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
   schedule:
     # 03:15 UTC daily — after claworks-smoke PR window, low-traffic slot
     - cron: "15 3 * * *"
