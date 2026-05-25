@@ -965,6 +965,44 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
   });
 
+  it("strips inline reasoning when the Kimi boundary is followed by whitespace", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️ Final answer only.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
+  });
+
+  it("strips inline reasoning before short Kimi cloud answers", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️ OK.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "OK." }]);
+  });
+
   it("does not strip inline boundary marker on non-kimi models", () => {
     const response = {
       model: "qwen3:32b",
@@ -1801,7 +1839,7 @@ describe("createOllamaStreamFn streaming events", () => {
         JSON.stringify({
           model: "kimi-k2.6:cloud",
           created_at: "t",
-          message: { role: "assistant", content: " ️Final answer only." },
+          message: { role: "assistant", content: " ️ OK." },
           done: false,
         }),
       );
@@ -1817,7 +1855,7 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(textDeltaEvent).not.toBe("timeout");
       expectIteratorEvent(textDeltaEvent, {
         type: "text_delta",
-        delta: "Final answer only.",
+        delta: "OK.",
         done: false,
       });
       if (textDeltaEvent !== "timeout" && textDeltaEvent.done === false) {
@@ -1834,7 +1872,7 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(textEndEvent).not.toBe("timeout");
       expectIteratorEvent(textEndEvent, {
         type: "text_end",
-        content: "Final answer only.",
+        content: "OK.",
         done: false,
       });
 
