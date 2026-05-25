@@ -1,0 +1,57 @@
+name: ClaWorks Weak Model Regression
+
+on:
+  schedule:
+    # 03:15 UTC daily — after claworks-smoke PR window, low-traffic slot
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fail_rate_threshold:
+        description: "Gate threshold (fail_rate > this fails the job; default 0.3)"
+        required: false
+        default: "0.3"
+        type: string
+      packs_ref:
+        description: "claworks-packs ref (branch/tag/SHA)"
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claworks-weak-model-regression
+  cancel-in-progress: false
+
+jobs:
+  weak_model_regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: claworks/claworks-packs
+          ref: ${{ inputs.packs_ref || 'main' }}
+          path: claworks-packs
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Weak model regression suite + gate
+        run: pnpm claworks:weak-model-regression
+        env:
+          CLAWORKS_PRODUCT: "1"
+          CLAWORKS_PACKS_DIR: ${{ github.workspace }}/claworks-packs
+          CLAWORKS_REGRESSION_FAIL_RATE_THRESHOLD: ${{ inputs.fail_rate_threshold || '0.3' }}

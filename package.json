@@ -1790,7 +1790,8 @@
     "claworks:runtime:dist-smoke": "node --import tsx scripts/claworks-runtime-dist-smoke.mjs",
     "claworks:runtime:test": "vitest run packages/claworks-runtime",
     "claworks:migrate": "node scripts/claworks-migrate.mjs",
-    "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs"
+    "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs",
+    "claworks:weak-model-regression": "node --import tsx scripts/claworks-weak-model-regression.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.1",
