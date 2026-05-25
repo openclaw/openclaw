@@ -355,6 +355,7 @@ export async function appendUserTurnTranscriptMessage(
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),
     message,
+    idempotencyLookup: "scan",
   });
 
   switch (params.updateMode ?? "inline") {
