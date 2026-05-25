@@ -41,7 +41,49 @@ describe("heartbeat template repair", () => {
     );
   });
 
-  it("recognizes the fenced docs template as repairable", () => {
+  it("recognizes the original prose docs-backed template as repairable", () => {
+    const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md
+
+Keep this file empty unless you want a tiny checklist. Keep it small.
+`);
+
+    expect(analysis.status).toBe("dirty-template");
+  });
+
+  it("keeps original prose templates with user tasks unchanged", async () => {
+    const { workspaceDir, heartbeatPath } = await makeWorkspaceWithHeartbeat(`# HEARTBEAT.md
+
+Keep this file empty unless you want a tiny checklist. Keep it small.
+
+- Check email
+`);
+
+    await maybeRepairHeartbeatTemplate({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } },
+      shouldRepair: true,
+    });
+
+    await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toContain("- Check email");
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("custom or unrecognized content"),
+      "Heartbeat template",
+    );
+  });
+
+  it("recognizes the docs-backed heading plus fenced template as repairable", () => {
+    const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md Template
+
+\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`);
+
+    expect(analysis.status).toBe("dirty-template");
+  });
+
+  it("recognizes the fenced docs-backed template as repairable", () => {
     const analysis = analyzeHeartbeatTemplateForRepair(`\`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
@@ -52,7 +94,7 @@ describe("heartbeat template repair", () => {
     expect(analysis.status).toBe("dirty-template");
   });
 
-  it("recognizes the fenced docs template with Related as repairable", () => {
+  it("recognizes the original docs-backed template as repairable", () => {
     const analysis = analyzeHeartbeatTemplateForRepair(`\`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
@@ -67,7 +109,7 @@ describe("heartbeat template repair", () => {
     expect(analysis.status).toBe("dirty-template");
   });
 
-  it("recognizes the current docs page boilerplate as repairable", () => {
+  it("recognizes the current docs page boilerplate template as repairable", () => {
     const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md template
 
 \`HEARTBEAT.md\` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.
@@ -119,7 +161,30 @@ Add short tasks below the comments only when you want the agent to check somethi
 
     await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toContain("- Check email");
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("plus custom content"),
+      expect.stringContaining("custom or unrecognized content"),
+      "Heartbeat template",
+    );
+  });
+
+  it("keeps unrecognized dirty template shapes unchanged", async () => {
+    const content = `# HEARTBEAT.md Template
+
+\`\`\`markdown
+# Add tasks below when you want the agent to check something periodically.
+
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+\`\`\`
+`;
+    const { workspaceDir, heartbeatPath } = await makeWorkspaceWithHeartbeat(content);
+
+    await maybeRepairHeartbeatTemplate({
+      cfg: { agents: { defaults: { workspace: workspaceDir } } },
+      shouldRepair: true,
+    });
+
+    await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(content);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("custom or unrecognized content"),
       "Heartbeat template",
     );
   });
