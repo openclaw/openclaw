@@ -149,6 +149,7 @@ let buildTelegramMessageContextLoader:
   | undefined;
 let vitestModuleLoader: Promise<typeof import("vitest")> | undefined;
 let messageContextMocksInstalled = false;
+const topicNameStoresForTest = new Map<string, Map<string, unknown>>();
 
 async function loadBuildTelegramMessageContext() {
   await installMessageContextTestMocks();
@@ -170,4 +171,22 @@ async function installMessageContextTestMocks() {
     return;
   }
   messageContextMocksInstalled = true;
+  const { setTelegramTopicNameStoreFactoryForTest } = await import("./topic-name-cache.js");
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    let store = topicNameStoresForTest.get(namespace);
+    if (!store) {
+      store = new Map();
+      topicNameStoresForTest.set(namespace, store);
+    }
+    return {
+      register: async (key, value) => {
+        store.set(key, value);
+      },
+      entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
+      delete: async (key) => store.delete(key),
+      clear: async () => {
+        store.clear();
+      },
+    };
+  });
 }
