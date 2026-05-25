@@ -29,12 +29,14 @@ exit 0
 
 function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.ProcessEnv = {}) {
   const githubPath = join(root, "github-path");
+  const pathOverride = extraEnv.PATH;
   const result = spawnSync(
     "bash",
     [
       "-c",
       [
         "set -e",
+        ...(pathOverride ? [`export PATH=${JSON.stringify(pathOverride)}`] : []),
         `source "${ensureNodeScript}"`,
         `openclaw_ensure_node "${requested}"`,
         "command -v node",
