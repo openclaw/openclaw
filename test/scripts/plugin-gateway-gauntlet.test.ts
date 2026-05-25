@@ -1,7 +1,12 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  parseTimedMetrics,
+  runMeasuredCommand,
+} from "../../scripts/check-plugin-gateway-gauntlet.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -260,5 +265,69 @@ describe("plugin gateway gauntlet helpers", () => {
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
+  });
+
+  it("parses macOS time -l metrics from strict trailing lines", () => {
+    const metrics = parseTimedMetrics(
+      [
+        "plugin stderr: 99.00 real 99.00 user 99.00 sys nope",
+        "        0.25 real         0.06 user         0.02 sys",
+        "     2097152  maximum resident set size",
+      ].join("\n"),
+      250,
+      "bsd",
+    );
+
+    expect(metrics.cpuMs).toBe(80);
+    expect(metrics.cpuCoreRatio).toBeCloseTo(0.32);
+    expect(metrics.maxRssMb).toBe(2);
+  });
+
+  it("marks spawn errors as failed measured rows", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = runMeasuredCommand({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: path.join(repoRoot, "missing-command"),
+      args: [],
+      label: "missing",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(1);
+    expect(row.spawnError?.code).toBe("ENOENT");
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+  });
+
+  it("cleans the isolated run root after a successful dry run", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.isolatedRunRootPreserved).toBe(false);
+    await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 });
