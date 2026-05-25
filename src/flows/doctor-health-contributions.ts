@@ -1308,6 +1308,31 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:config-audit-scrub",
       label: "Config audit",
+      healthChecks: {
+        description:
+          "Historical config-audit argv redaction gaps are represented as structured findings.",
+        async detect() {
+          const { configAuditScrubToHealthFinding, detectConfigAuditScrubIssue } =
+            await import("../commands/doctor-config-audit-scrub.js");
+          const result = await detectConfigAuditScrubIssue();
+          return result.rewritten > 0 ? [configAuditScrubToHealthFinding(result)] : [];
+        },
+        async repair(ctx) {
+          const { configAuditScrubToRepairEffect, detectConfigAuditScrubIssue } =
+            await import("../commands/doctor-config-audit-scrub.js");
+          const result = await detectConfigAuditScrubIssue();
+          const effects = result.rewritten > 0 ? [configAuditScrubToRepairEffect(result)] : [];
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor config audit contribution owns cleanup",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runConfigAuditScrubHealth,
     }),
     createDoctorHealthContribution({
