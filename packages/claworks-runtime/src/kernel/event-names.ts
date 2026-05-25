@@ -81,8 +81,12 @@ export const CW_EVENTS = {
   EVOLUTION_SANDBOX_IMPORTED: "evolution.sandbox_imported",
   /** 沙盒回归通过，等待 HITL 晋升生产 */
   EVOLUTION_SANDBOX_READY_FOR_PROMOTION: "evolution.sandbox_ready_for_promotion",
+  /** 沙盒进化包经 HITL 确认后晋升到生产 Pack */
+  EVOLUTION_SANDBOX_PROMOTED: "evolution.sandbox_promoted",
   EVOLVE_PLAYBOOK_DEPLOYED: "evolve.playbook_deployed",
   EVOLVE_PLAYBOOK_DRAFTED: "evolve.playbook_drafted",
+  /** proposeDraft 后 YAML 语法校验结果（非阻塞） */
+  EVOLVE_DRAFT_VALIDATED: "evolve.draft_validated",
   EVOLVE_SUGGESTIONS_READY: "evolve.suggestions_ready",
 
   // ── Capability / 能力反馈 ─────────────────────────────────────────────

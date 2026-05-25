@@ -4234,6 +4234,59 @@ export function makeEvolutionSyncCapabilities(runtime: ClaworksRuntime): Capabil
         return { ...status, history };
       },
     },
+
+    {
+      id: "evolution.list_pending_promotions",
+      verb: "query",
+      description: "列出沙盒回归通过、等待 HITL 晋升的进化包",
+      owner: { kind: "core" },
+      handler: async () => {
+        const mgr = runtime.evolutionSync;
+        if (!mgr) {
+          return { status: "unavailable", pending: [] };
+        }
+        const pending = mgr.listPendingSandboxPromotions();
+        return { status: "ok", pending, count: pending.length };
+      },
+    },
+
+    {
+      id: "evolution.promote_sandbox",
+      verb: "execute",
+      description: "将沙盒进化包晋升到生产 Pack（需 approved=true；fail-closed，不自动写入）",
+      owner: { kind: "core" },
+      rbac: { decision: "hitl_required", reason: "晋升沙盒包会修改生产 Playbook" },
+      paramsSchema: {
+        type: "object",
+        required: ["promotion_id", "approved"],
+        properties: {
+          promotion_id: {
+            type: "string",
+            description: "evolution.sandbox_ready_for_promotion 事件中的 promotion_id",
+          },
+          approved: {
+            type: "boolean",
+            description: "必须为 true 才会写入生产 Pack",
+          },
+        },
+      },
+      handler: async (_ctx, params) => {
+        const mgr = runtime.evolutionSync;
+        if (!mgr) {
+          return { status: "unavailable", reason: "evolutionSync 管理器未初始化" };
+        }
+        const promotionId = String(params.promotion_id ?? "");
+        if (!promotionId) {
+          return { status: "error", reason: "promotion_id 必填" };
+        }
+        const result = await mgr.promoteSandbox({
+          promotion_id: promotionId,
+          approved: params.approved === true,
+          source: "evolution.promote_sandbox",
+        });
+        return result as unknown as Record<string, unknown>;
+      },
+    },
   ];
 }
 

@@ -221,6 +221,8 @@ describe("playbook-engine HITL resume", () => {
         run_id: run1.id,
         steps: 2,
       }),
+      run1.id,
+      undefined,
     );
 
     close();

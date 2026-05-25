@@ -176,6 +176,7 @@ describe("publish_event step", () => {
       "playbook:test",
       expect.objectContaining({ equipment_id: "pump-001", severity: "critical" }),
       "run-test",
+      undefined,
     );
     expect(ctx.variables.publish_result).toMatchObject({
       published: true,

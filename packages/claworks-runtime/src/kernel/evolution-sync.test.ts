@@ -375,7 +375,16 @@ describe("EvolutionSyncManager.importEvolutionPack", () => {
     expect(runtime.kernel.publish).toHaveBeenCalledWith(
       "evolution.sandbox_ready_for_promotion",
       "evolution-sync",
-      expect.objectContaining({ hitl_required: true, playbook_ids: ["pb_sandbox_new"] }),
+      expect.objectContaining({
+        hitl_required: true,
+        playbook_ids: ["pb_sandbox_new"],
+        promotion_id: expect.stringMatching(/^sandbox-1\.0-/),
+      }),
+    );
+    expect(runtime.kernel.publish).toHaveBeenCalledWith(
+      "hitl.approval_requested",
+      "evolution-sync",
+      expect.objectContaining({ promotion_id: expect.stringMatching(/^sandbox-1\.0-/) }),
     );
     expect(runtime.kernel.publish).not.toHaveBeenCalledWith(
       "evolution.pack_imported",
@@ -417,6 +426,59 @@ describe("EvolutionSyncManager.importEvolutionPack", () => {
       "evolution-sync",
       expect.anything(),
     );
+  });
+});
+
+describe("EvolutionSyncManager.promoteSandbox", () => {
+  it("无 approved 时 fail-closed 返回 approval_required", async () => {
+    const runtime = makeRuntime();
+    const manager = new EvolutionSyncManager(runtime as never);
+    const pack = {
+      version: "2.0",
+      generated_at: "2026-05-25T00:00:00.000Z",
+      generated_by: "test",
+      source_robot_id: "robot-a",
+      improved_playbooks: [{ id: "pb_promo", steps: [] }],
+      summary: "待晋升",
+    };
+    await manager.importEvolutionPack(pack, { sandbox: true });
+    const pending = manager.listPendingSandboxPromotions();
+    expect(pending).toHaveLength(1);
+
+    const result = await manager.promoteSandbox({
+      promotion_id: pending[0]!.promotion_id,
+      approved: false,
+    });
+    expect(result.status).toBe("approval_required");
+    expect(manager.listPendingSandboxPromotions()).toHaveLength(1);
+  });
+
+  it("approved=true 时写入生产并发布 evolution.sandbox_promoted", async () => {
+    const runtime = makeRuntime();
+    runtime.evolveEngine = {
+      deploy: vi.fn(async () => ({ deployed: true, playbook_path: "/tmp/pb.yaml" })),
+    };
+    const manager = new EvolutionSyncManager(runtime as never);
+    const pack = {
+      version: "2.1",
+      generated_at: "2026-05-25T01:00:00.000Z",
+      generated_by: "test",
+      source_robot_id: "robot-a",
+      improved_playbooks: [{ id: "pb_promo_ok", steps: [] }],
+      summary: "晋升测试",
+    };
+    await manager.importEvolutionPack(pack, { sandbox: true });
+    const promotionId = manager.listPendingSandboxPromotions()[0]!.promotion_id;
+
+    const result = await manager.promoteSandbox({ promotion_id: promotionId, approved: true });
+    expect(result.status).toBe("promoted");
+    expect(manager.listPendingSandboxPromotions()).toHaveLength(0);
+    expect(runtime.kernel.publish).toHaveBeenCalledWith(
+      "evolution.sandbox_promoted",
+      "evolution.promote_sandbox",
+      expect.objectContaining({ promotion_id: promotionId, playbook_ids: ["pb_promo_ok"] }),
+    );
+    expect(runtime.evolveEngine.deploy).toHaveBeenCalled();
   });
 });
 

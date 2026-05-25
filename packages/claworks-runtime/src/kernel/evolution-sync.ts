@@ -139,11 +139,39 @@ export interface EvolutionHistoryEntry {
   summary: string;
 }
 
+export interface PendingSandboxPromotion {
+  promotion_id: string;
+  pack: EvolutionPack;
+  playbook_ids: string[];
+  simulation_results: Array<{ playbook_id: string; passed: boolean; error?: string }>;
+  registered_at: string;
+}
+
+export type PromoteSandboxOptions = {
+  promotion_id: string;
+  /** 必须为 true 才会写入生产 Pack；fail-closed */
+  approved: boolean;
+  source?: string;
+};
+
+export type PromoteSandboxResult =
+  | { status: "approval_required"; promotion_id: string; message: string }
+  | { status: "not_found"; promotion_id: string }
+  | { status: "promoted"; promotion_id: string; import: ImportResult }
+  | { status: "promotion_failed"; promotion_id: string; import: ImportResult };
+
+/** 沙盒待晋升包 ID（version + generated_at） */
+export function buildSandboxPromotionId(pack: EvolutionPack): string {
+  return `sandbox-${pack.version}-${createHash("sha256").update(pack.generated_at).digest("hex").slice(0, 12)}`;
+}
+
 // ── EvolutionSyncManager ──────────────────────────────────────────────────
 
 export class EvolutionSyncManager {
   /** 内存中保存的导入历史（重启后丢失；可用 DB 持久化） */
   private history: EvolutionHistoryEntry[] = [];
+  /** 沙盒回归通过后待 HITL 晋升的进化包（重启后丢失） */
+  private pendingSandboxPromotions = new Map<string, PendingSandboxPromotion>();
 
   constructor(private readonly runtime: ClaworksRuntime) {}
 
@@ -375,8 +403,18 @@ export class EvolutionSyncManager {
       .catch(() => undefined);
 
     if (regressionPassed && playbookIds.length > 0) {
+      const promotion_id = buildSandboxPromotionId(pack);
+      this.pendingSandboxPromotions.set(promotion_id, {
+        promotion_id,
+        pack,
+        playbook_ids: playbookIds,
+        simulation_results,
+        registered_at: new Date().toISOString(),
+      });
+
       await this.runtime.kernel
         .publish("evolution.sandbox_ready_for_promotion", "evolution-sync", {
+          promotion_id,
           pack_version: pack.version,
           pack_generated_at: pack.generated_at,
           generated_by: pack.generated_by,
@@ -385,6 +423,19 @@ export class EvolutionSyncManager {
           simulation_results,
           summary: pack.summary,
           hitl_required: true,
+        })
+        .catch(() => undefined);
+
+      await this.runtime.kernel
+        .publish("hitl.approval_requested", "evolution-sync", {
+          gate_id: promotion_id,
+          message: [
+            `沙盒进化包 ${pack.version} 回归已通过，是否晋升到生产？`,
+            `Playbooks: ${playbookIds.join(", ")}`,
+            `调用 evolution.promote_sandbox 并传 approved=true 确认。`,
+          ].join("\n"),
+          promotion_id,
+          playbook_ids: playbookIds,
         })
         .catch(() => undefined);
     }
@@ -456,6 +507,63 @@ export class EvolutionSyncManager {
       });
     }
     return results;
+  }
+
+  /** 列出待 HITL 晋升的沙盒进化包 */
+  listPendingSandboxPromotions(): PendingSandboxPromotion[] {
+    return [...this.pendingSandboxPromotions.values()];
+  }
+
+  /**
+   * 将沙盒进化包晋升到生产 Pack 路径。
+   * fail-closed：approved 不为 true 时拒绝写入。
+   */
+  async promoteSandbox(opts: PromoteSandboxOptions): Promise<PromoteSandboxResult> {
+    const source = opts.source ?? "evolution.promote_sandbox";
+    if (opts.approved !== true) {
+      await this.runtime.kernel
+        .publish("hitl.approval_requested", source, {
+          gate_id: opts.promotion_id,
+          message: `沙盒晋升 ${opts.promotion_id} 需要 approved=true 才能写入生产 Pack。`,
+          promotion_id: opts.promotion_id,
+        })
+        .catch(() => undefined);
+      return {
+        status: "approval_required",
+        promotion_id: opts.promotion_id,
+        message: "需要 approved=true 才能晋升沙盒包",
+      };
+    }
+
+    const pending = this.pendingSandboxPromotions.get(opts.promotion_id);
+    if (!pending) {
+      return { status: "not_found", promotion_id: opts.promotion_id };
+    }
+
+    const importResult = await this.importEvolutionPackProduction(pending.pack);
+    this.pendingSandboxPromotions.delete(opts.promotion_id);
+
+    if (importResult.success) {
+      await this.runtime.kernel
+        .publish("evolution.sandbox_promoted", source, {
+          promotion_id: opts.promotion_id,
+          pack_version: pending.pack.version,
+          playbook_ids: pending.playbook_ids,
+          improvements: importResult.applied.length,
+        })
+        .catch(() => undefined);
+      return {
+        status: "promoted",
+        promotion_id: opts.promotion_id,
+        import: importResult,
+      };
+    }
+
+    return {
+      status: "promotion_failed",
+      promotion_id: opts.promotion_id,
+      import: importResult,
+    };
   }
 
   /** 查看进化历史（最近导入的进化包记录） */

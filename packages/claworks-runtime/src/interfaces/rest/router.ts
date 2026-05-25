@@ -1025,6 +1025,55 @@ export function createClaworksRestHandler(
         return true;
       }
 
+      // POST /v1/evolution/promote — 沙盒进化包 HITL 晋升到生产
+      if (method === "POST" && parts[1] === "evolution" && parts[2] === "promote") {
+        if (!(await requireWrite("evolution:promote"))) {
+          return true;
+        }
+        if (!runtime.evolutionSync) {
+          sendJson(res, 503, { error: "evolutionSync 未初始化" });
+          return true;
+        }
+        const body = (await readJsonBody(req)) as {
+          promotion_id?: string;
+          approved?: boolean;
+        };
+        const result = await runtime.evolutionSync.promoteSandbox({
+          promotion_id: String(body.promotion_id ?? ""),
+          approved: body.approved === true,
+          source: "rest-api",
+        });
+        sendJson(res, 200, result);
+        return true;
+      }
+
+      // POST /v1/evolve/promote-draft — KB 草稿 HITL 晋升
+      if (method === "POST" && parts[1] === "evolve" && parts[2] === "promote-draft") {
+        if (!(await requireWrite("evolve:promote_draft"))) {
+          return true;
+        }
+        const body = (await readJsonBody(req)) as {
+          proposal_id?: string;
+          approved?: boolean;
+          pack_id?: string;
+          verify_after_deploy?: boolean;
+        };
+        const engine = runtime.evolveEngine;
+        if (!engine?.promoteDraft) {
+          sendJson(res, 503, { error: "evolveEngine 未初始化" });
+          return true;
+        }
+        const result = await engine.promoteDraft({
+          proposalId: String(body.proposal_id ?? ""),
+          approved: body.approved === true,
+          packId: body.pack_id,
+          verifyAfterDeploy: body.verify_after_deploy !== false,
+          source: "rest-api",
+        });
+        sendJson(res, 200, result);
+        return true;
+      }
+
       // POST /v1/evolution/simulate — 触发模拟蒸馏流水线（发布 evolution.simulation_requested）
       if (method === "POST" && parts[1] === "evolution" && parts[2] === "simulate") {
         if (!(await requireWrite("evolution:simulate"))) {

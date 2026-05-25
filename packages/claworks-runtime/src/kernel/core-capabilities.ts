@@ -1793,6 +1793,51 @@ function makeEvolveProposDescriptor(runtime: ClaworksRuntime): CapabilityDescrip
   };
 }
 
+function makeEvolvePromoteDraftDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
+  return {
+    id: "evolve.promote_draft",
+    verb: "execute",
+    description:
+      "将 KB evolution_drafts 中的 Playbook 草稿晋升到生产 Pack（需 approved=true；fail-closed）",
+    owner: { kind: "core" },
+    rbac: { decision: "hitl_required", reason: "部署进化草稿会修改机器人行为" },
+    paramsSchema: {
+      type: "object",
+      required: ["proposal_id", "approved"],
+      properties: {
+        proposal_id: { type: "string", description: "evolve.proposeDraft 返回的 proposal id" },
+        approved: {
+          type: "boolean",
+          description: "必须为 true 才会部署；false/省略时仅发起 HITL 请求",
+        },
+        pack_id: { type: "string", description: "目标 Pack ID，默认 user_evolved" },
+        verify_after_deploy: {
+          type: "boolean",
+          description: "部署后是否运行 evolve.verify，默认 true",
+        },
+      },
+    },
+    handler: async (_ctx, params) => {
+      const proposalId = String(params.proposal_id ?? "");
+      const approved = params.approved === true;
+      const packId = params.pack_id ? String(params.pack_id) : undefined;
+      const verifyAfterDeploy = params.verify_after_deploy !== false;
+      if (!proposalId) {
+        return { status: "error", reason: "proposal_id 必填" };
+      }
+      const engine = getOrCreateEvolveEngine(runtime);
+      const result = await engine.promoteDraft({
+        proposalId,
+        approved,
+        packId,
+        verifyAfterDeploy,
+        source: "evolve.promote_draft",
+      });
+      return result as unknown as Record<string, unknown>;
+    },
+  };
+}
+
 function makeEvolveDeployDescriptor(runtime: ClaworksRuntime): CapabilityDescriptor {
   return {
     id: "evolve.deploy",
@@ -2676,6 +2721,7 @@ export function createCoreCapabilityRegistry(runtime: ClaworksRuntime): Capabili
     makeEvolveDiscoverDescriptor(runtime),
     makeEvolveWritePlaybookDescriptor(runtime), // 向下兼容旧接口
     makeEvolveProposDescriptor(runtime),
+    makeEvolvePromoteDraftDescriptor(runtime),
     makeEvolveDeployDescriptor(runtime),
     makeEvolveVerifyDescriptor(runtime),
     makeEvolveLearnDescriptor(runtime),

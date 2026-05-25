@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCbrStore } from "../planes/data/cbr-store.js";
-import { createEvolveEngine } from "./evolve-engine.js";
+import { createEvolveEngine, parseEvolutionDraftText } from "./evolve-engine.js";
 
 function makeMockKernel() {
   const handlers = new Map<string, Array<(payload: Record<string, unknown>) => void>>();
@@ -42,6 +42,21 @@ function makeEvolveRuntime(
       ingest: vi.fn(async (text: string, opts: unknown) => {
         kbIngested.push({ text, opts });
       }),
+      search: vi.fn(async (query: string, opts?: { namespace?: string }) => {
+        return kbIngested
+          .filter(
+            (d) =>
+              !opts?.namespace || (d.opts as { namespace?: string })?.namespace === opts.namespace,
+          )
+          .filter((d) => d.text.includes(query))
+          .map((d, i) => ({
+            id: `kb-${i}`,
+            score: 1,
+            text: d.text,
+            title: (d.opts as { title?: string })?.title,
+            namespace: (d.opts as { namespace?: string })?.namespace,
+          }));
+      }),
     },
     kernel: {
       ...kernel,
@@ -56,6 +71,7 @@ function makeEvolveRuntime(
       listPlaybooks: () => [],
       list: () => [],
       listRuns: async () => [],
+      loadFromPacks: vi.fn(async () => undefined),
     },
     loadedPacks: [],
     packLoader: { load: vi.fn() },
@@ -146,5 +162,58 @@ describe("EvolveEngine", () => {
     expect(
       runtime._published.find((e) => e.type === "evolve.playbook_drafted")?.payload.status,
     ).toBe("pending_review");
+  });
+
+  it("parseEvolutionDraftText 解析 KB 草稿正文", () => {
+    const text = [
+      "# Playbook Draft: OEE",
+      "status: pending_review",
+      "proposal_id: evolved_123",
+      "confidence: 0.85",
+      "",
+      "id: evolved_123",
+      "name: OEE Query",
+      "trigger:",
+      "  kind: event",
+      "  pattern: oee.query",
+    ].join("\n");
+    const parsed = parseEvolutionDraftText(text);
+    expect(parsed?.proposalId).toBe("evolved_123");
+    expect(parsed?.playbookYaml).toContain("id: evolved_123");
+  });
+
+  it("promoteDraft 无 approved 时 fail-closed 返回 approval_required", async () => {
+    const runtime = makeEvolveRuntime();
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "test draft" });
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: false,
+    });
+    expect(result.status).toBe("approval_required");
+    expect(runtime._published.some((e) => e.type === "hitl.approval_requested")).toBe(true);
+  });
+
+  it("promoteDraft approved=true 部署草稿并发布 evolve.playbook_deployed", async () => {
+    const runtime = makeEvolveRuntime();
+    runtime.packLoader.load = vi.fn(async () => ({
+      manifest: { id: "user_evolved" },
+      path: "/tmp",
+      objectTypes: [],
+      playbooks: [],
+    }));
+    runtime.playbookEngine.loadFromPacks = vi.fn(async () => undefined);
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "deploy me" });
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: true,
+      verifyAfterDeploy: false,
+    });
+    expect(result.status).toBe("deployed_unverified");
+    expect(result.deployed).toBe(true);
+    expect(runtime._published.some((e) => e.type === "evolve.playbook_deployed")).toBe(true);
   });
 });
