@@ -243,7 +243,10 @@ import {
   validateReplayTurns,
 } from "../replay-history.js";
 import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.js";
-import { createEmbeddedPiResourceLoader } from "../resource-loader.js";
+import {
+  createEmbeddedPiResourceLoader,
+  markResourceLoaderReloaded,
+} from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -2265,13 +2268,18 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
-      const resourceLoader = createEmbeddedPiResourceLoader({
+      // Create resource loader with fast-path: skip packageManager.resolve()
+      // When all no* flags are true, resolve() scans directories but results are discarded.
+      // We load extensionFactories directly without triggering the expensive resolve().
+      const resourceLoader = await createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
         agentDir,
         settingsManager,
         extensionFactories,
       });
-      await resourceLoader.reload();
+      // No reload() needed - constructor state matches reload() output for no* flags,
+      // and OpenClaw overrides systemPrompt via applySystemPromptOverrideToSession.
+      markResourceLoaderReloaded(resolvedWorkspace, agentDir);
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
       // compaction overrides applied in createPreparedEmbeddedPiSettingsManager — same
       // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
