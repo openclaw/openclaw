@@ -8,6 +8,7 @@ import { setProgramContext, setProgramRawArgv } from "./program-context.js";
 
 export function buildProgram(argv: readonly string[] = process.argv) {
   const program = new Command();
+  const registrationArgv = [...argv];
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
   // Without this, unknown nested commands can print an error
@@ -23,7 +24,7 @@ export function buildProgram(argv: readonly string[] = process.argv) {
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
 
-  registerProgramCommands(program, ctx, argv);
+  registerProgramCommands(program, ctx, registrationArgv);
 
   return program;
 }
