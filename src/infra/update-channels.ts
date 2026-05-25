@@ -41,7 +41,7 @@ export function isBetaTag(tag: string): boolean {
 export function isPrereleaseTag(tag: string): boolean {
   const parsed = parseComparableSemver(tag, { normalizeLegacyDotBeta: true });
   if (parsed) {
-    return Boolean(parsed.prerelease?.length);
+    return Boolean(parsed.prerelease?.some((part) => !/^[0-9]+$/.test(part)));
   }
   return /(?:^|[.-])(alpha|beta|rc|pre|preview|canary|dev|next|nightly|experimental)(?:[.-]|$)/i.test(
     tag,

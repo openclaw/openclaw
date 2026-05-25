@@ -124,8 +124,10 @@ source (config, git tag, git branch, or default).
 ## Tagging best practices
 
 - Tag releases you want git checkouts to land on (`vYYYY.M.D` for stable,
-  `vYYYY.M.D-beta.N` for beta; semver prerelease suffixes are not stable
-  targets).
+  `vYYYY.M.D-beta.N` for beta; named semver prerelease suffixes such as
+  `-alpha.N`, `-rc.N`, and `-next.N` are not stable targets).
+- Legacy numeric stable tags such as `vYYYY.M.D-1` and `v1.0.1-1` are still
+  recognized as stable git tags for compatibility.
 - `vYYYY.M.D.beta.N` is also recognized for compatibility, but prefer `-beta.N`.
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:

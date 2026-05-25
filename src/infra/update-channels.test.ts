@@ -38,7 +38,8 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24-nightly.1", prerelease: true, stable: false },
     { tag: "v2026.2.24-experimental.1", prerelease: true, stable: false },
     { tag: "v2026.2.24-custom.1", prerelease: true, stable: false },
-    { tag: "v2026.2.24-1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-1", prerelease: false, stable: true },
+    { tag: "v1.0.1-1", prerelease: false, stable: true },
     { tag: "v2026.2.24-alphabeta.1", prerelease: true, stable: false },
     { tag: "v2026.2.24", prerelease: false, stable: true },
   ])("stable/prerelease classification for $tag", ({ tag, prerelease, stable }) => {
@@ -120,6 +121,14 @@ describe("resolveEffectiveUpdateChannel", () => {
         git: { tag: "v2026.5.25-alpha.1" },
       },
       expected: { channel: "dev", source: "git-tag" },
+    },
+    {
+      name: "preserves legacy numeric stable git tags",
+      params: {
+        installKind: "git" as const,
+        git: { tag: "v1.0.1-1" },
+      },
+      expected: { channel: "stable", source: "git-tag" },
     },
     {
       name: "uses non-HEAD git branch as dev",
