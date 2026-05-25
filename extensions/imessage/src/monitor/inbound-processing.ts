@@ -1,6 +1,7 @@
 import {
   buildMentionRegexes,
   type EnvelopeFormatOptions,
+  filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
@@ -23,7 +24,6 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -686,15 +686,24 @@ export async function resolveIMessageInboundDecision(params: {
             chatIdentifier,
           })
         : false;
-  const filteredReplyContext =
-    !replyContext ||
-    evaluateSupplementalContextVisibility({
-      mode: contextVisibilityMode,
-      kind: "quote",
-      senderAllowed: replySenderAllowed,
-    }).include
-      ? replyContext
-      : null;
+  const visibleReply = filterChannelInboundQuoteContext(
+    contextVisibilityMode,
+    replyContext
+      ? {
+          id: replyContext.id,
+          body: replyContext.body,
+          sender: replyContext.sender,
+          senderAllowed: replySenderAllowed,
+        }
+      : undefined,
+  );
+  const filteredReplyContext = visibleReply
+    ? {
+        id: visibleReply.id,
+        body: visibleReply.body ?? "",
+        sender: visibleReply.sender,
+      }
+    : null;
   if (replyContext && !filteredReplyContext && isGroup) {
     params.logVerbose?.(
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
@@ -927,9 +936,15 @@ export function buildIMessageInboundContext(params: {
     Surface: "imessage",
     MessageSid: messageSid,
     MessageSidFull: messageGuid,
-    ReplyToId: decision.replyContext?.id,
-    ReplyToBody: decision.replyContext?.body,
-    ReplyToSender: decision.replyContext?.sender,
+    SupplementalContext: decision.replyContext
+      ? {
+          quote: {
+            id: decision.replyContext.id,
+            body: decision.replyContext.body,
+            sender: decision.replyContext.sender,
+          },
+        }
+      : undefined,
     Timestamp: decision.createdAt,
     MediaPath: params.media?.path,
     MediaType: params.media?.type,

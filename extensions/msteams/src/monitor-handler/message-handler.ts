@@ -1,13 +1,13 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  filterChannelInboundQuoteContext,
   logInboundDrop,
+  resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
-  shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -753,13 +753,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               allowNameMatching,
             }).allowed
         : true;
-    const includeQuoteContext =
-      quoteInfo &&
-      shouldIncludeSupplementalContext({
-        mode: contextVisibilityMode,
-        kind: "quote",
-        senderAllowed: quoteSenderAllowed,
-      });
+    const visibleQuote = filterChannelInboundQuoteContext(
+      contextVisibilityMode,
+      quoteInfo
+        ? {
+            id: activity.replyToId ?? undefined,
+            body: quoteInfo.body,
+            sender: quoteInfo.sender,
+            senderAllowed: quoteSenderAllowed,
+            isQuote: true,
+          }
+        : undefined,
+    );
 
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -772,7 +777,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
     const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
-
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: bodyForAgent,
@@ -799,9 +803,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
       NativeChannelId: nativeChannelId,
+      SupplementalContext: { quote: visibleQuote },
       ReplyToId: activity.replyToId ?? undefined,
-      ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
-      ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,
       ReplyToIsQuote: quoteInfo ? true : undefined,
       ...mediaPayload,
     });

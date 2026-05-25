@@ -1,11 +1,13 @@
 // Shared inbound parsing helpers for channel plugins.
 import {
   buildChannelInboundEventContext,
+  filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+export { resolveChannelInboundSupplementalContext } from "../channels/inbound-event/supplemental-context.js";
 
 export {
   createInboundDebouncer,
@@ -63,7 +65,11 @@ export {
   resolveUnmentionedGroupInboundPolicy,
 } from "../channels/inbound-event/classification.js";
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
-export { buildChannelInboundEventContext, filterChannelInboundSupplementalContext };
+export {
+  buildChannelInboundEventContext,
+  filterChannelInboundQuoteContext,
+  filterChannelInboundSupplementalContext,
+};
 export type { BuildChannelInboundEventContextParams, BuiltChannelInboundEventContext };
 
 export type BuildChannelTurnContextParams = Omit<
@@ -95,6 +101,10 @@ export function buildChannelTurnContext(
   };
 }
 
+/**
+ * @deprecated Prefer `filterChannelInboundSupplementalContext`, or
+ * `filterChannelInboundQuoteContext` for quote-only checks.
+ */
 export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
 
 export {
@@ -109,7 +119,11 @@ export type {
   ChannelInboundMediaPayload,
   ChannelInboundMediaPayload as ChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
-export type { CommandFacts, InboundMediaFacts } from "../channels/turn/types.js";
+export type {
+  CommandFacts,
+  InboundMediaFacts,
+  SupplementalContextFacts,
+} from "../channels/turn/types.js";
 export type {
   InboundEventKind,
   InboundEventKind as InboundTurnKind,

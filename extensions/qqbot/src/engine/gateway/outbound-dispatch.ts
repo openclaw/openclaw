@@ -588,13 +588,15 @@ function buildCtxPayload(
     ...(inbound.remoteMediaUrls.length > 0
       ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
       : {}),
-    ...(inbound.replyTo
+    SupplementalContext: inbound.replyTo
       ? {
-          ReplyToId: inbound.replyTo.id,
-          ReplyToBody: inbound.replyTo.body,
-          ReplyToSender: inbound.replyTo.sender,
-          ReplyToIsQuote: inbound.replyTo.isQuote,
+          quote: {
+            id: inbound.replyTo.id,
+            body: inbound.replyTo.body,
+            sender: inbound.replyTo.sender,
+            isQuote: inbound.replyTo.isQuote,
+          },
         }
-      : {}),
+      : undefined,
   }) as FinalizedMsgContext;
 }

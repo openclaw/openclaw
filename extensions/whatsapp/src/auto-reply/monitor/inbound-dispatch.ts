@@ -317,9 +317,15 @@ export function buildWhatsAppInboundContext(params: {
     SessionKey: params.route.sessionKey,
     AccountId: params.route.accountId,
     MessageSid: params.msg.id,
-    ReplyToId: params.visibleReplyTo?.id,
-    ReplyToBody: params.visibleReplyTo?.body,
-    ReplyToSender: params.visibleReplyTo?.sender?.label,
+    SupplementalContext: params.visibleReplyTo
+      ? {
+          quote: {
+            id: params.visibleReplyTo.id,
+            body: params.visibleReplyTo.body,
+            sender: params.visibleReplyTo.sender?.label ?? undefined,
+          },
+        }
+      : undefined,
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,

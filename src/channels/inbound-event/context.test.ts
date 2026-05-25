@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
+import { resolveChannelInboundSupplementalContext } from "./supplemental-context.js";
 
 function createBaseContextParams(
   overrides: Partial<BuildChannelInboundEventContextParams> = {},
@@ -486,5 +487,65 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.ForwardedFrom).toBeUndefined();
     expect(ctx.ThreadStarterBody).toBeUndefined();
     expect(ctx.ThreadHistoryBody).toBeUndefined();
+  });
+});
+
+describe("resolveChannelInboundSupplementalContext", () => {
+  it("suppresses self-authored quote body/media by default", async () => {
+    const media = vi.fn(async () => [{ path: "/tmp/reply.png", contentType: "image/png" }]);
+    const result = await resolveChannelInboundSupplementalContext({
+      media: [{ path: "/tmp/current.png", contentType: "image/png" }],
+      contextVisibility: "all",
+      supplemental: {
+        quote: {
+          id: "reply-1",
+          body: "previous bot reply",
+          sender: "Bot",
+          isSelf: true,
+          media,
+        },
+      },
+    });
+
+    expect(media).not.toHaveBeenCalled();
+    expect(result.media).toEqual([{ path: "/tmp/current.png", contentType: "image/png" }]);
+    expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
+  });
+
+  it("preserves self-authored quote media when only the body is suppressed", async () => {
+    const result = await resolveChannelInboundSupplementalContext({
+      contextVisibility: "all",
+      suppressSelfQuoteMedia: false,
+      supplemental: {
+        quote: {
+          id: "reply-1",
+          body: "previous bot reply",
+          sender: "Bot",
+          isSelf: true,
+          media: async () => [{ path: "/tmp/self.png", contentType: "image/png" }],
+        },
+      },
+    });
+
+    expect(result.media).toEqual([{ path: "/tmp/self.png", contentType: "image/png" }]);
+    expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
+  });
+
+  it("does not resolve media for hidden quotes", async () => {
+    const media = vi.fn(async () => [{ path: "/tmp/hidden.png", contentType: "image/png" }]);
+    const result = await resolveChannelInboundSupplementalContext({
+      contextVisibility: "allowlist",
+      supplemental: {
+        quote: {
+          body: "hidden",
+          senderAllowed: false,
+          media,
+        },
+      },
+    });
+
+    expect(media).not.toHaveBeenCalled();
+    expect(result.quoteHidden).toBe(true);
+    expect(result.supplemental?.quote).toBeUndefined();
   });
 });

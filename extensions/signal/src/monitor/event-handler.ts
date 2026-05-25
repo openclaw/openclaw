@@ -213,9 +213,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
-      ReplyToBody: entry.replyToBody,
-      ReplyToSender: entry.replyToSender,
-      ReplyToIsQuote: entry.replyToIsQuote,
+      SupplementalContext: entry.replyToBody
+        ? {
+            quote: {
+              body: entry.replyToBody,
+              sender: entry.replyToSender,
+              isQuote: entry.replyToIsQuote,
+            },
+          }
+        : undefined,
       Timestamp: entry.timestamp ?? undefined,
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,

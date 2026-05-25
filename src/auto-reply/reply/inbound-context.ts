@@ -2,7 +2,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { FinalizedMsgContext, MsgContext, SupplementalContextFacts } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -13,6 +13,10 @@ export type FinalizeInboundContextOptions = {
 };
 
 const DEFAULT_MEDIA_TYPE = "application/octet-stream";
+
+type MsgContextWithSupplemental = MsgContext & {
+  SupplementalContext?: SupplementalContextFacts;
+};
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -43,11 +47,41 @@ function countMediaEntries(ctx: MsgContext): number {
   return Math.max(pathCount, urlCount, single);
 }
 
+function applySupplementalContext(ctx: MsgContextWithSupplemental): void {
+  const supplemental = ctx.SupplementalContext;
+  if (!supplemental) {
+    return;
+  }
+  const fields = {
+    ReplyToId: supplemental.quote?.id,
+    ReplyToIdFull: supplemental.quote?.fullId,
+    ReplyToBody: supplemental.quote?.body,
+    ReplyToSender: supplemental.quote?.sender,
+    ReplyToIsQuote: supplemental.quote?.isQuote,
+    ForwardedFrom: supplemental.forwarded?.from,
+    ForwardedFromType: supplemental.forwarded?.fromType,
+    ForwardedFromId: supplemental.forwarded?.fromId,
+    ForwardedDate: supplemental.forwarded?.date,
+    ThreadStarterBody: supplemental.thread?.starterBody,
+    ThreadHistoryBody: supplemental.thread?.historyBody,
+    ThreadLabel: supplemental.thread?.label,
+    GroupSystemPrompt: supplemental.groupSystemPrompt,
+    UntrustedStructuredContext: supplemental.untrustedContext,
+  };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && ctx[key as keyof MsgContext] === undefined) {
+      ctx[key as keyof MsgContext] = value as never;
+    }
+  }
+  delete ctx.SupplementalContext;
+}
+
 export function finalizeInboundContext<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
 ): T & FinalizedMsgContext {
-  const normalized = ctx as T & MsgContext;
+  const normalized = ctx as T & MsgContextWithSupplemental;
+  applySupplementalContext(normalized);
 
   normalized.Body = sanitizeInboundSystemTags(
     normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),

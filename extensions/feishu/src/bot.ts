@@ -1273,7 +1273,6 @@ export async function handleFeishuMessage(params: {
         Body: combinedBody,
         BodyForAgent: messageBody,
         InboundHistory: inboundHistory,
-        ReplyToId: ctx.parentId,
         RootMessageId: ctx.rootId,
         RawBody: agentFacingContent,
         CommandBody: agentFacingContent,
@@ -1290,10 +1289,18 @@ export async function handleFeishuMessage(params: {
         Provider: "feishu" as const,
         Surface: "feishu" as const,
         MessageSid: ctx.messageId,
-        ReplyToBody: quotedContent ?? undefined,
-        ThreadStarterBody: threadContext.threadStarterBody,
-        ThreadHistoryBody: threadContext.threadHistoryBody,
-        ThreadLabel: threadContext.threadLabel,
+        SupplementalContext: {
+          quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
+          thread: {
+            starterBody: threadContext.threadStarterBody,
+            historyBody: threadContext.threadHistoryBody,
+            label: threadContext.threadLabel,
+          },
+          groupSystemPrompt: isGroup
+            ? normalizeOptionalString(groupConfig?.systemPrompt)
+            : undefined,
+        },
+        ReplyToId: ctx.parentId,
         // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
         // ID and would produce invalid reply targets downstream.
         MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
@@ -1302,7 +1309,6 @@ export async function handleFeishuMessage(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
-        GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
         ...mediaPayload,
         ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
       });

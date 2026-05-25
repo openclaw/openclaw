@@ -3,6 +3,7 @@ import {
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
+  resolveChannelInboundSupplementalContext,
   resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
@@ -409,8 +410,42 @@ export async function buildTelegramInboundContextPayload(params: {
         })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
   const replyHead = visibleReplyChain[0];
+  const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
+    path: media.path,
+    url: media.path,
+    contentType: media.contentType,
+    transcribed: index !== undefined && audioTranscribedMediaIndex === index,
+  });
+  const currentMediaFacts = currentMediaForContext.map(toInboundMedia);
+  const replyMediaFacts =
+    visibleReplyChain.length > 0
+      ? visibleReplyChain.flatMap((entry) =>
+          entry.mediaPath
+            ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
+            : [],
+        )
+      : visibleReplyTarget
+        ? replyMedia.map((media) => toInboundMedia(media))
+        : [];
+  const supplementalProjection = await resolveChannelInboundSupplementalContext({
+    media: currentMediaFacts,
+    contextVisibility: contextVisibilityMode,
+    supplemental: {
+      quote:
+        replyHead || visibleReplyTarget
+          ? {
+              id: replyHead?.messageId ?? visibleReplyTarget?.id,
+              body: replyHead?.body ?? visibleReplyTarget?.body,
+              sender: replyHead?.sender ?? visibleReplyTarget?.sender,
+              senderAllowed: true,
+              isQuote:
+                replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
+              media: replyMediaFacts,
+            }
+          : undefined,
+    },
+  });
   const telegramFrom = isGroup
     ? buildTelegramGroupFrom(chatId, resolvedThreadId)
     : `telegram:${chatId}`;
@@ -499,24 +534,9 @@ export async function buildTelegramInboundContextPayload(params: {
               body: commandBody,
             }
           : undefined,
-    media: contextMedia.map((media, index) => ({
-      path: media.path,
-      url: media.path,
-      contentType: media.contentType,
-      transcribed: audioTranscribedMediaIndex === index,
-    })),
+    media: supplementalProjection.media,
     supplemental: {
-      quote:
-        replyHead || visibleReplyTarget
-          ? {
-              id: replyHead?.messageId ?? visibleReplyTarget?.id,
-              body: replyHead?.body ?? visibleReplyTarget?.body,
-              sender: replyHead?.sender ?? visibleReplyTarget?.sender,
-              senderAllowed: true,
-              isQuote:
-                replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
-            }
-          : undefined,
+      quote: supplementalProjection.supplemental?.quote,
       forwarded: visibleForwardOrigin
         ? {
             from: visibleForwardOrigin.from,

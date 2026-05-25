@@ -1,3 +1,4 @@
+import { filterChannelInboundQuoteContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
@@ -1293,12 +1294,21 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ? await resolveReplyContext({ roomId, eventId: replyToEventId })
           : undefined;
       }
-      if (
-        replyContext?.replyToSenderId &&
-        !shouldIncludeRoomContextSender("quote", replyContext.replyToSenderId)
-      ) {
+      const replySenderAllowed =
+        !replyContext?.replyToSenderId || isRoomContextSenderAllowed(replyContext.replyToSenderId);
+      const visibleReply = filterChannelInboundQuoteContext(
+        contextVisibilityMode,
+        replyContext
+          ? {
+              id: threadTarget ? undefined : (replyToEventId ?? undefined),
+              body: replyContext.replyToBody,
+              sender: replyContext.replyToSender,
+              senderAllowed: replySenderAllowed,
+            }
+          : undefined,
+      );
+      if (replyContext && !visibleReply) {
         logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
-        replyContext = undefined;
       }
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
@@ -1356,16 +1366,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupId: isRoom ? roomId : undefined,
         GroupChannel: isRoom ? roomId : undefined,
-        GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
+        SupplementalContext: {
+          quote: visibleReply,
+          thread: { starterBody: threadContext?.threadStarterBody },
+          groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
+        },
         Provider: "matrix" as const,
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
-        ReplyToBody: replyContext?.replyToBody,
-        ReplyToSender: replyContext?.replyToSender,
         MessageThreadId: threadTarget,
-        ThreadStarterBody: threadContext?.threadStarterBody,
         Timestamp: eventTs ?? undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
