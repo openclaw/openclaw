@@ -995,6 +995,13 @@ export const SlackAccountSchema = z
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
         emojiList: z.boolean().optional(),
+        /**
+         * Slack workspace admin operations: conversations.create, users.lookupByEmail,
+         * conversations.invite, and conversations.members. Defaults to false because
+         * these mutate workspace state and require broader Slack scopes. Opt in
+         * explicitly per account when the deployment is ready to grant them.
+         */
+        admin: z.boolean().optional(),
       })
       .strict()
       .optional(),

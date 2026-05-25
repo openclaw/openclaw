@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - MCP/openclaw-tools: bridge the Slack channel-plugin actions through the OpenClaw-tools MCP server so Claude Code and other harnesses with `mcp__openclaw__*` allowed tools can react, send/edit/delete messages, read history, manage pins, fetch member info, and upload/download files instead of seeing Slack guidance in `skills/slack/SKILL.md` with no callable surface. Admin operations like channel/app creation remain out of scope. Refs #74757. Thanks @Tiger0710.
+- Channels/Slack: add opt-in admin actions (`conversations.create`, `users.lookupByEmail`, `conversations.invite`, `conversations.members`) gated on `channels.slack.actions.admin === true` (default off). Surfaced through `listSlackMessageActions` and the openclaw-tools MCP `slack` bridge as `createConversation` / `lookupUserByEmail` / `inviteUsers` / `listMembers`. Workspace-level operations such as `apps.manifest.create` are not included here. Refs #74757. Thanks @Tiger0710.
 
 ### Fixes
 

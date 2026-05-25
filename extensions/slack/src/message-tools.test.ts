@@ -236,6 +236,35 @@ describe("Slack message tools", () => {
     expect(property.description).toContain("threadId: null");
   });
 
+  it("omits admin actions by default and adds them when admin gate is on", () => {
+    const baseCfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+        },
+      },
+    } as OpenClawConfig;
+    const baseline = listSlackMessageActions(baseCfg);
+    expect(baseline).not.toContain("channel-create");
+    expect(baseline).not.toContain("addParticipant");
+    expect(baseline).not.toContain("member-list");
+    expect(baseline).not.toContain("user-lookup-by-email");
+
+    const adminCfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          actions: { admin: true },
+        },
+      },
+    } as OpenClawConfig;
+    const withAdmin = listSlackMessageActions(adminCfg);
+    expect(withAdmin).toContain("channel-create");
+    expect(withAdmin).toContain("addParticipant");
+    expect(withAdmin).toContain("member-list");
+    expect(withAdmin).toContain("user-lookup-by-email");
+  });
+
   it("omits Slack file and message id schemas when those actions are disabled", () => {
     const discovery = describeSlackMessageTool({
       cfg: {

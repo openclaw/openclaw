@@ -8,7 +8,9 @@ metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.sl
 
 Use the `slack` tool. Reuse `channelId` and Slack timestamp message IDs from context when present.
 
-Harnesses that only see `mcp__openclaw__*` tools (Claude Code, etc.) reach the same surface as `mcp__openclaw__slack` via the OpenClaw-tools MCP bridge; the tool name stays `slack` and the `action` parameter selects the operation. The bridge routes through the Slack channel plugin and uses the configured bot token; admin operations such as channel creation or app-manifest mutation are out of scope and not exposed here.
+Harnesses that only see `mcp__openclaw__*` tools (Claude Code, etc.) reach the same surface as `mcp__openclaw__slack` via the OpenClaw-tools MCP bridge; the tool name stays `slack` and the `action` parameter selects the operation. The bridge routes through the Slack channel plugin and uses the configured Slack account credentials.
+
+Admin actions (`createConversation`, `lookupUserByEmail`, `inviteUsers`, `listMembers`) are **disabled by default**. The host operator opts in per account by setting `channels.slack.actions.admin: true` and granting the bot the required scopes (`channels:manage` / `groups:write`, `users:read.email`, `conversations:write`, `channels:read`). Workspace-level operations such as `apps.manifest.create` are not exposed here.
 
 ## Inputs
 
@@ -71,6 +73,26 @@ Harnesses that only see `mcp__openclaw__*` tools (Claude Code, etc.) reach the s
 
 ```json
 { "action": "emojiList" }
+```
+
+### Admin actions (opt-in)
+
+These only work when the host has set `channels.slack.actions.admin: true`. Call them with the same `slack` tool; the bridge errors with `Slack admin actions are disabled.` when the gate is off.
+
+```json
+{ "action": "lookupUserByEmail", "email": "alice@example.com" }
+```
+
+```json
+{ "action": "createConversation", "name": "team-x", "isPrivate": false }
+```
+
+```json
+{ "action": "inviteUsers", "channelId": "C123", "userIds": ["U1", "U2"] }
+```
+
+```json
+{ "action": "listMembers", "channelId": "C123", "limit": 100 }
 ```
 
 ## Safety

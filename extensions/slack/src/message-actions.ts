@@ -50,6 +50,12 @@ export function listSlackMessageActions(
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }
+  if (isActionEnabled("admin", false)) {
+    actions.add("channel-create");
+    actions.add("addParticipant");
+    actions.add("member-list");
+    actions.add("user-lookup-by-email");
+  }
   return Array.from(actions);
 }
 

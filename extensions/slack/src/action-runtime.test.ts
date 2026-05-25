@@ -18,6 +18,19 @@ const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const createSlackConversation = vi.fn(
+  async (..._args: unknown[]) => ({ id: "C-NEW", name: "team-x" }) as unknown,
+);
+const inviteSlackUsersToConversation = vi.fn(
+  async (..._args: unknown[]) =>
+    ({ channelId: "C1", invited: ["U1"], alreadyInChannel: [] }) as unknown,
+);
+const listSlackChannelMembers = vi.fn(
+  async (..._args: unknown[]) => ({ channelId: "C1", members: ["U1", "U2"] }) as unknown,
+);
+const lookupSlackUserByEmail = vi.fn(
+  async (..._args: unknown[]) => ({ id: "U9", email: "a@b" }) as unknown,
+);
 
 describe("handleSlackAction", () => {
   function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -216,6 +229,10 @@ describe("handleSlackAction", () => {
       removeSlackReaction,
       sendSlackMessage,
       unpinSlackMessage,
+      createSlackConversation,
+      inviteSlackUsersToConversation,
+      listSlackChannelMembers,
+      lookupSlackUserByEmail,
     });
   });
 
@@ -1114,6 +1131,82 @@ describe("handleSlackAction", () => {
         party: "https://example.com/party.png",
         tada: "https://example.com/tada.png",
       },
+    });
+  });
+
+  describe("admin actions", () => {
+    it("errors when admin gate is off (default)", async () => {
+      await expect(
+        handleSlackAction({ action: "channel-create", name: "team-x" }, slackConfig()),
+      ).rejects.toThrow(/admin actions are disabled/i);
+      await expect(
+        handleSlackAction({ action: "user-lookup-by-email", email: "a@b" }, slackConfig()),
+      ).rejects.toThrow(/admin actions are disabled/i);
+      expect(createSlackConversation).not.toHaveBeenCalled();
+      expect(lookupSlackUserByEmail).not.toHaveBeenCalled();
+    });
+
+    it("dispatches channel-create when admin gate is on", async () => {
+      const result = await handleSlackAction(
+        { action: "channel-create", name: "team-x", isPrivate: true },
+        slackConfig({ actions: { admin: true } }),
+      );
+      expect(createSlackConversation).toHaveBeenCalledTimes(1);
+      const [name, opts] = createSlackConversation.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(name).toBe("team-x");
+      expect(opts).toMatchObject({ isPrivate: true });
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.channel).toEqual({ id: "C-NEW", name: "team-x" });
+    });
+
+    it("dispatches user-lookup-by-email when admin gate is on", async () => {
+      const result = await handleSlackAction(
+        { action: "user-lookup-by-email", email: "alice@example.com" },
+        slackConfig({ actions: { admin: true } }),
+      );
+      expect(lookupSlackUserByEmail).toHaveBeenCalledTimes(1);
+      expect((lookupSlackUserByEmail.mock.calls[0] as unknown[])[0]).toBe("alice@example.com");
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.user).toEqual({ id: "U9", email: "a@b" });
+    });
+
+    it("dispatches addParticipant when admin gate is on", async () => {
+      const result = await handleSlackAction(
+        { action: "addParticipant", channelId: "C1", userIds: ["U1", "U2"] },
+        slackConfig({ actions: { admin: true } }),
+      );
+      expect(inviteSlackUsersToConversation).toHaveBeenCalledTimes(1);
+      const [channelId, userIds] = inviteSlackUsersToConversation.mock.calls[0] as [
+        string,
+        string[],
+      ];
+      expect(channelId).toBe("C1");
+      expect(userIds).toEqual(["U1", "U2"]);
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.invited).toEqual(["U1"]);
+    });
+
+    it("dispatches member-list with optional cursor/limit", async () => {
+      const result = await handleSlackAction(
+        { action: "member-list", channelId: "C1", limit: 50, cursor: "next-1" },
+        slackConfig({ actions: { admin: true } }),
+      );
+      expect(listSlackChannelMembers).toHaveBeenCalledTimes(1);
+      const [channelId, opts] = listSlackChannelMembers.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(channelId).toBe("C1");
+      expect(opts).toMatchObject({ limit: 50, cursor: "next-1" });
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.members).toEqual(["U1", "U2"]);
     });
   });
 });

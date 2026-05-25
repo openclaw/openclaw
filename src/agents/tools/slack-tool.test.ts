@@ -265,6 +265,62 @@ describe("slack tool bridge", () => {
         params: { fileId: "F1", channelId: "C1", threadId: "1.5" },
       });
     });
+
+    it("createConversation maps to channel-create with optional isPrivate", async () => {
+      const tool = makeTool();
+      await tool.execute("c-cc", { action: "createConversation", name: "team-x" });
+      expect(lastCall().request).toMatchObject({
+        action: "channel-create",
+        params: { name: "team-x" },
+      });
+      expect(lastCall().request.params).not.toHaveProperty("isPrivate");
+
+      await tool.execute("c-cc-priv", {
+        action: "createConversation",
+        name: "team-y",
+        isPrivate: true,
+      });
+      expect(lastCall().request.params).toMatchObject({ name: "team-y", isPrivate: true });
+    });
+
+    it("lookupUserByEmail maps to user-lookup-by-email", async () => {
+      const tool = makeTool();
+      await tool.execute("c-lu", {
+        action: "lookupUserByEmail",
+        email: "alice@example.com",
+      });
+      expect(lastCall().request).toMatchObject({
+        action: "user-lookup-by-email",
+        params: { email: "alice@example.com" },
+      });
+    });
+
+    it("inviteUsers maps to addParticipant with channelId + userIds", async () => {
+      const tool = makeTool();
+      await tool.execute("c-inv", {
+        action: "inviteUsers",
+        channelId: "C1",
+        userIds: ["U1", "U2"],
+      });
+      expect(lastCall().request).toMatchObject({
+        action: "addParticipant",
+        params: { channelId: "C1", userIds: ["U1", "U2"] },
+      });
+    });
+
+    it("listMembers maps to member-list with optional cursor/limit", async () => {
+      const tool = makeTool();
+      await tool.execute("c-lm", {
+        action: "listMembers",
+        channelId: "C1",
+        limit: 50,
+        cursor: "next-1",
+      });
+      expect(lastCall().request).toMatchObject({
+        action: "member-list",
+        params: { channelId: "C1", limit: 50, cursor: "next-1" },
+      });
+    });
   });
 
   describe("validation", () => {
@@ -312,13 +368,44 @@ describe("slack tool bridge", () => {
       const tool = makeTool();
       await expect(tool.execute("call", { action: "memberInfo" })).rejects.toThrow(/userId/);
     });
+
+    it("createConversation requires name", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "createConversation" })).rejects.toThrow(/name/);
+    });
+
+    it("lookupUserByEmail requires email", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "lookupUserByEmail" })).rejects.toThrow(/email/);
+    });
+
+    it("inviteUsers requires channelId and non-empty userIds", async () => {
+      const tool = makeTool();
+      await expect(
+        tool.execute("call", { action: "inviteUsers", userIds: ["U1"] }),
+      ).rejects.toThrow(/channelId required/);
+      await expect(
+        tool.execute("call", { action: "inviteUsers", channelId: "C1" }),
+      ).rejects.toThrow(/userIds required/);
+      await expect(
+        tool.execute("call", { action: "inviteUsers", channelId: "C1", userIds: [] }),
+      ).rejects.toThrow(/userIds required/);
+    });
+
+    it("listMembers requires channelId", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "listMembers" })).rejects.toThrow(
+        /channelId required/,
+      );
+    });
   });
 
   describe("description", () => {
-    it("documents the bridge boundary and refuses admin operations", () => {
+    it("documents the bridge boundary and the admin opt-in", () => {
       const tool = makeTool();
       expect(tool.description).toContain("skills/slack/SKILL.md");
-      expect(tool.description).toContain("does not unlock admin-token operations");
+      expect(tool.description).toContain("channels.slack.actions.admin");
+      expect(tool.description).toContain("apps.manifest.create");
     });
   });
 });

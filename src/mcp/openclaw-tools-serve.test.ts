@@ -33,6 +33,10 @@ describe("OpenClaw tools MCP server", () => {
         "emojiList",
         "uploadFile",
         "downloadFile",
+        "createConversation",
+        "lookupUserByEmail",
+        "inviteUsers",
+        "listMembers",
       ]),
     );
   });

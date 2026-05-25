@@ -46,9 +46,11 @@ function sameSlackChannelTarget(targetChannel: string, currentChannelId: string)
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
+type SlackAdminActionsRuntimeModule = typeof import("./admin-actions.runtime.js");
 
 let slackActionsRuntimePromise: Promise<SlackActionsRuntimeModule> | undefined;
 let slackAccountsRuntimePromise: Promise<SlackAccountsRuntimeModule> | undefined;
+let slackAdminActionsRuntimePromise: Promise<SlackAdminActionsRuntimeModule> | undefined;
 
 function loadSlackActionsRuntime(): Promise<SlackActionsRuntimeModule> {
   slackActionsRuntimePromise ??= import("./actions.runtime.js");
@@ -60,6 +62,11 @@ function loadSlackAccountsRuntime(): Promise<SlackAccountsRuntimeModule> {
   return slackAccountsRuntimePromise;
 }
 
+function loadSlackAdminActionsRuntime(): Promise<SlackAdminActionsRuntimeModule> {
+  slackAdminActionsRuntimePromise ??= import("./admin-actions.runtime.js");
+  return slackAdminActionsRuntimePromise;
+}
+
 function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
   key: K,
 ): SlackActionsRuntimeModule[K] {
@@ -68,6 +75,16 @@ function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
     const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
     return action(...args);
   }) as SlackActionsRuntimeModule[K];
+}
+
+function createLazySlackAdminAction<K extends keyof SlackAdminActionsRuntimeModule>(
+  key: K,
+): SlackAdminActionsRuntimeModule[K] {
+  return (async (...args: unknown[]) => {
+    const runtime = await loadSlackAdminActionsRuntime();
+    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
+    return action(...args);
+  }) as SlackAdminActionsRuntimeModule[K];
 }
 
 export const slackActionRuntime = {
@@ -86,6 +103,11 @@ export const slackActionRuntime = {
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
   unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
+  // Admin actions (channels.slack.actions.admin === true required).
+  createSlackConversation: createLazySlackAdminAction("createSlackConversation"),
+  inviteSlackUsersToConversation: createLazySlackAdminAction("inviteSlackUsersToConversation"),
+  listSlackChannelMembers: createLazySlackAdminAction("listSlackChannelMembers"),
+  lookupSlackUserByEmail: createLazySlackAdminAction("lookupSlackUserByEmail"),
 };
 
 export type SlackActionContext = {
@@ -587,6 +609,64 @@ export async function handleSlackAction(
       }
     }
     return jsonResult({ ok: true, emojis: result });
+  }
+
+  // Admin actions (default off; opt-in via channels.slack.actions.admin === true).
+  if (
+    action === "channel-create" ||
+    action === "user-lookup-by-email" ||
+    action === "addParticipant" ||
+    action === "member-list"
+  ) {
+    if (!isActionEnabled("admin", false)) {
+      throw new Error(
+        "Slack admin actions are disabled. Set channels.slack.actions.admin=true to opt in.",
+      );
+    }
+    if (action === "channel-create") {
+      const name = readStringParam(params, "name", { required: true });
+      const isPrivate = readBooleanParam(params, "isPrivate") ?? false;
+      const created = writeOpts
+        ? await slackActionRuntime.createSlackConversation(name, {
+            ...writeOpts,
+            isPrivate,
+          })
+        : await slackActionRuntime.createSlackConversation(name, { isPrivate });
+      return jsonResult({ ok: true, channel: created });
+    }
+    if (action === "user-lookup-by-email") {
+      const email = readStringParam(params, "email", { required: true });
+      const user = readOpts
+        ? await slackActionRuntime.lookupSlackUserByEmail(email, readOpts)
+        : await slackActionRuntime.lookupSlackUserByEmail(email);
+      return jsonResult({ ok: true, user });
+    }
+    if (action === "addParticipant") {
+      const channelId = resolveChannelId();
+      const rawUserIds = params.userIds;
+      const userIds = Array.isArray(rawUserIds)
+        ? rawUserIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const result = writeOpts
+        ? await slackActionRuntime.inviteSlackUsersToConversation(channelId, userIds, writeOpts)
+        : await slackActionRuntime.inviteSlackUsersToConversation(channelId, userIds);
+      return jsonResult({ ok: true, ...result });
+    }
+    // member-list
+    const channelId = resolveChannelId();
+    const limit = readNumberParam(params, "limit", { integer: true });
+    const cursor = readStringParam(params, "cursor");
+    const page = readOpts
+      ? await slackActionRuntime.listSlackChannelMembers(channelId, {
+          ...readOpts,
+          ...(limit != null ? { limit } : {}),
+          ...(cursor ? { cursor } : {}),
+        })
+      : await slackActionRuntime.listSlackChannelMembers(channelId, {
+          ...(limit != null ? { limit } : {}),
+          ...(cursor ? { cursor } : {}),
+        });
+    return jsonResult({ ok: true, ...page });
   }
 
   throw new Error(`Unknown action: ${action}`);
