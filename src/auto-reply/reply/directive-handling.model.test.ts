@@ -1898,7 +1898,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     expect(sessionEntry.execNode).toBe("worker-1");
   });
 
-  it("allows non-webchat channel callers without gateway scopes to persist exec defaults", async () => {
+  it("skips exec persistence for non-webchat channel callers without gateway scopes", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
       {
@@ -1908,20 +1908,20 @@ describe("persistInlineDirectives internal exec scope gate", () => {
       },
     );
 
-    expect(sessionEntry.execHost).toBe("node");
-    expect(sessionEntry.execSecurity).toBe("allowlist");
-    expect(sessionEntry.execAsk).toBe("always");
-    expect(sessionEntry.execNode).toBe("worker-1");
+    expect(sessionEntry.execHost).toBeUndefined();
+    expect(sessionEntry.execSecurity).toBeUndefined();
+    expect(sessionEntry.execAsk).toBeUndefined();
+    expect(sessionEntry.execNode).toBeUndefined();
   });
 
-  it("allows non-webchat channel callers without gateway scopes to persist verbose defaults", async () => {
+  it("skips verbose persistence for non-webchat channel callers without gateway scopes", async () => {
     const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "telegram",
       surface: "telegram",
       gatewayClientScopes: undefined,
     });
 
-    expect(sessionEntry.verboseLevel).toBe("full");
+    expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 
   it("treats internal provider context as authoritative over external surface metadata", async () => {
