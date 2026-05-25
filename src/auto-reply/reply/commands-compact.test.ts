@@ -350,7 +350,7 @@ describe("handleCompactCommand", () => {
   it("reports started Codex native compaction without incrementing completed compaction state", async () => {
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,
-      compacted: true,
+      compacted: false,
       result: {
         summary: "",
         firstKeptEntryId: "",

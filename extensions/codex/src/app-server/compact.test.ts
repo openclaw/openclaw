@@ -111,7 +111,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     expect(fake.client.addNotificationHandler).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(false);
     expect(result.result?.tokensBefore).toBe(123);
     expect(result.result?.tokensAfter).toBeUndefined();
     const details = compactDetails(result);
@@ -176,7 +176,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(false);
     expect(result.result?.tokensAfter).toBeUndefined();
     expect(compactDetails(result).tokenUsageSource).toBeUndefined();
     expect(compactDetails(result).signal).toBe("thread/compact/start");
@@ -241,7 +241,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(false);
     expect(compactDetails(result)).toMatchObject({
       backend: "codex-app-server",
       threadId: "thread-1",
@@ -551,7 +551,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.compacted).toBe(false);
     expect(compactDetails(result)).toMatchObject({
       backend: "codex-app-server",
       threadId: "thread-1",

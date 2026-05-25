@@ -197,7 +197,7 @@ async function compactCodexNativeThread(
   };
   return {
     ok: true,
-    compacted: true,
+    compacted: false,
     result: {
       summary: "",
       firstKeptEntryId: "",
