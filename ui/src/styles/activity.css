@@ -1,5 +1,7 @@
 .activity-page {
   display: grid;
+  grid-template-rows: auto auto minmax(260px, 1fr);
+  align-content: start;
   gap: 16px;
   min-height: min(680px, calc(100vh - 180px));
 }
@@ -73,6 +75,13 @@
   background: var(--secondary);
   font-size: var(--control-ui-text-sm);
   line-height: 1;
+}
+
+.activity-status-filter:focus-within,
+.activity-autofollow:focus-within,
+.activity-entry__summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .activity-status-filter input,
@@ -268,11 +277,6 @@
     min-height: calc(100vh - 150px);
   }
 
-  .activity-page__header,
-  .activity-entry__summary {
-    grid-template-columns: 1fr;
-  }
-
   .activity-page__header {
     display: grid;
   }
@@ -283,15 +287,17 @@
   }
 
   .activity-entry__summary {
+    grid-template-columns: 18px minmax(0, 1fr);
     gap: 8px;
   }
 
-  .activity-entry__chevron {
-    display: none;
+  .activity-entry__meta {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .activity-entry__body {
-    padding-left: 14px;
+    padding-left: 42px;
   }
 
   .activity-stream {

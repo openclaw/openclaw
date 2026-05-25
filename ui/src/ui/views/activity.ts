@@ -67,7 +67,11 @@ function hiddenArgumentsLabel(count: number): string {
 }
 
 function buildEntrySummary(entry: ActivityEntry): string {
-  return `${entry.toolName} ${statusLabel(entry.status)}; ${hiddenArgumentsLabel(entry.hiddenArgumentCount)}`;
+  return t("activity.entrySummary", {
+    argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
+    status: statusLabel(entry.status),
+    tool: entry.toolName,
+  });
 }
 
 function matchesEntry(entry: ActivityEntry, needle: string): boolean {
@@ -79,6 +83,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
       entry.toolName,
       entry.status,
       entry.summary,
+      buildEntrySummary(entry),
       entry.outputPreview,
       entry.runId,
       entry.toolCallId,
@@ -128,6 +133,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
   return html`
     <details
       class="activity-entry activity-entry--${entry.status}"
+      role="listitem"
       .open=${open}
       @toggle=${(event: Event) =>
         props.onEntryToggle(entry.id, (event.currentTarget as HTMLDetailsElement).open)}
@@ -255,7 +261,12 @@ export function renderActivity(props: ActivityProps) {
         </div>
       </div>
 
-      <div class="activity-stream" @scroll=${props.onScroll}>
+      <div
+        class="activity-stream"
+        role="list"
+        aria-label=${t("activity.streamLabel")}
+        @scroll=${props.onScroll}
+      >
         ${filtered.length === 0
           ? html`
               <div class="activity-empty">

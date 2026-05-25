@@ -64,8 +64,21 @@ describe("renderActivity", () => {
     render(renderActivity(createProps()), container);
 
     expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "exec Wird ausgeführt; 0 arguments hidden",
+      "0 arguments hidden",
     );
+  });
+
+  it("exposes the activity stream as a named list", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(renderActivity(createProps()), container);
+
+    const stream = container.querySelector(".activity-stream");
+    expect(stream?.getAttribute("role")).toBe("list");
+    expect(stream?.getAttribute("aria-label")).toBe("Tool activity entries");
+    expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
   });
 
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
