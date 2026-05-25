@@ -1088,10 +1088,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
           this.responseActive = true;
           this.responseCreateInFlight = false;
-          if (this.responseCreateInFlightInstructions) {
+          if (this.responseCreateInFlightInstructions && !this.responseCreatePending) {
             this.pendingResponseCreateInstructions = this.responseCreateInFlightInstructions;
-            this.responseCreateInFlightInstructions = undefined;
           }
+          this.responseCreateInFlightInstructions = undefined;
           this.responseCreatePending = true;
           return;
         }
