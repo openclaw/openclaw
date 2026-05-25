@@ -204,6 +204,85 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("bootstraps a Node toolchain for raw AWS macOS JavaScript commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "pnpm", "--version"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args).toContain("--shell");
+    expect(result.stderr).toContain(
+      "bootstrapping a pinned user-local Node toolchain before the command",
+    );
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("node-v${node_version}-darwin-${node_arch}.tar.gz");
+    expect(remoteCommand).toContain("shasum -a 256 -c -");
+    expect(remoteCommand).not.toContain("set -euo pipefail");
+    expect(remoteCommand).toContain('return "$status"');
+    expect(remoteCommand).toContain("node --version >&2");
+    expect(remoteCommand).toContain("pnpm --version >&2");
+    expect(remoteCommand).toContain("&& { pnpm --version\n}");
+  });
+
+  it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", "pnpm check:changed"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain("&& { pnpm check:changed\n}");
+  });
+
+  it("groups shell commands so fallbacks cannot mask AWS macOS bootstrap failures", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "macos",
+        "--shell",
+        "--",
+        "pnpm check:changed || true",
+      ],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js && {");
+    expect(remoteCommand).toContain("pnpm check:changed || true\n}");
+  });
+
+  it("does not bootstrap non-macOS AWS JavaScript commands", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "linux", "--", "pnpm", "--version"],
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.args).toEqual([
+      "run",
+      "--provider",
+      "aws",
+      "--target",
+      "linux",
+      "--",
+      "pnpm",
+      "--version",
+    ]);
+  });
+
   it("finds a Crabbox checkout next to the Git common dir in linked worktrees", () => {
     const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
     tempDirs.push(fakeWorkspaceParent);
@@ -440,6 +519,32 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain("git diff --cached --quiet");
     expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
     expect(remoteCommand).toMatch(/&& corepack pnpm check:changed$/u);
+  });
+
+  it("preserves macOS JS bootstrapping for sparse changed gates on remote raw syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--", "pnpm", "check:changed"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = output.args.at(-1) ?? "";
+    expect(result.status).toBe(0);
+    expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expect(remoteCommand).toContain(
+      "openclaw_crabbox_bootstrap_macos_js && { pnpm check:changed\n}",
+    );
   });
 
   it("preserves existing shell changed-gate commands after remote Git bootstrap", () => {
