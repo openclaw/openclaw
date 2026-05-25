@@ -328,7 +328,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node \\",
+      "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
@@ -339,8 +339,12 @@ describe("Dockerfile", () => {
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain("install -d -m 0755 -o node -g node /home/node/.config");
     expect(dockerfile).toContain("/home/node/.openclaw/workspace");
     expect(dockerfile).toContain("/home/node/.config/openclaw");
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755'",
+    );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
