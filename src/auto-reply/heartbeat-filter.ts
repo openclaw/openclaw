@@ -395,6 +395,7 @@ function resolveHeartbeatArtifactSpanEnd(
   let index = startIndex + 1;
   let sawTerminalHeartbeatArtifact = false;
   let sawNonTerminalAssistantOutput = false;
+  let sawToolActivity = false;
 
   while (index < messages.length) {
     const message = messages[index];
@@ -413,6 +414,7 @@ function resolveHeartbeatArtifactSpanEnd(
       if (hasCompletedVisibleHeartbeatResponseToolCall(messages, index)) {
         return undefined;
       }
+      sawToolActivity = true;
       index++;
       continue;
     }
@@ -426,6 +428,7 @@ function resolveHeartbeatArtifactSpanEnd(
       continue;
     }
     if (isToolResultMessage(message) || hasAssistantToolCall(message)) {
+      sawToolActivity = true;
       index++;
       continue;
     }
@@ -437,7 +440,16 @@ function resolveHeartbeatArtifactSpanEnd(
     return undefined;
   }
 
-  if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
+  // Keep unrecognized assistant output when a subsequent user message
+  // proves the user interacted with it, or when the heartbeat used tools
+  // (indicating it did real work worth preserving). Only trim text-only
+  // non-standard responses at the trailing position. Fixes #85614: models
+  // that don't produce a clean HEARTBEAT_OK left stale heartbeat context.
+  if (
+    sawNonTerminalAssistantOutput &&
+    !sawTerminalHeartbeatArtifact &&
+    (index < messages.length || sawToolActivity)
+  ) {
     return undefined;
   }
   return index;
