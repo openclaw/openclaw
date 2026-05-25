@@ -78,7 +78,10 @@ export type GoogleChatAccountConfig = {
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */
   audience?: string;
-  /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
+  /**
+   * Exact add-on principal to accept when app-url delivery uses add-on tokens.
+   * Required when audienceType is "app-url".
+   */
   appPrincipal?: string;
   /** Google Chat webhook path (default: /googlechat). */
   webhookPath?: string;
