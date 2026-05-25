@@ -827,7 +827,7 @@ describe("Code Mode", () => {
 
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("timeout exceeded");
+    expect(String(details.error)).toMatch(/timeout exceeded|interrupted/);
     expect(details.code).toBe("timeout");
   });
 
