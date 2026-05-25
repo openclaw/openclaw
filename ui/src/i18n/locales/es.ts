@@ -39,18 +39,23 @@ export const es: TranslationMap = {
     logs: "Registros",
   },
   subtitles: {
-    agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
-    overview: "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
+    agents:
+      "Gestionar espacios de trabajo, herramientas e identidades de agentes.",
+    overview:
+      "Estado de la puerta de enlace, puntos de entrada y lectura rápida de salud.",
     channels: "Gestionar canales y ajustes.",
     instances: "Balizas de presencia de clientes y nodos conectados.",
-    sessions: "Inspeccionar sesiones activas y ajustar valores predeterminados por sesión.",
+    sessions:
+      "Inspeccionar sesiones activas y ajustar valores predeterminados por sesión.",
     usage: "Monitorear uso de API y costes.",
     cron: "Programar despertares y ejecuciones recurrentes de agentes.",
-    skills: "Gestionar disponibilidad de habilidades e inyección de claves API.",
+    skills:
+      "Gestionar disponibilidad de habilidades e inyección de claves API.",
     nodes: "Dispositivos emparejados, capacidades y exposición de comandos.",
     chat: "Sesión de chat directa con la puerta de enlace para intervenciones rápidas.",
     config: "Editar ~/.openclaw/openclaw.json de forma segura.",
-    debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
+    debug:
+      "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
   },
   overview: {
@@ -72,13 +77,15 @@ export const es: TranslationMap = {
       uptime: "Tiempo de actividad",
       tickInterval: "Intervalo de tick",
       lastChannelsRefresh: "Última actualización de canales",
-      channelsHint: "Usa Canales para vincular WhatsApp, Telegram, Discord, Signal o iMessage.",
+      channelsHint:
+        "Usa Canales para vincular WhatsApp, Telegram, Discord, Signal o iMessage.",
     },
     stats: {
       instances: "Instancias",
       instancesHint: "Balizas de presencia en los últimos 5 minutos.",
       sessions: "Sesiones",
-      sessionsHint: "Claves de sesión recientes rastreadas por la puerta de enlace.",
+      sessionsHint:
+        "Claves de sesión recientes rastreadas por la puerta de enlace.",
       cron: "Cron",
       cronNext: "Próximo despertar {time}",
     },
@@ -139,7 +146,8 @@ export const es: TranslationMap = {
     },
     jobs: {
       title: "Tareas",
-      subtitle: "Todas las tareas programadas almacenadas en la puerta de enlace.",
+      subtitle:
+        "Todas las tareas programadas almacenadas en la puerta de enlace.",
       shownOf: "{shown} mostradas de {total}",
       searchJobs: "Buscar tareas",
       searchPlaceholder: "Nombre, descripción o agente",
@@ -175,7 +183,8 @@ export const es: TranslationMap = {
       clear: "Limpiar",
       allStatuses: "Todos los estados",
       allDelivery: "Todas las entregas",
-      selectJobHint: "Selecciona una tarea para ver su historial de ejecuciones.",
+      selectJobHint:
+        "Selecciona una tarea para ver su historial de ejecuciones.",
       noMatching: "No hay ejecuciones coincidentes.",
       loadMore: "Cargar más ejecuciones",
       runStatusOk: "OK",
@@ -195,7 +204,8 @@ export const es: TranslationMap = {
       required: "Requerido",
       requiredSr: "requerido",
       basics: "Básico",
-      basicsSub: "Asigna un nombre, elige el asistente y define si está habilitada.",
+      basicsSub:
+        "Asigna un nombre, elige el asistente y define si está habilitada.",
       fieldName: "Nombre",
       description: "Descripción",
       agentId: "ID de agente",
@@ -219,7 +229,8 @@ export const es: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Zona horaria (opcional)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp: "Selecciona una zona horaria común o ingresa cualquier zona IANA válida.",
+      timezoneHelp:
+        "Selecciona una zona horaria común o ingresa cualquier zona IANA válida.",
       jitterHelp:
         "¿Necesitas variación? Usa Avanzado → Ventana de escalonamiento / Unidad de escalonamiento.",
       execution: "Ejecución",
@@ -232,13 +243,15 @@ export const es: TranslationMap = {
       wakeMode: "Modo de activación",
       now: "Ahora",
       nextHeartbeat: "Próximo latido",
-      wakeModeHelp: "Ahora se activa inmediatamente. Próximo latido espera el siguiente ciclo.",
+      wakeModeHelp:
+        "Ahora se activa inmediatamente. Próximo latido espera el siguiente ciclo.",
       payloadKind: "¿Qué debe ejecutarse?",
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
       systemEventHelp:
         "Envía tu texto a la línea de tiempo principal de la puerta de enlace (ideal para recordatorios/activadores).",
-      agentTurnHelp: "Inicia una ejecución del asistente en su propia sesión usando tu indicación.",
+      agentTurnHelp:
+        "Inicia una ejecución del asistente en su propia sesión usando tu indicación.",
       timeoutSeconds: "Tiempo de espera (segundos)",
       timeoutPlaceholder: "Opcional, ej. 90",
       timeoutHelp:
@@ -260,7 +273,8 @@ export const es: TranslationMap = {
       webhookHelp: "Envía resúmenes de ejecución a un endpoint webhook.",
       to: "Para",
       toPlaceholder: "+1555... o ID de chat",
-      toHelp: "Anulación opcional del destinatario (ID de chat, teléfono o ID de usuario).",
+      toHelp:
+        "Anulación opcional del destinatario (ID de chat, teléfono o ID de usuario).",
       advanced: "Avanzado",
       advancedHelp:
         "Anulaciones opcionales para garantías de entrega, variación de programación y controles del modelo.",
@@ -282,11 +296,13 @@ export const es: TranslationMap = {
         "Comienza a escribir para seleccionar un modelo conocido o ingresa uno personalizado.",
       thinking: "Pensamiento",
       thinkingPlaceholder: "bajo",
-      thinkingHelp: "Usa un nivel sugerido o ingresa un valor específico del proveedor.",
+      thinkingHelp:
+        "Usa un nivel sugerido o ingresa un valor específico del proveedor.",
       bestEffortDelivery: "Entrega de mejor esfuerzo",
       bestEffortHelp: "No fallar la tarea si la entrega misma falla.",
       cantAddYet: "Aún no se puede agregar la tarea",
-      fillRequired: "Completa los campos requeridos a continuación para habilitar el envío.",
+      fillRequired:
+        "Completa los campos requeridos a continuación para habilitar el envío.",
       fixFields: "Corrige {count} campo para continuar.",
       fixFieldsPlural: "Corrige {count} campos para continuar.",
       saving: "Guardando...",
@@ -333,9 +349,11 @@ export const es: TranslationMap = {
       staggerAmountInvalid: "El escalonamiento debe ser mayor a 0.",
       systemTextRequired: "El texto del sistema es requerido.",
       agentMessageRequired: "El mensaje del agente es requerido.",
-      timeoutInvalid: "Si se establece, el tiempo de espera debe ser mayor a 0 segundos.",
+      timeoutInvalid:
+        "Si se establece, el tiempo de espera debe ser mayor a 0 segundos.",
       webhookUrlRequired: "La URL del webhook es requerida.",
-      webhookUrlInvalid: "La URL del webhook debe comenzar con http:// o https://.",
+      webhookUrlInvalid:
+        "La URL del webhook debe comenzar con http:// o https://.",
       invalidRunTime: "Tiempo de ejecución inválido.",
       invalidIntervalAmount: "Cantidad de intervalo inválida.",
       cronExprRequiredShort: "Expresión Cron requerida.",
