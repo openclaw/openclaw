@@ -63,7 +63,19 @@ type ModelsJsonCostCache = {
   rawEntries: Map<string, ModelCostConfig> | null;
 };
 
+type ProviderCostIndexCacheEntry = {
+  fingerprint: string;
+  normalizedEntries?: Map<string, ModelCostConfig>;
+  rawEntries?: Map<string, ModelCostConfig>;
+};
+
+const EMPTY_PROVIDER_COST_INDEX = new Map<string, ModelCostConfig>();
+
 let modelsJsonCostCache: ModelsJsonCostCache | null = null;
+let providerCostIndexByConfig = new WeakMap<
+  Record<string, ModelProviderConfig>,
+  ProviderCostIndexCacheEntry
+>();
 
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
@@ -108,6 +120,7 @@ function toResolvedModelKey(params: {
     return null;
   }
   const normalized = normalizeModelRef(provider, model, {
+    allowManifestNormalization: params.allowPluginNormalization === false ? false : undefined,
     allowPluginNormalization: params.allowPluginNormalization,
   });
   return modelKey(normalized.provider, normalized.model);
@@ -174,7 +187,7 @@ function normalizeTieredPricing(raw: RawPricingTier[] | undefined): PricingTier[
 
 function buildProviderCostIndex(
   providers: Record<string, ModelProviderConfig> | undefined,
-  options?: { allowPluginNormalization?: boolean },
+  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
 ): Map<string, ModelCostConfig> {
   const entries = new Map<string, ModelCostConfig>();
   if (!providers) {
@@ -184,6 +197,9 @@ function buildProviderCostIndex(
     const normalizedProvider = normalizeProviderId(providerKey);
     for (const model of providerConfig?.models ?? []) {
       const normalized = normalizeModelRef(normalizedProvider, model.id, {
+        allowManifestNormalization:
+          options?.allowManifestNormalization ??
+          (options?.allowPluginNormalization === false ? false : undefined),
         allowPluginNormalization: options?.allowPluginNormalization,
       });
       const cost = { ...model.cost };
@@ -199,6 +215,41 @@ function buildProviderCostIndex(
     }
   }
   return entries;
+}
+
+function getProviderCostIndex(
+  providers: Record<string, ModelProviderConfig> | undefined,
+  options?: { allowManifestNormalization?: boolean; allowPluginNormalization?: boolean },
+): Map<string, ModelCostConfig> {
+  if (!providers) {
+    return EMPTY_PROVIDER_COST_INDEX;
+  }
+  const isRawLookup =
+    options?.allowPluginNormalization === false &&
+    (options.allowManifestNormalization === false ||
+      options.allowManifestNormalization === undefined);
+  const isDefaultNormalizedLookup =
+    options?.allowPluginNormalization !== false &&
+    options?.allowManifestNormalization === undefined;
+  if (!isRawLookup && !isDefaultNormalizedLookup) {
+    return buildProviderCostIndex(providers, options);
+  }
+
+  const fingerprint = stableCostFingerprintValue(providers);
+  let cache = providerCostIndexByConfig.get(providers);
+  if (!cache || cache.fingerprint !== fingerprint) {
+    cache = { fingerprint };
+    providerCostIndexByConfig.set(providers, cache);
+  }
+  if (isRawLookup) {
+    cache.rawEntries ??= buildProviderCostIndex(providers, {
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    });
+    return cache.rawEntries;
+  }
+  cache.normalizedEntries ??= buildProviderCostIndex(providers);
+  return cache.normalizedEntries;
 }
 
 function loadModelsJsonCostIndex(options?: {
@@ -226,13 +277,13 @@ function loadModelsJsonCostIndex(options?: {
     }
 
     if (useRawEntries) {
-      modelsJsonCostCache.rawEntries ??= buildProviderCostIndex(modelsJsonCostCache.providers, {
+      modelsJsonCostCache.rawEntries ??= getProviderCostIndex(modelsJsonCostCache.providers, {
         allowPluginNormalization: false,
       });
       return modelsJsonCostCache.rawEntries;
     }
 
-    modelsJsonCostCache.normalizedEntries ??= buildProviderCostIndex(modelsJsonCostCache.providers);
+    modelsJsonCostCache.normalizedEntries ??= getProviderCostIndex(modelsJsonCostCache.providers);
     return modelsJsonCostCache.normalizedEntries;
   } catch {
     const empty = new Map<string, ModelCostConfig>();
@@ -257,7 +308,7 @@ function findConfiguredProviderCost(params: {
   if (!key) {
     return undefined;
   }
-  return buildProviderCostIndex(params.config?.models?.providers, {
+  return getProviderCostIndex(params.config?.models?.providers, {
     allowPluginNormalization: params.allowPluginNormalization,
   }).get(key);
 }
@@ -289,9 +340,9 @@ function serializeCostIndex(
 export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): string {
   return stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(
-      buildProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
+      getProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
-    configuredNormalized: serializeCostIndex(buildProviderCostIndex(config?.models?.providers)),
+    configuredNormalized: serializeCostIndex(getProviderCostIndex(config?.models?.providers)),
     modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
     modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
     gatewayPricing: getGatewayModelPricingCacheFingerprint(),
@@ -430,4 +481,5 @@ export function estimateUsageCost(params: {
 
 export function resetUsageFormatCachesForTest(): void {
   modelsJsonCostCache = null;
+  providerCostIndexByConfig = new WeakMap();
 }
