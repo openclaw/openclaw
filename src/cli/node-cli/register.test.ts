@@ -67,6 +67,59 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeDaemonStart.mock.calls[0]?.[0]?.json).toBe(true);
   });
 
+  it("registers node status/stop/restart/uninstall subcommands", async () => {
+    await createProgram().parseAsync(["node", "status", "--json"], { from: "user" });
+    expect(daemonMocks.runNodeDaemonStatus).toHaveBeenLastCalledWith({ json: true });
+
+    await createProgram().parseAsync(["node", "stop", "--json"], { from: "user" });
+    expect(daemonMocks.runNodeDaemonStop).toHaveBeenLastCalledWith({ json: true });
+
+    await createProgram().parseAsync(["node", "restart", "--json"], { from: "user" });
+    expect(daemonMocks.runNodeDaemonRestart).toHaveBeenLastCalledWith({ json: true });
+
+    await createProgram().parseAsync(["node", "uninstall", "--json"], { from: "user" });
+    expect(daemonMocks.runNodeDaemonUninstall).toHaveBeenLastCalledWith({ json: true });
+  });
+
+  it("passes install flags through to the node daemon installer", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(
+      [
+        "node",
+        "install",
+        "--host",
+        "10.0.0.3",
+        "--port",
+        "19002",
+        "--tls",
+        "--tls-fingerprint",
+        "abc123",
+        "--node-id",
+        "node-1",
+        "--display-name",
+        "Node One",
+        "--runtime",
+        "bun",
+        "--force",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith({
+      host: "10.0.0.3",
+      port: "19002",
+      tls: true,
+      tlsFingerprint: "abc123",
+      nodeId: "node-1",
+      displayName: "Node One",
+      runtime: "bun",
+      force: true,
+      json: true,
+    });
+  });
+
   it("rejects an explicit invalid node run port", async () => {
     const program = createProgram();
 
