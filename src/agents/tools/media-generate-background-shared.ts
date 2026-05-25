@@ -3,6 +3,7 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { recordImageGeneration } from "../../infra/image-generation-usage.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
@@ -219,6 +220,14 @@ function completeMediaGenerationTaskRun(params: {
       lastEventAt: endedAt,
       progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
       terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+    });
+    recordImageGeneration({
+      provider: params.provider,
+      model: params.model,
+      success: true,
+      count: params.count,
+      outputUrls: params.paths,
+      sessionKey: params.handle.requesterSessionKey,
     });
   } finally {
     clearAgentRunContext(params.handle.runId);

@@ -19,6 +19,7 @@ import type {
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
+import { recordImageGeneration } from "../../infra/image-generation-usage.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -1030,6 +1031,14 @@ export function createImageGenerateTool(options?: {
           count: executed.count,
           paths: executed.paths,
         });
+        recordImageGeneration({
+          provider: executed.provider,
+          model: executed.model,
+          success: true,
+          count: executed.count,
+          outputUrls: executed.paths,
+          sessionKey: options?.agentSessionKey,
+        });
         return {
           content: [{ type: "text", text: executed.contentText }],
           details: executed.details,
@@ -1038,6 +1047,15 @@ export function createImageGenerateTool(options?: {
         failImageGenerationTaskRun({
           handle: taskHandle,
           error,
+        });
+        recordImageGeneration({
+          provider: "unknown",
+          model: model ?? "unknown",
+          success: false,
+          count: 0,
+          outputUrls: [],
+          sessionKey: options?.agentSessionKey,
+          error: String(error),
         });
         throw error;
       }
