@@ -15,6 +15,26 @@ async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   return fixtureRoot;
 }
 
+async function makeLauncherProbeFixture(
+  fixtureRoots: string[],
+  probeSource: string,
+): Promise<string> {
+  const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+  const launcherPath = path.join(fixtureRoot, "openclaw.mjs");
+  const launcher = await fs.readFile(launcherPath, "utf8");
+  const bootstrapStart = "\nif (!waitingForCompileCacheRespawn) {";
+  const bootstrapIndex = launcher.indexOf(bootstrapStart);
+  if (bootstrapIndex < 0) {
+    throw new Error("openclaw launcher bootstrap block was not found");
+  }
+  await fs.writeFile(
+    launcherPath,
+    `${launcher.slice(0, bootstrapIndex)}\n${probeSource}\n`,
+    "utf8",
+  );
+  return fixtureRoot;
+}
+
 async function addSourceTreeMarker(fixtureRoot: string): Promise<void> {
   await fs.mkdir(path.join(fixtureRoot, "src"), { recursive: true });
   await fs.writeFile(path.join(fixtureRoot, "src", "entry.ts"), "export {};\n", "utf8");
@@ -201,6 +221,34 @@ describe("openclaw launcher", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing dist/entry.(m)js");
+  });
+
+  it("treats Bun direct optional import misses as direct launcher misses", async () => {
+    const fixtureRoot = await makeLauncherProbeFixture(
+      fixtureRoots,
+      [
+        "const result = {",
+        "  direct: isDirectModuleNotFoundError(",
+        "    { message: \"Cannot find module './dist/warning-filter.js' from '/pkg/openclaw/openclaw.mjs'\" },",
+        "    './dist/warning-filter.js',",
+        "  ),",
+        "  transitive: isDirectModuleNotFoundError(",
+        "    { message: \"Cannot find module './nested.js' from '/pkg/openclaw/dist/entry.js'\" },",
+        "    './dist/entry.js',",
+        "  ),",
+        "};",
+        "process.stdout.write(`${JSON.stringify(result)}\\n`);",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ direct: true, transitive: false });
   });
 
   it("uses precomputed root help when plugin config does not invalidate it", async () => {
