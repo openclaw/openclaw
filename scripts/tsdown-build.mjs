@@ -20,8 +20,8 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 6144;
+const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=8192";
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
