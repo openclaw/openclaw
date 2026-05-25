@@ -151,13 +151,66 @@ describe("OpenAI Codex routing policy", () => {
     ).toEqual(["openai-codex"]);
   });
 
-  it("routes openai provider to openai-codex when harness runtime is codex", () => {
+  it("routes OpenAI provider to OpenAI-Codex when Codex auth order is configured", () => {
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+        config: {
+          auth: {
+            order: {
+              "openai-codex": ["openai-codex:work"],
+            },
+          },
+        },
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("routes OpenAI provider to OpenAI-Codex when a Codex auth profile is configured", () => {
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+        config: {
+          auth: {
+            profiles: {
+              work: {
+                provider: "openai-codex",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("routes OpenAI provider to OpenAI-Codex when OpenAI auth order selects Codex", () => {
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai-codex:work"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+        config,
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("keeps OpenAI provider for Codex runtime when only direct API-key auth is implied", () => {
     expect(
       resolveSelectedOpenAIPiRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
       }),
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 
   it("does not route non-OpenAI providers when runtime is codex", () => {
