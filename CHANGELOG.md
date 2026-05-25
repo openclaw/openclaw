@@ -152,6 +152,7 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: tighten timeout, numeric option, media payload, permission, profile/TLS, plugin metadata, JSON, and remote URL handling; prevent stuck progress/app-server/IRC/Synology/Twitch waits; and keep imported chat history ordering stable.
 - Telegram/config: suppress the missing `accounts.default` warning when `channels.telegram.defaultAccount` names a configured account that also sorts first. Fixes #83948. Thanks @crypto86m.
 - Telegram: serialize visible topic replies through core reply-lane admission so heartbeat and queued follow-up turns cannot continue ownerless or misroute responses. (#85709) Thanks @jalehman.
+- CLI/node: print node status recovery hints on stdout consistently while keeping status errors on stderr. Fixes #83925. Thanks @davinci282828.
 - WebChat: summarize internal message-tool source replies so tool cards no longer duplicate the visible reply body. (#84773) Thanks @jason-allen-oneal.
 - Gateway/WebChat: hide duplicate `gateway-injected` assistant rows when Cursor ACP already persisted the same `acp-runtime` reply. Fixes #85741. Thanks @lxf-lxf.
 - WebChat: scope the visible attachment button to its own composer file input so clicking Upload reliably opens the file picker. (#83952, fixes #47983) Thanks @jason-allen-oneal.
