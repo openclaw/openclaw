@@ -177,6 +177,14 @@ function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string 
   return undefined;
 }
 
+function formatRealtimeLifecycleLog(event: RealtimeVoiceBridgeEvent): string | undefined {
+  if (!event.type.startsWith("session.")) {
+    return undefined;
+  }
+  const detail = event.detail ? ` ${event.detail}` : "";
+  return `discord voice: realtime lifecycle ${event.direction}:${event.type}${detail}`;
+}
+
 function isRealtimeResponseCancelled(event: RealtimeVoiceBridgeEvent): boolean {
   return (
     event.direction === "server" &&
@@ -590,6 +598,10 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         const interruptionLog = formatRealtimeInterruptionLog(event);
         if (interruptionLog) {
           logger.info(interruptionLog);
+        }
+        const lifecycleLog = formatRealtimeLifecycleLog(event);
+        if (lifecycleLog) {
+          logger.info(lifecycleLog);
         }
       },
       onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
