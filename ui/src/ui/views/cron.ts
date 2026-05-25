@@ -1695,7 +1695,17 @@ function renderJobPayload(job: CronJob) {
   if (!payload) {
     return html``;
   }
+  const summary = job.description?.trim();
   if (payload.kind === "systemEvent") {
+    if (summary) {
+      return html`<div class="cron-job-detail">
+        ${renderJobSummary(summary)}
+        <div class="cron-job-detail-section">
+          <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
+          <span class="muted cron-job-detail-value">${payload.text}</span>
+        </div>
+      </div>`;
+    }
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
       <span class="muted cron-job-detail-value">${payload.text}</span>
@@ -1714,6 +1724,7 @@ function renderJobPayload(job: CronJob) {
 
   return html`
     <div class="cron-job-detail">
+      ${summary ? renderJobSummary(summary) : nothing}
       <div class="cron-job-detail-section">
         <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
         <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
@@ -1728,6 +1739,13 @@ function renderJobPayload(job: CronJob) {
         : nothing}
     </div>
   `;
+}
+
+function renderJobSummary(summary: string) {
+  return html`<div class="cron-job-detail-section">
+    <span class="cron-job-detail-label">Summary</span>
+    <span class="muted cron-job-detail-value">${summary}</span>
+  </div>`;
 }
 
 function stopPropagationForInteractive(event: MouseEvent) {

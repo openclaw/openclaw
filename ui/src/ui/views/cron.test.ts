@@ -113,6 +113,14 @@ function getElement<T extends Element>(
   return element;
 }
 
+function getJobDetailRows(container: Element) {
+  return Array.from(container.querySelectorAll(".cron-job-detail-section")).map((section) => ({
+    label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
+    value: section.querySelector(".cron-job-detail-value")?.textContent?.trim(),
+    valueElement: section.querySelector(".cron-job-detail-value"),
+  }));
+}
+
 describe("cron view", () => {
   it("shows all-job history mode and wires run/job filters", () => {
     const container = document.createElement("div");
@@ -423,16 +431,101 @@ describe("cron view", () => {
       container,
     );
 
-    const details = Array.from(container.querySelectorAll(".cron-job-detail-section")).map(
-      (section) => ({
-        label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
-        value: section.querySelector(".cron-job-detail-value")?.textContent?.trim(),
-      }),
-    );
+    const details = getJobDetailRows(container).map(({ label, value }) => ({ label, value }));
     expect(details).toEqual([
       { label: "Prompt", value: "do it" },
       { label: "Delivery", value: "webhook (https://example.invalid/cron)" },
     ]);
+  });
+
+  it("renders trimmed job summaries before existing payload details", () => {
+    const container = document.createElement("div");
+    const systemJob = {
+      ...createJob("job-system-summary"),
+      description: "  Ping production health checks  ",
+    };
+    const agentJob = {
+      ...createJob("job-agent-summary"),
+      name: "Agent digest",
+      description: "  Prepare the daily ops digest  ",
+      sessionTarget: "isolated" as const,
+      payload: { kind: "agentTurn" as const, message: "Summarize incidents" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "ops" },
+    };
+
+    render(
+      renderCron(
+        createProps({
+          jobs: [systemJob, agentJob],
+        }),
+      ),
+      container,
+    );
+
+    const detailsByJob = Array.from(container.querySelectorAll(".cron-job")).map((job) =>
+      getJobDetailRows(job).map(({ label, value }) => ({ label, value })),
+    );
+    expect(detailsByJob).toEqual([
+      [
+        { label: "Summary", value: "Ping production health checks" },
+        { label: "System", value: "ping" },
+      ],
+      [
+        { label: "Summary", value: "Prepare the daily ops digest" },
+        { label: "Prompt", value: "Summarize incidents" },
+        { label: "Delivery", value: "announce (telegram -> ops)" },
+      ],
+    ]);
+  });
+
+  it("omits job summaries for missing, empty, or whitespace descriptions", () => {
+    const container = document.createElement("div");
+    const jobs = [
+      createJob("job-missing-summary"),
+      { ...createJob("job-empty-summary"), description: "" },
+      {
+        ...createJob("job-whitespace-summary"),
+        description: " \n\t ",
+        payload: { kind: "agentTurn" as const, message: "do it" },
+      },
+    ];
+
+    render(
+      renderCron(
+        createProps({
+          jobs,
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".cron-job-detail-label")).map((label) =>
+      label.textContent?.trim(),
+    );
+    expect(labels).toEqual(["System", "System", "Prompt"]);
+    expect(labels).not.toContain("Summary");
+  });
+
+  it("renders markup-like summary characters as text", () => {
+    const container = document.createElement("div");
+    const job = {
+      ...createJob("job-summary-escaping"),
+      description: '  Review <daily> & "ops"  ',
+    };
+
+    render(
+      renderCron(
+        createProps({
+          jobs: [job],
+        }),
+      ),
+      container,
+    );
+
+    const summary = getJobDetailRows(container).find((row) => row.label === "Summary");
+    expect(summary?.value).toBe('Review <daily> & "ops"');
+    expect(summary?.valueElement?.querySelector("*")).toBeNull();
+    expect(summary?.valueElement?.innerHTML).toBe("Review &lt;daily&gt; &amp; \"ops\"");
   });
 
   it("renders a stale cron job with no payload", () => {
