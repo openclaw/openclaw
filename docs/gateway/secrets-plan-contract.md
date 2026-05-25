@@ -79,6 +79,34 @@ configured`.
 }
 ```
 
+Or with Bitwarden CLI:
+
+```json5
+{
+  version: 1,
+  protocolVersion: 1,
+  providerUpserts: {
+    bitwarden_anthropic: {
+      source: "exec",
+      command: "/usr/bin/bw",
+      args: ["get", "password", "Anthropic"],
+      passEnv: ["BW_SESSION"],
+      jsonOnly: false,
+    },
+  },
+  providerDeletes: [],
+  targets: [
+    {
+      type: "models.providers.apiKey",
+      path: "models.providers.anthropic.apiKey",
+      pathSegments: ["models", "providers", "anthropic", "apiKey"],
+      providerId: "anthropic",
+      ref: { source: "exec", provider: "bitwarden_anthropic", id: "value" },
+    },
+  ],
+}
+```
+
 Exec providers introduced via `providerUpserts` are still subject to the
 exec consent rules in [Exec provider consent behavior](#exec-provider-consent-behavior):
 plans containing exec providers require `--allow-exec` in write mode.

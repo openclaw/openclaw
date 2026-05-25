@@ -456,6 +456,43 @@ describe("buildGatewayInstallPlan", () => {
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
   });
 
+  it("supports Bitwarden CLI exec provider with BW_SESSION passEnv", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        BW_SESSION: "bw-test-session",
+      }),
+      port: 3000,
+      runtime: "node",
+      config: {
+        secrets: {
+          providers: {
+            bitwarden: {
+              source: "exec",
+              command: "/usr/bin/bw",
+              args: ["get", "password", "Discord"],
+              passEnv: ["BW_SESSION"],
+              allowInsecurePath: true,
+            },
+          },
+        },
+        channels: {
+          discord: {
+            token: { source: "exec", provider: "bitwarden", id: "value" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.BW_SESSION).toBe("bw-test-session");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
+
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

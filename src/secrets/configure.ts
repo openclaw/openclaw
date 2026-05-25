@@ -146,14 +146,14 @@ function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource
   const choices: Array<{ value: SecretRefSource; label: string }> = [
     {
       value: "env",
-      label: "env",
+      label: "Environment variable",
     },
   ];
   if (hasSource("file")) {
-    choices.push({ value: "file", label: "file" });
+    choices.push({ value: "file", label: "File on disk" });
   }
   if (hasSource("exec")) {
-    choices.push({ value: "exec", label: "exec" });
+    choices.push({ value: "exec", label: "Password manager (1Password, Bitwarden, etc.)" });
   }
   return choices;
 }
@@ -187,7 +187,7 @@ async function promptEnvNameCsv(params: {
       initialValue: params.initialValue,
       validate: (value) => validateEnvNameCsv(value ?? ""),
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
   return parseCsv(raw ?? "");
 }
@@ -213,7 +213,7 @@ async function promptOptionalPositiveInt(params: {
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
   const parsed = parseOptionalPositiveInt(
     normalizeStringifiedOptionalString(raw) ?? "",
@@ -302,7 +302,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const credentialType = assertNoCancel(
@@ -313,7 +313,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
         { value: "token", label: "token (token/tokenRef)" },
       ],
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const provider = assertNoCancel(
@@ -321,7 +321,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
       message: "Provider id",
       validate: (value) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const profileIdTrimmed = normalizeStringifiedOptionalString(profileId) ?? "";
@@ -353,7 +353,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
 async function promptProviderAlias(params: { existingAliases: Set<string> }): Promise<string> {
   const alias = assertNoCancel(
     await text({
-      message: "Provider alias",
+      message: "Name this source (e.g. '1password', 'bitwarden', 'env')",
       initialValue: "default",
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -361,15 +361,15 @@ async function promptProviderAlias(params: { existingAliases: Set<string> }): Pr
           return "Required";
         }
         if (!isValidSecretProviderAlias(trimmed)) {
-          return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
+          return "Use lowercase letters, numbers, hyphens, or underscores";
         }
         if (params.existingAliases.has(trimmed)) {
-          return "Alias already exists";
+          return "You already have a source with this name";
         }
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
   return normalizeStringifiedOptionalString(alias) ?? "";
 }
@@ -377,15 +377,15 @@ async function promptProviderAlias(params: { existingAliases: Set<string> }): Pr
 async function promptProviderSource(initial?: SecretRefSource): Promise<SecretRefSource> {
   const source = assertNoCancel(
     await select({
-      message: "Provider source",
+      message: "What kind of source?",
       options: [
-        { value: "env", label: "env" },
-        { value: "file", label: "file" },
-        { value: "exec", label: "exec" },
+        { value: "env", label: "Environment variables" },
+        { value: "file", label: "File on disk" },
+        { value: "exec", label: "Password manager (1Password, Bitwarden, etc.)" },
       ],
       initialValue: initial,
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
   return source as SecretRefSource;
 }
@@ -394,7 +394,7 @@ async function promptEnvProvider(
   base?: Extract<SecretProviderConfig, { source: "env" }>,
 ): Promise<Extract<SecretProviderConfig, { source: "env" }>> {
   const allowlist = await promptEnvNameCsv({
-    message: "Env allowlist (comma-separated, blank for unrestricted)",
+    message: "Which env vars to allow? (comma-separated, leave blank for all)",
     initialValue: base?.allowlist?.join(",") ?? "",
   });
   return {
@@ -408,7 +408,7 @@ async function promptFileProvider(
 ): Promise<Extract<SecretProviderConfig, { source: "file" }>> {
   const filePath = assertNoCancel(
     await text({
-      message: "File path (absolute)",
+      message: "Path to the file (absolute path)",
       initialValue: base?.path ?? "",
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -416,42 +416,42 @@ async function promptFileProvider(
           return "Required";
         }
         if (!isAbsolutePathValue(trimmed)) {
-          return "Must be an absolute path";
+          return "Must be an absolute path starting with /";
         }
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const mode = assertNoCancel(
     await select({
-      message: "File mode",
+      message: "How is the file formatted?",
       options: [
-        { value: "json", label: "json" },
-        { value: "singleValue", label: "singleValue" },
+        { value: "json", label: "JSON (key-value pairs)" },
+        { value: "singleValue", label: "Single value (just the secret)" },
       ],
       initialValue: base?.mode ?? "json",
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
+    message: "Read timeout in ms (blank for default)",
     initialValue: base?.timeoutMs,
     max: 120000,
   });
   const maxBytes = await promptOptionalPositiveInt({
-    message: "Max bytes (blank for default)",
+    message: "Max file size in bytes (blank for default)",
     initialValue: base?.maxBytes,
     max: 20 * 1024 * 1024,
   });
   const allowInsecurePath = assertNoCancel(
     await confirm({
-      message: "Allow insecure file path checks?",
+      message: "Skip strict path security checks?",
       initialValue: base?.allowInsecurePath ?? false,
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   return {
@@ -481,7 +481,7 @@ async function promptExecProvider(
 ): Promise<Extract<SecretProviderConfig, { source: "exec" }>> {
   const command = assertNoCancel(
     await text({
-      message: "Command path (absolute)",
+      message: "Path to the CLI tool (absolute)",
       initialValue: base?.command ?? "",
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -489,20 +489,20 @@ async function promptExecProvider(
           return "Required";
         }
         if (!isAbsolutePathValue(trimmed)) {
-          return "Must be an absolute path";
+          return "Must be an absolute path starting with /";
         }
         if (!isSafeExecutableValue(trimmed)) {
-          return "Command value is not allowed";
+          return "This command is not allowed for security";
         }
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const argsRaw = assertNoCancel(
     await text({
-      message: "Args JSON array (blank for none)",
+      message: 'Command arguments (JSON array like ["get", "password"], blank for none)',
       initialValue: JSON.stringify(base?.args ?? []),
       validate: (value) => {
         const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -512,7 +512,7 @@ async function promptExecProvider(
         try {
           const parsed = JSON.parse(trimmed) as unknown;
           if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
-            return "Must be a JSON array of strings";
+            return 'Must be a JSON array of strings, e.g. ["get", "password"]';
           }
           return undefined;
         } catch {
@@ -520,43 +520,43 @@ async function promptExecProvider(
         }
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const timeoutMs = await promptOptionalPositiveInt({
-    message: "Timeout ms (blank for default)",
+    message: "Command timeout in ms (blank for default)",
     initialValue: base?.timeoutMs,
     max: 120000,
   });
 
   const noOutputTimeoutMs = await promptOptionalPositiveInt({
-    message: "No-output timeout ms (blank for default)",
+    message: "Timeout if no output in ms (blank for default)",
     initialValue: base?.noOutputTimeoutMs,
     max: 120000,
   });
 
   const maxOutputBytes = await promptOptionalPositiveInt({
-    message: "Max output bytes (blank for default)",
+    message: "Max output size in bytes (blank for default)",
     initialValue: base?.maxOutputBytes,
     max: 20 * 1024 * 1024,
   });
 
   const jsonOnly = assertNoCancel(
     await confirm({
-      message: "Require JSON-only response?",
+      message: "Expect JSON output from the command?",
       initialValue: base?.jsonOnly ?? true,
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const passEnv = await promptEnvNameCsv({
-    message: "Pass-through env vars (comma-separated, blank for none)",
+    message: "Env vars to pass through to the command (comma-separated, blank for none)",
     initialValue: base?.passEnv?.join(",") ?? "",
   });
 
   const trustedDirsRaw = assertNoCancel(
     await text({
-      message: "Trusted dirs (comma-separated absolute paths, blank for none)",
+      message: "Trusted directories (comma-separated absolute paths, blank for none)",
       initialValue: base?.trustedDirs?.join(",") ?? "",
       validate: (value) => {
         const entries = parseCsv(value ?? "");
@@ -568,7 +568,7 @@ async function promptExecProvider(
         return undefined;
       },
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const allowInsecurePath = assertNoCancel(
@@ -576,14 +576,14 @@ async function promptExecProvider(
       message: "Allow insecure command path checks?",
       initialValue: base?.allowInsecurePath ?? false,
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
   const allowSymlinkCommand = assertNoCancel(
     await confirm({
       message: "Allow symlink command path?",
       initialValue: base?.allowSymlinkCommand ?? false,
     }),
-    "Secrets configure cancelled.",
+    "Setup cancelled.",
   );
 
   const args = await parseArgsInput(normalizeStringifiedOptionalString(argsRaw) ?? "");
@@ -628,37 +628,37 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
     const actionOptions: Array<{ value: string; label: string; hint?: string }> = [
       {
         value: "add",
-        label: "Add provider",
-        hint: "Define a new env/file/exec provider",
+        label: "Add source",
+        hint: "Connect 1Password, Bitwarden, or env/file sources",
       },
     ];
     if (providerEntries.length > 0) {
       actionOptions.push({
         value: "edit",
-        label: "Edit provider",
-        hint: "Update an existing provider",
+        label: "Edit source",
+        hint: "Update an existing source",
       });
       actionOptions.push({
         value: "remove",
-        label: "Remove provider",
-        hint: "Delete a provider alias",
+        label: "Remove source",
+        hint: "Disconnect a source",
       });
     }
     actionOptions.push({
       value: "continue",
       label: "Continue",
-      hint: "Move to credential mapping",
+      hint: "Link your credentials",
     });
 
     const action = assertNoCancel(
       await select({
         message:
           providerEntries.length > 0
-            ? "Configure secret providers"
-            : "Configure secret providers (only env refs are available until file/exec providers are added)",
+            ? "Choose how to handle your saved passwords and keys"
+            : "Choose how to handle your saved passwords and keys (env vars work out of the box — add a password manager for more options)",
         options: actionOptions,
       }),
-      "Secrets configure cancelled.",
+      "Setup cancelled.",
     );
 
     if (action === "continue") {
@@ -678,14 +678,14 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
     if (action === "edit") {
       const alias = assertNoCancel(
         await select({
-          message: "Select provider to edit",
+          message: "Which source to update?",
           options: providerEntries.map(([providerAlias, providerConfig]) => ({
             value: providerAlias,
             label: providerAlias,
             hint: providerHint(providerConfig),
           })),
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
       const current = providers[alias];
       if (!current) {
@@ -702,22 +702,22 @@ async function configureProvidersInteractive(config: OpenClawConfig): Promise<vo
     if (action === "remove") {
       const alias = assertNoCancel(
         await select({
-          message: "Select provider to remove",
+          message: "Which source to disconnect?",
           options: providerEntries.map(([providerAlias, providerConfig]) => ({
             value: providerAlias,
             label: providerAlias,
             hint: providerHint(providerConfig),
           })),
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
 
       const shouldRemove = assertNoCancel(
         await confirm({
-          message: `Remove provider "${alias}"?`,
+          message: `Disconnect "${alias}"?`,
           initialValue: false,
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
       if (shouldRemove) {
         removeSecretProvider(config, alias);
@@ -736,7 +736,7 @@ export async function runSecretsConfigureInteractive(
   } = {},
 ): Promise<SecretsConfigureResult> {
   if (!process.stdin.isTTY) {
-    throw new Error("secrets configure requires an interactive TTY.");
+    throw new Error("This setup needs an interactive terminal. Run it in a shell, not a script.");
   }
   if (params.providersOnly && params.skipProviderSetup) {
     throw new Error("Cannot combine --providers-only with --skip-provider-setup.");
@@ -747,7 +747,7 @@ export async function runSecretsConfigureInteractive(
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
-    throw new Error("Cannot run interactive secrets configure because config is invalid.");
+    throw new Error("Can't start setup — your config file has errors. Fix them first.");
   }
 
   const stagedConfig = structuredClone(snapshot.config);
@@ -776,7 +776,7 @@ export async function runSecretsConfigureInteractive(
       },
     });
     if (candidates.length === 0) {
-      throw new Error("No configurable secret-bearing fields found for this agent scope.");
+      throw new Error("No credentials need linking for this agent. You're all set!");
     }
 
     const sourceChoices = toSourceChoices(stagedConfig);
@@ -790,41 +790,36 @@ export async function runSecretsConfigureInteractive(
       const options = visibleCandidates.map((candidate) => ({
         value: configureCandidateKey(candidate),
         label: candidate.label,
-        hint: [
-          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
-          candidate.isDerived === true ? "derived" : undefined,
-        ]
-          .filter(Boolean)
-          .join(" | "),
+        hint: candidate.configFile === "auth-profiles.json" ? "per-agent" : "global",
       }));
       options.push({
         value: "__create_auth_profile__",
-        label: "Create auth profile mapping",
-        hint: `Add a new auth-profiles target for agent ${configureAgentId}`,
+        label: "Add new credential",
+        hint: `For agent ${configureAgentId}`,
       });
       if (hasDerivedCandidates) {
         options.push({
           value: "__toggle_derived__",
-          label: showDerivedCandidates ? "Hide derived targets" : "Show derived targets",
+          label: showDerivedCandidates ? "Hide auto-detected" : "Show auto-detected",
           hint: showDerivedCandidates
-            ? "Show only fields authored directly in config"
-            : "Include normalized/derived aliases",
+            ? "Show only manually configured"
+            : "Include detected from config",
         });
       }
       if (selectedByPath.size > 0) {
         options.unshift({
           value: "__done__",
           label: "Done",
-          hint: "Finish and run preflight",
+          hint: "Save and verify",
         });
       }
 
       const selectedPath = assertNoCancel(
         await select({
-          message: "Select credential field",
+          message: "Which credential do you want to link?",
           options,
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
 
       if (selectedPath === "__done__") {
@@ -862,11 +857,11 @@ export async function runSecretsConfigureInteractive(
 
       const source = assertNoCancel(
         await select({
-          message: "Secret source",
+          message: "Where is this credential stored?",
           options: sourceChoices,
           initialValue: sourceInitialValue,
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       ) as SecretRefSource;
 
       const defaultAlias = resolveDefaultSecretProviderAlias(stagedConfig, source, {
@@ -876,7 +871,7 @@ export async function runSecretsConfigureInteractive(
         existingRef?.source === source ? existingRef.provider : defaultAlias;
       const provider = assertNoCancel(
         await text({
-          message: "Provider alias",
+          message: "Which source? (name you gave it above)",
           initialValue: providerInitialValue,
           validate: (value) => {
             const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -884,12 +879,12 @@ export async function runSecretsConfigureInteractive(
               return "Required";
             }
             if (!isValidSecretProviderAlias(trimmed)) {
-              return "Must match /^[a-z][a-z0-9_-]{0,63}$/";
+              return "Use lowercase letters, numbers, hyphens, or underscores";
             }
             return undefined;
           },
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
       const providerAlias = normalizeStringifiedOptionalString(provider) ?? "";
       const suggestedIdFromExistingRef =
@@ -906,7 +901,7 @@ export async function runSecretsConfigureInteractive(
       }
       const id = assertNoCancel(
         await text({
-          message: "Secret id",
+          message: "What's the credential called in that source?",
           initialValue: suggestedId,
           validate: (value) => {
             const trimmed = normalizeStringifiedOptionalString(value) ?? "";
@@ -919,7 +914,7 @@ export async function runSecretsConfigureInteractive(
             return undefined;
           },
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
       const ref: SecretRef = {
         source,
@@ -960,7 +955,7 @@ export async function runSecretsConfigureInteractive(
           message: "Configure another credential?",
           initialValue: true,
         }),
-        "Secrets configure cancelled.",
+        "Setup cancelled.",
       );
       if (!addMore) {
         break;
