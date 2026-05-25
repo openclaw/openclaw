@@ -12,10 +12,6 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
-  findGatewayAuthLabelMatchingHooksToken,
-  type GatewayAuthSharedSecretLabel,
-} from "../gateway/hooks-token-auth-reuse.js";
-import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
@@ -48,6 +44,12 @@ export type HooksHardeningAuditOptions = {
 
 export type GatewayHttpNoAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
+};
+
+type GatewayAuthSharedSecretLabel = "gateway auth token" | "gateway auth password";
+type ActiveGatewaySharedSecret = {
+  label: GatewayAuthSharedSecretLabel;
+  value?: string;
 };
 
 // --------------------------------------------------------------------------
@@ -91,6 +93,25 @@ function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSe
     return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
   }
   return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
+}
+
+function listActiveGatewaySharedSecrets(auth: ResolvedGatewayAuth): ActiveGatewaySharedSecret[] {
+  if (auth.mode === "token") {
+    return [{ label: "gateway auth token", value: auth.token }];
+  }
+  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
+    return [{ label: "gateway auth password", value: auth.password }];
+  }
+  return [];
+}
+
+function findGatewayAuthLabelMatchingHooksToken(params: {
+  hooksToken: string;
+  auth: ResolvedGatewayAuth;
+}): GatewayAuthSharedSecretLabel | undefined {
+  return listActiveGatewaySharedSecrets(params.auth).find(
+    (candidate) => normalizeOptionalString(candidate.value) === params.hooksToken,
+  )?.label;
 }
 
 function findHooksTokenGatewayAuthReuseLabel(params: {
