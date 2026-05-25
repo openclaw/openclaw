@@ -108,8 +108,15 @@ async function loadTelegramMonitorWebhookRuntime() {
 }
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const log = (line: string) => (opts.runtime?.log ?? console.log)(line);
+  const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
   const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
+  const log = (line: string) => {
+    if (line.includes("[telegram][diag]")) {
+      logInfo(line);
+      return;
+    }
+    logError(line);
+  };
   let pollingSession: TelegramPollingSessionInstance | undefined;
 
   const handlePollingNetworkFailure = (err: unknown, label: string) => {
