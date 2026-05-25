@@ -912,11 +912,15 @@ export function createAgentEventHandler({
       // they can render live pending tool cards without polling history.
       if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
-        if (sessionSubscribers.size > 0) {
+        const sessionToolRecipients =
+          recipients && recipients.size > 0
+            ? new Set([...sessionSubscribers].filter((connId) => !recipients.has(connId)))
+            : sessionSubscribers;
+        if (sessionToolRecipients.size > 0) {
           broadcastToConnIds(
             "session.tool",
             { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) },
-            sessionSubscribers,
+            sessionToolRecipients,
             { dropIfSlow: true },
           );
         }
