@@ -605,8 +605,16 @@ describe("Discord model picker rendering", () => {
       [
         "google",
         [
-          { id: "google-gemini-cli", label: "Google Gemini CLI" },
-          { id: "pi", label: "OpenClaw Pi Default" },
+          {
+            id: "google-gemini-cli",
+            label: "Google Gemini CLI",
+            description: "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+          },
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
         ],
       ],
     ]);
