@@ -1864,7 +1864,11 @@ describe("subagent registry seam flow", () => {
         suspendedAt: undefined,
         suspendedReason: undefined,
         discardedAt: now,
-        discardReason: "expired",
+        discardReason: "expired-after-durable-fallback",
+      },
+      completion: {
+        fallbackResultText: "large final payload",
+        fallbackCapturedAt: now,
       },
       cleanupHandled: true,
       cleanupCompletedAt: now,
