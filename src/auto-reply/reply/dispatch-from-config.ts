@@ -1432,8 +1432,9 @@ export async function dispatchReplyFromConfig(
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
-    ctx.InboundEventKind === "room_event" ||
-    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
+    (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
+    (!isInternalWebchatTurn &&
+      params.replyOptions?.sourceReplyDeliveryMode === undefined &&
       !isExplicitSourceReplyCommand(ctx) &&
       effectiveVisibleReplies === "message_tool");
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
@@ -1493,7 +1494,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,

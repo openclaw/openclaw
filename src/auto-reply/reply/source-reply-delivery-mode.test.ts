@@ -74,6 +74,56 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
+  it("keeps internal WebChat room events on automatic delivery", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: automaticGroupReplyConfig,
+        ctx: {
+          ChatType: "direct",
+          InboundEventKind: "room_event",
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "direct",
+          InboundEventKind: "room_event",
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        requested: "automatic",
+      }),
+    ).toBe("automatic");
+  });
+
+  it("keeps internal WebChat direct turns automatic despite message-tool config", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: {
+          ChatType: "direct",
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: {
+          ChatType: "direct",
+          Provider: "webchat",
+          Surface: "webchat",
+        },
+        requested: "message_tool_only",
+      }),
+    ).toBe("automatic");
+  });
+
   it("allows message-tool-only delivery for any source chat via global config", () => {
     for (const ChatType of ["direct", "group", "channel"] as const) {
       expect(

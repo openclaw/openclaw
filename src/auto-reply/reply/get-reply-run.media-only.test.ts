@@ -1977,6 +1977,73 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
+  it("keeps webchat room events on automatic source delivery", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "automatic" },
+        ctx: {
+          Body: "webchat prompt",
+          RawBody: "webchat prompt",
+          CommandBody: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "webchat prompt",
+          BodyStripped: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+          InboundEventKind: "room_event",
+          MessageSid: "webchat-room-event",
+          SenderName: "Operator",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
+      "visible_reply_contract: message_tool_only",
+    );
+  });
+
+  it("keeps webchat direct replies automatic when message-tool mode is requested", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "message_tool_only" },
+        ctx: {
+          Body: "webchat prompt",
+          RawBody: "webchat prompt",
+          CommandBody: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "webchat prompt",
+          BodyStripped: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+          MessageSid: "webchat-direct",
+          SenderName: "Operator",
+        },
+      }),
+    );
+
+    const directContextParams = requireMockCallArg(
+      vi.mocked(buildDirectChatContext),
+      "direct chat context",
+    ) as { sourceReplyDeliveryMode?: string };
+    const inboundPrefixCall = vi.mocked(buildInboundUserContextPrefix).mock.calls.at(-1);
+    const call = requireLastRunReplyAgentCall();
+    expect(directContextParams?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "automatic" });
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+  });
+
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
     const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
 

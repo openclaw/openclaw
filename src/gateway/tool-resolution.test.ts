@@ -28,6 +28,19 @@ describe("resolveGatewayScopedTools", () => {
     );
   });
 
+  it("keeps webchat room-event turns on automatic source delivery", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
+      sessionKey: "agent:main:webchat:forge-main",
+      messageProvider: "webchat",
+      inboundEventKind: "room_event",
+      surface: "loopback",
+    });
+
+    expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBeUndefined();
+  });
+
   it("keeps ordinary loopback turns under the configured profile", () => {
     const result = resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,

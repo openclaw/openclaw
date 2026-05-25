@@ -7130,6 +7130,33 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("delivers internal WebChat room-event final replies automatically", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "visible webchat reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        InboundEventKind: "room_event",
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:forge:webchat:forge-main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBeUndefined();
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible webchat reply");
+  });
+
   it("keeps default direct source delivery automatic", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

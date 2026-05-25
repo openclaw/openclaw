@@ -2,6 +2,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   isExplicitCommandTurn,
   resolveCommandTurnContext,
@@ -12,6 +13,8 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   InboundEventKind?: InboundEventKind;
+  Provider?: string;
+  Surface?: string;
   CommandAuthorized?: boolean;
   CommandBody?: string;
   CommandSource?: "text" | "native";
@@ -31,6 +34,17 @@ function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): bo
   );
 }
 
+function isInternalRoomEvent(ctx: SourceReplyDeliveryModeContext): boolean {
+  return (
+    ctx.InboundEventKind === "room_event" &&
+    (isInternalMessageChannel(ctx.Provider) || isInternalMessageChannel(ctx.Surface))
+  );
+}
+
+function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext): boolean {
+  return isInternalMessageChannel(ctx.Provider) || isInternalMessageChannel(ctx.Surface);
+}
+
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -42,7 +56,10 @@ export function resolveSourceReplyDeliveryMode(params: {
   if (params.strictMessageToolOnly === true) {
     return "message_tool_only";
   }
-  if (params.ctx.InboundEventKind === "room_event") {
+  if (isInternalSourceReplyChannel(params.ctx)) {
+    return "automatic";
+  }
+  if (params.ctx.InboundEventKind === "room_event" && !isInternalRoomEvent(params.ctx)) {
     return "message_tool_only";
   }
   if (

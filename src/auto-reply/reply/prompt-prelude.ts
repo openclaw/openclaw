@@ -2,6 +2,7 @@ import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runne
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -131,10 +132,13 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
 
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
   const roomEventBody = resolveRoomEventBody(params);
+  const visibleReplyContract = isInternalMessageChannel(params.sessionCtx.Provider)
+    ? undefined
+    : `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`;
   return [
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",
-    `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`,
+    visibleReplyContract,
     params.inboundUserContext.trim() ? `Room context:\n${params.inboundUserContext.trim()}` : "",
     `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
     "Treat this as observed room activity. Decide whether to act.",
