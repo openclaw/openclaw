@@ -3,7 +3,8 @@ export {
   unregisterApiProviders,
   type ApiProvider,
 } from "../llm/api-registry.js";
-export { calculateCost } from "../llm/models.js";
+export { getEnvApiKey } from "../llm/env-api-keys.js";
+export { calculateCost } from "../llm/model-utils.js";
 export {
   adjustMaxTokensForThinking,
   buildBaseOptions,

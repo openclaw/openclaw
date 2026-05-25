@@ -4,7 +4,8 @@
 
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { type KnownProvider, type Model, modelsAreEqual } from "openclaw/plugin-sdk/llm";
+import { modelsAreEqual } from "../../llm/model-utils.js";
+import type { KnownProvider, Model } from "../../llm/types.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";

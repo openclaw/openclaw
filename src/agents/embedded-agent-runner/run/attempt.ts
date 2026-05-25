@@ -130,8 +130,6 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
@@ -404,6 +402,7 @@ import {
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
+import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import {
   MID_TURN_PRECHECK_ERROR_MESSAGE,
   isMidTurnPrecheckSignal,
@@ -3110,28 +3109,17 @@ export async function runEmbeddedAttempt(
       // outbound messages where policy allows rewriting; otherwise preserve
       // latest thinking and let the recovery wrapper retry once without it.
       if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropReasoningFromHistory) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
-            ? dropReasoningFromHistory(messages as unknown as AgentMessage[])
-            : (messages as unknown as AgentMessage[]);
-          const sanitized = transcriptPolicy.dropThinkingBlocks
-            ? (dropThinkingBlocks(reasoningSanitized) as unknown)
-            : (reasoningSanitized as unknown);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnWithMessageTransform(
+          activeSession.agent.streamFn,
+          (messages) => {
+            const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
+              ? dropReasoningFromHistory(messages)
+              : messages;
+            return transcriptPolicy.dropThinkingBlocks
+              ? dropThinkingBlocks(reasoningSanitized)
+              : reasoningSanitized;
+          },
+        );
       }
       if (
         transcriptPolicy.preserveSignatures ||
@@ -3162,55 +3150,30 @@ export async function runEmbeddedAttempt(
         isOpenAIResponsesApi,
       };
       if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
-        const inner = activeSession.agent.streamFn;
         const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const nextMessages = sanitizeReplayToolCallIdsForStream({
-            messages: messages as AgentMessage[],
-            mode,
-            allowedToolNames: replayAllowedToolNames,
-            preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
-            preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
-              modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-              provider: params.provider,
-              policy: transcriptPolicy,
+        activeSession.agent.streamFn = wrapStreamFnWithMessageTransform(
+          activeSession.agent.streamFn,
+          (messages, model) =>
+            sanitizeReplayToolCallIdsForStream({
+              messages,
+              mode,
+              allowedToolNames: replayAllowedToolNames,
+              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+              preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
+                modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+                provider: params.provider,
+                policy: transcriptPolicy,
+              }),
+              repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
             }),
-            repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-          });
-          if (nextMessages === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: nextMessages,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        );
       }
 
       if (isOpenAIResponsesApi) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = sanitizeOpenAIResponsesReplayForStream(messages as AgentMessage[]);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnWithMessageTransform(
+          activeSession.agent.streamFn,
+          (messages) => sanitizeOpenAIResponsesReplayForStream(messages),
+        );
       }
 
       const innerStreamFn = activeSession.agent.streamFn;

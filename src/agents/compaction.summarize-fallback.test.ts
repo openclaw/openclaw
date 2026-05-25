@@ -20,6 +20,15 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
   };
 });
 
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
+  return {
+    ...actual,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
+  };
+});
+
 const testModel = {
   id: "test",
   name: "test",

@@ -2,8 +2,8 @@ import { constants } from "node:fs";
 import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
-import type { ImageContent, Model, TextContent } from "openclaw/plugin-sdk/llm";
 import { type Static, Type } from "typebox";
+import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {

@@ -7,7 +7,7 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
-import { calculateCost, clampThinkingLevel } from "../models.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
   AssistantMessage,

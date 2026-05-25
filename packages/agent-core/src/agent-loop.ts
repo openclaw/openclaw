@@ -3,14 +3,8 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 
-import {
-  type AssistantMessage,
-  type Context,
-  EventStream,
-  streamSimple,
-  type ToolResultMessage,
-  validateToolArguments,
-} from "openclaw/plugin-sdk/llm";
+import { type AssistantMessage, type Context, EventStream, type ToolResultMessage } from "./llm.js";
+import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -21,6 +15,7 @@ import type {
   AgentToolResult,
   StreamFn,
 } from "./types.js";
+import { validateToolArguments } from "./validation.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
@@ -34,6 +29,7 @@ export function agentLoop(
   config: AgentLoopConfig,
   signal?: AbortSignal,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): EventStream<AgentEvent, AgentMessage[]> {
   const stream = createAgentStream();
 
@@ -46,6 +42,7 @@ export function agentLoop(
     },
     signal,
     streamFn,
+    runtime,
   ).then((messages) => {
     stream.end(messages);
   });
@@ -66,6 +63,7 @@ export function agentLoopContinue(
   config: AgentLoopConfig,
   signal?: AbortSignal,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): EventStream<AgentEvent, AgentMessage[]> {
   if (context.messages.length === 0) {
     throw new Error("Cannot continue: no messages in context");
@@ -85,6 +83,7 @@ export function agentLoopContinue(
     },
     signal,
     streamFn,
+    runtime,
   ).then((messages) => {
     stream.end(messages);
   });
@@ -99,6 +98,7 @@ export async function runAgentLoop(
   emit: AgentEventSink,
   signal?: AbortSignal,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
   const newMessages: AgentMessage[] = [...prompts];
   const currentContext: AgentContext = {
@@ -113,7 +113,7 @@ export async function runAgentLoop(
     await emit({ type: "message_end", message: prompt });
   }
 
-  await runLoop(currentContext, newMessages, config, signal, emit, streamFn);
+  await runLoop(currentContext, newMessages, config, signal, emit, streamFn, runtime);
   return newMessages;
 }
 
@@ -123,6 +123,7 @@ export async function runAgentLoopContinue(
   emit: AgentEventSink,
   signal?: AbortSignal,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AgentMessage[]> {
   if (context.messages.length === 0) {
     throw new Error("Cannot continue: no messages in context");
@@ -138,7 +139,7 @@ export async function runAgentLoopContinue(
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
 
-  await runLoop(currentContext, newMessages, config, signal, emit, streamFn);
+  await runLoop(currentContext, newMessages, config, signal, emit, streamFn, runtime);
   return newMessages;
 }
 
@@ -159,6 +160,7 @@ async function runLoop(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<void> {
   let currentContext = initialContext;
   let config = initialConfig;
@@ -190,7 +192,14 @@ async function runLoop(
       }
 
       // Stream assistant response
-      const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
+      const message = await streamAssistantResponse(
+        currentContext,
+        config,
+        signal,
+        emit,
+        streamFn,
+        runtime,
+      );
       newMessages.push(message);
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
@@ -283,6 +292,7 @@ async function streamAssistantResponse(
   signal: AbortSignal | undefined,
   emit: AgentEventSink,
   streamFn?: StreamFn,
+  runtime?: AgentCoreStreamRuntimeDeps,
 ): Promise<AssistantMessage> {
   // Apply context transform if configured (AgentMessage[] → AgentMessage[])
   let messages = context.messages;
@@ -300,7 +310,7 @@ async function streamAssistantResponse(
     tools: context.tools,
   };
 
-  const streamFunction = streamFn || streamSimple;
+  const streamFunction = resolveAgentCoreStreamFn(runtime, streamFn);
 
   // Resolve API key (important for expiring tokens)
   const resolvedApiKey =
@@ -317,12 +327,14 @@ async function streamAssistantResponse(
 
   for await (const event of response) {
     switch (event.type) {
-      case "start":
-        partialMessage = event.partial;
-        context.messages.push(partialMessage);
+      case "start": {
+        const message = event.partial;
+        partialMessage = message;
+        context.messages.push(message);
         addedPartial = true;
-        await emit({ type: "message_start", message: { ...partialMessage } });
+        await emit({ type: "message_start", message: { ...message } });
         break;
+      }
 
       case "text_start":
       case "text_delta":
@@ -334,12 +346,13 @@ async function streamAssistantResponse(
       case "toolcall_delta":
       case "toolcall_end":
         if (partialMessage) {
-          partialMessage = event.partial;
-          context.messages[context.messages.length - 1] = partialMessage;
+          const message = event.partial;
+          partialMessage = message;
+          context.messages[context.messages.length - 1] = message;
           await emit({
             type: "message_update",
             assistantMessageEvent: event,
-            message: { ...partialMessage },
+            message: { ...message },
           });
         }
         break;

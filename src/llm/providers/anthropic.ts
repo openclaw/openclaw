@@ -7,7 +7,7 @@ import type {
   RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost } from "../models.js";
+import { calculateCost } from "../model-utils.js";
 import type {
   AnthropicMessagesCompat,
   Api,

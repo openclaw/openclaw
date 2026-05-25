@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CURRENT_SESSION_VERSION } from "../../agents/sessions/index.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export type SessionTranscriptHeaderParams = {
   sessionId?: string;

@@ -1,5 +1,15 @@
-import type { Model, Usage } from "openclaw/plugin-sdk/llm";
-import { completeSimple } from "openclaw/plugin-sdk/llm";
+import type {
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StreamFn,
+  Usage,
+} from "../../llm.js";
+import {
+  type AgentCoreCompletionRuntimeDeps,
+  resolveAgentCoreCompleteFn,
+} from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
   convertToLlm,
@@ -489,17 +499,47 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
+function createSummarizationOptions(
+  model: Model,
+  maxTokens: number,
+  apiKey: string | undefined,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal | undefined,
+  thinkingLevel: ThinkingLevel | undefined,
+): SimpleStreamOptions {
+  const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
+  if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
+    options.reasoning = thinkingLevel;
+  }
+  return options;
+}
+
+async function completeSummarization(
+  model: Model,
+  context: Context,
+  options: SimpleStreamOptions,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreCompletionRuntimeDeps,
+): Promise<AssistantMessage> {
+  if (streamFn) {
+    return (await streamFn(model, context, options)).result();
+  }
+  return await resolveAgentCoreCompleteFn(runtime)(model, context, options);
+}
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
   model: Model,
   reserveTokens: number,
-  apiKey: string,
+  apiKey: string | undefined,
   headers?: Record<string, string>,
   signal?: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
   thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.8 * reserveTokens),
@@ -525,15 +565,12 @@ export async function generateSummary(
     },
   ];
 
-  const completionOptions =
-    model.reasoning && thinkingLevel && thinkingLevel !== "off"
-      ? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-      : { maxTokens, signal, apiKey, headers };
-
-  const response = await completeSimple(
+  const response = await completeSummarization(
     model,
     { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    completionOptions,
+    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    streamFn,
+    runtime,
   );
   if (response.stopReason === "aborted") {
     return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
@@ -675,11 +712,13 @@ export { serializeConversation } from "./utils.js";
 export async function compact(
   preparation: CompactionPreparation,
   model: Model,
-  apiKey: string,
+  apiKey: string | undefined,
   headers?: Record<string, string>,
   customInstructions?: string,
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<CompactionResult, CompactionError>> {
   const {
     firstKeptEntryId,
@@ -716,6 +755,8 @@ export async function compact(
             customInstructions,
             previousSummary,
             thinkingLevel,
+            streamFn,
+            runtime,
           )
         : Promise.resolve(ok<string, CompactionError>("No prior history.")),
       generateTurnPrefixSummary(
@@ -726,6 +767,8 @@ export async function compact(
         headers,
         signal,
         thinkingLevel,
+        streamFn,
+        runtime,
       ),
     ]);
     if (!historyResult.ok) {
@@ -746,6 +789,8 @@ export async function compact(
       customInstructions,
       previousSummary,
       thinkingLevel,
+      streamFn,
+      runtime,
     );
     if (!summaryResult.ok) {
       return err(summaryResult.error);
@@ -767,10 +812,12 @@ async function generateTurnPrefixSummary(
   messages: AgentMessage[],
   model: Model,
   reserveTokens: number,
-  apiKey: string,
+  apiKey: string | undefined,
   headers?: Record<string, string>,
   signal?: AbortSignal,
   thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
+  runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
   const maxTokens = Math.min(
     Math.floor(0.5 * reserveTokens),
@@ -787,12 +834,12 @@ async function generateTurnPrefixSummary(
     },
   ];
 
-  const response = await completeSimple(
+  const response = await completeSummarization(
     model,
     { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    model.reasoning && thinkingLevel && thinkingLevel !== "off"
-      ? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
-      : { maxTokens, signal, apiKey, headers },
+    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    streamFn,
+    runtime,
   );
   if (response.stopReason === "aborted") {
     return err(

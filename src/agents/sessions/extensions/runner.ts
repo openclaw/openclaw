@@ -3,7 +3,7 @@
  */
 
 import type { KeyId } from "@earendil-works/pi-tui";
-import type { ImageContent, Model } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, Model } from "../../../llm/types.js";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";

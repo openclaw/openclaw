@@ -1,7 +1,9 @@
 export * from "./agent.js";
 export * from "./agent-loop.js";
 export * from "./node.js";
+export * from "./runtime-deps.js";
 export * from "./types.js";
+export * from "./validation.js";
 export * from "./harness/agent-harness.js";
 export * from "./harness/messages.js";
 export * from "./harness/prompt-templates.js";
@@ -17,9 +19,12 @@ export * from "./harness/session/session.js";
 export { uuidv7 } from "./harness/session/uuid.js";
 export {
   type BranchPreparation,
+  type BranchPathEntry,
   type BranchSummaryDetails,
+  type CollectBranchPathEntriesResult,
   type CollectEntriesResult,
   collectEntriesForBranchSummary,
+  collectEntriesForBranchSummaryFromBranches,
   generateBranchSummary,
   prepareBranchEntries,
 } from "./harness/compaction/branch-summarization.js";
@@ -36,6 +41,11 @@ export {
   prepareCompaction,
   serializeConversation,
   shouldCompact,
+  type CompactionDetails,
+  type CompactionPreparation,
+  type CompactionResult,
+  type CompactionSettings,
+  type ContextUsageEstimate,
 } from "./harness/compaction/compaction.js";
 export * from "./harness/utils/shell-output.js";
 export * from "./harness/utils/truncate.js";

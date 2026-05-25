@@ -1,14 +1,14 @@
+import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import {
   type ImageContent,
   type Message,
   type Model,
   type SimpleStreamOptions,
-  streamSimple,
   type TextContent,
   type ThinkingBudgets,
   type Transport,
-} from "openclaw/plugin-sdk/llm";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+} from "./llm.js";
+import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
@@ -105,6 +105,7 @@ export interface AgentOptions {
   >;
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+  runtime?: AgentCoreStreamRuntimeDeps;
   streamFn?: StreamFn;
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   onPayload?: SimpleStreamOptions["onPayload"];
@@ -190,6 +191,7 @@ export class Agent {
     messages: AgentMessage[],
     signal?: AbortSignal,
   ) => Promise<AgentMessage[]>;
+  public runtime?: AgentCoreStreamRuntimeDeps;
   public streamFn: StreamFn;
   public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   public onPayload?: SimpleStreamOptions["onPayload"];
@@ -221,7 +223,8 @@ export class Agent {
     this.mutableState = createMutableAgentState(options.initialState);
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
     this.transformContext = options.transformContext;
-    this.streamFn = options.streamFn ?? streamSimple;
+    this.runtime = options.runtime;
+    this.streamFn = resolveAgentCoreStreamFn(options.runtime, options.streamFn);
     this.getApiKey = options.getApiKey;
     this.onPayload = options.onPayload;
     this.onResponse = options.onResponse;

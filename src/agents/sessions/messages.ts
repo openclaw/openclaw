@@ -5,7 +5,7 @@
  * and provides a transformer to convert them to LLM-compatible messages.
  */
 
-import type { ImageContent, Message, TextContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:

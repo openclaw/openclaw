@@ -2,7 +2,6 @@
  * GitHub Copilot OAuth flow
  */
 
-import { getModels } from "../../models.js";
 import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
@@ -22,6 +21,7 @@ const COPILOT_HEADERS = {
 
 const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
+const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 
 type DeviceCodeResponse = {
   device_code: string;
@@ -41,6 +41,14 @@ type DeviceTokenErrorResponse = {
   error: string;
   error_description?: string;
   interval?: number;
+};
+
+type CopilotModelListEntry = {
+  id?: unknown;
+  object?: unknown;
+  capabilities?: {
+    type?: unknown;
+  };
 };
 
 export function normalizeDomain(input: string): string | null {
@@ -320,20 +328,64 @@ async function enableGitHubCopilotModel(
   }
 }
 
+async function listGitHubCopilotModelIds(
+  token: string,
+  enterpriseDomain?: string,
+): Promise<string[]> {
+  const baseUrl = getGitHubCopilotBaseUrl(token, enterpriseDomain);
+  const url = `${baseUrl}/models`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        ...COPILOT_HEADERS,
+      },
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const raw = await response.json();
+    const data = raw && typeof raw === "object" ? (raw as { data?: unknown }).data : undefined;
+    if (!Array.isArray(data)) {
+      return [];
+    }
+    return data.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const model = entry as CopilotModelListEntry;
+      const id = typeof model.id === "string" ? model.id.trim() : "";
+      if (!id || id.startsWith(COPILOT_ROUTER_ID_PREFIX)) {
+        return [];
+      }
+      if (model.object && model.object !== "model") {
+        return [];
+      }
+      if (model.capabilities?.type && model.capabilities.type !== "chat") {
+        return [];
+      }
+      return [id];
+    });
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Enable all known GitHub Copilot models that may require policy acceptance.
- * Called after successful login to ensure all models are available.
+ * Enable GitHub Copilot models visible to this account.
+ * Called after successful login to ensure available models are policy-enabled.
  */
 async function enableAllGitHubCopilotModels(
   token: string,
   enterpriseDomain?: string,
   onProgress?: (model: string, success: boolean) => void,
 ): Promise<void> {
-  const models = getModels("github-copilot");
+  const modelIds = await listGitHubCopilotModelIds(token, enterpriseDomain);
   await Promise.all(
-    models.map(async (model) => {
-      const success = await enableGitHubCopilotModel(token, model.id, enterpriseDomain);
-      onProgress?.(model.id, success);
+    modelIds.map(async (modelId) => {
+      const success = await enableGitHubCopilotModel(token, modelId, enterpriseDomain);
+      onProgress?.(modelId, success);
     }),
   );
 }
@@ -424,4 +476,8 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
     const baseUrl = getGitHubCopilotBaseUrl(creds.access, domain);
     return models.map((m) => (m.provider === "github-copilot" ? { ...m, baseUrl } : m));
   },
+};
+
+export const testing = {
+  listGitHubCopilotModelIds,
 };

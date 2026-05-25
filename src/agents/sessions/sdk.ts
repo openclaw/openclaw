@@ -1,10 +1,7 @@
 import { join } from "node:path";
-import {
-  clampThinkingLevel,
-  type Message,
-  type Model,
-  streamSimple,
-} from "openclaw/plugin-sdk/llm";
+import { clampThinkingLevel } from "../../llm/model-utils.js";
+import { streamSimple } from "../../llm/stream.js";
+import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import { Agent, type AgentMessage, type ThinkingLevel } from "../runtime/index.js";
 import { AgentSession } from "./agent-session.js";

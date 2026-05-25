@@ -1,4 +1,4 @@
-import type { Message } from "openclaw/plugin-sdk/llm";
+import type { Message } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 
 /** File paths touched by a session branch or compaction range. */

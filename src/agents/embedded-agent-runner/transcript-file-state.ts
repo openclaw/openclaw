@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { appendRegularFile } from "../../infra/fs-safe.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import {
   buildSessionContext,
-  CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   parseSessionEntries,
   type FileEntry,

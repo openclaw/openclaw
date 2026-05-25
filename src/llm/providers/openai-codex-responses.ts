@@ -21,7 +21,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 }
 
 import { getEnvApiKey } from "../env-api-keys.js";
-import { clampThinkingLevel } from "../models.js";
+import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
