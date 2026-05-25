@@ -82,6 +82,9 @@ const mockState = vi.hoisted(() => ({
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
   hasBeforeAgentRunHooks: false,
+  beforeMessageWriteBlock: false,
+  beforeMessageWriteContent: null as string | null,
+  beforeMessageWriteCalls: [] as Array<{ message: unknown; ctx: unknown }>,
   dispatchBlockedByBeforeAgentRun: false,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
@@ -198,6 +201,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
         onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+        onUserMessagePersistencePending?: (pending: Promise<void>) => void;
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
@@ -269,7 +273,25 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: (hookName: string) =>
-      hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks,
+      (hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks) ||
+      (hookName === "before_message_write" &&
+        (mockState.beforeMessageWriteBlock || mockState.beforeMessageWriteContent !== null)),
+    runBeforeMessageWrite: (event: { message: unknown }, ctx: unknown) => {
+      mockState.beforeMessageWriteCalls.push({ message: event.message, ctx });
+      if (mockState.beforeMessageWriteBlock) {
+        return { block: true };
+      }
+      if (mockState.beforeMessageWriteContent !== null) {
+        return {
+          message: {
+            ...(typeof event.message === "object" && event.message !== null ? event.message : {}),
+            role: "user",
+            content: mockState.beforeMessageWriteContent,
+          },
+        };
+      }
+      return undefined;
+    },
   }),
 }));
 
@@ -740,6 +762,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
     mockState.hasBeforeAgentRunHooks = false;
+    mockState.beforeMessageWriteBlock = false;
+    mockState.beforeMessageWriteContent = null;
+    mockState.beforeMessageWriteCalls = [];
     mockState.dispatchBlockedByBeforeAgentRun = false;
   });
 
@@ -4641,6 +4666,75 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         );
       expect(persistedUser?.content).toBe("hello before cli startup failure");
     });
+  });
+
+  it("applies before_message_write redaction to gateway fallback user transcript persistence", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-before-write-redact-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchErrorAfterAgentRunStart = new Error("cli backend unavailable");
+    mockState.beforeMessageWriteContent = "[redacted by hook]";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-error-before-write-redact",
+      message: "raw sensitive prompt",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(message?.content).toBe("[redacted by hook]");
+      expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
+      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
+        .map((entry) => entry.message)
+        .find(
+          (candidate): candidate is Record<string, unknown> =>
+            typeof candidate === "object" &&
+            candidate !== null &&
+            (candidate as { role?: unknown }).role === "user",
+        );
+      expect(persistedUser?.content).toBe("[redacted by hook]");
+      expect(JSON.stringify(persistedUser)).not.toContain("raw sensitive prompt");
+    });
+  });
+
+  it("does not persist gateway fallback user transcripts blocked by before_message_write", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-error-before-write-block-");
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchErrorAfterAgentRunStart = new Error("cli backend unavailable");
+    mockState.beforeMessageWriteBlock = true;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-error-before-write-block",
+      message: "blocked sensitive prompt",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get("chat:idem-user-transcript-error-before-write-block")?.ok).toBe(
+        false,
+      );
+      expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
+    });
+    expect(findUserUpdate()).toBeUndefined();
+    expect(
+      readTranscriptJsonLines(mockState.transcriptPath)
+        .map((entry) => entry.message)
+        .filter(
+          (candidate): candidate is Record<string, unknown> =>
+            typeof candidate === "object" &&
+            candidate !== null &&
+            (candidate as { role?: unknown }).role === "user",
+        ),
+    ).toHaveLength(0);
   });
 
   it("emits a user transcript update when a started agent returns an error before runtime persistence", async () => {

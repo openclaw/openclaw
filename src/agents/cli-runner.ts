@@ -135,6 +135,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
   const transcriptTarget = {
     transcriptPath: params.sessionFile,
     sessionId: params.sessionId,
+    agentId: params.agentId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     cwd: params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),

@@ -2699,10 +2699,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
+      let runtimeUserTranscriptPersistencePromise: Promise<void> | null = null;
       let agentRunStarted = false;
       let agentUserMessagePersisted = false;
       let beforeAgentRunBlocked = false;
       const persistGatewayUserTurnTranscript = async () => {
+        const runtimePersistence = runtimeUserTranscriptPersistencePromise;
+        if (runtimePersistence) {
+          await runtimePersistence.catch((error) => {
+            context.logGateway.warn(
+              `runtime user transcript persistence failed before fallback: ${formatForLog(error)}`,
+            );
+          });
+          if (agentUserMessagePersisted) {
+            return;
+          }
+        }
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
           return;
@@ -2896,6 +2908,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               },
               onUserMessagePersisted: () => {
                 agentUserMessagePersisted = true;
+              },
+              onUserMessagePersistencePending: (pending) => {
+                runtimeUserTranscriptPersistencePromise = pending;
               },
               onModelSelected: (modelSelection) => {
                 updateChatRunProvider(context.chatAbortControllers, {

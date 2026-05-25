@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -41,6 +42,7 @@ export type AppendUserTurnTranscriptMessageParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   sessionId?: string;
+  agentId?: string;
   sessionKey?: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -306,6 +308,18 @@ function resolvePersistedUserTurnMessage(
   return buildPersistedUserTurnMessage(params.input);
 }
 
+function applyBeforeMessageWriteToUserTurn(
+  message: PersistedUserTurnMessage,
+  params: Pick<AppendUserTurnTranscriptMessageParams, "agentId" | "sessionKey">,
+): PersistedUserTurnMessage | undefined {
+  const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+    message,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+  return nextMessage?.role === "user" ? nextMessage : undefined;
+}
+
 export async function appendUserTurnTranscriptMessage(
   params: AppendUserTurnTranscriptMessageParams,
 ): Promise<
@@ -316,7 +330,10 @@ export async function appendUserTurnTranscriptMessage(
     }
   | undefined
 > {
-  const message = resolvePersistedUserTurnMessage(params);
+  const resolvedMessage = resolvePersistedUserTurnMessage(params);
+  const message = resolvedMessage
+    ? applyBeforeMessageWriteToUserTurn(resolvedMessage, params)
+    : undefined;
   if (!message) {
     return undefined;
   }
@@ -396,6 +413,7 @@ export async function persistUserTurnTranscript(params: PersistUserTurnTranscrip
     transcriptPath: sessionFile,
     message,
     sessionId: params.sessionId,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),

@@ -61,6 +61,8 @@ export type GetReplyOptions = {
   onUserMessagePersisted?: (
     message: Extract<AgentMessage, { role: "user" }>,
   ) => Promise<void> | void;
+  /** Notifies when runtime-owned user turn persistence is in flight. */
+  onUserMessagePersistencePending?: (pending: Promise<void>) => void;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;

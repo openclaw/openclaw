@@ -232,6 +232,7 @@ export type RunEmbeddedPiAgentParams = {
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
+  onUserMessagePersistencePending?: (pending: Promise<void>) => void;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,

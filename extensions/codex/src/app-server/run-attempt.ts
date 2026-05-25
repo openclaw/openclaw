@@ -6132,24 +6132,28 @@ async function mirrorPromptAtTurnStartBestEffort(params: {
     return;
   }
   try {
-    const userPromptMessage = attachCodexMirrorIdentity(
-      buildCodexUserPromptMessage(params.params),
-      `${params.turnId}:prompt`,
-    );
-    const mirrorResult = await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      messages: [userPromptMessage],
-      idempotencyScope: `codex-app-server:${params.threadId}`,
-      config: params.params.config,
-    });
-    for (const message of mirrorResult.userMessagesPresent) {
-      notifyCodexAppServerUserMessagePersisted({
-        runParams: params.params,
-        message,
+    const mirrorPromise = (async () => {
+      const userPromptMessage = attachCodexMirrorIdentity(
+        buildCodexUserPromptMessage(params.params),
+        `${params.turnId}:prompt`,
+      );
+      const mirrorResult = await mirrorCodexAppServerTranscript({
+        sessionFile: params.params.sessionFile,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        messages: [userPromptMessage],
+        idempotencyScope: `codex-app-server:${params.threadId}`,
+        config: params.params.config,
       });
-    }
+      for (const message of mirrorResult.userMessagesPresent) {
+        notifyCodexAppServerUserMessagePersisted({
+          runParams: params.params,
+          message,
+        });
+      }
+    })();
+    params.params.onUserMessagePersistencePending?.(mirrorPromise);
+    await mirrorPromise;
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", { error });
   }
