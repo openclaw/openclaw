@@ -35,6 +35,7 @@ import {
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
+  resolvePersistedUserTurnText,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -1134,12 +1135,27 @@ export async function runPreparedReply(
       ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+  const userTurnTranscriptText = resolvePersistedUserTurnText(
+    {
+      Transcript: ctx.Transcript,
+      RawBody: ctx.RawBody,
+      CommandBody: ctx.CommandBody,
+      BodyForCommands: ctx.BodyForCommands,
+      Body: ctx.Body,
+      BodyStripped: sessionCtx.BodyStripped,
+    },
+    {
+      hasMedia: userTurnMediaForPersistence.length > 0,
+      fallback: baseBodyTrimmedRaw,
+    },
+  );
   const userTurnInput =
     params.userTurnInput ??
     (userTurnMediaForPersistence.length > 0
       ? {
-          text: baseBodyTrimmedRaw,
+          text: userTurnTranscriptText,
           media: userTurnMediaForPersistence,
+          mediaOnlyText: "[User sent media without caption]",
         }
       : undefined);
   const userMessageForPersistence = userTurnInput

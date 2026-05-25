@@ -2578,6 +2578,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 text: parsedMessage,
                 media,
                 timestamp: now,
+                mediaOnlyText: "[User sent media without caption]",
               }
             : undefined,
       );

@@ -971,6 +971,111 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
   });
 
+  it("persists clean media captions instead of model-only media notes", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "What is in this image?",
+          RawBody: "What is in this image?",
+          CommandBody: "What is in this image?",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "[media attached: media://inbound/a.png (image/png)]\nTo send an image back, prefer the message tool (media/path/filePath).\nWhat is in this image?",
+          BodyStripped:
+            "[media attached: media://inbound/a.png (image/png)]\nTo send an image back, prefer the message tool (media/path/filePath).\nWhat is in this image?",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userMessageForPersistence).toMatchObject({
+      role: "user",
+      content: "What is in this image?",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+    const persistedContent = call.followupRun.userMessageForPersistence?.content;
+    expect(persistedContent).toBe("What is in this image?");
+    expect(persistedContent).not.toContain("media attached");
+    expect(persistedContent).not.toContain("message tool");
+  });
+
+  it("uses a media-only transcript label for exact media placeholders", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "<media:image>",
+          RawBody: "<media:image>",
+          CommandBody: "<media:image>",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "<media:image>",
+          BodyStripped: "<media:image>",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userMessageForPersistence).toMatchObject({
+      role: "user",
+      content: "[User sent media without caption]",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+  });
+
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
