@@ -38,7 +38,7 @@ function resolveInlineReasoningVisibleText(params: {
   const boundaryEndIndex = match.index + match[0].length;
   const prefix = params.text.slice(0, boundaryStartIndex).trim();
   const answer = params.text.slice(boundaryEndIndex).trim();
-  if (prefix.length >= INLINE_REASONING_MIN_PREFIX_CHARS && answer) {
+  if (prefix.length >= INLINE_REASONING_MIN_PREFIX_CHARS) {
     return { kind: "visible", text: answer };
   }
 
