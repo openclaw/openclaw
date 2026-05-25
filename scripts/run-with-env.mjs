@@ -5,9 +5,7 @@ const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 export function parseRunWithEnvArgs(argv) {
   const separatorIndex = argv.indexOf("--");
   if (separatorIndex <= 0 || separatorIndex === argv.length - 1) {
-    throw new Error(
-      "usage: node scripts/run-with-env.mjs KEY=value [KEY=value ...] -- command [args...]",
-    );
+    throw new Error("usage: node scripts/run-with-env.mjs KEY=value [KEY=value ...] -- command [args...]");
   }
 
   const assignments = argv.slice(0, separatorIndex);

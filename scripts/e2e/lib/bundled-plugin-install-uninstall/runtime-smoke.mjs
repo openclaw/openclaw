@@ -33,7 +33,9 @@ function writeJson(file, value) {
 
 function manifestPath(pluginDir, pluginRoot) {
   const candidates = [
-    ...(isNonEmptyString(pluginRoot) ? [path.join(pluginRoot, "openclaw.plugin.json")] : []),
+    ...(isNonEmptyString(pluginRoot)
+      ? [path.join(pluginRoot, "openclaw.plugin.json")]
+      : []),
     path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json"),
     path.join(process.cwd(), "dist-runtime", "extensions", pluginDir, "openclaw.plugin.json"),
   ];

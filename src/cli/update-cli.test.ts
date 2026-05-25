@@ -1186,7 +1186,8 @@ describe("update-cli", () => {
         .mocked(readConfigFileSnapshot)
         .mock.calls.some(
           ([options]) =>
-            options?.skipPluginValidation === true && options.suppressFutureVersionWarning === true,
+            options?.skipPluginValidation === true &&
+            options.suppressFutureVersionWarning === true,
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);

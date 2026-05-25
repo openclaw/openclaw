@@ -13,7 +13,14 @@ export function resolveNativeOpusInstallCommand(params = {}) {
     nodeExecPath: params.nodeExecPath,
     npmExecPath: params.npmExecPath,
     platform: params.platform,
-    pnpmArgs: ["--dir", params.opusDir, "exec", "node-pre-gyp", "install", "--fallback-to-build"],
+    pnpmArgs: [
+      "--dir",
+      params.opusDir,
+      "exec",
+      "node-pre-gyp",
+      "install",
+      "--fallback-to-build",
+    ],
   });
 }
 

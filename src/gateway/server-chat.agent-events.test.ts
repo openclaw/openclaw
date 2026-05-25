@@ -107,7 +107,8 @@ describe("agent event handler", () => {
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
-      shouldBackoffLowPrioritySessionToolEvents: params?.shouldBackoffLowPrioritySessionToolEvents,
+      shouldBackoffLowPrioritySessionToolEvents:
+        params?.shouldBackoffLowPrioritySessionToolEvents,
     });
 
     return {

@@ -414,9 +414,7 @@ describe("docker build helper", () => {
     expect(runner).not.toContain("-- --reporter=verbose");
     expect(runner).toContain("expected focused Vitest summary for exactly 3 passed tests");
     expect(dockerfile).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1");
-    expect(dockerfile).toContain(
-      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
-    );
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --ignore-scripts --filter openclaw");
   });
 
   it("covers plugin install/update sources in the Docker plugin sweep", () => {

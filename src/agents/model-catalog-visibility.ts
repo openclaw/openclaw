@@ -68,7 +68,7 @@ export async function resolveVisibleModelCatalog(params: {
         env: params.env,
         allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
         discoverExternalCliAuth: params.runtimeAuthDiscovery,
-      });
+    });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
       if (await providerHasAuth(hasAuth, entry.provider)) {

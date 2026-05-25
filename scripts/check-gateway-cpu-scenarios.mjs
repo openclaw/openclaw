@@ -223,7 +223,9 @@ async function runGatewayCpuScenarios(options, params = {}) {
       qaOutputArg,
       ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
     ]);
-    steps.push(runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params));
+    steps.push(
+      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
+    );
   }
 
   const startup = readJsonIfExists(startupOutput);
