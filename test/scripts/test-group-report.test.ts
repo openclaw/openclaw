@@ -274,6 +274,34 @@ describe("scripts/test-group-report arg parsing", () => {
 });
 
 describe("scripts/test-group-report run plans", () => {
+  it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+
+      expect(plans.map((plan) => plan.config)).not.toContain(
+        "test/vitest/vitest.full-agentic.config.ts",
+      );
+      expect(plans.map((plan) => plan.config)).toContain(
+        "test/vitest/vitest.agents-tools.config.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousLeaf === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeaf;
+      }
+    }
+  });
+
   it("preserves full-suite shard file args and unique report labels", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";
