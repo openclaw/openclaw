@@ -657,6 +657,35 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
+  it("uses session contextTokens before primary metadata for uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "custom",
+        model: "uncataloged-32k",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
@@ -4855,6 +4884,45 @@ describe("runAgentTurnWithFallback", () => {
     expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
     expect(updateSessionIdMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the throwing fallback candidate model for compaction failure hints", async () => {
+    state.isCompactionFailureErrorMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("ollama", "qwen3.5-9b-32k:latest");
+      throw new Error("expected fallback candidate to throw");
+    });
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Auto-compaction failed: nothing to compact"),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openrouter";
+    followupRun.run.model = "qwen3.6-plus";
+    followupRun.run.config = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.test",
+            models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+          },
+          ollama: {
+            baseUrl: "http://ollama.test",
+            models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+          },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("20000");
+      expect(result.payload.text).not.toContain("100000");
+    }
   });
 
   it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {

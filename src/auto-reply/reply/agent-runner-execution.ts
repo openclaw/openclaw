@@ -755,6 +755,10 @@ function resolveContextWindowForCompactionHint(params: {
       modelWindow = resolved;
     }
   }
+  const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
+  if (modelWindow === undefined && runtimeProvider && runtimeModel && sessionWindow !== undefined) {
+    modelWindow = sessionWindow;
+  }
   if (modelWindow === undefined && params.primaryProvider && params.primaryModel) {
     const resolved = resolveContextTokensForModel({
       cfg: params.cfg,
@@ -766,7 +770,6 @@ function resolveContextWindowForCompactionHint(params: {
       modelWindow = resolved;
     }
   }
-  const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
   const contextWindow = modelWindow ?? sessionWindow;
   const agentCap = resolveAgentContextTokensForHint({
     cfg: params.cfg,
@@ -1418,6 +1421,8 @@ export async function runAgentTurnWithFallback(params: {
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
+  let attemptedRuntimeProvider = fallbackProvider;
+  let attemptedRuntimeModel = fallbackModel;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
@@ -1737,6 +1742,8 @@ export async function runAgentTurnWithFallback(params: {
           return classification;
         },
         run: async (provider, model, runOptions) => {
+          attemptedRuntimeProvider = provider;
+          attemptedRuntimeModel = model;
           const suppressQueuedUserPersistenceForCandidate =
             (params.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
             queuedUserMessagePersistedAcrossFallback;
@@ -2354,8 +2361,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
-              runtimeProvider: fallbackProvider,
-              runtimeModel: fallbackModel,
+              runtimeProvider: attemptedRuntimeProvider,
+              runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),
@@ -2486,8 +2493,8 @@ export async function runAgentTurnWithFallback(params: {
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
               primaryModel: params.followupRun.run.model,
-              runtimeProvider: fallbackProvider,
-              runtimeModel: fallbackModel,
+              runtimeProvider: attemptedRuntimeProvider,
+              runtimeModel: attemptedRuntimeModel,
               activeSessionEntry: params.getActiveSessionEntry(),
             }),
           }),
