@@ -565,7 +565,7 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
   snapshot: PluginMetadataSnapshot;
 }): boolean {
-  return result.registrySource !== "derived" && result.snapshot.index.plugins.length > 0;
+  return result.snapshot.index.plugins.length > 0;
 }
 
 export function resolvePluginMetadataSnapshot(
