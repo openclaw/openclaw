@@ -196,6 +196,7 @@ describe("channel-broker HTTP routes", () => {
 
     registerChannelBrokerHttpRoutes({
       config: brokerConfig(),
+      runtime: { config: { current: () => brokerConfig() } },
       registerHttpRoute,
     } as never);
 
@@ -207,6 +208,30 @@ describe("channel-broker HTTP routes", () => {
         handler: expect.any(Function),
       }),
     );
+  });
+
+  it("reads current runtime config when handling the registered inbound route", async () => {
+    const registerHttpRoute = vi.fn();
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const staleConfig = brokerConfig("old-secret");
+    const currentConfig = brokerConfig("rotated-secret");
+    const body = inboundBody();
+
+    registerChannelBrokerHttpRoutes({
+      config: staleConfig,
+      runtime: { config: { current: () => currentConfig } },
+      registerHttpRoute,
+    } as never);
+
+    const route = registerHttpRoute.mock.calls[0]?.[0] as {
+      handler(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
+    };
+    const res = createResponse();
+    await route.handler(createRequest({ body, signature: sign(body, "rotated-secret") }), res);
+
+    expect(res.statusCode).toBe(202);
+    expect(receiveInboundEvent).toHaveBeenCalledOnce();
   });
 
   it("verifies signatures, normalizes events, and delegates durable receive ack", async () => {

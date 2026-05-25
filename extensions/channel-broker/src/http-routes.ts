@@ -260,6 +260,10 @@ export function registerChannelBrokerHttpRoutes(api: OpenClawPluginApi): void {
     auth: "plugin",
     match: "exact",
     handler: async (req, res) =>
-      await handleChannelBrokerInboundHttpRequest({ cfg: api.config as CoreConfig, req, res }),
+      await handleChannelBrokerInboundHttpRequest({
+        cfg: api.runtime.config.current() as CoreConfig,
+        req,
+        res,
+      }),
   });
 }
