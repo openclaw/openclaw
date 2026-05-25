@@ -14,6 +14,11 @@ export const DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE = DISCORD_COMPONENT_MAX_SEL
 export const DISCORD_MODEL_PICKER_PROVIDER_SINGLE_PAGE_MAX = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 export const DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
+function compareBucketItems(left: string, right: string): number {
+  const normalized = left.toLowerCase().localeCompare(right.toLowerCase());
+  return normalized === 0 ? left.localeCompare(right) : normalized;
+}
+
 const COMMAND_CONTEXTS = ["model", "models"] as const;
 const PICKER_ACTIONS = [
   "open",
@@ -498,7 +503,7 @@ export function findModelBucketId(
   if (!modelSet) {
     return undefined;
   }
-  const sorted = [...modelSet].toSorted();
+  const sorted = [...modelSet].toSorted(compareBucketItems);
   const idx = sorted.indexOf(model);
   if (idx < 0) {
     return undefined;
@@ -564,7 +569,7 @@ export function getDiscordModelPickerModelPage(params: {
     return null;
   }
 
-  const allModels = [...modelSet].toSorted();
+  const allModels = [...modelSet].toSorted(compareBucketItems);
   const buckets = computeAlphaBuckets(allModels);
   const bucket = resolveBucket(buckets, params.bucket);
   const bucketItems = bucket ? allModels.slice(bucket.start, bucket.end) : allModels;
@@ -599,7 +604,7 @@ export function resolveDiscordModelPickerPageForModel(params: {
   if (!modelSet) {
     return { page: 1 };
   }
-  const sorted = [...modelSet].toSorted();
+  const sorted = [...modelSet].toSorted(compareBucketItems);
   const index = sorted.indexOf(params.model);
   if (index < 0) {
     return { page: 1 };

@@ -687,6 +687,29 @@ describe("Discord model picker rendering", () => {
     expect(firstBucket.totalPages).toBe(2);
   });
 
+  it("sorts mixed-case model ids by the same key used for bucket labels", () => {
+    const models = [
+      "zulu-lower",
+      "MiniMaxAI/model",
+      "openai/model",
+      "Qwen/model",
+      "NousResearch/model",
+      ...Array.from({ length: 25 }, (_, i) => `camel-${String(i + 1).padStart(2, "0")}`),
+    ];
+    const data = createModelsProviderData({ chutes: models });
+
+    const page = requireValue(
+      getDiscordModelPickerModelPage({ data, provider: "chutes", bucket: "m-z" }),
+      "model page should exist",
+    );
+    const rangeLabels = page.buckets
+      .map((bucket) => bucket.label)
+      .filter((label) => label.includes("–"));
+
+    expect(rangeLabels.every((label) => !/M–C|Q–N|O–C/u.test(label))).toBe(true);
+    expect(page.items.some((item) => item.startsWith("MiniMaxAI/"))).toBe(true);
+  });
+
   it("provider select and pagination preserve the active provider bucket", () => {
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= 30; i += 1) {
