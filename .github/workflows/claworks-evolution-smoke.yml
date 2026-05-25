@@ -1,0 +1,53 @@
+name: ClaWorks Evolution Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:00 UTC Sunday — after evolution_weekly_export (Asia/Shanghai 02:00 ≈ Sat 18:00 UTC)
+    - cron: "0 4 * * 0"
+  pull_request:
+    paths:
+      - "packages/claworks-runtime/src/kernel/autonomy-engine.ts"
+      - "packages/claworks-runtime/src/kernel/evolve-engine.ts"
+      - "packages/claworks-runtime/src/kernel/evolution-*.ts"
+      - "scripts/claworks-evolution-chain-smoke.mjs"
+      - ".github/workflows/claworks-evolution-smoke.yml"
+      - "package.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claworks-evolution-smoke
+  cancel-in-progress: false
+
+jobs:
+  evolution_chain_smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: claworks/claworks-packs
+          ref: main
+          path: claworks-packs
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Evolution chain smoke
+        run: pnpm claworks:evolution:smoke
+        env:
+          CLAWORKS_PRODUCT: "1"
+          CLAWORKS_PACKS_DIR: ${{ github.workspace }}/claworks-packs

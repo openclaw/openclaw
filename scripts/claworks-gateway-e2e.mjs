@@ -2,6 +2,11 @@
 /**
  * Gateway-level E2E for ClaWorks (spawns real `gateway run`, exercises plugin HTTP routes).
  *
+ * Double-register contract: the gateway loads `claworks-robot` twice (HTTP route pass +
+ * full service pass). Runtime + bridge refs live in a process-global store
+ * (`extensions/claworks-robot/runtime-store.ts`, Symbol.for key) so both passes share
+ * one kernel instance. This script asserts `/v1/health` and MCP against that shared runtime.
+ *
  * Usage:
  *   node --import tsx scripts/claworks-gateway-e2e.mjs
  *

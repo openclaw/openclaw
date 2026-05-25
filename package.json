@@ -1370,6 +1370,7 @@
     "android:test:integration": "OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_ANDROID_NODE=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts src/gateway/android-node.capabilities.live.test.ts",
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
+    "audit:product-copy": "node scripts/audit-product-copy.mjs",
     "build": "node scripts/build-all.mjs",
     "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && pnpm plugins:assets:build && pnpm plugins:assets:copy && node --experimental-strip-types scripts/copy-hook-metadata.ts && node --experimental-strip-types scripts/copy-export-html-templates.ts && node --experimental-strip-types scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --experimental-strip-types scripts/write-cli-compat.ts",
@@ -1795,7 +1796,8 @@
     "claworks:runtime:test": "vitest run packages/claworks-runtime",
     "claworks:migrate": "node scripts/claworks-migrate.mjs",
     "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs",
-    "claworks:weak-model-regression": "node --import tsx scripts/claworks-weak-model-regression.mjs"
+    "claworks:weak-model-regression": "node --import tsx scripts/claworks-weak-model-regression.mjs",
+    "claworks:evolution:smoke": "node --import tsx scripts/claworks-evolution-chain-smoke.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.1",
