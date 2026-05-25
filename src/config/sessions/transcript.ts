@@ -353,7 +353,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
             return await appendSessionTranscriptMessage({
               transcriptPath: sessionFile,
               message,
-              idempotencyLookup: explicitIdempotencyKey ? "caller-checked" : "scan",
               config: params.config,
             });
           },
