@@ -50,10 +50,48 @@ const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
+const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
+const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+
+type OllamaStreamCooperativeScheduler = {
+  afterEvent: () => Promise<void>;
+};
+
+function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error("Request was aborted");
+  }
+}
+
+function createOllamaStreamCooperativeScheduler(
+  signal?: AbortSignal,
+): OllamaStreamCooperativeScheduler {
+  let lastYieldedAt = Date.now();
+  let eventsSinceYield = 0;
+  return {
+    async afterEvent() {
+      throwIfOllamaStreamAborted(signal);
+      eventsSinceYield += 1;
+      const now = Date.now();
+      if (
+        eventsSinceYield < OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
+        now - lastYieldedAt < OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
+      ) {
+        return;
+      }
+      eventsSinceYield = 0;
+      lastYieldedAt = now;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      throwIfOllamaStreamAborted(signal);
+    },
+  };
+}
 
 function countMatches(text: string, re: RegExp): number {
   re.lastIndex = 0;
@@ -1155,6 +1193,7 @@ export function createOllamaStreamFn(
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
           const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
+          const cooperativeScheduler = createOllamaStreamCooperativeScheduler(options?.signal);
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
@@ -1275,6 +1314,7 @@ export function createOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader)) {
+            throwIfOllamaStreamAborted(options?.signal);
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta) {
               if (!streamStarted) {
@@ -1327,6 +1367,7 @@ export function createOllamaStreamFn(
               finalResponse = chunk;
               break;
             }
+            await cooperativeScheduler.afterEvent();
           }
 
           if (!finalResponse) {

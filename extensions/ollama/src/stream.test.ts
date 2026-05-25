@@ -249,4 +249,45 @@ describe("createOllamaStreamFn thinking events", () => {
       auditContext: "ollama-stream.chat",
     });
   });
+
+  it("yields to the event loop while processing dense native stream chunks", async () => {
+    const chunks = [
+      ...Array.from({ length: 200 }, (_value, index) => ({
+        model: "qwen3.5",
+        created_at: `2026-01-01T00:00:${String(index % 60).padStart(2, "0")}Z`,
+        message: { role: "assistant" as const, content: "x" },
+        done: false,
+      })),
+      makeOllamaResponse({ content: "" }),
+    ];
+    const body = makeNdjsonBody(chunks);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      {},
+    );
+
+    let timerFired = false;
+    const timerPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve();
+      }, 0);
+    });
+    let yieldedBeforeDone = false;
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      if (timerFired && event.type !== "done") {
+        yieldedBeforeDone = true;
+      }
+    }
+    await timerPromise;
+
+    expect(yieldedBeforeDone).toBe(true);
+  });
 });
