@@ -362,6 +362,30 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
 
+  it("logs duplicate inbound drops before queueing", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const params = createDiscordHandlerParams();
+    const handler = createDiscordMessageHandler(params);
+    const duplicate = createMessageData("m-dup-log");
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+
+    await flushQueueWork();
+
+    const runtimeLog = params.runtime.log as unknown as MockCallSource;
+    expect(
+      mockCalls(runtimeLog).some(
+        ([message]) =>
+          String(message).includes("discord inbound outcome:") &&
+          String(message).includes("outcome=duplicate-before-queue") &&
+          String(message).includes("message=m-dup-log"),
+      ),
+    ).toBe(true);
+  });
+
   it("retries duplicate deliveries after an explicit retryable worker failure", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

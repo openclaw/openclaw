@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "../internal/discord.js";
 import {
@@ -851,7 +852,19 @@ describe("monitorDiscordProvider", () => {
     expect(params?.workerRunTimeoutMs).toBeUndefined();
   });
 
-  it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
+  it("passes the OpenClaw state dir into the Discord message replay guard", async () => {
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const params = getFirstDiscordMessageHandlerParams<{
+      replayStateDir?: string;
+    }>();
+    expect(params?.replayStateDir).toBe(resolveStateDir(process.env));
+  });
+
+  it("treats Discord native command deploy rate limits as non-fatal warnings", async () => {
     const runtime = baseRuntime();
     const request = new Request("https://discord.com/api/v10/applications/commands", {
       method: "PUT",

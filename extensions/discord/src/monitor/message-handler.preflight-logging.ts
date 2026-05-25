@@ -34,3 +34,17 @@ export function logDiscordPreflightInboundSummary(params: {
     `discord: inbound id=${params.messageId} guild=${params.guildId ?? "dm"} channel=${params.channelId} mention=${params.wasMentioned ? "yes" : "no"} type=${params.isDirectMessage ? "dm" : params.isGroupDm ? "group-dm" : "guild"} content=${params.hasContent ? "yes" : "no"}`,
   );
 }
+
+export function logDiscordInboundOutcome(params: {
+  accountId: string;
+  channelId: string;
+  messageId: string;
+  outcome: string;
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  reason?: string;
+}) {
+  logVerbose(
+    `discord inbound outcome: account=${params.accountId} channel=${params.channelId} message=${params.messageId} type=${params.isDirectMessage ? "dm" : params.isGroupDm ? "group-dm" : "guild"} outcome=${params.outcome}${params.reason ? ` reason=${params.reason}` : ""}`,
+  );
+}
