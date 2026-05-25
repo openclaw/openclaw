@@ -3331,14 +3331,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
+            text?: unknown;
             media?: Array<{ path?: string; contentType?: string }>;
           }
         | undefined;
       expect(findUserUpdate()).toBeUndefined();
+      expect(userTurnInput?.text).toBe("edit both");
       expect(userTurnInput?.media).toEqual([
         { path: "/tmp/chat-send-inline.png", contentType: "image/png" },
         { path: "/tmp/offloaded-big.png", contentType: "image/png" },
       ]);
+      expect(userTurnInput?.text).not.toContain("media://");
     });
   });
 

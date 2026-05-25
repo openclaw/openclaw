@@ -2598,7 +2598,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         (media) =>
           media.length > 0
             ? {
-                text: parsedMessage,
+                text: rawMessage,
                 media,
                 timestamp: now,
                 idempotencyKey: `${clientRunId}:user`,
@@ -2728,7 +2728,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 agentId,
                 config: cfg,
                 input: userTurnInput ?? {
-                  text: parsedMessage,
+                  text: rawMessage,
                   media: persistedImages,
                   timestamp: now,
                   idempotencyKey: `${clientRunId}:user`,
