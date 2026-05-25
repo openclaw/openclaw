@@ -578,7 +578,7 @@ class TalkModeManager internal constructor(
       while (true) {
         realtimeSessionId?.let { return@withTimeout it }
         val status = _statusText.value
-        if (!_isEnabled.value && status.startsWith("Talk failed")) {
+        if (!_isEnabled.value && status != "Off") {
           throw IllegalStateException(status)
         }
         delay(100L)

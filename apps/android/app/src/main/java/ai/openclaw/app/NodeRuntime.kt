@@ -515,7 +515,7 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        isConnected = { operatorConnected },
+        isConnected = { _isConnected.value },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -622,7 +622,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      isConnected = { operatorConnected },
+      isConnected = { _isConnected.value },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
