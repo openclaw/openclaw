@@ -188,7 +188,7 @@ describe("gateway status output", () => {
     expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
   });
 
-  it("warns about multiple gateways when same-host reachable probes use different gateway ports", () => {
+  it("does not warn when the same gateway identity is reached through different transport ports", () => {
     const self = {
       host: "gateway-host",
       ip: "192.0.2.10",
@@ -212,12 +212,7 @@ describe("gateway status output", () => {
       discoveryCount: 0,
     });
 
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toStrictEqual({
-      code: "multiple_gateways",
-      message:
-        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
-      targetIds: ["localLoopback", "explicit"],
-    });
+    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
   });
 
   it("warns about multiple gateways when reachable probes report distinct identities", () => {

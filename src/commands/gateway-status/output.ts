@@ -23,32 +23,16 @@ export type GatewayStatusWarning = {
 const noReachableGatewayDiagnostic =
   "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
 
-function gatewayTargetPort(entry: GatewayStatusProbedTarget): string | null {
-  if (entry.target.kind === "sshTunnel") {
-    return String(entry.target.tunnel?.remotePort ?? "");
-  }
-  try {
-    const url = new URL(entry.target.url);
-    return url.port || (url.protocol === "wss:" ? "443" : url.protocol === "ws:" ? "80" : null);
-  } catch {
-    return null;
-  }
-}
-
 function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
   if (!entry.self) {
     return null;
   }
   const host = typeof entry.self.host === "string" ? entry.self.host.trim().toLowerCase() : "";
   const ip = typeof entry.self.ip === "string" ? entry.self.ip.trim().toLowerCase() : "";
-  const port = gatewayTargetPort(entry);
   if (!host && !ip) {
     return null;
   }
-  if (!port) {
-    return null;
-  }
-  return `${host}\0${ip}\0${port}`;
+  return `${host}\0${ip}`;
 }
 
 function hasMultipleReachableGatewayIdentities(reachable: GatewayStatusProbedTarget[]): boolean {
