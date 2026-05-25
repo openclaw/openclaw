@@ -29,6 +29,7 @@ import {
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -822,6 +823,6 @@ export async function runComfyWorkflow(params: {
     assets,
     model: providerModel,
     promptId,
-    outputNodeIds: Array.from(new Set(outputFiles.map((entry) => entry.nodeId))),
+    outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }
