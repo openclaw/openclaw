@@ -2327,6 +2327,7 @@ export async function runEmbeddedAttempt(
         config: params.config,
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
+        userMessageForPersistence: params.userMessageForPersistence,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         missingToolResultText:
           params.model.api === "openai-responses" ||
