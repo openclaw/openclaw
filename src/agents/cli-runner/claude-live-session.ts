@@ -1,8 +1,13 @@
 import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ExecToolConfig } from "../../config/types.tools.js";
+import {
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+  resolveExecApprovalsFromFile,
+} from "../../infra/exec-approvals.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -10,6 +15,7 @@ import {
   type CliOutput,
   type CliStreamingDelta,
 } from "../cli-output.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -57,10 +63,11 @@ type ClaudeLiveControlRequestPolicy = {
   effectivePermissionMode?: string;
 };
 
-// Claude's bypass permission mode disables its native permission prompts entirely;
-// the live bridge must only auto-allow native Bash when the launched Claude is
-// actually in that mode AND the OpenClaw exec policy resolves to full/no-ask.
+// OpenClaw exec policy is authoritative for Claude live native Bash. Keep
+// Claude's launch mode aligned with the effective OpenClaw policy instead of
+// letting raw Claude permission args silently relax or tighten it.
 const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
+const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_PERMISSION_MODE_FLAG = "--permission-mode";
 type ClaudeLiveRunResult = {
   output: CliOutput;
@@ -465,21 +472,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function resolveExecPolicyForClaudeLiveSession(
-  context: PreparedCliRunContext,
-): ExecToolConfig | undefined {
-  const config: OpenClawConfig | undefined = context.params.config;
-  const agentId = context.params.agentId;
-  if (config && agentId) {
-    const agentEntry = config.agents?.list?.find((entry) => entry?.id === agentId);
-    const agentExec = agentEntry?.tools?.exec;
-    if (agentExec) {
-      return agentExec;
-    }
-  }
-  return config?.tools?.exec;
-}
-
 function extractClaudeEffectivePermissionMode(argv: readonly string[]): string | undefined {
   // Scan from the end so the last-set --permission-mode wins, matching how
   // CLI arg precedence works in practice and how
@@ -508,43 +500,58 @@ function resolveClaudeLiveControlRequestPolicy(
   context: PreparedCliRunContext,
   argv?: readonly string[],
 ): ClaudeLiveControlRequestPolicy {
-  const exec = resolveExecPolicyForClaudeLiveSession(context);
-  // Use the same defaults as extensions/anthropic/cli-shared.ts
-  // isOpenClawRequestedYolo (security ?? "full", ask ?? "off") and
-  // src/agents/exec-defaults.ts resolveExecDefaults, so the bridge's view of
-  // "what the user actually granted" matches both the launched Claude
-  // permission mode and the real Bash exec runner.
-  const security: ClaudeLiveControlRequestPolicy["security"] =
-    exec?.security === "deny" || exec?.security === "allowlist" || exec?.security === "full"
-      ? exec.security
-      : "full";
-  const ask: ClaudeLiveControlRequestPolicy["ask"] =
-    exec?.ask === "off" || exec?.ask === "on-miss" || exec?.ask === "always" ? exec.ask : "off";
-  // Effective permission mode: prefer an explicit --permission-mode in argv
-  // (which is how operators override OpenClaw's automatic bypass), and fall
-  // back to what extensions/anthropic/cli-shared.ts:normalizeClaudePermissionArgs
-  // would have inserted for an un-overridden launch. This keeps the bridge's
-  // view of the launched Claude mode in sync with what the backend actually
-  // passes on argv even in callers that constructed argv before normalization.
+  const execDefaults = resolveExecDefaults({
+    cfg: context.params.config,
+    sessionEntry: context.params.sessionEntry,
+    agentId: context.params.agentId,
+    sessionKey: context.params.sessionKey,
+  });
+  const effectiveAgentId = resolveSessionAgentIds({
+    sessionKey: context.params.sessionKey,
+    config: context.params.config,
+    agentId: context.params.agentId,
+  }).sessionAgentId;
+  const approvals = resolveExecApprovalsFromFile({
+    file: loadExecApprovals(),
+    agentId: effectiveAgentId,
+    overrides: {
+      security: execDefaults.security,
+      ask: execDefaults.ask,
+    },
+  });
+  const security: ClaudeLiveControlRequestPolicy["security"] = minSecurity(
+    execDefaults.security,
+    approvals.agent.security,
+  );
+  const ask: ClaudeLiveControlRequestPolicy["ask"] = maxAsk(execDefaults.ask, approvals.agent.ask);
+  // Effective permission mode starts from argv so we can detect when the live
+  // launch needs to be normalized back to OpenClaw's effective exec policy.
   const argvMode = argv ? extractClaudeEffectivePermissionMode(argv) : undefined;
   const synthesizedMode =
     security === "full" && ask === "off" ? CLAUDE_BYPASS_PERMISSION_MODE : undefined;
   const effectivePermissionMode = argvMode ?? synthesizedMode;
-  // Auto-allow native Bash only when the launched Claude is actually in the
-  // bypass-permissions path (no native prompt) AND the OpenClaw exec policy
-  // resolves to full/no-ask. Explicit raw-arg overrides like
-  // --permission-mode default or acceptEdits broaden Claude's native prompting
-  // intentionally; honor that operator intent by routing through deny here.
-  const allowNativeBash =
-    security === "full" &&
-    ask === "off" &&
-    effectivePermissionMode === CLAUDE_BYPASS_PERMISSION_MODE;
+  const allowNativeBash = security === "full" && ask === "off";
   return {
     allowNativeBash,
     security,
     ask,
     ...(effectivePermissionMode ? { effectivePermissionMode } : {}),
   };
+}
+
+function shouldForceClaudeLivePermissionPrompt(policy: ClaudeLiveControlRequestPolicy): boolean {
+  return (
+    (policy.security !== "full" || policy.ask !== "off") &&
+    policy.effectivePermissionMode !== CLAUDE_DEFAULT_PERMISSION_MODE
+  );
+}
+
+function shouldForceClaudeLiveBypass(policy: ClaudeLiveControlRequestPolicy): boolean {
+  return (
+    policy.security === "full" &&
+    policy.ask === "off" &&
+    policy.effectivePermissionMode !== CLAUDE_BYPASS_PERMISSION_MODE
+  );
 }
 
 function writeClaudeLiveControlResponse(
@@ -585,7 +592,7 @@ function buildClaudeLivePermissionResult(
     : "";
   const message =
     toolName === "Bash"
-      ? `OpenClaw denied Claude native Bash because the effective exec policy is security=${session.controlRequestPolicy.security}, ask=${session.controlRequestPolicy.ask}${permissionModeNote}; this bridge only auto-allows Bash when OpenClaw exec is full/no-ask and Claude is in bypassPermissions mode.`
+      ? `OpenClaw denied Claude native Bash because the effective exec policy is security=${session.controlRequestPolicy.security}, ask=${session.controlRequestPolicy.ask}${permissionModeNote}; this bridge only auto-allows Bash when OpenClaw exec is full/no-ask.`
       : `OpenClaw denied Claude native ${toolName || "tool"}; this bridge only maps Claude native Bash permission prompts to OpenClaw exec policy. Use OpenClaw MCP tools instead.`;
   return {
     behavior: "deny",
@@ -1036,15 +1043,25 @@ export async function runClaudeLiveSessionTurn(params: {
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
-  const argv = [
-    params.context.preparedBackend.backend.command,
-    ...buildClaudeLiveArgs({
-      args: params.args,
-      backend: params.context.preparedBackend.backend,
-      systemPrompt: params.context.systemPrompt,
-      useResume: params.useResume,
-    }),
-  ];
+  let liveArgs = buildClaudeLiveArgs({
+    args: params.args,
+    backend: params.context.preparedBackend.backend,
+    systemPrompt: params.context.systemPrompt,
+    useResume: params.useResume,
+  });
+  let argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  const launchPolicy = resolveClaudeLiveControlRequestPolicy(params.context, argv);
+  if (shouldForceClaudeLivePermissionPrompt(launchPolicy)) {
+    liveArgs = upsertArgValue(
+      liveArgs,
+      CLAUDE_PERMISSION_MODE_FLAG,
+      CLAUDE_DEFAULT_PERMISSION_MODE,
+    );
+    argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  } else if (shouldForceClaudeLiveBypass(launchPolicy)) {
+    liveArgs = upsertArgValue(liveArgs, CLAUDE_PERMISSION_MODE_FLAG, CLAUDE_BYPASS_PERMISSION_MODE);
+    argv = [params.context.preparedBackend.backend.command, ...liveArgs];
+  }
   const fingerprint = buildClaudeLiveFingerprint({
     context: params.context,
     argv,
