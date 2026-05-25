@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
@@ -326,6 +327,7 @@ function createChannelPlugin(params: {
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
   describeMessageTool?: DescribeMessageTool;
+  message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
   return {
@@ -343,6 +345,7 @@ function createChannelPlugin(params: {
       listAccountIds: () => ["default"],
       resolveAccount: () => ({}),
     },
+    ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
     actions: {
       describeMessageTool:
@@ -785,6 +788,47 @@ describe("message tool secret scoping", () => {
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
     expect(firstRunMessageActionInput()?.cfg).toBe(resolvedConfig);
+  });
+});
+
+describe("message tool delivery mode schema", () => {
+  it("hides bestEffort when required durable delivery is not available", () => {
+    const defaultTool = createMessageTool();
+    const scopedTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+
+    expect(getToolProperties(defaultTool).bestEffort).toBeUndefined();
+    expect(getToolProperties(scopedTool).bestEffort).toBeUndefined();
+  });
+
+  it("exposes bestEffort only for channels that can reconcile unknown sends", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+      actions: ["send"],
+      message: {
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend: async () => ({ status: "not_sent" }),
+        },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const bestEffort = getToolProperties(tool).bestEffort as
+      | { description?: string; type?: string }
+      | undefined;
+
+    expect(bestEffort?.type).toBe("boolean");
+    expect(bestEffort?.description).toContain("required durable delivery");
   });
 });
 
