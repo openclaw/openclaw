@@ -1,8 +1,26 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
+const bundledRuntimeFragments = (pluginDir) => [
+  `/dist/extensions/${pluginDir}`,
+  `/dist-runtime/extensions/${pluginDir}`,
+];
+
+function resolveStateDir() {
+  if (process.env.OPENCLAW_STATE_DIR) {
+    return process.env.OPENCLAW_STATE_DIR;
+  }
+  return path.join(process.env.HOME || os.homedir(), ".openclaw");
+}
+
+function pathReferencesBundledRuntime(value, pluginDir) {
+  const normalized = normalizePathForProbe(value);
+  return bundledRuntimeFragments(pluginDir).some((fragment) => normalized.includes(fragment));
+}
 
 function resolveOpenClawEntry() {
   if (process.env.OPENCLAW_ENTRY) {
@@ -109,8 +127,9 @@ async function selectedManifestEntries() {
 }
 
 function assertInstalled(pluginId, pluginDir, requiresConfig) {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const stateDir = resolveStateDir();
+  const configPath = path.join(stateDir, "openclaw.json");
+  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = readJson(configPath);
   const index = readJson(indexPath);
   const records = index.installRecords ?? index.records ?? {};
@@ -125,23 +144,15 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
   }
   if (
     typeof record.sourcePath !== "string" ||
-    ![`/dist/extensions/${pluginDir}`, `/dist-runtime/extensions/${pluginDir}`].some((fragment) =>
-      record.sourcePath.includes(fragment),
-    )
+    !pathReferencesBundledRuntime(record.sourcePath, pluginDir)
   ) {
     throw new Error(`unexpected bundled source path for ${pluginId}: ${record.sourcePath}`);
   }
-  if (record.installPath !== record.sourcePath) {
+  if (normalizePathForProbe(record.installPath) !== normalizePathForProbe(record.sourcePath)) {
     throw new Error(`bundled install path should equal source path for ${pluginId}`);
   }
   const paths = config.plugins?.load?.paths || [];
-  if (
-    paths.some((entry) =>
-      [`/dist/extensions/${pluginDir}`, `/dist-runtime/extensions/${pluginDir}`].some(
-        (fragment) => String(entry).includes(fragment),
-      ),
-    )
-  ) {
+  if (paths.some((entry) => pathReferencesBundledRuntime(entry, pluginDir))) {
     throw new Error(`config load paths should not include bundled install path for ${pluginId}`);
   }
   if (requiresConfig && config.plugins?.entries?.[pluginId]?.enabled === true) {
@@ -162,8 +173,9 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
 }
 
 function assertUninstalled(pluginId, pluginDir) {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const stateDir = resolveStateDir();
+  const configPath = path.join(stateDir, "openclaw.json");
+  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
   const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const records = index.installRecords ?? index.records ?? {};
@@ -171,13 +183,7 @@ function assertUninstalled(pluginId, pluginDir) {
     throw new Error(`install record still present after uninstall for ${pluginId}`);
   }
   const paths = config.plugins?.load?.paths || [];
-  if (
-    paths.some((entry) =>
-      [`/dist/extensions/${pluginDir}`, `/dist-runtime/extensions/${pluginDir}`].some(
-        (fragment) => String(entry).includes(fragment),
-      ),
-    )
-  ) {
+  if (paths.some((entry) => pathReferencesBundledRuntime(entry, pluginDir))) {
     throw new Error(`load path still present after uninstall for ${pluginId}`);
   }
   if (config.plugins?.entries?.[pluginId]) {
@@ -189,7 +195,7 @@ function assertUninstalled(pluginId, pluginDir) {
   if ((config.plugins?.deny || []).includes(pluginId)) {
     throw new Error(`denylist still contains ${pluginId} after uninstall`);
   }
-  const managedPath = path.join(process.env.HOME, ".openclaw", "extensions", pluginId);
+  const managedPath = path.join(stateDir, "extensions", pluginId);
   if (fs.existsSync(managedPath)) {
     throw new Error(
       `managed install directory unexpectedly exists for bundled plugin ${pluginId}: ${managedPath}`,
