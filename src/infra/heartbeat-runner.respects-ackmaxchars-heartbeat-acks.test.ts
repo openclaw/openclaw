@@ -1,20 +1,45 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   type HeartbeatReplySpy,
   seedMainSessionStore,
+  seedSessionStore,
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+
+type TranscriptAppendParams = {
+  agentId?: string;
+  idempotencyKey?: string;
+  sessionKey?: string;
+  text?: string;
+};
+
+const transcriptMocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async (_params: TranscriptAppendParams) => ({
+    ok: true,
+    sessionFile: "test-session.jsonl",
+    messageId: "message-1",
+  })),
+}));
+
+vi.mock("../config/sessions/transcript.runtime.js", () => ({
+  appendAssistantMessageToSessionTranscript:
+    transcriptMocks.appendAssistantMessageToSessionTranscript,
+}));
 
 installHeartbeatRunnerTestRuntime();
 
 describe("runHeartbeatOnce ack handling", () => {
   const WHATSAPP_GROUP = "120363140186826074@g.us";
   const TELEGRAM_GROUP = "-1001234567890";
+
+  beforeEach(() => {
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+  });
 
   function createHeartbeatConfig(params: {
     tmpDir: string;
@@ -261,6 +286,49 @@ describe("runHeartbeatOnce ack handling", () => {
         text: "HEARTBEAT_OK",
         cfg,
       });
+    });
+  });
+
+  it("mirrors delivered heartbeat notifications into the active chat transcript", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+      const sessionKey = "agent:main:whatsapp:direct:test-user";
+      await seedSessionStore(storePath, sessionKey, {
+        sessionId: "direct-sid",
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "test-user",
+      });
+
+      replySpy.mockResolvedValue({ text: "Deepali messaged about Zane." });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "test-user",
+        "Deepali messaged about Zane.",
+        expect.any(Object),
+      );
+      expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+      const appendCall =
+        transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls[0]?.[0];
+      expect(appendCall).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        text: "Deepali messaged about Zane.",
+      });
+      expect(appendCall?.idempotencyKey).toMatch(/^heartbeat-delivery-mirror:v1:/);
     });
   });
 

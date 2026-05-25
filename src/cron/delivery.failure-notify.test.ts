@@ -36,7 +36,8 @@ vi.mock("../logging.js", () => ({
   })),
 }));
 
-const { sendFailureNotificationAnnounce } = await import("./delivery.js");
+const { sendCronAnnouncePayloadStrict, sendFailureNotificationAnnounce } =
+  await import("./delivery.js");
 
 type DeliveryRequest = {
   abortSignal?: unknown;
@@ -46,6 +47,12 @@ type DeliveryRequest = {
   channel?: string;
   deps?: unknown;
   identity?: unknown;
+  mirror?: {
+    agentId?: string;
+    idempotencyKey?: string;
+    sessionKey?: string;
+    text?: string;
+  };
   payloads?: unknown;
   session?: unknown;
   threadId?: number;
@@ -117,6 +124,175 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.bestEffort).toBe(false);
     expect(deliveryRequest.deps).toEqual({ kind: "deps" });
     expect(deliveryRequest.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("mirrors successful announces into custom delivery session transcripts", async () => {
+    const abortController = new AbortController();
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: {
+        channel: "telegram",
+        sessionKey: "agent:main:session:daily-digest",
+      },
+      message: "Cron summary",
+      abortSignal: abortController.signal,
+    });
+
+    const [deliveryRequest] = mocks.deliverOutboundPayloads.mock.calls[0] as [
+      {
+        mirror?: {
+          agentId?: string;
+          idempotencyKey?: string;
+          sessionKey?: string;
+          text?: string;
+        };
+      },
+    ];
+    expect(deliveryRequest.mirror).toMatchObject({
+      sessionKey: "agent:main:session:daily-digest",
+      agentId: "main",
+      text: "Cron summary",
+    });
+    expect(deliveryRequest.mirror?.idempotencyKey).toMatch(/^cron-announce-mirror:v1:job-1:/);
+  });
+
+  it.each([
+    {
+      name: "legacy main alias",
+      agentId: "ops",
+      cfg: { session: { mainKey: "work" } },
+      sessionKey: "main",
+      expected: "agent:ops:work",
+    },
+    {
+      name: "canonical main alias",
+      agentId: "ops",
+      cfg: { session: { mainKey: "work" } },
+      sessionKey: "agent:ops:main",
+      expected: "agent:ops:work",
+    },
+    {
+      name: "unscoped custom session alias",
+      agentId: "main",
+      cfg: {},
+      sessionKey: "daily-digest",
+      expected: "agent:main:daily-digest",
+    },
+  ])(
+    "canonicalizes cron mirror session keys for $name",
+    async ({ agentId, cfg, sessionKey, expected }) => {
+      const abortController = new AbortController();
+
+      await sendCronAnnouncePayloadStrict({
+        deps: {} as never,
+        cfg: cfg as never,
+        agentId,
+        jobId: "job-1",
+        target: {
+          channel: "telegram",
+          sessionKey,
+        },
+        message: "Cron summary",
+        abortSignal: abortController.signal,
+      });
+
+      const deliveryRequest = firstDeliveryRequest();
+      expect(deliveryRequest.mirror).toMatchObject({
+        sessionKey: expected,
+        agentId,
+        text: "Cron summary",
+      });
+    },
+  );
+
+  it("canonicalizes failure alert mirror session keys with the configured main alias", async () => {
+    const cfg = { session: { mainKey: "work" } };
+
+    await sendFailureNotificationAnnounce(
+      {} as never,
+      cfg as never,
+      "ops",
+      "job-1",
+      {
+        channel: "telegram",
+        sessionKey: "main",
+      },
+      "Cron failed",
+    );
+
+    const deliveryRequest = firstDeliveryRequest();
+    expect(deliveryRequest.mirror).toMatchObject({
+      sessionKey: "agent:ops:work",
+      agentId: "ops",
+      text: "Cron failed",
+    });
+  });
+
+  it("skips mirrors for routed peer session keys to avoid active chat lock races", async () => {
+    const abortController = new AbortController();
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: {
+        channel: "telegram",
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+      },
+      message: "Cron summary",
+      abortSignal: abortController.signal,
+    });
+
+    const deliveryRequest = firstDeliveryRequest();
+    expect(deliveryRequest.mirror).toBeUndefined();
+  });
+
+  it("skips mirrors for legacy dm routed peer session keys", async () => {
+    const abortController = new AbortController();
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: {
+        channel: "telegram",
+        sessionKey: "agent:main:telegram:dm:123:thread:99",
+      },
+      message: "Cron summary",
+      abortSignal: abortController.signal,
+    });
+
+    const deliveryRequest = firstDeliveryRequest();
+    expect(deliveryRequest.mirror).toBeUndefined();
+  });
+
+  it.each([
+    "agent:main:telegram:group:-100123:topic:77",
+    "agent:main:slack:channel:general:thread:1699999999.0001",
+  ])("skips mirrors for routed group/channel session key %s", async (sessionKey) => {
+    const abortController = new AbortController();
+
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: {
+        channel: "telegram",
+        sessionKey,
+      },
+      message: "Cron summary",
+      abortSignal: abortController.signal,
+    });
+
+    const deliveryRequest = firstDeliveryRequest();
+    expect(deliveryRequest.mirror).toBeUndefined();
   });
 
   it("uses sessionKey for delivery-target resolution and outbound context", async () => {

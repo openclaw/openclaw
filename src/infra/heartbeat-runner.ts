@@ -160,6 +160,77 @@ function loadHeartbeatRunnerRuntime() {
   return heartbeatRunnerRuntimePromise;
 }
 
+function normalizeHeartbeatMirrorMediaUrls(payloads: readonly ReplyPayload[]): string[] {
+  return payloads.flatMap((payload) => [
+    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
+      ? [payload.mediaUrl.trim()]
+      : []),
+    ...(Array.isArray(payload.mediaUrls)
+      ? payload.mediaUrls
+          .filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+          .map((url) => url.trim())
+      : []),
+  ]);
+}
+
+function resolveHeartbeatMirrorText(payloads: readonly ReplyPayload[]): string | undefined {
+  const text = payloads
+    .map((payload) => (typeof payload.text === "string" ? payload.text.trim() : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function buildHeartbeatMirrorIdempotencyKey(params: {
+  runSessionKey: string;
+  sessionKey: string;
+  startedAt: number;
+  text?: string;
+  mediaUrls: readonly string[];
+}): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        params.runSessionKey,
+        params.sessionKey,
+        params.startedAt,
+        params.text ?? "",
+        params.mediaUrls,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 24);
+  return `heartbeat-delivery-mirror:v1:${params.runSessionKey}:${params.startedAt}:${digest}`;
+}
+
+function buildHeartbeatDeliveryMirror(params: {
+  agentId: string;
+  sessionKey: string;
+  runSessionKey: string;
+  startedAt: number;
+  payloads: readonly ReplyPayload[];
+}) {
+  const text = resolveHeartbeatMirrorText(params.payloads);
+  const mediaUrls = normalizeHeartbeatMirrorMediaUrls(params.payloads);
+  if (!text && mediaUrls.length === 0) {
+    return undefined;
+  }
+  return {
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    idempotencyKey: buildHeartbeatMirrorIdempotencyKey({
+      runSessionKey: params.runSessionKey,
+      sessionKey: params.sessionKey,
+      startedAt: params.startedAt,
+      text,
+      mediaUrls,
+    }),
+  };
+}
+
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 
 function hasQueuedWorkInLanes(
@@ -1722,14 +1793,22 @@ export async function runHeartbeatOnce(opts: {
         return false;
       }
     }
+    const heartbeatOkPayloads = [{ text: resolveHeartbeatOkText() }];
     const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
       accountId: delivery.accountId,
       threadId: delivery.threadId,
-      payloads: [{ text: resolveHeartbeatOkText() }],
+      payloads: heartbeatOkPayloads,
       session: outboundSession,
+      mirror: buildHeartbeatDeliveryMirror({
+        agentId,
+        sessionKey,
+        runSessionKey,
+        startedAt,
+        payloads: heartbeatOkPayloads,
+      }),
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
@@ -2002,6 +2081,17 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    const deliveryPayloads = [
+      ...reasoningPayloads,
+      ...(shouldSkipMain
+        ? []
+        : [
+            {
+              text: normalized.text,
+              mediaUrls,
+            },
+          ]),
+    ];
     const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
@@ -2009,17 +2099,14 @@ export async function runHeartbeatOnce(opts: {
       accountId: deliveryAccountId,
       session: outboundSession,
       threadId: delivery.threadId,
-      payloads: [
-        ...reasoningPayloads,
-        ...(shouldSkipMain
-          ? []
-          : [
-              {
-                text: normalized.text,
-                mediaUrls,
-              },
-            ]),
-      ],
+      payloads: deliveryPayloads,
+      mirror: buildHeartbeatDeliveryMirror({
+        agentId,
+        sessionKey,
+        runSessionKey,
+        startedAt,
+        payloads: deliveryPayloads,
+      }),
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
