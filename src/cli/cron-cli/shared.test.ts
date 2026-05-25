@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  handleCronCliError,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -46,6 +47,110 @@ function createBaseJob(overrides: Partial<CronJob>): CronJob {
     ...overrides,
   } as CronJob;
 }
+
+function captureDefaultRuntimeOutput() {
+  const errors: string[] = [];
+  const json: unknown[] = [];
+  const errorSpy = vi
+    .spyOn(defaultRuntime, "error")
+    .mockImplementation((...args) => errors.push(args.map(String).join(" ")));
+  const writeJsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+    json.push(value);
+  });
+  const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+  return {
+    errors,
+    json,
+    exitSpy,
+    restore: () => {
+      errorSpy.mockRestore();
+      writeJsonSpy.mockRestore();
+      exitSpy.mockRestore();
+    },
+  };
+}
+
+describe("handleCronCliError", () => {
+  it("renders scope-upgrade pairing guidance for human output", () => {
+    const capture = captureDefaultRuntimeOutput();
+    try {
+      handleCronCliError(
+        new Error(
+          [
+            "gateway closed (1008): pairing required: device is asking for more scopes than currently approved (requestId: req-123)",
+            "Gateway target: ws://127.0.0.1:18789",
+          ].join("\n"),
+        ),
+      );
+
+      const output = capture.errors.join("\n");
+      expect(output).toContain("Gateway scope upgrade pending approval.");
+      expect(output).toContain("openclaw devices approve req-123");
+      expect(output).toContain("openclaw devices list");
+      expect(capture.exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it("keeps scope-upgrade details machine-readable for JSON output", () => {
+    const capture = captureDefaultRuntimeOutput();
+    try {
+      const err = Object.assign(new Error("scope upgrade pending approval"), {
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "scope-upgrade",
+          requestId: "req-json",
+          requestedScopes: ["operator.admin"],
+          approvedScopes: ["operator.write"],
+        },
+      });
+
+      handleCronCliError(err, { json: true });
+
+      expect(capture.errors).toEqual([]);
+      expect(capture.json).toEqual([
+        {
+          ok: false,
+          error: {
+            type: "gateway_pairing_required",
+            message: "scope upgrade pending approval",
+            reason: "scope-upgrade",
+            requestId: "req-json",
+            requestedScopes: ["operator.admin"],
+            approvedScopes: ["operator.write"],
+            approveCommand: "openclaw devices approve req-json",
+            listCommand: "openclaw devices list",
+          },
+        },
+      ]);
+      expect(capture.exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it("keeps generic cron failures machine-readable for JSON output", () => {
+    const capture = captureDefaultRuntimeOutput();
+    try {
+      handleCronCliError(new Error("invalid cron expression"), { json: true });
+
+      expect(capture.errors).toEqual([]);
+      expect(capture.json).toEqual([
+        {
+          ok: false,
+          error: {
+            type: "cron_cli_error",
+            message: "invalid cron expression",
+          },
+        },
+      ]);
+      expect(capture.exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      capture.restore();
+    }
+  });
+});
 
 describe("printCronList", () => {
   beforeEach(() => {

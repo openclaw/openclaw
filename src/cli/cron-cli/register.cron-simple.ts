@@ -140,7 +140,7 @@ function registerCronToggleCommand(params: {
           printCronJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -160,7 +160,7 @@ export function registerCronSimpleCommands(cron: Command) {
           const res = await callGatewayFromCli("cron.remove", opts, { id });
           printCronJson(res);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -188,7 +188,7 @@ export function registerCronSimpleCommands(cron: Command) {
           const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
           printCronJson(res);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -211,7 +211,7 @@ export function registerCronSimpleCommands(cron: Command) {
           }
           printCronShow(job, defaultRuntime, { deliveryPreview });
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -235,7 +235,7 @@ export function registerCronSimpleCommands(cron: Command) {
           });
           printCronJson(res);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -291,7 +291,7 @@ export function registerCronSimpleCommands(cron: Command) {
           printCronJson(res);
           defaultRuntime.exit(result?.ok && (result?.ran || result?.enqueued) ? 0 : 1);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );

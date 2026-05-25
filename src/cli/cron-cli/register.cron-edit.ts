@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -14,6 +13,7 @@ import {
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  handleCronCliError,
   parseCronToolsAllow,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -407,8 +407,7 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+          handleCronCliError(err, opts);
         }
       }),
   );

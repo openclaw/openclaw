@@ -162,11 +162,20 @@ describe("gateway tool defaults", () => {
 
   it("uses admin scope only for admin methods", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("config.set", {}, { path: "commands.enabled", value: true });
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("config.set");
+    expect(call.params).toEqual({ path: "commands.enabled", value: true });
+    expect(call.scopes).toEqual(["operator.admin"]);
+  });
+
+  it("uses write scope for cron mutations", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("cron.add", {}, { id: "job-1" });
     const call = capturedGatewayCall();
     expect(call.method).toBe("cron.add");
     expect(call.params).toEqual({ id: "job-1" });
-    expect(call.scopes).toEqual(["operator.admin"]);
+    expect(call.scopes).toEqual(["operator.write"]);
   });
 
   it("derives plugin session action scopes from call params", async () => {

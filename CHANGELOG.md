@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/cron: request `operator.write` for cron mutations and print exact device-approval recovery commands for scope-upgrade failures instead of raw Gateway transport errors.
 - Scripts: remove stale Knip unused-file allowlist entries so the dead-code gate fails only on current findings.
 - Tests: normalize bundled plugin lifecycle probe paths and state-root lookup so native Windows release sweeps accept valid packaged plugin installs.
 - Config: keep benign legacy metadata write anomalies out of default doctor and config command output while preserving explicit anomaly logging for diagnostics.
