@@ -109,7 +109,13 @@ export type ImageDescriptionResult = {
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
-  transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
-  describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
-  describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
+  transcribeAudio?: (
+    req: AudioTranscriptionRequest,
+  ) => Promise<AudioTranscriptionResult>;
+  describeVideo?: (
+    req: VideoDescriptionRequest,
+  ) => Promise<VideoDescriptionResult>;
+  describeImage?: (
+    req: ImageDescriptionRequest,
+  ) => Promise<ImageDescriptionResult>;
 };

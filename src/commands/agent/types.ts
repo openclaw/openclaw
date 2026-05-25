@@ -84,7 +84,10 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
 };
 
-export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
+export type AgentCommandIngressOpts = Omit<
+  AgentCommandOpts,
+  "senderIsOwner"
+> & {
   /** Ingress callsites must always pass explicit owner authorization state. */
   senderIsOwner: boolean;
 };
