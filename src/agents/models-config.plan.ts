@@ -111,6 +111,7 @@ function resolveProvidersForMode(params: {
 
 function stripPlaintextProviderApiKeys(
   providers: Record<string, ProviderConfig>,
+  options: { secretRefManagedProviders?: ReadonlySet<string> } = {},
 ): Record<string, ProviderConfig> {
   let mutated = false;
   const nextProviders: Record<string, ProviderConfig> = {};
@@ -119,7 +120,12 @@ function stripPlaintextProviderApiKeys(
       nextProviders[providerKey] = provider;
       continue;
     }
-    if (typeof provider.apiKey === "string" && isNonSecretApiKeyMarker(provider.apiKey)) {
+    const isSecretRefManagedProvider = options.secretRefManagedProviders?.has(providerKey.trim());
+    if (
+      typeof provider.apiKey === "string" &&
+      provider.apiKey.trim() &&
+      (isNonSecretApiKeyMarker(provider.apiKey) || isSecretRefManagedProvider)
+    ) {
       nextProviders[providerKey] = provider;
       continue;
     }
@@ -231,7 +237,9 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
       manifestPlugins,
     }) ?? providers;
-  const promptSafeProviders = stripPlaintextProviderApiKeys(normalizedProviders);
+  const promptSafeProviders = stripPlaintextProviderApiKeys(normalizedProviders, {
+    secretRefManagedProviders,
+  });
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
@@ -250,7 +258,9 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
   const compatProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
-  const finalProviders = stripPlaintextProviderApiKeys(compatProviders);
+  const finalProviders = stripPlaintextProviderApiKeys(compatProviders, {
+    secretRefManagedProviders,
+  });
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

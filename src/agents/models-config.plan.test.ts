@@ -14,6 +14,7 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 vi.mock("../plugins/provider-runtime.js", () => ({
   applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));

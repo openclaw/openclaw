@@ -475,7 +475,16 @@ describe("models-config write serialization", () => {
         )}\n`,
       }));
 
-      await ensureOpenClawModelsJson({}, agentDir);
+      await ensureOpenClawModelsJson(
+        {
+          env: {
+            vars: {
+              LITELLM_KEY: "sk-resolved-from-env",
+            },
+          },
+        },
+        agentDir,
+      );
 
       const modelsJson = JSON.parse(
         await fs.readFile(path.join(agentDir, "models.json"), "utf8"),

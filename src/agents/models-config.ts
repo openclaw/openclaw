@@ -136,6 +136,35 @@ function resolveProviderCatalog(value: unknown): Record<string, unknown> {
   return value.providers;
 }
 
+function stripBlankProviderApiKeysFromModelsJsonContents(contents: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents) as unknown;
+  } catch {
+    return contents;
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.providers)) {
+    return contents;
+  }
+
+  let mutated = false;
+  const nextProviders: Record<string, unknown> = {};
+  for (const [providerKey, provider] of Object.entries(parsed.providers)) {
+    if (isRecord(provider) && typeof provider.apiKey === "string" && !provider.apiKey.trim()) {
+      const { apiKey: _apiKey, ...providerWithoutBlankApiKey } = provider;
+      nextProviders[providerKey] = providerWithoutBlankApiKey;
+      mutated = true;
+      continue;
+    }
+    nextProviders[providerKey] = provider;
+  }
+
+  if (!mutated) {
+    return contents;
+  }
+  return `${JSON.stringify({ ...parsed, providers: nextProviders }, null, 2)}\n`;
+}
+
 function resolveMigratableProviderApiKey(provider: unknown): string | undefined {
   if (!isRecord(provider) || typeof provider.apiKey !== "string") {
     return undefined;
@@ -344,20 +373,19 @@ export async function ensureOpenClawModelsJson(
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
+  const explicitAgentDir = agentDirOverride?.trim() || undefined;
   const workspaceDir =
     options.workspaceDir ??
-    (agentDirOverride?.trim()
-      ? undefined
-      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+    (explicitAgentDir ? undefined : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
       config: cfg,
       env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
-      allowWorkspaceScopedCurrent: workspaceDir === undefined,
+      allowWorkspaceScopedCurrent: workspaceDir === undefined && explicitAgentDir === undefined,
     });
-  const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
+  const agentDir = explicitAgentDir ?? resolveDefaultAgentDir(cfg);
   const targetPath = path.join(agentDir, "models.json");
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,
@@ -417,15 +445,21 @@ export async function ensureOpenClawModelsJson(
       return { fingerprint, result: { agentDir, wrote: false } };
     }
 
+    const writeContents = stripBlankProviderApiKeysFromModelsJsonContents(plan.contents);
+    if (writeContents === existingModelsFile.raw) {
+      await ensureModelsFileModeForModelsJson(targetPath);
+      return { fingerprint, result: { agentDir, wrote: false } };
+    }
+
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     await migrateExistingModelsJsonOnlyProviderApiKeys({
       cfg,
       agentDir,
       env,
       existingParsed: existingModelsFile.parsed,
-      nextContents: plan.contents,
+      nextContents: writeContents,
     });
-    await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
+    await writeModelsFileAtomicForModelsJson(targetPath, writeContents);
     await ensureModelsFileModeForModelsJson(targetPath);
     return { fingerprint, result: { agentDir, wrote: true } };
   });
