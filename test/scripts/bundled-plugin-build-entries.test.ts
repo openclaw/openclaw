@@ -144,6 +144,18 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
 
+  it("packs channel-broker when registered as a bundled channel", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+    const excludedDirs = collectRootPackageExcludedExtensionDirs();
+
+    expect(entries["extensions/channel-broker/index"]).toBe("extensions/channel-broker/index.ts");
+    expect(excludedDirs.has("channel-broker")).toBe(false);
+    expect(artifacts).toContain("dist/extensions/channel-broker/openclaw.plugin.json");
+    expect(artifacts).toContain("dist/extensions/channel-broker/package.json");
+    expect(artifacts).toContain("dist/extensions/channel-broker/index.js");
+  });
+
   it("keeps private QA bundles out of required npm pack artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 

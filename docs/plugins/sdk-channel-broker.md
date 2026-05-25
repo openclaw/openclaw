@@ -46,9 +46,11 @@ import type {
 } from "openclaw/plugin-sdk/channel-broker";
 ```
 
-V1 uses signed inbound HTTP webhooks and outbound HTTP calls. WebSocket and
-provider polling transports are intentionally deferred so providers can first
-prove the stable message lifecycle contract.
+V1 defines outbound HTTP calls and a signed inbound HTTP webhook envelope. The
+Phase 1 bundled plugin sends outbound provider requests; the signed inbound route
+lands with the conformance layer before platform migration proofs depend on it.
+WebSocket and provider polling transports are intentionally deferred so
+providers can first prove the stable message lifecycle contract.
 
 ## Outbound request
 
