@@ -10,6 +10,7 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
+const persistUserTurnTranscriptMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
@@ -352,6 +353,15 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("../../agents/cli-runner.js", () => ({
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
+  vi.doMock("../../sessions/user-turn-transcript.js", async () => {
+    const actual = await vi.importActual<typeof import("../../sessions/user-turn-transcript.js")>(
+      "../../sessions/user-turn-transcript.js",
+    );
+    return {
+      ...actual,
+      persistUserTurnTranscript: (params: unknown) => persistUserTurnTranscriptMock(params),
+    };
+  });
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
@@ -461,6 +471,11 @@ beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   runCliAgentMock.mockReset();
+  persistUserTurnTranscriptMock.mockReset();
+  persistUserTurnTranscriptMock.mockResolvedValue({
+    message: { role: "user", content: [{ type: "text", text: "hello" }] },
+    sessionFile: "/tmp/session.jsonl",
+  });
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockImplementation(
     async (params: {
@@ -800,6 +815,7 @@ describe("createFollowupRunner runtime config", () => {
         originatingChannel: "telegram",
         run: {
           config: runtimeConfig,
+          sessionId: "session-cli-followup",
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
@@ -815,6 +831,24 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(persistUserTurnTranscriptMock).toHaveBeenCalledOnce();
+    const persistenceCall = requireLastMockCallArg(
+      persistUserTurnTranscriptMock,
+      "persist user turn transcript",
+    );
+    expect(persistenceCall).toMatchObject({
+      sessionId: "session-cli-followup",
+      sessionKey: "main",
+      sessionEntry,
+      sessionStore,
+      agentId: "agent",
+      cwd: "/tmp",
+      config: runtimeConfig,
+      updateMode: "inline",
+    });
+    expect(persistenceCall.input).toMatchObject({
+      text: "hello",
+    });
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
