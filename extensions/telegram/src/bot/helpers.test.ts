@@ -754,6 +754,36 @@ describe("hasBotMention", () => {
     ).toBe(true);
   });
 
+  it("matches bot command entities addressed to this bot", () => {
+    const text = "/deploy@gaian check status";
+
+    expect(
+      hasBotMention(
+        {
+          text,
+          entities: [{ type: "bot_command", offset: 0, length: "/deploy@gaian".length }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match bot command entities addressed to another bot", () => {
+    const text = "/deploy@other_bot check status";
+
+    expect(
+      hasBotMention(
+        {
+          text,
+          entities: [{ type: "bot_command", offset: 0, length: "/deploy@other_bot".length }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
+  });
+
   it("matches mention followed by punctuation", () => {
     expect(
       hasBotMention(
