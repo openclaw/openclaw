@@ -1718,6 +1718,36 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it("accepts top-level broker webhooks for configured default provider ids", async () => {
+    const body = inboundBody();
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            defaultProviderId: "acme",
+            baseUrl: "https://broker.example.test",
+            signingSecret: "broker-secret",
+            allowFrom: ["user-1"],
+          },
+        },
+      },
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(receiveInboundEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: expect.objectContaining({ providerId: "acme" }),
+      }),
+    );
+  });
+
   it("rejects unlisted inbound provider ids before inheriting top-level credentials", async () => {
     const body = inboundBody("user-1", { providerId: "rogue-provider" });
     const receiveInboundEvent = vi.fn();

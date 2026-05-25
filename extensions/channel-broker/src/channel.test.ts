@@ -610,6 +610,53 @@ describe("channel-broker plugin", () => {
     expect(attachment).not.toHaveProperty("url");
   });
 
+  it("treats explicit thread targets as channels even when the account defaults to direct", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-thread-default-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["1716500000.000100"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-thread-default-1",
+      sendOutboundRequest,
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                defaultConversationType: "direct",
+              },
+            },
+          },
+        },
+      },
+      to: "slack:C123?threadId=1716500000.000001",
+      text: "thread proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          conversation: {
+            id: "C123",
+            type: "channel",
+            threadId: "1716500000.000001",
+          },
+        }),
+      }),
+    );
+  });
+
   it("marks direct audio media sends as voice in provider payloads and receipts", async () => {
     const sendOutboundRequest = vi.fn(async () =>
       createBrokerReceipt({
