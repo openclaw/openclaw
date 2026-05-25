@@ -1303,7 +1303,7 @@ describe("sessions tools", () => {
     const requesterKey = "agent:re-portal:main";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCallerKey = "agent:leasing-ops:cron:monthly-utility";
-    const queueMessage = vi.fn(async () => {
+    const queueMessage = vi.fn(async (_text: string, _options?: unknown) => {
       throw new Error("active session ended before queued steering message was committed");
     });
     setActiveEmbeddedRun(
