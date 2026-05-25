@@ -1002,6 +1002,7 @@ describe("cron service timer regressions", () => {
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
@@ -1013,7 +1014,6 @@ describe("cron service timer regressions", () => {
         now += params.job.id === first.id ? 50 : 20;
         return { status: "ok" as const, summary: "ok" };
       }),
-      cronConfig: { maxConcurrentRuns: 1 },
     });
 
     await onTimer(state);
