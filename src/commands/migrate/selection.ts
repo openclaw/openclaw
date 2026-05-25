@@ -3,6 +3,7 @@ import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
@@ -492,7 +493,7 @@ export function reconcileInteractiveMigrationEnterValues(
     if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
       return selectedSelectableValues;
     }
-    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
+    return uniqueStrings([...selectedSelectableValues, activatedValue]);
   }
   return [...selectedValues];
 }

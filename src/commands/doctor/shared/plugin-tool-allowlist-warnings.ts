@@ -16,6 +16,7 @@ import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { sortUniqueStrings, uniqueStrings } from "../../../shared/string-normalization.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -96,7 +97,7 @@ function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[]
 }
 
 function collectSortedSourceLabels(labels: Iterable<string>): string[] {
-  return [...new Set(labels)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(labels);
 }
 
 function formatSortedSourceLabels(sorted: readonly string[]): string {
@@ -298,7 +299,9 @@ function buildEffectiveSandboxToolPolicy(params: {
     Boolean(label),
   );
   const labels = allowLabels.length > 0 ? allowLabels : ["tools.sandbox.tools.alsoAllow (unset)"];
-  const dedupeLabels = Array.from(new Set([...labels, deny.label].filter(Boolean)));
+  const dedupeLabels = uniqueStrings(
+    [...labels, deny.label].filter((label): label is string => Boolean(label)),
+  );
 
   return {
     labels,
