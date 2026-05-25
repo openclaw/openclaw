@@ -8,7 +8,6 @@ export const CHANNEL_BROKER_PLATFORM_TARGET_PREFIXES = [
   "telegram",
   "whatsapp",
   "signal",
-  "imessage",
   "matrix",
   "microsoft-teams",
   "msteams",
