@@ -1,5 +1,6 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { compileSafeRegex } from "../security/safe-regex.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -454,12 +455,12 @@ function resolveModelSupportMatchKind(
 ): ModelSupportMatchKind | undefined {
   const patterns = plugin.modelSupport?.modelPatterns ?? [];
   for (const patternSource of patterns) {
-    try {
-      if (new RegExp(patternSource, "u").test(modelId)) {
-        return "pattern";
-      }
-    } catch {
-      continue;
+    // compileSafeRegex rejects patterns with nested repetition (ReDoS risk)
+    // and returns null. Rejected patterns are silently skipped: the plugin
+    // will not match via that pattern but other patterns/prefixes still apply.
+    const regex = compileSafeRegex(patternSource, "u");
+    if (regex?.test(modelId)) {
+      return "pattern";
     }
   }
   const prefixes = plugin.modelSupport?.modelPrefixes ?? [];

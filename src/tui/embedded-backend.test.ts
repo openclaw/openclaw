@@ -6,7 +6,9 @@ const agentCommandFromIngressMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionsPatchToStoreMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
-const loadGatewayModelCatalogMock = vi.fn(() => []);
+const loadGatewayModelCatalogMock = vi.fn(
+  (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
+);
 const loadSessionEntryMock = vi.fn((sessionKey: string) => ({
   cfg: {},
   canonicalKey: sessionKey,
@@ -108,7 +110,7 @@ vi.mock("../gateway/session-utils.js", () => ({
 }));
 
 vi.mock("../gateway/server-model-catalog.js", () => ({
-  loadGatewayModelCatalog: (...args: unknown[]) => loadGatewayModelCatalogMock(...args),
+  loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
 }));
 
 vi.mock("../gateway/session-reset-service.js", () => ({
