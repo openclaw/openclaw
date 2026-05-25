@@ -31,11 +31,14 @@ export function mergeAttemptToolMediaPayloads(params: {
     ) {
       return payloads;
     }
-    const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
+    const payloadMediaUrls = Array.from(
+      new Set([...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])]),
+    );
+    const mergedMediaUrls = mediaUrls.length ? mediaUrls : payloadMediaUrls;
     payloads[payloadIndex] = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
-      mediaUrl: payload.mediaUrl ?? mergedMediaUrls[0],
+      mediaUrl: mergedMediaUrls[0],
       audioAsVoice: payload.audioAsVoice || params.toolAudioAsVoice || undefined,
       trustedLocalMedia: payload.trustedLocalMedia || params.toolTrustedLocalMedia || undefined,
     });

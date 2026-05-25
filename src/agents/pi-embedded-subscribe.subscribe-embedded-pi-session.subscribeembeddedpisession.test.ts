@@ -416,7 +416,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
-  it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
+  it("prefers generated tool media when the assistant reply has MEDIA lines", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -465,7 +465,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here is the selected image.",
-      mediaUrls: ["./selected.png"],
+      mediaUrls: ["/tmp/generated.png"],
     });
   });
 
@@ -747,6 +747,10 @@ describe("subscribeEmbeddedPiSession", () => {
       audioAsVoice: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getAttemptToolMediaReply()).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
   });
 

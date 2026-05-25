@@ -78,6 +78,10 @@ Use `profile="user"` only when existing cookies/login matter. This attaches to t
 
 For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
 
+## Screenshot Delivery
+
+When the user asks for a browser screenshot, call the browser screenshot action and then reply normally. Do not write `MEDIA:<path>` or invent a screenshot path in the assistant text; OpenClaw attaches screenshot media from the browser tool result automatically.
+
 ## Google Meet Notes
 
 When creating or joining a Meet:

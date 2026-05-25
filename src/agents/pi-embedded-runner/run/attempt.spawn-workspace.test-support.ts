@@ -110,6 +110,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSourceReplyPayloads: () => [] as MessagingToolSourceReplyPayload[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getAttemptToolMediaReply: () => null,
     getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
