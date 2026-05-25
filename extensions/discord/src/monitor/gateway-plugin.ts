@@ -17,13 +17,12 @@ import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
-  fetchDiscordGatewayMetadataDirect,
+  fetchDiscordGatewayMetadataGuarded,
   resolveDiscordGatewayInfoTimeoutMs,
   resolveGatewayInfoWithFallback,
   type DiscordGatewayFetch,
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
-import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
 export {
   parseDiscordGatewayInfoBody,
@@ -231,22 +230,22 @@ function createGatewayPlugin(params: {
   return new OpenClawGatewayPlugin();
 }
 
-function createDiscordGatewayMetadataFetch(debugCaptureEnabled: boolean): DiscordGatewayFetch {
+function createDiscordGatewayMetadataFetch(
+  debugCaptureEnabled: boolean,
+  proxyUrl?: string,
+): DiscordGatewayFetch {
   return (input, init) =>
-    fetchDiscordGatewayMetadataDirect(
-      input,
-      init,
-      debugCaptureEnabled
-        ? false
+    fetchDiscordGatewayMetadataGuarded(input, init, {
+      ...(debugCaptureEnabled
+        ? {}
         : {
-            flowId: randomUUID(),
-            meta: { subsystem: "discord-gateway-metadata" },
-          },
-    );
-}
-
-function createDiscordGatewayMetadataProxyFetch(proxyFetch: typeof fetch): DiscordGatewayFetch {
-  return async (input, init) => await proxyFetch(input, init as RequestInit);
+            capture: {
+              flowId: randomUUID(),
+              meta: { subsystem: "discord-gateway-metadata" },
+            },
+          }),
+      ...(proxyUrl ? { proxyUrl } : {}),
+    });
 }
 
 export function waitForDiscordGatewayPluginRegistration(
@@ -284,13 +283,12 @@ export function createDiscordGatewayPlugin(params: {
       const HttpsProxyAgentCtor =
         params.testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
       wsAgent = new HttpsProxyAgentCtor<string>(proxy);
-      fetchImpl = createDiscordGatewayMetadataProxyFetch(
-        resolveDiscordRestFetch(proxy, params.runtime),
-      );
+      fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled, proxy);
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-      fetchImpl = (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false);
+      fetchImpl = (input, init) =>
+        fetchDiscordGatewayMetadataGuarded(input, init, { capture: false });
     }
   }
 
