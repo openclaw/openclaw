@@ -2152,7 +2152,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolMetas).toEqual([
       {
         toolName: "image_generate",
-        meta: "generate lighthouse",
+        meta: "lighthouse",
         asyncStarted: true,
       },
     ]);
