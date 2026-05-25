@@ -1,0 +1,16 @@
+{
+  "production_mode": true,
+  "connectors": {
+    "plant-mqtt": {
+      "preset": "mqtt",
+      "enabled": true,
+      "simulate": false,
+      "env": {
+        "CLAWORKS_MQTT_URL": "mqtt://broker.plant.local:1883",
+        "CLAWORKS_MQTT_TOPIC": "plant/alarms/#",
+        "CLAWORKS_MQTT_EVENT_TYPE": "alarm.created"
+      }
+    },
+    "echo": { "preset": "echo", "enabled": false }
+  }
+}

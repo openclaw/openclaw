@@ -362,6 +362,8 @@ CLAWORKS_INIT_REPAIR=1 pnpm claworks:init
 4. `curl -s http://127.0.0.1:18800/v1/connectors` — 连接器状态为 healthy。
 5. 触发 OT 事件或等待 poll，确认 `process-industry` Playbook 匹配与工单创建。
 
+**模板**：`contrib/examples/ot-production.claworks.fragment.json` · **Feishu E2E**：`contrib/examples/feishu-live-e2e.env.example`
+
 **全量健康自检：**
 
 ```bash

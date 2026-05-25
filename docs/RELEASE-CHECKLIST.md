@@ -103,8 +103,11 @@ pnpm claworks:weak-model-regression
 # OT 模拟连接器（无实机）
 pnpm claworks:ot-dry-run
 
-# 打 tag 前预检（默认跳过 gateway e2e；全量：CLAWORKS_PREFLIGHT_GATEWAY=1 pnpm claworks:release:preflight）
+# 打 tag 前预检（默认跳过 gateway/evolution；全量见下行）
 pnpm claworks:release:preflight
+CLAWORKS_PREFLIGHT_EVOLUTION=1 CLAWORKS_PREFLIGHT_GATEWAY=1 pnpm claworks:release:preflight
+
+# Branch protection / Release notes: docs/GITHUB-BRANCH-PROTECTION.md  docs/RELEASE-NOTES-2026.5.19.md
 
 # 产品诊断
 CLAWORKS_INIT_SECURE=1 pnpm claworks:init   # 首次

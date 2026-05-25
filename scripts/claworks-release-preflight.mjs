@@ -54,6 +54,16 @@ results.push(
   }),
 );
 
+if (process.env.CLAWORKS_PREFLIGHT_EVOLUTION === "1") {
+  results.push(
+    check("evolution chain smoke", () => {
+      run("pnpm claworks:evolution:smoke", { env: { ...process.env, CLAWORKS_PRODUCT: "1" } });
+    }),
+  );
+} else {
+  console.log("\n[preflight] skip evolution smoke (set CLAWORKS_PREFLIGHT_EVOLUTION=1 to include)");
+}
+
 if (process.env.CLAWORKS_PREFLIGHT_GATEWAY === "1") {
   results.push(
     check("gateway e2e", () => {
