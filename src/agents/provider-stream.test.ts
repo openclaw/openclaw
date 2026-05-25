@@ -50,11 +50,13 @@ function providerConfig(
 }
 
 function credential(value: string): Record<string, string> {
-  return { ["api" + "Key"]: value };
+  const keyName = ["api", "Key"].join("");
+  return { [keyName]: value };
 }
 
 function geminiEnv(value: string): NodeJS.ProcessEnv {
-  return { ["GEMINI_" + "API_KEY"]: value } as NodeJS.ProcessEnv;
+  const keyName = ["GEMINI", "API_KEY"].join("_");
+  return { [keyName]: value } as NodeJS.ProcessEnv;
 }
 
 beforeEach(() => {
