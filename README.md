@@ -1,10 +1,11 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.svg" alt="OpenClaw" width="500">
-    </picture>
+    <img src="https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/docs/assets/lan-command-chat-desktop-light.png" alt="LAN command chat light mode" width="900">
+</p>
+
+<p align="center">
+    <img src="https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/docs/assets/lan-command-chat-desktop-dark.png" alt="LAN command chat dark mode" width="900">
 </p>
 
 <p align="center">
