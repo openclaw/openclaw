@@ -51,6 +51,23 @@ export {
   type TalkTurnSuccess,
 } from "../talk/talk-session-controller.js";
 export {
+  REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS,
+  isSupportedRealtimeVoiceActivationName,
+  matchRealtimeVoiceActivationName,
+  normalizeRealtimeVoiceActivationName,
+  normalizeRealtimeVoiceActivationNamePrefix,
+  normalizeSupportedRealtimeVoiceActivationName,
+  realtimeVoiceActivationNameWordCount,
+  sortRealtimeVoiceActivationNames,
+  type RealtimeVoiceActivationNameEdge,
+  type RealtimeVoiceActivationNameMatchKind,
+  type RealtimeVoiceActivationNameTranscriptResult,
+} from "../talk/activation-name.js";
+export {
+  classifySkippableRealtimeVoiceConsultTranscript,
+  type SkippableRealtimeVoiceConsultTranscriptReason,
+} from "../talk/consult-transcript.js";
+export {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
