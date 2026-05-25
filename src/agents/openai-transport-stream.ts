@@ -2419,7 +2419,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           enforceCodeModeResponsesToolSurface(params);
           assertCodeModeResponsesToolSurface(params);
         }
-        assertOpenAICompletionsPayloadHasConversationTurn(params, model);
+        const compat = getCompat(model as OpenAIModeModel);
+        if (compat.requiresNonEmptyUserOrAssistantMessage) {
+          assertOpenAICompletionsPayloadHasConversationTurn(params, model);
+        }
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -2869,6 +2872,7 @@ function detectCompat(model: OpenAIModeModel) {
     supportsStrictMode: compatDefaults.supportsStrictMode,
     requiresReasoningContentOnAssistantMessages:
       compatDefaults.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: compatDefaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 
@@ -2891,6 +2895,7 @@ function getCompat(model: OpenAIModeModel): {
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
   requiresReasoningContentOnAssistantMessages: boolean;
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -2924,6 +2929,7 @@ function getCompat(model: OpenAIModeModel): {
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
       detected.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 

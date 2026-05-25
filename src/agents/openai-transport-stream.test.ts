@@ -1028,13 +1028,13 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("refuses OpenAI-compatible chat streams with no user or assistant payload turns", async () => {
+  it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = {
-      id: "mlx-community/Qwen3-30B-A3B-6bit",
-      name: "Qwen3 MLX",
+      id: "qwen-coder-plus",
+      name: "qwen-coder-plus",
       api: "openai-completions",
-      provider: "mlx",
-      baseUrl: "http://127.0.0.1:9/v1",
+      provider: "qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1066,6 +1066,96 @@ describe("openai transport stream", () => {
       "contains no non-empty user or assistant messages",
     );
     expect(String(errorPayload?.errorMessage)).toContain("system/tool-only request");
+  });
+
+  it("allows generic OpenAI-compatible chat streams without the ModelStudio turn guard", async () => {
+    let capturedRoles: string[] | undefined;
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
+        capturedRoles = parsed.messages?.map((message) => message.role ?? "");
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-system-only",
+            object: "chat.completion.chunk",
+            created,
+            model: "generic-openai-compatible",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OK" },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-system-only",
+            object: "chat.completion.chunk",
+            created,
+            model: "generic-openai-compatible",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "generic-openai-compatible",
+        name: "Generic OpenAI Compatible",
+        api: "openai-completions",
+        provider: "custom-openai-compatible",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "runtime-only system prompt",
+          messages: [],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(capturedRoles).toEqual(["system"]);
+      expect(doneReason).toBe("stop");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("parses JSON chat completions returned to streaming requests", async () => {
