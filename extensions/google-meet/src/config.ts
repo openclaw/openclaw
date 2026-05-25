@@ -7,6 +7,7 @@ import {
   asRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
@@ -313,13 +314,7 @@ function readEnvNumber(env: NodeJS.ProcessEnv, keys: readonly string[]): number 
 }
 
 function resolveStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.length > 0 ? normalized : undefined;
+  return normalizeOptionalTrimmedStringList(value);
 }
 
 function resolveProvidersConfig(value: unknown): Record<string, Record<string, unknown>> {

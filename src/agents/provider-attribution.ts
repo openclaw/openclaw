@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -233,12 +234,7 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
+  return normalizeTrimmedStringList(value);
 }
 
 function readManifestProviderEndpoints(

@@ -14,6 +14,7 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -63,12 +64,7 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return normalizeTrimmedStringList(value);
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {

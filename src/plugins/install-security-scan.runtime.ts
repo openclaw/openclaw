@@ -5,6 +5,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
@@ -824,12 +825,7 @@ async function scanDirectoryTarget(params: {
 }
 
 function readStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  return normalizeTrimmedStringList(value);
 }
 
 function collectPackageExecutableScanEntries(params: {
