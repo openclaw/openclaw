@@ -7,6 +7,47 @@ describe("semantic fallback matcher", () => {
     expect(semanticFallbackScore("alarm.*", "alarm.created")).toBeGreaterThan(0.4);
   });
 
+  it("does not cross-match sibling evolution event types", () => {
+    expect(
+      semanticFallbackScore("evolution.regression_requested", "evolution.simulation_requested"),
+    ).toBe(0);
+    expect(
+      semanticFallbackScore("evolution.simulation_requested", "evolution.regression_requested"),
+    ).toBe(0);
+  });
+
+  it("does not match weak_model playbook on simulation_requested via semantic fallback", () => {
+    const matcher = createPlaybookMatcher();
+    matcher.load([
+      {
+        id: "evolution_simulation_pipeline",
+        name: "Simulation",
+        pack: "base",
+        trigger: { kind: "event", pattern: "evolution.simulation_requested" },
+        priority: 910,
+        steps: [],
+      },
+      {
+        id: "weak_model_regression_suite",
+        name: "Regression",
+        pack: "base",
+        trigger: { kind: "event", pattern: "evolution.regression_requested" },
+        priority: 10,
+        steps: [],
+      },
+    ]);
+
+    const matches = matcher.match({
+      id: "1",
+      type: "evolution.simulation_requested",
+      source: "test",
+      payload: {},
+      timestamp: 0,
+    });
+
+    expect(matches.map((m) => m.playbookId)).toEqual(["evolution_simulation_pipeline"]);
+  });
+
   it("matches via semantic fallback when glob misses", () => {
     const matcher = createPlaybookMatcher();
     const pb: PlaybookDefinition = {

@@ -123,20 +123,23 @@ export function createPlaybookMatcher(): PlaybookMatcher {
   };
 }
 
-/** Token overlap fallback when glob patterns miss (e.g. alarm.triggered ≈ alarm.created). */
+/**
+ * Token overlap fallback when glob patterns miss (e.g. equipment.alarm ≈ equipment.alarm.tripped).
+ * Pattern tokens must all appear in the event type so sibling evolution events
+ * (simulation_requested vs regression_requested) do not cross-match.
+ */
 export function semanticFallbackScore(pattern: string, eventType: string): number {
   const a = tokenizeEventKey(pattern);
   const b = tokenizeEventKey(eventType);
   if (a.size === 0 || b.size === 0) {
     return 0;
   }
-  let overlap = 0;
   for (const t of a) {
-    if (b.has(t)) {
-      overlap += 1;
+    if (!b.has(t)) {
+      return 0;
     }
   }
-  return overlap / Math.max(a.size, b.size);
+  return a.size / Math.max(a.size, b.size);
 }
 
 function tokenizeEventKey(value: string): Set<string> {
