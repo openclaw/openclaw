@@ -31,7 +31,7 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
 
 function normalizeIdentityValue(value: string): string {
   let normalized = value.trim();
-  normalized = normalized.replace(/^[*_]+|[*_]+$/g, "").trim();
+  normalized = normalized.replace(/^[*_`\s]+|[*_`\s]+$/g, "").trim();
   if (normalized.startsWith("(") && normalized.endsWith(")")) {
     normalized = normalized.slice(1, -1).trim();
   }
@@ -54,11 +54,11 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
       continue;
     }
     const label = normalizeLowercaseStringOrEmpty(
-      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
+      cleaned.slice(0, colonIndex).replace(/[*_`]/g, ""),
     );
     const value = cleaned
       .slice(colonIndex + 1)
-      .replace(/^[*_]+|[*_]+$/g, "")
+      .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
       .trim();
     if (!value) {
       continue;
