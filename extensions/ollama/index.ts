@@ -18,6 +18,7 @@ import {
   buildOpenAICompatibleReplayPolicy,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   OLLAMA_DEFAULT_BASE_URL,
   buildOllamaModelDefinition,
@@ -319,7 +320,7 @@ export default definePluginEntry({
       },
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +
-        'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
+        `Set OLLAMA_API_KEY="ollama-local" (any value works) or run "${formatCliCommand("openclaw configure")}". ` +
         "See: https://docs.openclaw.ai/providers/ollama",
     });
   },

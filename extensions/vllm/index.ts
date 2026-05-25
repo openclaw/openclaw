@@ -3,6 +3,7 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   buildVllmProvider,
   VLLM_DEFAULT_API_KEY_ENV_VAR,
@@ -88,7 +89,7 @@ export default definePluginEntry({
       },
       buildUnknownModelHint: () =>
         "vLLM requires authentication to be registered as a provider. " +
-        'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
+        `Set VLLM_API_KEY (any value works) or run "${formatCliCommand("openclaw configure")}". ` +
         "See: https://docs.openclaw.ai/providers/vllm",
       wrapStreamFn: wrapVllmProviderStream,
     });

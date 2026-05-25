@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
@@ -13,6 +14,10 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "./channel-contract.js";
 import type { OpenClawConfig } from "./config-runtime.js";
+
+function resolveDoctorFixHint(): string {
+  return `Run "${formatCliCommand("openclaw doctor --fix")}".`;
+}
 
 export { isPrivateIpAddress, mergeSsrFPolicies };
 export type { SsrFPolicy };
@@ -128,12 +133,12 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
     legacyConfigRules: [
       {
         path: ["channels", params.channelKey],
-        message: `${pathPrefix}.allowPrivateNetwork is legacy; use ${pathPrefix}.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
+        message: `${pathPrefix}.allowPrivateNetwork is legacy; use ${pathPrefix}.network.dangerouslyAllowPrivateNetwork instead. ${resolveDoctorFixHint()}`,
         match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(value) ?? {}),
       },
       {
         path: ["channels", params.channelKey, "accounts"],
-        message: `${pathPrefix}.accounts.<id>.allowPrivateNetwork is legacy; use ${pathPrefix}.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
+        message: `${pathPrefix}.accounts.<id>.allowPrivateNetwork is legacy; use ${pathPrefix}.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. ${resolveDoctorFixHint()}`,
         match: hasLegacyAllowPrivateNetworkInAccounts,
       },
     ],

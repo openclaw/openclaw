@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -108,6 +109,26 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function requireConfiguredStreamParams(): Record<string, unknown> {
   return requireRecord(createConfiguredOllamaStreamFnMock.mock.calls[0]?.[0], "stream params");
 }
+
+describe("ollama provider doctor hints", () => {
+  it("productizes configure guidance in unknown-model hints", () => {
+    const previous = process.env.CLAWORKS_PRODUCT;
+    process.env.CLAWORKS_PRODUCT = "1";
+    try {
+      const provider = registerProvider();
+      const hint = provider.buildUnknownModelHint?.({} as never);
+      expect(hint).toContain(formatCliCommand("openclaw configure"));
+      expect(hint).toContain("claworks configure");
+      expect(hint).not.toContain("openclaw configure");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAWORKS_PRODUCT;
+      } else {
+        process.env.CLAWORKS_PRODUCT = previous;
+      }
+    }
+  });
+});
 
 function captureWrappedOllamaPayload(
   thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "max" | undefined,

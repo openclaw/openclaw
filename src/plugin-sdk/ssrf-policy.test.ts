@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   resolvePinnedHostnameWithPolicy,
@@ -15,6 +16,7 @@ import {
   mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
+  createLegacyPrivateNetworkDoctorContract,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -169,6 +171,35 @@ describe("mergeSsrFPolicies", () => {
       allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
       hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
     });
+  });
+});
+
+describe("createLegacyPrivateNetworkDoctorContract", () => {
+  it("productizes doctor --fix hints for legacy allowPrivateNetwork keys", () => {
+    const previous = process.env.CLAWORKS_PRODUCT;
+    process.env.CLAWORKS_PRODUCT = "1";
+    try {
+      const doctorFixHint = `Run "${formatCliCommand("openclaw doctor --fix")}".`;
+      const contract = createLegacyPrivateNetworkDoctorContract({ channelKey: "tlon" });
+
+      expect(contract.legacyConfigRules).toHaveLength(2);
+      expect(contract.legacyConfigRules[0]?.message).toContain(
+        "channels.tlon.allowPrivateNetwork is legacy",
+      );
+      expect(contract.legacyConfigRules[0]?.message).toContain(doctorFixHint);
+      expect(contract.legacyConfigRules[0]?.message).toContain("claworks doctor --fix");
+      expect(contract.legacyConfigRules[0]?.message).not.toContain("openclaw doctor --fix");
+      expect(contract.legacyConfigRules[1]?.message).toContain(
+        "channels.tlon.accounts.<id>.allowPrivateNetwork is legacy",
+      );
+      expect(contract.legacyConfigRules[1]?.message).toContain(doctorFixHint);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLAWORKS_PRODUCT;
+      } else {
+        process.env.CLAWORKS_PRODUCT = previous;
+      }
+    }
   });
 });
 
