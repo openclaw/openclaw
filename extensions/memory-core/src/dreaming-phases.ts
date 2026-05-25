@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -569,12 +569,9 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
       if (scope.trim().length === 0 || !Array.isArray(value)) {
         continue;
       }
-      const unique = [
+      const unique = normalizeStringEntries([
         ...new Set(value.filter((entry): entry is string => typeof entry === "string")),
-      ]
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
+      ]).slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
       if (unique.length > 0) {
         seenMessages[scope] = unique;
       }
@@ -1394,13 +1391,7 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {
-  return new Set(
-    snippet
-      .toLowerCase()
-      .split(/[^a-z0-9]+/i)
-      .map((token) => token.trim())
-      .filter(Boolean),
-  );
+  return new Set(normalizeStringEntries(snippet.toLowerCase().split(/[^a-z0-9]+/i)));
 }
 
 function jaccardSimilarity(left: string, right: string): number {
