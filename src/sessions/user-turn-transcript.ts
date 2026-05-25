@@ -45,6 +45,16 @@ export type AppendUserTurnTranscriptMessageParams = {
   updateMode?: UserTurnTranscriptUpdateMode;
 };
 
+export type AppendInlineUserTurnTranscriptMessageParams = Omit<
+  AppendUserTurnTranscriptMessageParams,
+  "updateMode"
+>;
+
+export type TryAppendInlineUserTurnTranscriptMessageParams =
+  AppendInlineUserTurnTranscriptMessageParams & {
+    errorContext?: string;
+  };
+
 export type PersistUserTurnTranscriptParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
@@ -322,6 +332,28 @@ export async function appendUserTurnTranscriptMessage(
     messageId: appended.messageId,
     message: appended.message,
   };
+}
+
+export async function appendInlineUserTurnTranscriptMessage(
+  params: AppendInlineUserTurnTranscriptMessageParams,
+): ReturnType<typeof appendUserTurnTranscriptMessage> {
+  return await appendUserTurnTranscriptMessage({
+    ...params,
+    updateMode: "inline",
+  });
+}
+
+export async function tryAppendInlineUserTurnTranscriptMessage(
+  params: TryAppendInlineUserTurnTranscriptMessageParams,
+): ReturnType<typeof appendUserTurnTranscriptMessage> {
+  try {
+    return await appendInlineUserTurnTranscriptMessage(params);
+  } catch (error) {
+    logVerbose(
+      `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+    );
+    return undefined;
+  }
 }
 
 export async function persistUserTurnTranscript(params: PersistUserTurnTranscriptParams): Promise<

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  appendInlineUserTurnTranscriptMessage,
   appendUserTurnTranscriptMessage,
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMediaFields,
@@ -292,6 +293,33 @@ describe("user turn transcript persistence", () => {
           content: "What is in this image?",
           MediaPath: "/tmp/image.png",
           MediaType: "image/png",
+        }),
+      ]);
+    });
+
+    it("uses inline update mode through the convenience wrapper", async () => {
+      const dir = createTempDir("openclaw-user-turn-append-inline-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      const appended = await appendInlineUserTurnTranscriptMessage({
+        transcriptPath,
+        sessionId: "session-1",
+        sessionKey: "main",
+        cwd: dir,
+        input: {
+          text: "hello from runtime",
+          timestamp: 123,
+        },
+      });
+
+      expect(appended?.message).toMatchObject({
+        role: "user",
+        content: "hello from runtime",
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "hello from runtime",
         }),
       ]);
     });
