@@ -84,3 +84,4 @@ struct MacNodeBrowserProxyTests {
         #expect(arr.count == 2)
     }
 }
+
