@@ -1798,7 +1798,8 @@
     "claworks:migrate": "node scripts/claworks-migrate.mjs",
     "claworks:closed-loop": "node --import tsx scripts/claworks-closed-loop-demo.mjs",
     "claworks:weak-model-regression": "node --import tsx scripts/claworks-weak-model-regression.mjs",
-    "claworks:evolution:smoke": "node --import tsx scripts/claworks-evolution-chain-smoke.mjs"
+    "claworks:evolution:smoke": "node --import tsx scripts/claworks-evolution-chain-smoke.mjs",
+    "claworks:evolution:export-helper": "node scripts/claworks-evolution-export-helper.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.1",
