@@ -63,6 +63,9 @@ type LegacyEditToolInput = Record<string, unknown> & {
   newText?: unknown;
 };
 
+const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
+const EDIT_MISMATCH_HINT_LIMIT = 800;
+
 /**
  * Pluggable operations for the edit tool.
  * Override these to delegate file editing to remote systems (for example SSH).
@@ -120,6 +123,50 @@ function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] 
     throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
   }
   return { path: input.path, edits: input.edits };
+}
+
+function removeExactOccurrences(content: string, needle: string): string {
+  return needle.length > 0 ? content.split(needle).join("") : content;
+}
+
+function didEditLikelyApply(params: {
+  originalContent: string;
+  currentContent: string;
+  edits: Edit[];
+}): boolean {
+  if (params.edits.length === 0) {
+    return false;
+  }
+  const normalizedOriginal = normalizeToLF(params.originalContent);
+  const normalizedCurrent = normalizeToLF(params.currentContent);
+  if (normalizedOriginal === normalizedCurrent) {
+    return false;
+  }
+
+  let withoutInsertedNewText = normalizedCurrent;
+  for (const edit of params.edits) {
+    const normalizedNew = normalizeToLF(edit.newText);
+    if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
+      return false;
+    }
+    withoutInsertedNewText = removeExactOccurrences(withoutInsertedNewText, normalizedNew);
+  }
+
+  return params.edits.every(
+    (edit) => !withoutInsertedNewText.includes(normalizeToLF(edit.oldText)),
+  );
+}
+
+function appendMismatchHint(error: Error, currentContent: string): Error {
+  const snippet =
+    currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
+      ? currentContent
+      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
+    cause: error,
+  });
+  enhanced.stack = error.stack;
+  return enhanced;
 }
 
 type RenderableEditArgs = {
@@ -330,119 +377,82 @@ export function createEditToolDefinition(
       const { path, edits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
 
-      return withFileMutationQueue(
-        absolutePath,
-        () =>
-          new Promise<{
-            content: Array<{ type: "text"; text: string }>;
-            details: EditToolDetails | undefined;
-          }>((resolve, reject) => {
-            // Check if already aborted.
-            if (signal?.aborted) {
-              reject(new Error("Operation aborted"));
-              return;
-            }
+      return withFileMutationQueue(absolutePath, async () => {
+        if (signal?.aborted) {
+          throw new Error("Operation aborted");
+        }
 
-            let aborted = false;
+        try {
+          await ops.access(absolutePath);
+        } catch (error: unknown) {
+          const errorMessage =
+            error instanceof Error && "code" in error
+              ? `Error code: ${String(error.code)}`
+              : String(error);
+          throw new Error(`Could not edit file: ${path}. ${errorMessage}.`, {
+            cause: error,
+          });
+        }
 
-            // Set up abort handler.
-            const onAbort = () => {
-              aborted = true;
-              reject(new Error("Operation aborted"));
+        const buffer = await ops.readFile(absolutePath);
+        const rawContent = buffer.toString("utf-8");
+        try {
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+
+          const { bom, text: content } = stripBom(rawContent);
+          const originalEnding = detectLineEnding(content);
+          const normalizedContent = normalizeToLF(content);
+          const { baseContent, newContent } = applyEditsToNormalizedContent(
+            normalizedContent,
+            edits,
+            path,
+          );
+          const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+          await ops.writeFile(absolutePath, finalContent);
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+
+          const diffResult = generateDiffString(baseContent, newContent);
+          const patch = generateUnifiedPatch(path, baseContent, newContent);
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+              },
+            ],
+            details: {
+              diff: diffResult.diff,
+              patch,
+              firstChangedLine: diffResult.firstChangedLine,
+            },
+          };
+        } catch (error: unknown) {
+          const normalizedError = error instanceof Error ? error : new Error(String(error));
+          const currentContent = await ops
+            .readFile(absolutePath)
+            .then((current) => current.toString("utf-8"))
+            .catch(() => rawContent);
+          if (didEditLikelyApply({ originalContent: rawContent, currentContent, edits })) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+                },
+              ],
+              details: { diff: "", patch: "" },
             };
-
-            if (signal) {
-              signal.addEventListener("abort", onAbort, { once: true });
-            }
-
-            // Perform the edit operation.
-            void (async () => {
-              try {
-                // Check if file exists.
-                try {
-                  await ops.access(absolutePath);
-                } catch (error: unknown) {
-                  const errorMessage =
-                    error instanceof Error && "code" in error
-                      ? `Error code: ${String(error.code)}`
-                      : String(error);
-                  if (signal) {
-                    signal.removeEventListener("abort", onAbort);
-                  }
-                  reject(new Error(`Could not edit file: ${path}. ${errorMessage}.`));
-                  return;
-                }
-
-                // Check if aborted before reading.
-                if (aborted) {
-                  return;
-                }
-
-                // Read the file.
-                const buffer = await ops.readFile(absolutePath);
-                const rawContent = buffer.toString("utf-8");
-
-                // Check if aborted after reading.
-                if (aborted) {
-                  return;
-                }
-
-                // Strip BOM before matching. The model will not include an invisible BOM in oldText.
-                const { bom, text: content } = stripBom(rawContent);
-                const originalEnding = detectLineEnding(content);
-                const normalizedContent = normalizeToLF(content);
-                const { baseContent, newContent } = applyEditsToNormalizedContent(
-                  normalizedContent,
-                  edits,
-                  path,
-                );
-
-                // Check if aborted before writing.
-                if (aborted) {
-                  return;
-                }
-
-                const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-                await ops.writeFile(absolutePath, finalContent);
-
-                // Check if aborted after writing.
-                if (aborted) {
-                  return;
-                }
-
-                // Clean up abort handler.
-                if (signal) {
-                  signal.removeEventListener("abort", onAbort);
-                }
-
-                const diffResult = generateDiffString(baseContent, newContent);
-                const patch = generateUnifiedPatch(path, baseContent, newContent);
-                resolve({
-                  content: [
-                    {
-                      type: "text",
-                      text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
-                    },
-                  ],
-                  details: {
-                    diff: diffResult.diff,
-                    patch,
-                    firstChangedLine: diffResult.firstChangedLine,
-                  },
-                });
-              } catch (error: unknown) {
-                // Clean up abort handler.
-                if (signal) {
-                  signal.removeEventListener("abort", onAbort);
-                }
-
-                if (!aborted) {
-                  reject(error instanceof Error ? error : new Error(String(error)));
-                }
-              }
-            })();
-          }),
-      );
+          }
+          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
+            throw appendMismatchHint(normalizedError, currentContent);
+          }
+          throw normalizedError;
+        }
+      });
     },
     renderCall(args, theme, context) {
       const component = getEditCallRenderComponent(context.state, context.lastComponent);

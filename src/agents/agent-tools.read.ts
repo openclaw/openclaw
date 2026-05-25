@@ -11,7 +11,6 @@ import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { wrapEditToolWithRecovery, wrapWriteToolWithRecovery } from "./agent-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -805,69 +804,28 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  const withRecovery = wrapWriteToolWithRecovery(base, {
-    root: params.root,
-    readFile: async (absolutePath: string) =>
-      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
-    statFile: (absolutePath: string) =>
-      params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  const withRecovery = wrapEditToolWithRecovery(base, {
-    root: params.root,
-    readFile: async (absolutePath: string) =>
-      (await params.bridge.readFile({ filePath: absolutePath, cwd: params.root })).toString("utf8"),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  const withRecovery = wrapWriteToolWithRecovery(base, {
-    root,
-    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
-    statFile: async (absolutePath: string) => {
-      let stat;
-      try {
-        stat = await fs.stat(absolutePath);
-      } catch (err) {
-        if (
-          err &&
-          typeof err === "object" &&
-          "code" in err &&
-          (err as { code?: unknown }).code === "ENOENT"
-        ) {
-          return null;
-        }
-        throw err;
-      }
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      };
-    },
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  const withRecovery = wrapEditToolWithRecovery(base, {
-    root,
-    readFile: (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
-  });
-  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
 export function createOpenClawReadTool(
@@ -924,6 +882,10 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
     writeFile: async (absolutePath: string, content: string) => {
       await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
     },
+    readFile: (absolutePath: string) =>
+      params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
+    statFile: (absolutePath: string) =>
+      params.bridge.stat({ filePath: absolutePath, cwd: params.root }),
   } as const;
 }
 
@@ -953,6 +915,27 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
+async function statHostFile(absolutePath: string) {
+  try {
+    const stat = await fs.stat(absolutePath);
+    return {
+      type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    } as const;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
@@ -964,6 +947,9 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
+      readFile: async (absolutePath: string) =>
+        fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      statFile: (absolutePath: string) => statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
     } as const;
   }
 
@@ -979,6 +965,14 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     writeFile: async (absolutePath: string, content: string) => {
       const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
+    },
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      return (await (await rootPromise).read(relative)).buffer;
+    },
+    statFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      return statHostFile(path.resolve(root, relative));
     },
   } as const;
 }

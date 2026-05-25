@@ -1,4 +1,9 @@
-import { mkdir as fsMkdir, writeFile as fsWriteFile } from "node:fs/promises";
+import {
+  mkdir as fsMkdir,
+  readFile as fsReadFile,
+  stat as fsStat,
+  writeFile as fsWriteFile,
+} from "node:fs/promises";
 import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -32,17 +37,55 @@ export interface WriteOperations {
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
+  /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
+  readFile?: (absolutePath: string) => Promise<Buffer | string>;
+  /** Optional stat used to avoid reporting success for files that already matched before execution */
+  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
 }
 
 const defaultWriteOperations: WriteOperations = {
   writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
   mkdir: (dir) => fsMkdir(dir, { recursive: true }).then(() => {}),
+  readFile: (path) => fsReadFile(path),
+  statFile: async (path) => {
+    try {
+      const stat = await fsStat(path);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as { code?: unknown }).code === "ENOENT"
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  },
 };
 
 export interface WriteToolOptions {
   /** Custom operations for file writing. Default: local filesystem */
   operations?: WriteOperations;
 }
+
+type WriteToolFileStat = {
+  type: "file" | "directory" | "other";
+  size: number;
+  mtimeMs?: number;
+};
+
+type WriteToolPrecheck = {
+  state: "different" | "same" | "unknown";
+  beforeStat?: WriteToolFileStat | null;
+};
+
+const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
 
 type WriteHighlightCache = {
   rawPath: string | null;
@@ -207,6 +250,117 @@ function formatWriteResult(
   return `\n${theme.fg("error", output)}`;
 }
 
+function isMissingFileError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+    return true;
+  }
+  return error instanceof Error && error.message.includes("No such file or directory");
+}
+
+async function readOriginalWriteState(
+  absolutePath: string,
+  content: string,
+  ops: WriteOperations,
+): Promise<WriteToolPrecheck> {
+  if (!ops.statFile) {
+    return { state: "unknown" };
+  }
+  let stat: WriteToolFileStat | null;
+  try {
+    stat = await ops.statFile(absolutePath);
+  } catch (error) {
+    return { state: isMissingFileError(error) ? "different" : "unknown" };
+  }
+  if (!stat) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (stat.type !== "file") {
+    return { state: "unknown", beforeStat: stat };
+  }
+  if (stat.size !== Buffer.byteLength(content, "utf8")) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (!ops.readFile || stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+    return { state: "unknown", beforeStat: stat };
+  }
+
+  try {
+    const originalContent = await ops.readFile(absolutePath);
+    const originalText = Buffer.isBuffer(originalContent)
+      ? originalContent.toString("utf8")
+      : originalContent;
+    return { state: originalText === content ? "same" : "different", beforeStat: stat };
+  } catch {
+    return { state: "unknown", beforeStat: stat };
+  }
+}
+
+async function didWriteMetadataChange(
+  absolutePath: string,
+  beforeStat: WriteToolFileStat | null | undefined,
+  ops: WriteOperations,
+): Promise<boolean> {
+  if (!beforeStat || !ops.statFile) {
+    return false;
+  }
+  const afterStat = await ops.statFile(absolutePath).catch(() => null);
+  if (!afterStat || afterStat.type !== "file") {
+    return false;
+  }
+  return afterStat.size !== beforeStat.size || afterStat.mtimeMs !== beforeStat.mtimeMs;
+}
+
+function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    message.includes("timed out") ||
+    message.includes("timeout")
+  );
+}
+
+async function recoverSuccessfulWrite(params: {
+  absolutePath: string;
+  content: string;
+  error: unknown;
+  ops: WriteOperations;
+  path: string;
+  precheck: WriteToolPrecheck;
+  signal?: AbortSignal;
+}) {
+  if (!params.ops.readFile || !isWriteRecoveryCandidate(params.error, params.signal)) {
+    return null;
+  }
+  const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
+  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
+  const changed =
+    params.precheck.state === "different" ||
+    (params.precheck.state === "unknown" &&
+      (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
+  if (currentContent !== params.content || !changed) {
+    return null;
+  }
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: `Successfully wrote ${params.content.length} bytes to ${params.path}`,
+      },
+    ],
+    details: undefined,
+  };
+}
+
 export function createWriteToolDefinition(
   cwd: string,
   options?: WriteToolOptions,
@@ -232,53 +386,45 @@ export function createWriteToolDefinition(
       void ctx;
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
-      return withFileMutationQueue(
-        absolutePath,
-        () =>
-          new Promise<{ content: Array<{ type: "text"; text: string }>; details: undefined }>(
-            (resolve, reject) => {
-              if (signal?.aborted) {
-                reject(new Error("Operation aborted"));
-                return;
-              }
-              let aborted = false;
-              const onAbort = () => {
-                aborted = true;
-                reject(new Error("Operation aborted"));
-              };
-              signal?.addEventListener("abort", onAbort, { once: true });
-              void (async () => {
-                try {
-                  // Create parent directories if needed.
-                  await ops.mkdir(dir);
-                  if (aborted) {
-                    return;
-                  }
-                  // Write the file contents.
-                  await ops.writeFile(absolutePath, content);
-                  if (aborted) {
-                    return;
-                  }
-                  signal?.removeEventListener("abort", onAbort);
-                  resolve({
-                    content: [
-                      {
-                        type: "text",
-                        text: `Successfully wrote ${content.length} bytes to ${path}`,
-                      },
-                    ],
-                    details: undefined,
-                  });
-                } catch (error: unknown) {
-                  signal?.removeEventListener("abort", onAbort);
-                  if (!aborted) {
-                    reject(error);
-                  }
-                }
-              })();
-            },
-          ),
-      );
+      return withFileMutationQueue(absolutePath, async () => {
+        const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        try {
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+          await ops.mkdir(dir);
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+          await ops.writeFile(absolutePath, content);
+          if (signal?.aborted) {
+            throw new Error("Operation aborted");
+          }
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Successfully wrote ${content.length} bytes to ${path}`,
+              },
+            ],
+            details: undefined,
+          };
+        } catch (error: unknown) {
+          const recovered = await recoverSuccessfulWrite({
+            absolutePath,
+            content,
+            error,
+            ops,
+            path,
+            precheck,
+            signal,
+          });
+          if (recovered) {
+            return recovered;
+          }
+          throw error;
+        }
+      });
     },
     renderCall(args, theme, context) {
       const renderArgs = args as
