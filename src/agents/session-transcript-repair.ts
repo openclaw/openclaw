@@ -22,6 +22,7 @@ type RawToolCallBlock = {
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
+  partialJson?: unknown;
 };
 
 const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
@@ -65,6 +66,31 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
     hasNonEmptyStringField(block.tool_call_id) ||
     hasNonEmptyStringField(block.tool_use_id)
   );
+}
+
+function hasPartialJson(
+  block: RawToolCallBlock,
+): block is RawToolCallBlock & { partialJson: string } {
+  return typeof block.partialJson === "string";
+}
+
+function isFinalizedOpenAIResponsesToolCall(block: RawToolCallBlock): boolean {
+  if (!hasPartialJson(block) || typeof block.id !== "string" || "input" in block) {
+    return false;
+  }
+
+  const separator = block.id.indexOf("|");
+  if (separator <= 0 || separator === block.id.length - 1) {
+    return false;
+  }
+
+  return "arguments" in block && block.arguments !== undefined && block.arguments !== null;
+}
+function isInterruptedAssistantTurn(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || !("stopReason" in message)) {
+    return false;
+  }
+  return message.stopReason === "aborted" || message.stopReason === "error";
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {

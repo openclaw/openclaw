@@ -489,23 +489,34 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     expect(ids).toEqual(expectedIds);
   });
 
-  it("strips partialJson from completed blocks and drops incomplete streaming artifacts", () => {
+  it("keeps finalized OpenAI Responses blocks and drops interrupted partialJson artifacts", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
         content: [
           // complete tool call — kept as-is
           { type: "toolCall", id: "call_ok", name: "read", arguments: { path: "/a" } },
-          // has partialJson but complete id/name/arguments — partialJson is stripped, block kept
-          // (OpenAI Responses transport retains partialJson on finalized blocks)
+          // Finalized OpenAI Responses blocks keep parsed arguments plus
+          // partialJson in persisted history; repair should strip only
+          // partialJson and keep the finished tool call.
           {
             type: "toolCall",
-            id: "call_partial",
+            id: "call_partial|fc_123",
             name: "Bash",
             arguments: { command: "ls" },
             partialJson: '{"command": "ls"}',
           },
-          // has partialJson and missing input — genuine interrupted stream artifact, dropped
+          // Anthropic can persist initialized tool calls with arguments: {}
+          // plus partialJson if the stream aborts before content_block_stop.
+          // Those incomplete artifacts must be dropped.
+          {
+            type: "toolCall",
+            id: "toolu_123",
+            name: "Bash",
+            arguments: {},
+            partialJson: '{"command":',
+          },
+          // Missing required input is also an interrupted artifact and should drop.
           {
             type: "toolUse",
             id: "call_partial2",
@@ -517,24 +528,22 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       },
       { role: "user", content: "retry" },
     ]);
-
     const out = sanitizeToolCallInputs(input);
     const toolCalls = getAssistantToolCallBlocks(out);
     const ids = toolCalls.map((t) => (t as { id?: unknown }).id);
-    expect(ids).toEqual(["call_ok", "call_partial"]);
-    // Verify partialJson was stripped from the completed block
-    const keptPartial = toolCalls.find((t) => (t as { id?: unknown }).id === "call_partial");
+    expect(ids).toEqual(["call_ok", "call_partial|fc_123"]);
+    const keptPartial = toolCalls.find((t) => (t as { id?: unknown }).id === "call_partial|fc_123");
     expect(keptPartial).not.toHaveProperty("partialJson");
   });
 
-  it("strips partialJson and still redacts sessions_spawn attachment content", () => {
+  it("strips partialJson and preserves sessions_spawn attachment content", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
         content: [
           {
             type: "toolCall",
-            id: "call_spawn",
+            id: "call_spawn|fc_456",
             name: "sessions_spawn",
             arguments: { attachments: [{ content: "secret data" }] },
             partialJson: '{"attachments":[{"content":"secret data"}]}',
@@ -549,9 +558,9 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const spawn = toolCalls[0] as { id?: unknown; arguments?: unknown };
     // partialJson must be stripped
     expect(spawn).not.toHaveProperty("partialJson");
-    // sessions_spawn attachment content must be redacted
+    // sessions_spawn attachment content must be preserved on current main.
     const args = spawn.arguments as { attachments?: Array<{ content?: unknown }> };
-    expect(args?.attachments?.[0]?.content).not.toBe("secret data");
+    expect(args?.attachments?.[0]?.content).toBe("secret data");
   });
 
   it("keeps valid tool calls and preserves text blocks", () => {
