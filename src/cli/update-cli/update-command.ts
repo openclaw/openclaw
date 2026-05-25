@@ -96,6 +96,7 @@ import {
 } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
@@ -233,10 +234,6 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
     record.source === "git" ||
     record.source === "marketplace"
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizePluginInstallRecordMap(value: unknown): Record<string, PluginInstallRecord> {
@@ -2750,6 +2747,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -2906,7 +2904,25 @@ async function markControlPlaneUpdateRestartSentinelFailureBestEffort(params: {
   }
 }
 
+async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  return run().finally(() => {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+  });
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
+  return await withUpdateInProgressEnv(async () => {
+    await updateCommandInternal(opts);
+  });
+}
+
+async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();

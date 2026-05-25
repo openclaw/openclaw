@@ -59,7 +59,6 @@ if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
 fi
 MIN_NODE_VERSION="22.19.0"
 APK_NODE_BIN_DIR="/usr/bin"
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
@@ -85,7 +84,6 @@ Usage: install-cli.sh [options]
   --set-npm-prefix                    Force npm prefix to ~/.npm-global if current prefix is not writable (Linux)
 
 Environment variables:
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   OPENCLAW_INSTALL_METHOD=git|npm
   OPENCLAW_HOME=...
@@ -819,7 +817,7 @@ ensure_pnpm() {
 
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"start\",\"method\":\"npm\"}"
   log "Installing pnpm via npm..."
-  SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
+  "$(npm_bin)" install -g --prefix "$PREFIX" pnpm@11
   detect_pnpm_cmd || true
   emit_json "{\"event\":\"step\",\"name\":\"pnpm\",\"status\":\"ok\"}"
   return 0
@@ -857,25 +855,27 @@ fix_npm_prefix_if_needed() {
   log "Configured npm prefix to ${target}"
 }
 
-expand_npm_config_path() {
-  local path="$1"
-  if [[ -z "$path" ]]; then
+resolve_npm_config_path() {
+  local raw="$1"
+  if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
     return 1
   fi
-  case "$path" in
-    "\${HOME}/"*) path="${HOME:-}/${path#\$\{HOME\}/}" ;;
-    "\$HOME/"*) path="${HOME:-}/${path#\$HOME/}" ;;
-    [~]/*) path="${HOME:-}/${path#\~/}" ;;
-  esac
-  printf '%s\n' "$path"
+  if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/${raw#"~/"}"
+    return 0
+  fi
+  if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
+    printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
+    return 0
+  fi
+  printf '%s\n' "$raw"
 }
 
 npm_config_file_has_key() {
-  local file
-  file="$(expand_npm_config_path "$1")" || return 1
+  local file="$1"
   local key="$2"
   [[ -f "$file" ]] || return 1
-  grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" >/dev/null 2>&1
+  grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
 }
 
 npm_command_path() {
@@ -899,36 +899,39 @@ npm_builtin_config_path() {
   printf '%s\n' "${npm_root}/npmrc"
 }
 
-npm_raw_config_has_key() {
-  local key="$1"
-  local npm_cmd="${2:-npm}"
-  local user_config="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
-  local global_config="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
-  local prefix="${NPM_CONFIG_PREFIX:-${npm_config_prefix:-}}"
+npm_config_has_raw_key() {
+  local npm_cmd="$1"
+  local key="$2"
+  local raw=""
+  local file=""
+  local -a files=()
 
-  npm_config_file_has_key ".npmrc" "$key" && return 0
-  if [[ -n "$user_config" ]]; then
-    npm_config_file_has_key "$user_config" "$key" && return 0
+  raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+  if [[ -n "$raw" ]]; then
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
   elif [[ -n "${HOME:-}" ]]; then
-    npm_config_file_has_key "${HOME}/.npmrc" "$key" && return 0
+    files+=("${HOME}/.npmrc")
   fi
-  if [[ -n "$global_config" ]]; then
-    npm_config_file_has_key "$global_config" "$key" && return 0
-  else
-    local resolved_global_config=""
-    resolved_global_config="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get globalconfig 2>/dev/null || true)"
-    if [[ -n "$resolved_global_config" && "$resolved_global_config" != "null" && "$resolved_global_config" != "undefined" ]]; then
-      npm_config_file_has_key "$resolved_global_config" "$key" && return 0
+
+  raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+  if [[ -n "$raw" ]]; then
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+  fi
+
+  raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
+  file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+  [[ -n "$file" ]] && files+=("$file")
+
+  file="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+  [[ -n "$file" ]] && files+=("$file")
+
+  for file in "${files[@]}"; do
+    if npm_config_file_has_key "$file" "$key"; then
+      return 0
     fi
-  fi
-  if [[ -n "$prefix" ]]; then
-    npm_config_file_has_key "${prefix}/etc/npmrc" "$key" && return 0
-  fi
-  local builtin_config=""
-  builtin_config="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
-  if [[ -n "$builtin_config" ]]; then
-    npm_config_file_has_key "$builtin_config" "$key" && return 0
-  fi
+  done
   return 1
 }
 
@@ -939,10 +942,12 @@ install_openclaw() {
   fi
   local freshness_flag="--min-release-age=0"
   local min_release_age=""
-  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age 2>/dev/null || true)"
-  if ! npm_raw_config_has_key "min-release-age" "$(npm_bin)" && [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age --global 2>/dev/null || true)"
+  if npm_config_has_raw_key "$(npm_bin)" "min-release-age"; then
+    freshness_flag="--min-release-age=0"
+  elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
     local before_value=""
-    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before 2>/dev/null || true)"
+    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before --global 2>/dev/null || true)"
     if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
       freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
     fi
@@ -960,14 +965,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"
@@ -1063,7 +1068,7 @@ install_openclaw_from_git() {
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-  CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
   if ! run_pnpm -C "$repo_dir" ui:build; then
     log "UI build failed; continuing (CLI may still work)"

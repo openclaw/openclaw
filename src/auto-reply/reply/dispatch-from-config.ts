@@ -58,11 +58,9 @@ import { isAbortError } from "../../infra/unhandled-rejections.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
-  logMessageProcessed,
-  logMessageQueued,
-  logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
@@ -798,6 +796,17 @@ export async function dispatchReplyFromConfig(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const messageLifecycle = createDiagnosticMessageLifecycle({
+    enabled: diagnosticsEnabled,
+    channel,
+    chatId,
+    messageId,
+    sessionKey,
+    source: "dispatch",
+    processingReason: "message_start",
+    startedAtMs: startTime,
+    trackSessionState: canTrackSession,
+  });
   const traceAttributes = {
     surface: channel,
     hasSessionKey: Boolean(sessionKey),
@@ -818,19 +827,7 @@ export async function dispatchReplyFromConfig(
       error?: string;
     },
   ) => {
-    if (!diagnosticsEnabled) {
-      return;
-    }
-    logMessageProcessed({
-      channel,
-      chatId,
-      messageId,
-      sessionKey,
-      durationMs: Date.now() - startTime,
-      outcome,
-      reason: opts?.reason,
-      error: opts?.error,
-    });
+    messageLifecycle.markProcessed(outcome, opts);
   };
 
   const recordAgentDispatchStarted = () => {
@@ -867,26 +864,11 @@ export async function dispatchReplyFromConfig(
   };
 
   const markProcessing = () => {
-    if (!canTrackSession || !sessionKey) {
-      return;
-    }
-    logMessageQueued({ sessionKey, channel, source: "dispatch" });
-    logSessionStateChange({
-      sessionKey,
-      state: "processing",
-      reason: "message_start",
-    });
+    messageLifecycle.markProcessing();
   };
 
   const markIdle = (reason: string) => {
-    if (!canTrackSession || !sessionKey) {
-      return;
-    }
-    logSessionStateChange({
-      sessionKey,
-      state: "idle",
-      reason,
-    });
+    messageLifecycle.markIdle(reason);
   };
 
   let inboundDedupeReplayUnsafe = false;

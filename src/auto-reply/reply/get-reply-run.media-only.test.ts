@@ -878,7 +878,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current MediaPaths into queued followup images", async () => {
+  it("hydrates current image MediaPaths by extension when MediaTypes are missing", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -897,7 +897,6 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: "describe this",
           CommandBody: "describe this",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
@@ -911,7 +910,6 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingTo: "C123",
           ChatType: "group",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
         },
       }),

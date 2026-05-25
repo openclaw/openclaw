@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
@@ -991,12 +992,7 @@ function normalizeHeaders(value: unknown): Record<string, string> {
 }
 
 function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => readNonEmptyString(entry))
-    .filter((entry): entry is string => entry !== undefined);
+  return normalizeTrimmedStringList(value);
 }
 
 function readBooleanEnv(value: string | undefined): boolean | undefined {

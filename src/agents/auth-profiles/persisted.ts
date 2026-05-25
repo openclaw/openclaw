@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import { asBoolean } from "../../utils/boolean.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -47,10 +50,6 @@ const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
 const runtimeLegacyOAuthSidecarCredentials = new WeakSet<OAuthCredential>();
 const runtimeLegacyOAuthSidecarMaterialFingerprints = new Map<string, string>();
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
 function normalizeOptionalCredentialString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -80,10 +79,6 @@ function buildLegacyOAuthSecretMaterialFingerprint(
       JSON.stringify([material.access ?? null, material.refresh ?? null, material.idToken ?? null]),
     )
     .digest("hex");
-}
-
-function normalizeOptionalCredentialBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizeExpiryField(value: unknown): number | undefined {
@@ -126,7 +121,7 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   const normalized: Record<string, unknown> = {
     provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
   };
-  const copyToAgents = normalizeOptionalCredentialBoolean(entry.copyToAgents);
+  const copyToAgents = asBoolean(entry.copyToAgents);
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
   }
@@ -416,7 +411,7 @@ function mergeRecord<T>(
 }
 
 function dedupeMergedProfileOrder(profileIds: string[]): string[] {
-  return Array.from(new Set(profileIds));
+  return uniqueStrings(profileIds);
 }
 
 function hasComparableOAuthIdentityConflict(

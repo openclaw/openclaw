@@ -42,6 +42,7 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
@@ -89,6 +90,7 @@ describe("agent event handler", () => {
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -100,6 +102,7 @@ describe("agent event handler", () => {
       clearAgentRunContext,
       toolEventRecipients,
       sessionEventSubscribers,
+      sessionMessageSubscribers,
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
@@ -115,6 +118,7 @@ describe("agent event handler", () => {
       chatRunState,
       toolEventRecipients,
       sessionEventSubscribers,
+      sessionMessageSubscribers,
       handler,
     };
   }
@@ -1519,6 +1523,45 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("does not duplicate tool events to clients subscribed by run and session", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-dedupe",
+      });
+
+    registerAgentRunContext("run-session-dedupe-tool", {
+      sessionKey: "session-dedupe",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-overlap");
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-run-only");
+    sessionEventSubscribers.subscribe("conn-overlap");
+    sessionEventSubscribers.subscribe("conn-session-only");
+
+    handler({
+      runId: "run-session-dedupe-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-dedupe-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+      new Set(["conn-overlap", "conn-run-only"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+      new Set(["conn-session-only"]),
+    );
+  });
+
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
     const {
       broadcastToConnIds,
@@ -2417,6 +2460,46 @@ describe("agent event handler", () => {
     const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
     expect(persistEvent.runId).toBe("run-hidden");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
+  });
+
+  it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {
+    const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-hidden",
+      });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "visible only to the selected session" },
+    });
+    emitLifecycleEnd(handler, "run-hidden", 2);
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "hidden chat delta event")).toBe("chat");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "hidden chat delta recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "hidden chat final event")).toBe("chat");
+    const finalPayload = requireMockPayload(broadcastToConnIds, 1, 1, "hidden chat final payload");
+    expectPayloadFields(finalPayload, {
+      runId: "run-hidden",
+      sessionKey: "session-hidden",
+      state: "final",
+    });
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "hidden chat final recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {

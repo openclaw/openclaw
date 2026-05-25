@@ -5,6 +5,7 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -235,6 +236,16 @@ function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   }
 
   return true;
+}
+
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  if (typeof params.explicit === "boolean") {
+    return params.explicit;
+  }
+  return params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario));
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -1014,7 +1025,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
-      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+      ...normalizeStringEntries(params?.enabledPluginIds ?? []),
       ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
     ]),
   ];
@@ -1036,6 +1047,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     concurrency,
     lab: params?.lab,
     startLab: params?.startLab,
+  });
+  const controlUiEnabled = resolveQaSuiteControlUiEnabled({
+    explicit: params?.controlUiEnabled,
+    scenarios: selectedCatalogScenarios,
   });
 
   if (params?.runtimePair) {
@@ -1331,7 +1346,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     fastMode,
     thinkingDefault: params?.thinkingDefault,
     claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled: params?.controlUiEnabled ?? true,
+    controlUiEnabled,
     enabledPluginIds,
     forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
@@ -1350,10 +1365,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
   );
-  lab.setControlUi({
-    controlUiProxyTarget: gateway.baseUrl,
-    controlUiProxyToken: gateway.token,
-  });
+  if (controlUiEnabled) {
+    lab.setControlUi({
+      controlUiProxyTarget: gateway.baseUrl,
+      controlUiProxyToken: gateway.token,
+    });
+  }
   const env: QaSuiteEnvironment = {
     lab,
     mock,
@@ -1579,6 +1596,7 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  resolveQaSuiteControlUiEnabled,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,

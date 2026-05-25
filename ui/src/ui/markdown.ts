@@ -87,6 +87,16 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 
+export type MarkdownCodeBlockChrome = "copy" | "none";
+
+export type MarkdownRenderOptions = {
+  codeBlockChrome?: MarkdownCodeBlockChrome;
+};
+
+type MarkdownRenderEnv = {
+  codeBlockChrome: MarkdownCodeBlockChrome;
+};
+
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -113,6 +123,16 @@ function setCachedMarkdown(key: string, value: string) {
   if (oldest) {
     markdownCache.delete(oldest);
   }
+}
+
+function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
+  return {
+    codeBlockChrome: options.codeBlockChrome ?? "copy",
+  };
+}
+
+function shouldRenderCodeBlockCopy(env: unknown): boolean {
+  return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
 function installHooks() {
@@ -521,7 +541,7 @@ md.renderer.rules.image = (tokens, idx) => {
 };
 
 // Override fenced code blocks with copy button + JSON collapse
-md.renderer.rules.fence = (tokens, idx) => {
+md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
@@ -530,6 +550,9 @@ md.renderer.rules.fence = (tokens, idx) => {
   const highlighted = highlightCode(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!shouldRenderCodeBlockCopy(env)) {
+    return codeBlock;
+  }
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
@@ -552,12 +575,15 @@ md.renderer.rules.fence = (tokens, idx) => {
 };
 
 // Override indented code blocks (code_block) with the same treatment as fence
-md.renderer.rules.code_block = (tokens, idx) => {
+md.renderer.rules.code_block = (tokens, idx, _options, env) => {
   const token = tokens[idx];
   const text = token.content;
   const highlighted = highlightCode(text, "");
   const classAttr = codeClassAttribute("", highlighted);
   const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
+  if (!shouldRenderCodeBlockCopy(env)) {
+    return codeBlock;
+  }
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;
@@ -576,13 +602,17 @@ md.renderer.rules.code_block = (tokens, idx) => {
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
-export function toSanitizedMarkdownHtml(markdown: string): string {
+export function toSanitizedMarkdownHtml(
+  markdown: string,
+  options: MarkdownRenderOptions = {},
+): string {
+  const renderOptions = normalizeMarkdownRenderOptions(options);
   const input = stripUnsupportedCitationControlMarkers(markdown).trim();
   if (!input) {
     return "";
   }
   installHooks();
-  const cacheKey = `${i18n.getLocale()}\0${input}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -606,7 +636,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = md.render(`${truncated.text}${suffix}`);
+    rendered = md.render(`${truncated.text}${suffix}`, renderOptions);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
