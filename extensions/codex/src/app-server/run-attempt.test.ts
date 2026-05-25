@@ -7884,6 +7884,44 @@ describe("runCodexAppServerAttempt", () => {
     expect(interrupt?.params).toEqual({ threadId: "thread-1", turnId: "turn-1" });
   });
 
+  it("accepts message-tool-only steering for active Codex app-server source replies", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    expect(
+      queueActiveRunMessageForTest("session-1", "subagent complete", {
+        debounceMs: 1,
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toBe(true);
+
+    await vi.waitFor(
+      () =>
+        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "subagent complete", text_elements: [] }],
+            },
+          },
+        ]),
+      { interval: 1 },
+    );
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("batches default queued steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 

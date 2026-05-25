@@ -2929,6 +2929,7 @@ export async function runCodexAppServerAttempt(
       activeSteeringQueue.queue(text, options),
     isStreaming: () => !completed,
     isCompacting: () => projector?.isCompacting() ?? false,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => runAbortController.abort("cancelled"),
     abort: () => runAbortController.abort("aborted"),
   };
