@@ -686,6 +686,30 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
+  it("does not use primary metadata for explicit uncataloged runtime models", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      runtimeProvider: "custom",
+      runtimeModel: "uncataloged-32k",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("100000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("caps reserveTokensFloor hint by agent.defaults.contextTokens", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
@@ -4889,7 +4913,7 @@ describe("runAgentTurnWithFallback", () => {
   it("uses the throwing fallback candidate model for compaction failure hints", async () => {
     state.isCompactionFailureErrorMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("ollama", "qwen3.5-9b-32k:latest");
+      await params.run("custom", "uncataloged-32k");
       throw new Error("expected fallback candidate to throw");
     });
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
@@ -4905,10 +4929,6 @@ describe("runAgentTurnWithFallback", () => {
           openrouter: {
             baseUrl: "https://openrouter.test",
             models: [makeTestModel("qwen3.6-plus", 1_000_000)],
-          },
-          ollama: {
-            baseUrl: "http://ollama.test",
-            models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
           },
         },
       },

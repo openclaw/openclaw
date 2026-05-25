@@ -742,8 +742,11 @@ function resolveContextWindowForCompactionHint(params: {
   activeSessionEntry?: SessionEntry;
 }): number | undefined {
   let modelWindow: number | undefined;
-  const runtimeProvider = params.runtimeProvider ?? params.activeSessionEntry?.modelProvider;
-  const runtimeModel = params.runtimeModel ?? params.activeSessionEntry?.model;
+  const entryProvider = params.activeSessionEntry?.modelProvider;
+  const entryModel = params.activeSessionEntry?.model;
+  const runtimeProvider = params.runtimeProvider ?? entryProvider;
+  const runtimeModel = params.runtimeModel ?? entryModel;
+  const hasExplicitRuntimeRef = Boolean(params.runtimeProvider && params.runtimeModel);
   if (runtimeProvider && runtimeModel) {
     const resolved = resolveContextTokensForModel({
       cfg: params.cfg,
@@ -756,10 +759,16 @@ function resolveContextWindowForCompactionHint(params: {
     }
   }
   const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
-  if (modelWindow === undefined && runtimeProvider && runtimeModel && sessionWindow !== undefined) {
+  const sessionMatchesRuntimeRef = runtimeProvider === entryProvider && runtimeModel === entryModel;
+  if (modelWindow === undefined && sessionMatchesRuntimeRef && sessionWindow !== undefined) {
     modelWindow = sessionWindow;
   }
-  if (modelWindow === undefined && params.primaryProvider && params.primaryModel) {
+  if (
+    modelWindow === undefined &&
+    !hasExplicitRuntimeRef &&
+    params.primaryProvider &&
+    params.primaryModel
+  ) {
     const resolved = resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.primaryProvider,
