@@ -1,5 +1,5 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
@@ -60,6 +60,27 @@ function normalizeKilocodeStopPayload(payloadObj: Record<string, unknown>): void
   }
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeKilocodeStopAfterCaller(
+  value: unknown,
+  fallbackPayload: Record<string, unknown> | undefined,
+): unknown {
+  const replacementPayload = asRecord(value);
+  if (replacementPayload) {
+    normalizeKilocodeStopPayload(replacementPayload);
+    return value;
+  }
+  if (fallbackPayload) {
+    normalizeKilocodeStopPayload(fallbackPayload);
+  }
+  return value;
+}
+
 function isProxyReasoningUnsupported(modelId: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(modelId);
   const slashIndex = trimmed?.indexOf("/") ?? -1;
@@ -81,23 +102,38 @@ export function createKilocodeStreamWrapper(
     return undefined;
   }
   const underlying = baseStreamFn;
-  return (model, context, options) =>
-    streamWithPayloadPatch(
-      underlying,
-      model,
-      context,
-      {
-        ...options,
-        headers: {
-          ...options?.headers,
-          ...resolveKilocodeAppHeaders(),
-        },
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    const headers = resolveProviderRequestHeaders({
+      provider: typeof model.provider === "string" ? model.provider : "kilocode",
+      api: model.api,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      defaultHeaders: resolveKilocodeAppHeaders(),
+      precedence: "defaults-win",
+    });
+    return underlying(model, context, {
+      ...options,
+      headers,
+      onPayload(payload, payloadModel) {
+        const payloadObj = asRecord(payload);
+        if (payloadObj) {
+          // Keep Kilo thinking defaults overrideable by later caller/config payload hooks.
+          normalizeKilocodeReasoningPayload(payloadObj, thinkingLevel);
+        }
+
+        const result = originalOnPayload?.(payload, payloadModel);
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          return Promise.resolve(result).then((resolved) =>
+            normalizeKilocodeStopAfterCaller(resolved, payloadObj),
+          );
+        }
+        return normalizeKilocodeStopAfterCaller(result, payloadObj);
       },
-      (payloadObj) => {
-        normalizeKilocodeReasoningPayload(payloadObj, thinkingLevel);
-        normalizeKilocodeStopPayload(payloadObj);
-      },
-    );
+    });
+  };
 }
 
 export function wrapKilocodeProviderStream(
