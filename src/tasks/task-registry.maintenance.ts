@@ -362,7 +362,7 @@ function isRecoverableLostCronTask(task: TaskRecord): boolean {
     return false;
   }
   const error = task.error?.trim().toLowerCase();
-  return !error || error.includes("backing session missing");
+  return Boolean(error?.includes("backing session missing"));
 }
 
 function mapCronTerminalStatus(status: unknown, error?: string): CronTerminalRecovery["status"] {
