@@ -94,7 +94,25 @@ export function createBlockReplyCoalescer(params: {
     const text = reply.text;
     const hasText = reply.hasText;
     if (hasMedia) {
-      void flush({ force: true });
+      clearIdleTimer();
+      const replyToConflict = Boolean(
+        bufferText &&
+        payload.replyToId &&
+        (!bufferReplyToId || bufferReplyToId !== payload.replyToId),
+      );
+      if (bufferText && !replyToConflict) {
+        const mergedPayload: ReplyPayload = {
+          ...payload,
+          text: text ? `${bufferText}\n${text}` : bufferText,
+        };
+        resetBuffer();
+        void onFlush(mergedPayload);
+        return;
+      }
+      if (bufferText) {
+        void flush({ force: true });
+      }
+      resetBuffer();
       void onFlush(payload);
       return;
     }
