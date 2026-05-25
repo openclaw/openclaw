@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resetGatewayModelPricingCacheForTest,
   setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
+import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import {
   resetUsageFormatCachesForTest,
   estimateUsageCost,
@@ -286,6 +287,76 @@ describe("usage-format", () => {
       cacheRead: 0.7,
       cacheWrite: 0.8,
     });
+  });
+
+  it("skips manifest model normalization for raw cost lookup", () => {
+    const manifestSpy = vi.spyOn(
+      manifestModelIdNormalization,
+      "normalizeProviderModelIdWithManifest",
+    );
+    const config = {
+      models: {
+        providers: {
+          "demo-raw": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-raw",
+        model: "demo-model",
+        config,
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+    });
+    expect(manifestSpy).not.toHaveBeenCalled();
+  });
+
+  it("observes in-place config pricing changes after a cached lookup", () => {
+    const model = {
+      id: "demo-model",
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    };
+    const config = {
+      models: {
+        providers: {
+          "demo-mutated": {
+            models: [model],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-mutated",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(1);
+
+    model.cost.input = 9;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "demo-mutated",
+        model: "demo-model",
+        config,
+      })?.input,
+    ).toBe(9);
   });
 
   // -----------------------------------------------------------------------
