@@ -560,7 +560,7 @@ const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
   /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
   /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
 ];
-const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "test"];
+const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "ui/config", "test"];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
@@ -1285,7 +1285,7 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (siblingTest) {
     return [siblingTest];
   }
-  if (/^(?:src|test\/helpers|extensions|packages|ui\/src)\//u.test(changedPath)) {
+  if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
     if (affectedTests.length > 0) {
       return affectedTests;

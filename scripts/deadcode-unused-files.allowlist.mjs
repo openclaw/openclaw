@@ -42,5 +42,4 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
   "src/gateway/test/server-sessions-helpers.ts",
-  "ui/src/ui/control-ui-chunking.ts",
 ];

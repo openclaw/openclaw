@@ -162,7 +162,6 @@ const config = {
       entry: [
         "index.html!",
         "src/main.ts!",
-        "src/build/chunking.ts!",
         "vite.config.ts!",
         "vitest*.ts!",
       ],
