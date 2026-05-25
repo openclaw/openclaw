@@ -1603,6 +1603,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
   });
 
+  it("preserves configured session instructions for manual speech", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      instructions: "Stay concise and follow the configured call policy.",
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
+
+    expect(parseSent(socket).slice(-1)).toEqual([
+      {
+        type: "response.create",
+        response: {
+          instructions:
+            "Stay concise and follow the configured call policy.\n\nSay exactly: hello from explicit speech.",
+        },
+      },
+    ]);
+  });
+
   it("defers manual response.create while a realtime response is active", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
