@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as cronStore from "../cron/store.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
@@ -25,6 +26,7 @@ async function makeTempStorePath() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   noteMock.mockClear();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -124,6 +126,45 @@ function expectNoNoteContaining(message: string, title: string): void {
 }
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("warns and continues when the cron store is unreadable", async () => {
+    const storePath = await makeTempStorePath();
+    const err = new Error("permission denied") as NodeJS.ErrnoException;
+    err.code = "EACCES";
+    const loadCronStoreSpy = vi.spyOn(cronStore, "loadCronStore").mockRejectedValueOnce(err);
+
+    await expect(
+      maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(loadCronStoreSpy).toHaveBeenCalledWith(storePath);
+    expectNoteContaining(`Cron store at ${storePath} could not be read.`, "Doctor warnings");
+    expectNoteContaining(
+      "Doctor skipped legacy cron store checks and will continue with later health checks.",
+      "Doctor warnings",
+    );
+    expectNoteContaining("Read error: permission denied", "Doctor warnings");
+  });
+
+  it("rethrows non-permission cron store errors", async () => {
+    const storePath = await makeTempStorePath();
+    const err = new Error("Failed to parse cron store");
+    vi.spyOn(cronStore, "loadCronStore").mockRejectedValueOnce(err);
+
+    await expect(
+      maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      }),
+    ).rejects.toThrow("Failed to parse cron store");
+
+    expectNoNoteContaining("could not be read", "Doctor warnings");
+  });
+
   it("surfaces cron payload model overrides without rewriting current jobs", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

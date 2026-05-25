@@ -34,6 +34,15 @@ function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function isUnreadableCronStoreError(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code;
+  if (code === "EACCES" || code === "EPERM") {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /permission denied|operation not permitted/i.test(message);
+}
+
 function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
@@ -335,7 +344,23 @@ export async function maybeRepairLegacyCronStore(params: {
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  try {
+    store = await loadCronStore(storePath);
+  } catch (err) {
+    if (!isUnreadableCronStoreError(err)) {
+      throw err;
+    }
+    note(
+      [
+        `Cron store at ${shortenHomePath(storePath)} could not be read.`,
+        `Doctor skipped legacy cron store checks and will continue with later health checks.`,
+        `Read error: ${err instanceof Error ? err.message : String(err)}`,
+      ].join("\n"),
+      "Doctor warnings",
+    );
+    return;
+  }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     return;
