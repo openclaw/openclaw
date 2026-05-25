@@ -1892,6 +1892,70 @@ describe("createOllamaStreamFn streaming events", () => {
     }
   });
 
+  it("streams marker-less Kimi answers after the bounded sanitizer window", async () => {
+    const controlledFetch = createControlledNdjsonFetch();
+    fetchWithSsrFGuardMock.mockImplementation(controlledFetch.fetchImpl);
+
+    try {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      const visibleAnswer = "This is a normal Kimi cloud answer without hidden reasoning. ".repeat(
+        12,
+      );
+
+      controlledFetch.pushLine(
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: visibleAnswer },
+          done: false,
+        }),
+      );
+
+      const startEvent = await nextEventWithin(iterator);
+      expect(startEvent).not.toBe("timeout");
+      expectIteratorEvent(startEvent, { type: "start", done: false });
+
+      const textStartEvent = await nextEventWithin(iterator);
+      expect(textStartEvent).not.toBe("timeout");
+      expectIteratorEvent(textStartEvent, { type: "text_start", done: false });
+
+      const textDeltaEvent = await nextEventWithin(iterator);
+      expect(textDeltaEvent).not.toBe("timeout");
+      expectIteratorEvent(textDeltaEvent, {
+        type: "text_delta",
+        delta: visibleAnswer,
+        done: false,
+      });
+
+      controlledFetch.pushLine(
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      );
+      controlledFetch.close();
+
+      const textEndEvent = await nextEventWithin(iterator);
+      expect(textEndEvent).not.toBe("timeout");
+      expectIteratorEvent(textEndEvent, {
+        type: "text_end",
+        content: visibleAnswer,
+        done: false,
+      });
+
+      const doneEvent = await nextEventWithin(iterator);
+      expect(doneEvent).not.toBe("timeout");
+      expectIteratorEvent(doneEvent, { type: "done", done: false });
+
+      const streamEnd = await nextEventWithin(iterator);
+      expect(streamEnd).not.toBe("timeout");
+      expectIteratorEvent(streamEnd, { done: true });
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
   it("does not reject punctuation-heavy text from unrelated Ollama models", async () => {
     const punctuationHeavy =
       '$$"##"%#"##"####""$""""##""$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$' +

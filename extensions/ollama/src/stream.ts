@@ -362,6 +362,7 @@ function isOllamaCloudKimiModelRef(modelId: string): boolean {
 }
 
 const KIMI_INLINE_REASONING_MIN_PREFIX_CHARS = 80;
+const KIMI_INLINE_REASONING_MAX_PENDING_CHARS = 512;
 const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
 
 type KimiInlineReasoningVisibleTextResolution =
@@ -379,7 +380,10 @@ function resolveKimiInlineReasoningVisibleText(params: {
 
   const match = KIMI_INLINE_REASONING_BOUNDARY_RE.exec(params.text);
   if (!match) {
-    return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
+    if (!params.final && params.text.length <= KIMI_INLINE_REASONING_MAX_PENDING_CHARS) {
+      return { kind: "pending" };
+    }
+    return { kind: "visible", text: params.text };
   }
 
   const boundaryStartIndex = match.index + match[1].length;
