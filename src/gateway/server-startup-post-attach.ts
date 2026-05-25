@@ -183,6 +183,19 @@ type ResolvedMemoryIndexIdleEvictPolicy =
   | { mode: "off" }
   | { mode: "on"; idleMs: number; scanMs: number };
 
+// Resolve idle-eviction policy from gateway defaults only.
+//
+// By design this reads only `agents.defaults.memorySearch.sync`. The
+// MemoryIndexManager cache (`INDEX_CACHE`) is a module-level singleton
+// shared by every agent in the gateway process, and the sweep runs once
+// per cadence over the entire cache. There is no per-agent sweep timer,
+// and no meaningful way to honour a per-agent `idleEvictMs` while another
+// agent in the same gateway wants the same manager kept alive. Per-agent
+// values placed under `agents.list[].memorySearch.sync` are accepted by
+// the zod schema (shared with `agents.defaults`) but intentionally not
+// read here; the gateway-wide contract is documented on the
+// `MemorySearchConfig.sync.idleEvictMs` / `idleEvictScanMs` TS docs and
+// in the corresponding schema-label entries.
 function resolveMemoryIndexIdleEvictPolicy(
   cfg: OpenClawConfig,
 ): ResolvedMemoryIndexIdleEvictPolicy {
