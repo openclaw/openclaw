@@ -5,16 +5,11 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
-import {
-  normalizeAgentId,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -43,7 +38,6 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { getActivePluginChannelRegistry } from "./runtime.js";
-import { createRuntimeLlm } from "./runtime/runtime-llm.runtime.js";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -179,25 +173,10 @@ function resolveBindingConversationFromCommand(params: {
   });
 }
 
-function resolvePluginCommandAgentId(params: {
-  config: OpenClawConfig;
-  sessionKey?: string;
-}): string | undefined {
-  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  const parsed = parseAgentSessionKey(normalizedSessionKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  const loweredSessionKey = normalizeLowercaseStringOrEmpty(normalizedSessionKey);
-  const mainKey = normalizeMainKey(params.config.session?.mainKey);
-  if (loweredSessionKey === "main" || loweredSessionKey === mainKey) {
-    return resolveDefaultAgentId(params.config);
-  }
-  return undefined;
-}
+type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
+type PluginCommandLlmCompleteParams = Parameters<
+  NonNullable<PluginCommandRuntimeLlm>["complete"]
+>[0];
 
 function buildPluginCommandRuntimeContext(params: {
   command: RegisteredPluginCommand;
@@ -206,7 +185,7 @@ function buildPluginCommandRuntimeContext(params: {
   authProfileId?: string;
 }): PluginCommandContext["runtimeContext"] {
   const sessionKey = params.sessionKey?.trim();
-  const agentId = resolvePluginCommandAgentId({
+  const agentId = resolveBoundAgentIdForSession({
     config: params.config,
     sessionKey,
   });
@@ -214,24 +193,29 @@ function buildPluginCommandRuntimeContext(params: {
     return undefined;
   }
   return {
-    llm: createRuntimeLlm({
-      getConfig: () => params.config,
-      authority: {
-        caller: {
-          kind: "plugin",
-          id: params.command.pluginId,
-          name: params.command.pluginName,
-        },
-        pluginIdForPolicy: params.command.pluginId,
-        requiresBoundAgent: true,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(agentId ? { agentId } : {}),
-        ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
-        allowAgentIdOverride: false,
-        allowModelOverride: false,
-        allowComplete: true,
+    llm: {
+      complete: async (request: PluginCommandLlmCompleteParams) => {
+        const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
+        return await createRuntimeLlm({
+          getConfig: () => params.config,
+          authority: {
+            caller: {
+              kind: "plugin",
+              id: params.command.pluginId,
+              name: params.command.pluginName,
+            },
+            pluginIdForPolicy: params.command.pluginId,
+            requiresBoundAgent: true,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
+            allowAgentIdOverride: false,
+            allowModelOverride: false,
+            allowComplete: true,
+          },
+        }).complete(request);
       },
-    }),
+    },
   };
 }
 
