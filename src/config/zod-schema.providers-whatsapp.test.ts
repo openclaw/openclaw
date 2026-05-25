@@ -180,4 +180,36 @@ describe("WhatsApp prompt config Zod validation", () => {
     const result = WhatsAppConfigSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  it("accepts channel-level pluginHooks.messageReceived: false", () => {
+    const config = {
+      pluginHooks: {
+        messageReceived: false,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.messageReceived).toBe(false);
+    }
+  });
+
+  it("accepts account-level pluginHooks.messageReceived: false", () => {
+    const config = {
+      accounts: {
+        work: {
+          pluginHooks: {
+            messageReceived: false,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
+    }
+  });
 });
