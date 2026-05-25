@@ -39,11 +39,9 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
@@ -915,7 +913,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),

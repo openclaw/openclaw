@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
 import {
   inspectPersistedInstalledPluginIndex,
@@ -8,13 +8,19 @@ import {
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const memoClearerDisposers: Array<() => void> = [];
 
 afterEach(() => {
+  for (const dispose of memoClearerDisposers.splice(0)) {
+    dispose();
+  }
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -102,6 +108,30 @@ describe("installed plugin index persistence", () => {
       expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
     }
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(index);
+  });
+
+  it("clears registered plugin metadata lifecycle memos after async writes succeed", async () => {
+    const stateDir = makeTempDir();
+    const clearer = vi.fn();
+    memoClearerDisposers.push(registerPluginMetadataProcessMemoLifecycleClear(clearer));
+
+    expect(clearer).not.toHaveBeenCalled();
+
+    await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
+
+    expect(clearer).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears registered plugin metadata lifecycle memos after sync writes succeed", () => {
+    const stateDir = makeTempDir();
+    const clearer = vi.fn();
+    memoClearerDisposers.push(registerPluginMetadataProcessMemoLifecycleClear(clearer));
+
+    expect(clearer).not.toHaveBeenCalled();
+
+    writePersistedInstalledPluginIndexSync(createIndex(), { stateDir });
+
+    expect(clearer).toHaveBeenCalledTimes(1);
   });
 
   it("does not preserve prototype poison keys from persisted index JSON", async () => {

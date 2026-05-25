@@ -1,6 +1,33 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+
+const closeLifecycleProbe = vi.hoisted(() => ({
+  events: [] as string[],
+}));
+
+vi.mock("./server-close.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-close.runtime.js")>(
+    "./server-close.runtime.js",
+  );
+
+  return {
+    ...actual,
+    runGatewayClosePrelude: async (...args: Parameters<typeof actual.runGatewayClosePrelude>) => {
+      closeLifecycleProbe.events.push("close-prelude");
+      await actual.runGatewayClosePrelude(...args);
+    },
+    createGatewayCloseHandler: (...args: Parameters<typeof actual.createGatewayCloseHandler>) => {
+      const closeHandler = actual.createGatewayCloseHandler(...args);
+      return async (...handlerArgs: Parameters<typeof closeHandler>) => {
+        closeLifecycleProbe.events.push("close-handler");
+        return await closeHandler(...handlerArgs);
+      };
+    },
+  };
+});
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -51,14 +78,31 @@ describe("gateway startup import boundaries", () => {
     expect(validation).not.toContain("commands/doctor");
   });
 
-  it("marks gateway close before awaiting gateway_stop hooks", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
-    const closeStart = serverImpl.indexOf("close: async (opts)");
-    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
+  describe("close path metadata lifecycle", () => {
+    installGatewayTestHooks();
 
-    expect(closeStart).toBeGreaterThan(-1);
-    expect(markStart).toBeGreaterThan(closeStart);
-    expect(markStart).toBeLessThan(hookStart);
+    let disposeLifecycleClearer: (() => void) | undefined;
+
+    afterEach(() => {
+      disposeLifecycleClearer?.();
+      disposeLifecycleClearer = undefined;
+      closeLifecycleProbe.events = [];
+    });
+
+    it("clears plugin metadata lifecycle caches before close prelude work runs", async () => {
+      disposeLifecycleClearer = registerPluginMetadataProcessMemoLifecycleClear(() => {
+        closeLifecycleProbe.events.push("lifecycle-clear");
+      });
+      const server = await startGatewayServer(await getFreePort());
+
+      closeLifecycleProbe.events = [];
+      await server.close({ reason: "close lifecycle import boundary test" });
+
+      expect(closeLifecycleProbe.events).toEqual([
+        "lifecycle-clear",
+        "close-prelude",
+        "close-handler",
+      ]);
+    });
   });
 });
