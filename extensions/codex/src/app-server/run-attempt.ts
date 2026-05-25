@@ -4286,9 +4286,39 @@ function shouldProjectMirroredHistoryForCodexStart(params: {
   if (!params.startupBinding?.threadId) {
     return true;
   }
+  if (
+    hasUserVisibleHistoryAfterCodexBinding({
+      startupBinding: params.startupBinding,
+      historyMessages: params.historyMessages,
+    })
+  ) {
+    return true;
+  }
   return !areCodexDynamicToolFingerprintsCompatible({
     previous: params.startupBinding.dynamicToolsFingerprint,
     next: params.dynamicToolsFingerprint,
+  });
+}
+
+function hasUserVisibleHistoryAfterCodexBinding(params: {
+  startupBinding: CodexAppServerThreadBinding;
+  historyMessages: AgentMessage[];
+}): boolean {
+  const bindingUpdatedAt = Date.parse(params.startupBinding.updatedAt);
+  if (!Number.isFinite(bindingUpdatedAt)) {
+    return false;
+  }
+  return params.historyMessages.some((message) => {
+    if (message.role !== "user" && message.role !== "assistant") {
+      return false;
+    }
+    const timestamp =
+      typeof message.timestamp === "number"
+        ? message.timestamp
+        : typeof message.timestamp === "string"
+          ? Date.parse(message.timestamp)
+          : Number.NaN;
+    return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
   });
 }
 
