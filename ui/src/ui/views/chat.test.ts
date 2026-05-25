@@ -169,6 +169,7 @@ vi.mock("../controllers/agents.ts", () => ({
 
 vi.mock("../controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),
 }));
 
 vi.mock("./agents-utils.ts", () => ({
