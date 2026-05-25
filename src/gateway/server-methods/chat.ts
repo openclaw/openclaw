@@ -1082,17 +1082,23 @@ function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
   };
 }
 
-function extractTranscriptUserText(content: unknown): string | undefined {
+export function extractTranscriptUserText(content: unknown): string | undefined {
+  const extractFromString = (str: string): string => {
+    // Remove media attachment markers like "[media attached: media://...]"
+    return str.replace(/\[media attached:[^\]]*\]/g, "").trim();
+  };
   if (typeof content === "string") {
-    return content;
+    return extractFromString(content);
   }
   if (!Array.isArray(content)) {
     return undefined;
   }
   const textBlocks = content
-    .map((block) =>
-      block && typeof block === "object" && "text" in block ? block.text : undefined,
-    )
+    .map((block) => {
+      if (!block || typeof block !== "object") return undefined;
+      const typed = block as { text?: unknown };
+      return typeof typed.text === "string" ? extractFromString(typed.text) : undefined;
+    })
     .filter((text): text is string => typeof text === "string");
   return textBlocks.length > 0 ? textBlocks.join("") : undefined;
 }

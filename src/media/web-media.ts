@@ -829,7 +829,7 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
-  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl)) {
+  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl) && !mediaUrl.startsWith("media://")) {
     mediaUrl = path.resolve(workspaceDir, mediaUrl);
   }
   try {
