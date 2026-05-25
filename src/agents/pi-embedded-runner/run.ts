@@ -1539,6 +1539,7 @@ export async function runEmbeddedPiAgent(
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+            onUserMessagePersistencePending: params.onUserMessagePersistencePending,
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
