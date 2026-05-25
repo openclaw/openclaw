@@ -1716,6 +1716,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
+    if (!bridge.sendUserMessage) {
+      throw new Error("expected bridge to support user messages");
+    }
     bridge.triggerGreeting?.("Say exactly: stale manual speech.");
     bridge.sendUserMessage("Respond to this newer user message.");
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
@@ -2303,6 +2306,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
+    if (!bridge.sendUserMessage) {
+      throw new Error("expected bridge to support user messages");
+    }
     bridge.triggerGreeting?.("Say exactly: stale in-flight speech.");
     bridge.sendUserMessage("Respond to this newer user message.");
     socket.emit(
