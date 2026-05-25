@@ -92,6 +92,20 @@ describe("shouldSupersedeTelegramReplyFence", () => {
         CommandAuthorized: true,
       }),
     ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/plugin_command",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "plugin_command",
+          body: "/plugin_command",
+        },
+      }),
+    ).toBe(true);
   });
 });
 
