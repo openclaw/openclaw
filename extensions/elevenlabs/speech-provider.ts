@@ -90,8 +90,8 @@ function normalizeElevenLabsProviderConfig(
       path: "messages.tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
-    voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
-    modelId: trimToUndefined(raw?.modelId) ?? DEFAULT_ELEVENLABS_MODEL_ID,
+    voiceId: trimToUndefined(raw?.voiceId ?? raw?.voice) ?? DEFAULT_ELEVENLABS_VOICE_ID,
+    modelId: trimToUndefined(raw?.modelId ?? raw?.model) ?? DEFAULT_ELEVENLABS_MODEL_ID,
     seed: asFiniteNumber(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization) as
       | "auto"
@@ -120,8 +120,8 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsP
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
+    voiceId: trimToUndefined(config.voiceId ?? config.voice) ?? defaults.voiceId,
+    modelId: trimToUndefined(config.modelId ?? config.model) ?? defaults.modelId,
     seed: asFiniteNumber(config.seed) ?? defaults.seed,
     applyTextNormalization:
       (trimToUndefined(config.applyTextNormalization) as "auto" | "on" | "off" | undefined) ??
@@ -383,12 +383,16 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
+        ...(trimToUndefined(talkProviderConfig.voiceId ?? talkProviderConfig.voice) == null
           ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
+          : {
+              voiceId: trimToUndefined(talkProviderConfig.voiceId ?? talkProviderConfig.voice),
+            }),
+        ...(trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model) == null
           ? {}
-          : { modelId: trimToUndefined(talkProviderConfig.modelId) }),
+          : {
+              modelId: trimToUndefined(talkProviderConfig.modelId ?? talkProviderConfig.model),
+            }),
         ...(asFiniteNumber(talkProviderConfig.seed) == null
           ? {}
           : { seed: asFiniteNumber(talkProviderConfig.seed) }),

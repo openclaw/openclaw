@@ -73,6 +73,49 @@ describe("elevenlabs speech provider", () => {
     }
   });
 
+  it("accepts voice and model as aliases for voiceId and modelId in config", () => {
+    const provider = buildElevenLabsSpeechProvider();
+
+    const config = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-test",
+            voice: "N2lVS1w4EtoT3dr4eOWO",
+            model: "eleven_v3",
+          },
+        },
+      },
+    });
+
+    expect(config?.voiceId).toBe("N2lVS1w4EtoT3dr4eOWO");
+    expect(config?.modelId).toBe("eleven_v3");
+  });
+
+  it("prefers voiceId over voice and modelId over model when both are present", () => {
+    const provider = buildElevenLabsSpeechProvider();
+
+    const config = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          elevenlabs: {
+            voiceId: "preferred-voice",
+            voice: "fallback-voice",
+            modelId: "preferred-model",
+            model: "fallback-model",
+          },
+        },
+      },
+    });
+
+    expect(config?.voiceId).toBe("preferred-voice");
+    expect(config?.modelId).toBe("preferred-model");
+  });
+
   it("applies provider overrides to telephony synthesis", async () => {
     const provider = buildElevenLabsSpeechProvider();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
