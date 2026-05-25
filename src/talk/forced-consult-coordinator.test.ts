@@ -17,6 +17,8 @@ describe("realtime voice forced consult coordinator", () => {
       vi.advanceTimersByTime(250);
 
       expect(run).not.toHaveBeenCalled();
+      expect(coordinator.hasRecent("Can you check this?")).toBe(true);
+      vi.advanceTimersByTime(2_001);
       expect(coordinator.hasRecent("Can you check this?")).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -108,6 +110,16 @@ describe("realtime voice forced consult coordinator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("matches remembered question aliases", () => {
+    const coordinator = createRealtimeVoiceForcedConsultCoordinator();
+    const handle = coordinator.prepare("check server status", { id: "forced-1" });
+
+    coordinator.rememberQuestion(handle!, "Please inspect the server health");
+
+    expect(coordinator.findRecent("inspect server health")).toEqual(handle);
+    expect(coordinator.hasRecent("check server status")).toBe(true);
   });
 
   it("consumes the only pending handle while delivered handles are retained", () => {
