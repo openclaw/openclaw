@@ -47,8 +47,14 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-fork.js";
-import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import {
+  forkSessionFromParent,
+  resolveParentForkMaxTokens,
+} from "./session-fork.js";
+import {
+  buildSessionEndHookPayload,
+  buildSessionStartHookPayload,
+} from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
 
@@ -85,11 +91,14 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   }
   const accountId = normalizeConversationText(ctx.AccountId) || "default";
   const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
+    ctx.MessageThreadId != null
+      ? normalizeConversationText(String(ctx.MessageThreadId))
+      : "";
 
   if (channelRaw === "telegram") {
     const parentConversationId =
-      parseTelegramChatIdFromTarget(ctx.OriginatingTo) ?? parseTelegramChatIdFromTarget(ctx.To);
+      parseTelegramChatIdFromTarget(ctx.OriginatingTo) ??
+      parseTelegramChatIdFromTarget(ctx.To);
     let conversationId =
       resolveConversationIdFromTargets({
         threadId: normalizedThreadId || undefined,
@@ -126,7 +135,9 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
     if (fromContext && fromContext !== conversationId) {
       parentConversationId = fromContext;
     } else {
-      const fromParentSession = parseDiscordParentChannelFromSessionKey(ctx.ParentSessionKey);
+      const fromParentSession = parseDiscordParentChannelFromSessionKey(
+        ctx.ParentSessionKey,
+      );
       if (fromParentSession && fromParentSession !== conversationId) {
         parentConversationId = fromParentSession;
       } else {
@@ -175,7 +186,9 @@ export async function initSessionState(params: {
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
-    ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+    ctx.CommandSource === "native"
+      ? ctx.CommandTargetSessionKey?.trim()
+      : undefined;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -186,7 +199,8 @@ export async function initSessionState(params: {
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
   });
-  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
+  const groupResolution =
+    resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
@@ -198,9 +212,12 @@ export async function initSessionState(params: {
   // Stale cache (especially with multiple gateway processes or on Windows where
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-  });
+  const sessionStore: Record<string, SessionEntry> = loadSessionStore(
+    storePath,
+    {
+      skipCache: true,
+    },
+  );
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -221,10 +238,13 @@ export async function initSessionState(params: {
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
-    normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+    normalizedChatType != null && normalizedChatType !== "direct"
+      ? true
+      : Boolean(groupResolution);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource =
+    ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   // IMPORTANT: do NOT lowercase the entire command body.
   // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
   // Command parsing downstream lowercases only the command token for matching.
@@ -252,7 +272,9 @@ export async function initSessionState(params: {
   );
   const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
     shouldUseAcpInPlaceReset &&
-    DEFAULT_RESET_TRIGGERS.some((defaultTrigger) => defaultTrigger.toLowerCase() === triggerLower);
+    DEFAULT_RESET_TRIGGERS.some(
+      (defaultTrigger) => defaultTrigger.toLowerCase() === triggerLower,
+    );
 
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
@@ -267,7 +289,10 @@ export async function initSessionState(params: {
       break;
     }
     const triggerLower = trigger.toLowerCase();
-    if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+    if (
+      trimmedBodyLower === triggerLower ||
+      strippedForResetLower === triggerLower
+    ) {
       if (shouldBypassAcpResetForTrigger(triggerLower)) {
         // ACP-bound conversations handle /new and /reset in command handling
         // so the bound ACP runtime can be reset in place without rotating the
@@ -305,7 +330,8 @@ export async function initSessionState(params: {
     ctx,
   });
   if (retiredLegacyMainDelivery) {
-    sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
+    sessionStore[retiredLegacyMainDelivery.key] =
+      retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
   const now = Date.now();
@@ -331,13 +357,18 @@ export async function initSessionState(params: {
     resetOverride: channelReset,
   });
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? evaluateSessionFreshness({
+        updatedAt: entry.updatedAt,
+        now,
+        policy: resetPolicy,
+      }).fresh
     : false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const previousSessionEntry =
+    (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
@@ -393,7 +424,8 @@ export async function initSessionState(params: {
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const lastThreadIdRaw =
+    ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
@@ -494,7 +526,11 @@ export async function initSessionState(params: {
     }
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    ? resolveSessionTranscriptPath(
+        sessionEntry.sessionId,
+        agentId,
+        ctx.MessageThreadId,
+      )
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,
@@ -576,14 +612,19 @@ export async function initSessionState(params: {
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+    if (
+      previousSessionEntry?.sessionId &&
+      previousSessionEntry.sessionId !== effectiveSessionId
+    ) {
       if (hookRunner.hasHooks("session_end")) {
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
           cfg,
         });
-        void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
+        void hookRunner
+          .runSessionEnd(payload.event, payload.context)
+          .catch(() => {});
       }
     }
 
@@ -595,7 +636,9 @@ export async function initSessionState(params: {
         cfg,
         resumedFrom: previousSessionEntry?.sessionId,
       });
-      void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
+      void hookRunner
+        .runSessionStart(payload.event, payload.context)
+        .catch(() => {});
     }
   }
 

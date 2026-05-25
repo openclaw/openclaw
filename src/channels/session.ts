@@ -19,7 +19,10 @@ export type InboundLastRouteUpdate = {
   mainDmOwnerPin?: {
     ownerRecipient: string;
     senderRecipient: string;
-    onSkip?: (params: { ownerRecipient: string; senderRecipient: string }) => void;
+    onSkip?: (params: {
+      ownerRecipient: string;
+      senderRecipient: string;
+    }) => void;
   };
 };
 
@@ -34,7 +37,10 @@ function shouldSkipPinnedMainDmRouteUpdate(
   if (!owner || !sender || owner === sender) {
     return false;
   }
-  pin.onSkip?.({ ownerRecipient: pin.ownerRecipient, senderRecipient: pin.senderRecipient });
+  pin.onSkip?.({
+    ownerRecipient: pin.ownerRecipient,
+    senderRecipient: pin.senderRecipient,
+  });
   return true;
 }
 
@@ -47,7 +53,8 @@ export async function recordInboundSession(params: {
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
 }): Promise<void> {
-  const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
+  const { storePath, sessionKey, ctx, groupResolution, createIfMissing } =
+    params;
   const canonicalSessionKey = normalizeSessionStoreKey(sessionKey);
   void recordSessionMetaFromInbound({
     storePath,

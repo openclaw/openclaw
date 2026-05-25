@@ -118,7 +118,9 @@ export async function createWaSocket(
     markOnlineOnConnect: false,
   });
 
-  sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
+  sock.ev.on("creds.update", () =>
+    enqueueSaveCreds(authDir, saveCreds, sessionLogger),
+  );
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
@@ -145,13 +147,19 @@ export async function createWaSocket(
           console.log(success("WhatsApp Web connected."));
         }
       } catch (err) {
-        sessionLogger.error({ error: String(err) }, "connection.update handler error");
+        sessionLogger.error(
+          { error: String(err) },
+          "connection.update handler error",
+        );
       }
     },
   );
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
-  if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
+  if (
+    sock.ws &&
+    typeof (sock.ws as unknown as { on?: unknown }).on === "function"
+  ) {
     sock.ws.on("error", (err: Error) => {
       sessionLogger.error({ error: String(err) }, "WebSocket error");
     });
@@ -160,7 +168,9 @@ export async function createWaSocket(
   return sock;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export async function waitForWaConnection(
+  sock: ReturnType<typeof makeWASocket>,
+) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -168,7 +178,9 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
     const evWithOff = sock.ev as unknown as OffCapable;
 
     const handler = (...args: unknown[]) => {
-      const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
+      const update = (args[0] ?? {}) as Partial<
+        import("@whiskeysockets/baileys").ConnectionState
+      >;
       if (update.connection === "open") {
         evWithOff.off?.("connection.update", handler);
         resolve();
@@ -202,7 +214,9 @@ function safeStringify(value: unknown, limit = 800): string {
         if (typeof v === "function") {
           const maybeName = (v as { name?: unknown }).name;
           const name =
-            typeof maybeName === "string" && maybeName.length > 0 ? maybeName : "anonymous";
+            typeof maybeName === "string" && maybeName.length > 0
+              ? maybeName
+              : "anonymous";
           return `[Function ${name}]`;
         }
         if (typeof v === "object" && v) {
@@ -248,7 +262,8 @@ function extractBoomDetails(err: unknown): {
         ? payload.statusCode
         : undefined;
   const error = typeof payload?.error === "string" ? payload.error : undefined;
-  const message = typeof payload?.message === "string" ? payload.message : undefined;
+  const message =
+    typeof payload?.message === "string" ? payload.message : undefined;
   if (!statusCode && !error && !message) {
     return null;
   }
@@ -270,18 +285,24 @@ export function formatError(err: unknown): string {
   const boom =
     extractBoomDetails(err) ??
     extractBoomDetails((err as { error?: unknown })?.error) ??
-    extractBoomDetails((err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error);
+    extractBoomDetails(
+      (err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error,
+    );
 
   const status = boom?.statusCode ?? getStatusCode(err);
   const code = (err as { code?: unknown })?.code;
-  const codeText = typeof code === "string" || typeof code === "number" ? String(code) : undefined;
+  const codeText =
+    typeof code === "string" || typeof code === "number"
+      ? String(code)
+      : undefined;
 
   const messageCandidates = [
     boom?.message,
     typeof (err as { message?: unknown })?.message === "string"
       ? ((err as { message?: unknown }).message as string)
       : undefined,
-    typeof (err as { error?: { message?: unknown } })?.error?.message === "string"
+    typeof (err as { error?: { message?: unknown } })?.error?.message ===
+    "string"
       ? ((err as { error?: { message?: unknown } }).error?.message as string)
       : undefined,
   ].filter((v): v is string => Boolean(v && v.trim().length > 0));
