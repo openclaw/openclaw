@@ -94,6 +94,7 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 }));
 
 vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  isManifestPluginAvailableForControlPlane: () => true,
   loadManifestMetadataSnapshot: () => ({
     index: { plugins: [] },
     plugins: mediaMetadataPlugins,

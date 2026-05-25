@@ -38,6 +38,10 @@ import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import {
+  buildMediaUnderstandingManifestMetadataRegistry,
+  hasAvailableMediaUnderstandingManifestMetadataGaps,
+} from "../media-understanding/manifest-metadata.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
@@ -2086,7 +2090,16 @@ export function registerCapabilityCli(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const providers = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
+        const metadataRegistry = buildMediaUnderstandingManifestMetadataRegistry(cfg);
+        const providerRegistry = hasAvailableMediaUnderstandingManifestMetadataGaps(cfg)
+          ? new Map([
+              ...metadataRegistry,
+              ...[...buildMediaUnderstandingRegistry(undefined, cfg)].filter(
+                ([providerId]) => !metadataRegistry.has(providerId),
+              ),
+            ])
+          : metadataRegistry;
+        const providers = [...providerRegistry.values()]
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,

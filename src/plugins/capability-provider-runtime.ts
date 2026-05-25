@@ -572,7 +572,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     }
   }
   let requestedProviders: Set<string> | undefined;
-  if (params.key === "speechProviders") {
+  if (params.key === "speechProviders" || params.key === "mediaUnderstandingProviders") {
     requestedProviders =
       missingRequestedProviders ??
       (activeProviders.length === 0

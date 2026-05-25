@@ -722,7 +722,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "deepgram"]);
     expectInitialRuntimeRegistryLookup();
-    expectActiveRegistryLookup(["deepgram", "google"]);
+    expectActiveRegistryLookup(["deepgram"]);
   });
 
   it("keeps active speech providers when cfg requests an active provider alias", () => {
@@ -1305,6 +1305,68 @@ describe("resolvePluginCapabilityProviders", () => {
     expectResolvedCapabilityProviderIds(providers, ["google"]);
     expectManifestRegistryLoad(0, {});
     expectActiveRegistryLookup(["google"]);
+  });
+
+  it("loads only config-requested media-understanding providers when no active registry exists", () => {
+    const cfg = {
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "deepgram", model: "nova-3" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const compatConfig = {
+      plugins: {
+        enabled: true,
+        allow: ["deepgram"],
+        entries: { deepgram: { enabled: true } },
+      },
+    } as OpenClawConfig;
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "deepgram",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "deepgram",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["deepgram"] },
+        },
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["google"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["deepgram"]);
+    expectManifestRegistryLoad(0, cfg);
+    expectActiveRegistryLookup(["deepgram"]);
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
+      config: cfg,
+      pluginIds: ["deepgram"],
+    });
   });
 
   it("loads fallback snapshots without startup dependency repair", () => {
