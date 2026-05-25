@@ -217,6 +217,20 @@ export function createSubagentRegistryLifecycleController(params: {
     if (typeof delivery.enqueuedAt === "number") {
       deliveryState.enqueuedAt ??= delivery.enqueuedAt;
     }
+    if (delivery.requesterWakeStatus === "delivered") {
+      deliveryState.requesterWakeDeliveredAt =
+        typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
+    }
+    if (delivery.visibleDeliveryRequired !== undefined) {
+      deliveryState.visibleRequired = delivery.visibleDeliveryRequired;
+    }
+    if (delivery.visibleDeliveryStatus !== undefined) {
+      deliveryState.visibleStatus = delivery.visibleDeliveryStatus;
+      deliveryState.visibleError =
+        delivery.visibleDeliveryStatus === "failed"
+          ? (delivery.visibleDeliveryError ?? delivery.error ?? null)
+          : undefined;
+    }
     if (delivery.delivered) {
       const deliveredAt =
         typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
@@ -824,15 +838,30 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (didAnnounce) {
       const delivery = ensureDeliveryState(entry);
+      const visibleDeliveryError =
+        delivery.visibleStatus === "failed"
+          ? (delivery.visibleError ?? getDeliveryLastError(entry) ?? "visible delivery failed")
+          : undefined;
       const shouldCreditDelivery =
         !options?.skipAnnounce ||
         delivery.status === "delivered" ||
+        delivery.status === "failed" ||
+        typeof delivery.requesterWakeDeliveredAt === "number" ||
         typeof delivery.announcedAt === "number";
       if (shouldCreditDelivery) {
-        const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
-        delivery.status = "delivered";
+        const deliveredAt =
+          delivery.deliveredAt ??
+          delivery.announcedAt ??
+          delivery.requesterWakeDeliveredAt ??
+          Date.now();
+        delivery.status = visibleDeliveryError ? "failed" : "delivered";
         delivery.deliveredAt = deliveredAt;
         delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
+        if (visibleDeliveryError) {
+          delivery.lastError = visibleDeliveryError;
+        } else {
+          delivery.lastError = undefined;
+        }
         if (!options?.skipAnnounce) {
           delivery.announcedAt = deliveredAt;
           params.persist();
@@ -841,18 +870,23 @@ export function createSubagentRegistryLifecycleController(params: {
       clearPendingFinalDelivery(entry);
       const finalDelivery = ensureDeliveryState(entry);
       if (shouldCreditDelivery) {
-        finalDelivery.status = "delivered";
+        finalDelivery.status = visibleDeliveryError ? "failed" : "delivered";
         finalDelivery.suspendedAt = undefined;
         finalDelivery.suspendedReason = undefined;
+        if (visibleDeliveryError) {
+          finalDelivery.lastError = visibleDeliveryError;
+        } else {
+          finalDelivery.lastError = undefined;
+        }
       }
       if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
           childSessionKey: entry.childSessionKey,
-          deliveryStatus: "delivered",
+          deliveryStatus: visibleDeliveryError ? "failed" : "delivered",
+          deliveryError: visibleDeliveryError,
         });
       }
-      finalDelivery.lastError = undefined;
       finalDelivery.lastDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
@@ -1065,7 +1099,14 @@ export function createSubagentRegistryLifecycleController(params: {
           recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
             const deliveryState = ensureDeliveryState(entry);
-            if (deliveryState.lastError !== undefined) {
+            const visibleDeliveryError =
+              delivery.visibleDeliveryStatus === "failed"
+                ? (delivery.visibleDeliveryError ?? delivery.error)
+                : undefined;
+            if (visibleDeliveryError) {
+              deliveryState.lastError = visibleDeliveryError;
+              params.persist();
+            } else if (deliveryState.lastError !== undefined) {
               deliveryState.lastError = undefined;
               params.persist();
             }
