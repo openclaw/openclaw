@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - Installer: avoid the incompatible generated `--before` install filter when raw npm `min-release-age` config is present. (#85491) Thanks @TurboTheTurtle.
 - Agents/MCP: bound bundled MCP `tools/list` catalog discovery so hung MCP servers do not block session tool materialization. (#85063) Thanks @nxmxbbd.
 - Scripts: run generated-module formatting through the shared pnpm launcher and Windows CI coverage so native Windows generator checks avoid shell-mode package-manager shims.
+- Channels/iMessage: recover malformed anchorless group watch payloads by GUID before debounce/routing, and drop unrecoverable payloads instead of replying to the sender DM. Fixes #84470. Refs #84503. Thanks @zhangguiping-xydt and @zqchris.
 - Channels/iMessage: advance the startup catchup cursor from live-handled rows after a completed catchup pass, including rows received while catchup is still running, so restarts do not replay them. (#85475) Thanks @TurboTheTurtle.
 - Tests: mount the shared Windows command helper into bare Docker E2E harness containers so published upgrade-survivor config walks can start on Linux.
 - Tests: keep the plugin binding command escape Docker smoke focused on its intended Vitest cases and skip source-only install lifecycle scripts.

@@ -57,6 +57,7 @@ import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { runIMessageCatchup } from "./catchup-bridge.js";
 import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
+import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
@@ -357,6 +358,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     return client;
   };
 
+  async function repairMessageConversationAnchor(
+    message: IMessagePayload,
+  ): Promise<IMessagePayload | null> {
+    return await repairIMessageConversationAnchor({
+      client: getActiveClient(),
+      message,
+      runtime,
+    });
+  }
+
   function resolveLiveCatchupCursor(
     message: IMessagePayload,
   ): { lastSeenMs: number; lastSeenRowid: number } | null {
@@ -425,7 +436,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  async function handleMessageNowInner(message: IMessagePayload) {
+  async function handleMessageNowInner(rawMessage: IMessagePayload) {
+    const message = await repairMessageConversationAnchor(rawMessage);
+    if (!message) {
+      return;
+    }
+
     const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
@@ -872,7 +888,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
-    await inboundDebouncer.enqueue({ message });
+    const repairedMessage = await repairMessageConversationAnchor(message);
+    if (!repairedMessage) {
+      return;
+    }
+    await inboundDebouncer.enqueue({ message: repairedMessage });
   };
 
   await waitForTransportReady({
