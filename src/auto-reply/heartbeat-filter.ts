@@ -436,8 +436,11 @@ function resolveHeartbeatArtifactSpanEnd(
     }
     if (message.role === "assistant") {
       sawNonTerminalAssistantOutput = true;
-      const { text } = resolveMessageText(message.content);
-      if (text.includes(HEARTBEAT_TOKEN)) {
+      // Only mark as token-bearing when the message is a no-op ack wrapper
+      // (token at edges, remaining text within ack budget). Middle-token
+      // alerts like "Status HEARTBEAT_OK due to watchdog failure" are
+      // meaningful and must not be trimmed.
+      if (isHeartbeatOkResponse(message, ackMaxChars)) {
         sawHeartbeatTokenInAssistant = true;
       }
       index++;
