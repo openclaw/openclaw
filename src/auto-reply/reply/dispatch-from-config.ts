@@ -63,6 +63,7 @@ import {
   logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -73,6 +74,7 @@ import {
   toPluginConversationBinding,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -94,9 +96,16 @@ import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
+import {
+  findCommandByNativeName,
+  normalizeCommandBody,
+  resolveTextCommand,
+} from "../commands-registry.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
+  copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -123,12 +132,8 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  ReplyRunAlreadyActiveError,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -149,6 +154,38 @@ function isDispatchReplyOperationAbortedError(
   error: unknown,
 ): error is DispatchReplyOperationAbortedError {
   return error instanceof DispatchReplyOperationAbortedError;
+}
+
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals: AbortSignal[] = [];
+  for (const signal of signals) {
+    if (signal && !activeSignals.includes(signal)) {
+      activeSignals.push(signal);
+    }
+  }
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort(signal);
+      return controller.signal;
+    }
+    signal.addEventListener("abort", () => abort(signal), { once: true });
+  }
+  return controller.signal;
 }
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -212,7 +249,7 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+  if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   if (
@@ -227,7 +264,10 @@ async function maybeApplyTtsToReplyPayload(
     return params.payload;
   }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
-  return maybeApplyTtsToPayload(params);
+  const ttsPayload = await maybeApplyTtsToPayload(params);
+  return ttsPayload === params.payload
+    ? ttsPayload
+    : copyReplyPayloadMetadata(params.payload, ttsPayload);
 }
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -348,19 +388,24 @@ const resolveBoundAcpDispatchSessionKey = (params: {
 const createShouldEmitVerboseProgress = (params: {
   sessionKey?: string;
   storePath?: string;
+  initialExplicitLevel?: string;
   fallbackLevel: string;
 }) => {
-  const resolveLevel = () => {
+  const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
         const entry = readSessionEntry(params.storePath, params.sessionKey);
-        const currentLevel = normalizeVerboseLevel(entry?.verboseLevel ?? "");
-        if (currentLevel) {
-          return currentLevel;
-        }
+        return normalizeVerboseLevel(entry?.verboseLevel ?? "");
       } catch {
         // Ignore transient store read failures and fall back to the current dispatch snapshot.
       }
+    }
+    return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
+  };
+  const resolveLevel = () => {
+    const explicitLevel = resolveCurrentExplicitLevel();
+    if (explicitLevel) {
+      return explicitLevel;
     }
     return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
   };
@@ -376,6 +421,18 @@ type HarnessDefaultCandidate = {
   provider: string;
   model?: string;
 };
+
+function createReplyDispatchEvent(
+  params: Omit<PluginHookReplyDispatchEvent, "shouldSendToolSummaries"> & {
+    shouldSendToolSummaries: () => boolean;
+  },
+): PluginHookReplyDispatchEvent {
+  const { shouldSendToolSummaries, ...event } = params;
+  return Object.defineProperty(event, "shouldSendToolSummaries", {
+    enumerable: true,
+    get: shouldSendToolSummaries,
+  }) as PluginHookReplyDispatchEvent;
+}
 
 function resolveHarnessDefaultChannel(params: {
   ctx: FinalizedMsgContext;
@@ -407,10 +464,6 @@ function resolveHarnessDefaultParentSessionKey(params: {
 function resolveTurnModelOverride(
   replyOptions: DispatchFromConfigParams["replyOptions"],
 ): string | undefined {
-  const modelOverride = normalizeOptionalString(replyOptions?.modelOverride);
-  if (modelOverride) {
-    return modelOverride;
-  }
   if (replyOptions?.isHeartbeat !== true) {
     return undefined;
   }
@@ -571,6 +624,42 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   }
 };
 
+function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (!commandTurn.authorized) {
+    return false;
+  }
+  if (isNativeCommandTurn(commandTurn)) {
+    return true;
+  }
+  if (commandTurn.kind !== "text-slash") {
+    return false;
+  }
+  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+    botUsername: ctx.BotUsername,
+  });
+  if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  if (resolveTextCommand(commandBody)) {
+    return true;
+  }
+  const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
+  if (
+    commandTurn.commandName &&
+    findCommandByNativeName(commandTurn.commandName, provider, {
+      includeBundledChannelFallback: true,
+    })
+  ) {
+    return true;
+  }
+  return Boolean(
+    matchPluginCommand(commandBody, {
+      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
+    }),
+  );
+}
+
 async function clearPendingFinalDeliveryAfterSuccess(params: {
   storePath?: string;
   sessionKey?: string;
@@ -621,23 +710,22 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
-function runWithReplyOperationAbort<T>(
-  operation: ReplyOperation | undefined,
+function runWithDispatchAbortSignal<T>(
+  signal: AbortSignal | undefined,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  if (!operation) {
+  if (!signal) {
     return Promise.resolve().then(run);
   }
-  const signal = operation.abortSignal;
-  const shouldStopForOperationAbort = () => signal.aborted;
-  if (signal.aborted && shouldStopForOperationAbort()) {
+  const shouldStopForAbort = () => signal.aborted;
+  if (signal.aborted && shouldStopForAbort()) {
     return Promise.reject(new DispatchReplyOperationAbortedError());
   }
   let settled = false;
   let abortHandler: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     abortHandler = () => {
-      if (!settled && shouldStopForOperationAbort()) {
+      if (!settled && shouldStopForAbort()) {
         reject(new DispatchReplyOperationAbortedError());
       }
     };
@@ -652,7 +740,7 @@ function runWithReplyOperationAbort<T>(
       },
       (error: unknown) => {
         settled = true;
-        if (shouldStopForOperationAbort() && isAbortError(error)) {
+        if (shouldStopForAbort() && isAbortError(error)) {
           throw new DispatchReplyOperationAbortedError();
         }
         throw error;
@@ -832,6 +920,7 @@ export async function dispatchReplyFromConfig(
   const verboseProgress = createShouldEmitVerboseProgress({
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
+    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
     fallbackLevel:
       normalizeVerboseLevel(
         sessionStoreEntry.entry?.verboseLevel ??
@@ -856,49 +945,116 @@ export async function dispatchReplyFromConfig(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
-  const ensureDispatchReplyOperation = (): ReplyOperation | undefined => {
+  let preDispatchAbortOperation: ReplyOperation | undefined;
+  type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
+  const ensureDispatchReplyOperation = async (
+    phase: "pre_dispatch" | "dispatch",
+  ): Promise<DispatchReplyOperationAcquisition> => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
-      return dispatchReplyOperation;
+      return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
-      return dispatchReplyOperation;
+      return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
+    }
+    if (
+      phase === "dispatch" &&
+      preDispatchAbortOperation?.result &&
+      preDispatchAbortOperation.result.kind !== "completed" &&
+      !dispatchReplyOperation
+    ) {
+      dispatchAbortOperation = preDispatchAbortOperation;
+      return { status: "busy" };
     }
     if (!dispatchOperationSessionKey) {
-      return undefined;
+      return { status: "ready" };
     }
     const operationSessionId =
       dispatchAbortOperation?.sessionId ??
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
-    try {
-      dispatchReplyOperation = createReplyOperation({
-        sessionKey: dispatchOperationSessionKey,
-        sessionId: operationSessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: params.replyOptions?.abortSignal,
-      });
-      dispatchAbortOperation = dispatchReplyOperation;
-    } catch (error) {
-      if (error instanceof ReplyRunAlreadyActiveError) {
-        dispatchAbortOperation = replyRunRegistry.get(dispatchOperationSessionKey);
-        logVerbose(
-          `dispatch-from-config: reply operation already active for ${dispatchOperationSessionKey}; using active operation abort signal without ownership`,
-        );
-        return undefined;
+    const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const admission = await admitReplyTurn({
+      sessionKey: dispatchOperationSessionKey,
+      sessionId: operationSessionId,
+      kind: replyTurnKind,
+      resetTriggered: false,
+      upstreamAbortSignal: params.replyOptions?.abortSignal,
+      waitForActive: !allowActivePreDispatch,
+    });
+    if (admission.status === "skipped") {
+      if (allowActivePreDispatch && admission.reason === "active-run") {
+        preDispatchAbortOperation = admission.activeOperation;
+        return { status: "ready" };
       }
-      throw error;
+      dispatchAbortOperation = admission.activeOperation;
+      logVerbose(
+        `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
+      );
+      return { status: "busy" };
     }
-    return dispatchReplyOperation;
+    dispatchReplyOperation = admission.operation;
+    dispatchAbortOperation = admission.operation;
+    return { status: "ready" };
   };
-  const getReplyOptions = () =>
-    dispatchReplyOperation
-      ? {
-          ...params.replyOptions,
-          abortSignal: dispatchReplyOperation.abortSignal,
-          replyOperation: dispatchReplyOperation,
-        }
-      : params.replyOptions;
+  const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
+  let cachedPreDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
+  let cachedDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
+  const getPreDispatchAbortSignal = () => {
+    const operationSignal = getPreDispatchAbortOperation()?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedPreDispatchAbortSignal &&
+      cachedPreDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedPreDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedPreDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedPreDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getDispatchAbortSignal = () => {
+    const operationSignal = dispatchReplyOperation?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedDispatchAbortSignal &&
+      cachedDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getQueuedFollowupAbortSignal = () =>
+    dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
+  const getReplyOptions = () => {
+    const abortSignal = getDispatchAbortSignal();
+    if (!abortSignal) {
+      return params.replyOptions;
+    }
+    return {
+      ...params.replyOptions,
+      abortSignal,
+      queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
+      ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
+    };
+  };
   const completeDispatchReplyOperation = () => {
     if (dispatchReplyOperation) {
       dispatchReplyOperation.complete();
@@ -909,7 +1065,8 @@ export async function dispatchReplyFromConfig(
       dispatchReplyOperation.fail("run_failed", error);
     }
   };
-  const isDispatchOperationAborted = () => dispatchAbortOperation?.abortSignal.aborted === true;
+  const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
+  const isPreDispatchOperationAborted = () => getPreDispatchAbortSignal()?.aborted === true;
   const throwIfDispatchOperationAborted = () => {
     if (isDispatchOperationAborted()) {
       throw new DispatchReplyOperationAbortedError();
@@ -917,7 +1074,7 @@ export async function dispatchReplyFromConfig(
   };
   const dispatchHookDispatcher = createAbortAwareDispatcher({
     dispatcher,
-    isAborted: isDispatchOperationAborted,
+    isAborted: isPreDispatchOperationAborted,
   });
   const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
     loadRuntimePlugins(),
@@ -1060,7 +1217,7 @@ export async function dispatchReplyFromConfig(
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
       return;
     }
-    const effectiveAbortSignal = abortSignal ?? dispatchAbortOperation?.abortSignal;
+    const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
       return;
     }
@@ -1259,6 +1416,20 @@ export async function dispatchReplyFromConfig(
       commitInboundDedupe(inboundDedupeClaim.key);
     }
   };
+  const finishReplyOperationBusyDispatch = (opts?: {
+    recordAgentDispatchCompleted?: boolean;
+  }): DispatchFromConfigResult => {
+    if (opts?.recordAgentDispatchCompleted) {
+      recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
+    }
+    recordProcessed("skipped", { reason: "reply-operation-active" });
+    markIdle("message_completed");
+    commitInboundDedupeIfClaimed();
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -1267,7 +1438,11 @@ export async function dispatchReplyFromConfig(
 
   if (pluginOwnedBinding) {
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (suppressDelivery) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+      logVerbose(
+        `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
+      );
+    } else if (suppressDelivery) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is suppressed, skip the plugin
       // claim and fall through to normal suppressed agent processing.
@@ -1429,13 +1604,13 @@ export async function dispatchReplyFromConfig(
     }
     // Register the dispatch-owned operation before any plugin hook or model work
     // so /stop can abort pre-run and in-run stalls through the same session lane.
-    ensureDispatchReplyOperation();
+    if ((await ensureDispatchReplyOperation("pre_dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch();
+    }
 
-    const isSlackNonDirectSurface =
-      (ctx.Surface === "slack" || ctx.Provider === "slack") && ctx.ChatType !== "direct";
-    const shouldSendVerboseProgressMessages =
-      !isSlackNonDirectSurface && (ctx.ChatType !== "group" || ctx.IsForum === true);
-    const shouldSendToolSummaries = shouldSendVerboseProgressMessages;
+    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+    const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
+    const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;
     const shouldDeliverVerboseProgressDespiteSourceSuppression = () =>
       suppressAutomaticSourceDelivery &&
@@ -1443,7 +1618,7 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       shouldEmitVerboseProgress() &&
-      shouldSendVerboseProgressMessages;
+      shouldSendVerboseProgressMessages();
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -1474,8 +1649,15 @@ export async function dispatchReplyFromConfig(
     };
     const sendFinalPayload = async (
       payload: ReplyPayload,
+      options: { abortSignal?: AbortSignal } = {},
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      throwIfDispatchOperationAborted();
+      const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
+      const throwIfFinalDeliveryAborted = () => {
+        if (abortSignal?.aborted) {
+          throw new DispatchReplyOperationAbortedError();
+        }
+      };
+      throwIfFinalDeliveryAborted();
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
       const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
@@ -1493,11 +1675,11 @@ export async function dispatchReplyFromConfig(
         agentId: sessionAgentId,
         accountId: replyRoute.accountId,
       });
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
-        abortSignal: dispatchAbortOperation?.abortSignal,
+        abortSignal,
       });
       if (result) {
         if (!result.ok) {
@@ -1516,7 +1698,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
@@ -1534,7 +1716,7 @@ export async function dispatchReplyFromConfig(
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runBeforeDispatch(
             {
               content: hookContext.content,
@@ -1560,7 +1742,10 @@ export async function dispatchReplyFromConfig(
         let queuedFinal = false;
         let routedFinalCount = 0;
         if (text && !suppressDelivery) {
-          const handledReply = await sendFinalPayload({ text });
+          const handledReply = await sendFinalPayload(
+            { text },
+            { abortSignal: getPreDispatchAbortSignal() },
+          );
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
         }
@@ -1576,9 +1761,9 @@ export async function dispatchReplyFromConfig(
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
-            {
+            createReplyDispatchEvent({
               ctx,
               runId: params.replyOptions?.runId,
               sessionKey: acpDispatchSessionKey,
@@ -1594,11 +1779,11 @@ export async function dispatchReplyFromConfig(
               originatingTo: routeReplyTo,
               shouldSendToolSummaries,
               sendPolicy,
-            },
+            }),
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -1616,6 +1801,10 @@ export async function dispatchReplyFromConfig(
       }
     }
 
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch();
+    }
+
     // When automatic source delivery is suppressed, still let the agent process
     // the inbound message (context, memory, tool calls) but suppress automatic
     // outbound source delivery.
@@ -1627,6 +1816,7 @@ export async function dispatchReplyFromConfig(
 
     const toolStartStatusesSent = new Set<string>();
     let toolStartStatusCount = 0;
+    let didSendPlanStatusNotice = false;
     const normalizeWorkingLabel = (label: string) => {
       const collapsed = label.replace(/\s+/g, " ").trim();
       if (collapsed.length <= 80) {
@@ -1639,14 +1829,10 @@ export async function dispatchReplyFromConfig(
       const steps = (payload.steps ?? [])
         .map((step) => step.replace(/\s+/g, " ").trim())
         .filter(Boolean);
-      const parts: string[] = [];
-      if (explanation) {
-        parts.push(explanation);
-      }
       if (steps.length > 0) {
-        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
+        return steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
       }
-      return parts.join("\n\n").trim() || "Planning next steps.";
+      return explanation || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
       if (shouldSuppressProgressDelivery()) {
@@ -1680,13 +1866,15 @@ export async function dispatchReplyFromConfig(
     }): Promise<void> => {
       if (
         shouldSuppressProgressDelivery() ||
-        !shouldEmitVerboseProgress() ||
-        !shouldSendVerboseProgressMessages
+        !shouldSendVerboseProgressMessages() ||
+        didSendPlanStatusNotice
       ) {
         return;
       }
+      didSendPlanStatusNotice = true;
       const replyPayload: ReplyPayload = {
         text: formatPlanUpdateText(payload),
+        isStatusNotice: true,
       };
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);
@@ -1754,7 +1942,7 @@ export async function dispatchReplyFromConfig(
       ) {
         return null;
       }
-      if (shouldSendToolSummaries) {
+      if (shouldSendToolSummaries()) {
         return payload;
       }
       const execApproval =
@@ -1780,22 +1968,42 @@ export async function dispatchReplyFromConfig(
       originatingChannel: routeReplyChannel,
       systemEvent: shouldRouteToOriginating,
     });
-    const suppressDefaultToolProgressMessages =
-      params.replyOptions?.suppressDefaultToolProgressMessages === true;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
     const shouldSuppressProgressDelivery = () =>
       sendPolicyDenied ||
       (suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-    const hasVisibleRegularVerboseToolProgress =
+    const hasVisibleRegularVerboseToolProgress = () =>
       shouldEmitVerboseProgress() &&
       !shouldEmitFullVerboseProgress() &&
-      shouldSendVerboseProgressMessages &&
+      shouldSendVerboseProgressMessages() &&
       ctx.InboundEventKind !== "room_event" &&
       !shouldSuppressProgressDelivery();
+    let observedVisibleToolErrorProgress = false;
+    const markVisibleToolErrorProgress = () => {
+      if (hasVisibleRegularVerboseToolProgress()) {
+        observedVisibleToolErrorProgress = true;
+      }
+    };
+    const hasFailedProgressStatus = (payload: {
+      phase?: string;
+      status?: string;
+      exitCode?: number | null;
+    }) =>
+      payload.phase === "error" ||
+      payload.status === "failed" ||
+      payload.status === "error" ||
+      (typeof payload.exitCode === "number" && payload.exitCode !== 0);
+    const shouldSuppressToolErrorWarnings = () => {
+      if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
+        return params.replyOptions.suppressToolErrorWarnings;
+      }
+      if (!shouldEmitVerboseProgress()) {
+        return false;
+      }
+      return observedVisibleToolErrorProgress ? true : undefined;
+    };
     const suppressToolErrorWarnings =
       params.replyOptions?.suppressToolErrorWarnings ??
-      (hasVisibleRegularVerboseToolProgress ? true : undefined);
+      (observedVisibleToolErrorProgress ? true : undefined);
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -1804,13 +2012,24 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
-    }) =>
-      !suppressAutomaticSourceDelivery ||
-      (allowSuppressedSourceProgressCallbacks &&
-        options?.forwardWhenSourceDeliverySuppressed === true);
+      requiresToolSummaryVisibility?: boolean;
+    }) => {
+      if (options?.requiresToolSummaryVisibility === true && !shouldSendToolSummaries()) {
+        return false;
+      }
+      return (
+        !suppressAutomaticSourceDelivery ||
+        (allowSuppressedSourceProgressCallbacks &&
+          options?.forwardWhenSourceDeliverySuppressed === true)
+      );
+    };
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
-      options?: { forwardWhenSourceDeliverySuppressed?: boolean },
+      options?: {
+        forwardWhenSourceDeliverySuppressed?: boolean;
+        requiresToolSummaryVisibility?: boolean;
+        onForward?: (...args: Args) => void;
+      },
     ): ((...args: Args) => Promise<void>) | undefined => {
       if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
         return undefined;
@@ -1821,6 +2040,7 @@ export async function dispatchReplyFromConfig(
         }
         markProgress();
         if (shouldForwardProgressCallback(options)) {
+          options?.onForward?.(...args);
           await callback?.(...args);
         }
       };
@@ -1834,7 +2054,7 @@ export async function dispatchReplyFromConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
-    const replyResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+    const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
       traceReplyPhase("reply.run_reply_resolver", () =>
         replyResolver(
           ctx,
@@ -1842,6 +2062,7 @@ export async function dispatchReplyFromConfig(
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
             suppressToolErrorWarnings,
+            shouldSuppressToolErrorWarnings,
             typingPolicy: typing.typingPolicy,
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
@@ -1853,18 +2074,33 @@ export async function dispatchReplyFromConfig(
             onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
               forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
             }),
             onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
               forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
+              onForward: (payload) => {
+                if (hasFailedProgressStatus(payload)) {
+                  markVisibleToolErrorProgress();
+                }
+              },
             }),
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
+              onForward: (payload) => {
+                if (hasFailedProgressStatus(payload)) {
+                  markVisibleToolErrorProgress();
+                }
+              },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
               forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
               forwardWhenSourceDeliverySuppressed: true,
+              requiresToolSummaryVisibility: true,
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
@@ -1873,7 +2109,7 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 markInboundDedupeReplayUnsafe();
-                if (!suppressAutomaticSourceDelivery) {
+                if (!suppressAutomaticSourceDelivery && shouldSendToolSummaries()) {
                   await onToolResultFromReplyOptions?.(payload);
                 }
                 if (isDispatchOperationAborted()) {
@@ -1882,8 +2118,12 @@ export async function dispatchReplyFromConfig(
                 if (shouldSuppressProgressDelivery()) {
                   return;
                 }
+                const visibleToolPayload = resolveToolDeliveryPayload(payload);
+                if (!visibleToolPayload) {
+                  return;
+                }
                 const ttsPayload = await maybeApplyTtsToReplyPayload({
-                  payload,
+                  payload: visibleToolPayload,
                   cfg,
                   channel: deliveryChannel,
                   kind: "tool",
@@ -1912,6 +2152,9 @@ export async function dispatchReplyFromConfig(
                     return;
                   }
                 }
+                if (deliveryPayload.isError === true) {
+                  markVisibleToolErrorProgress();
+                }
                 if (shouldRouteToOriginating) {
                   await sendPayloadAsync(deliveryPayload, undefined, false);
                 } else {
@@ -1927,7 +2170,12 @@ export async function dispatchReplyFromConfig(
               }
               markProgress();
               markInboundDedupeReplayUnsafe();
-              if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
+              if (
+                shouldForwardProgressCallback({
+                  forwardWhenSourceDeliverySuppressed: true,
+                  requiresToolSummaryVisibility: true,
+                })
+              ) {
                 await onPlanUpdateFromReplyOptions?.(payload);
               }
               if (isDispatchOperationAborted()) {
@@ -1944,7 +2192,12 @@ export async function dispatchReplyFromConfig(
               }
               markProgress();
               markInboundDedupeReplayUnsafe();
-              if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
+              if (
+                shouldForwardProgressCallback({
+                  forwardWhenSourceDeliverySuppressed: true,
+                  requiresToolSummaryVisibility: true,
+                })
+              ) {
                 await onApprovalEventFromReplyOptions?.(payload);
               }
               if (isDispatchOperationAborted()) {
@@ -1969,7 +2222,12 @@ export async function dispatchReplyFromConfig(
               }
               markProgress();
               markInboundDedupeReplayUnsafe();
-              if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
+              if (
+                shouldForwardProgressCallback({
+                  forwardWhenSourceDeliverySuppressed: true,
+                  requiresToolSummaryVisibility: true,
+                })
+              ) {
                 await onPatchSummaryFromReplyOptions?.(payload);
               }
               if (isDispatchOperationAborted()) {
@@ -2008,7 +2266,7 @@ export async function dispatchReplyFromConfig(
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
                 // and must not be synthesised into the spoken reply.
-                const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+                const isStatusNotice = isReplyPayloadStatusNotice(payload);
                 if (payload.text && !isStatusNotice) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
@@ -2080,16 +2338,18 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
-    ensureDispatchReplyOperation();
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
+    }
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
       if (hookRunner?.hasHooks("reply_dispatch")) {
-        const tailDispatchResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        const tailDispatchResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
-            {
+            createReplyDispatchEvent({
               ctx,
               runId: params.replyOptions?.runId,
               sessionKey: acpDispatchSessionKey,
@@ -2106,11 +2366,11 @@ export async function dispatchReplyFromConfig(
               shouldSendToolSummaries,
               sendPolicy,
               isTailDispatch: true,
-            },
+            }),
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -2228,7 +2488,7 @@ export async function dispatchReplyFromConfig(
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
-              abortSignal: dispatchAbortOperation?.abortSignal,
+              abortSignal: getDispatchAbortSignal(),
             });
             if (result) {
               queuedFinal = result.ok || queuedFinal;

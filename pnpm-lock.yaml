@@ -745,6 +745,9 @@ importers:
       '@google/genai':
         specifier: 2.5.0
         version: 2.5.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      google-auth-library:
+        specifier: 10.6.2
+        version: 10.6.2
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -956,6 +959,16 @@ importers:
       sharp:
         specifier: 0.34.5
         version: 0.34.5
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/meeting-notes:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -28,11 +29,34 @@ import {
 } from "./update-managed-service-handoff.js";
 import { assertValidParams } from "./validation.js";
 
+const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
+
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     return err.message || err.name;
   }
   return String(err);
+}
+
+function tryResolveProcessCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveManagedServiceHandoffRestartDelayMs(
+  restartDelayMs: number | undefined,
+  supervisor: ReturnType<typeof detectRespawnSupervisor>,
+): number | undefined {
+  if (supervisor !== "systemd") {
+    return restartDelayMs;
+  }
+  return Math.max(
+    restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
+    SYSTEMD_HANDOFF_RESTART_GRACE_MS,
+  );
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
@@ -79,21 +103,25 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...(note !== undefined ? { note } : {}),
       ...(continuationMessage !== undefined ? { continuationMessage } : {}),
     };
+    let supervisor: ReturnType<typeof detectRespawnSupervisor> = null;
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
+      const invocationCwd = tryResolveProcessCwd();
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
           argv1: process.argv[1],
-          cwd: process.cwd(),
-        })) ?? process.cwd();
+          ...(invocationCwd ? { cwd: invocationCwd } : {}),
+        })) ??
+        invocationCwd ??
+        os.homedir();
       const installSurface = await resolveUpdateInstallSurface({
         timeoutMs,
         cwd: root,
         argv1: process.argv[1],
       });
-      const supervisor = detectRespawnSupervisor(process.env, process.platform);
+      supervisor = detectRespawnSupervisor(process.env, process.platform);
       if (!isRestartEnabled(config) && !supervisor) {
         const beforeVersion = installSurface.root
           ? await readPackageVersion(installSurface.root)
@@ -120,6 +148,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,
+              supervisor,
             });
             handoff = {
               status: "started",
@@ -218,7 +247,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         ? scheduleGatewaySigusr1Restart({
             delayMs:
               handoff?.status === "started"
-                ? restartDelayMs
+                ? resolveManagedServiceHandoffRestartDelayMs(restartDelayMs, supervisor)
                 : updateWasPackageSwap
                   ? 0
                   : restartDelayMs,

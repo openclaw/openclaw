@@ -18,7 +18,14 @@ const {
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 120,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 120,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived: false,
+  }),
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -771,7 +778,7 @@ describe("createChatSession", () => {
       },
       {
         activeMinutes: 120,
-        limit: 100,
+        limit: 50,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
@@ -972,7 +979,7 @@ describe("switchChatSession", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
-      limit: 100,
+      limit: 50,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,

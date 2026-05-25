@@ -42,6 +42,8 @@ export type {
 } from "../agents/pi-embedded-runner/run/types.js";
 export type {
   ContextEngine as HarnessContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
@@ -173,11 +175,13 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
+  type BeforeToolCallPolicyDiagnosticState,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
@@ -186,6 +190,10 @@ export {
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
+export {
+  assertContextEngineHostSupport,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+} from "../context-engine/host-compat.js";
 export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -204,6 +212,14 @@ export {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "../agents/pi-embedded-runner/compaction-safety-timeout.js";
+export {
+  estimateRenderedLlmBoundaryTokenPressure,
+  formatPrePromptPrecheckLog,
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  shouldPreemptivelyCompactBeforePrompt,
+  type LlmBoundaryTokenPressure,
+  type PreemptiveCompactionDecision,
+} from "../agents/pi-embedded-runner/run/preemptive-compaction.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,

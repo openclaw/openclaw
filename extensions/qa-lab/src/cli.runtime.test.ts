@@ -799,6 +799,12 @@ describe("qa cli runtime", () => {
       scenarioIds: [
         "channel-chat-baseline",
         "runtime-tool-bash",
+        "auth-profile-codex-mixed-profiles",
+        "auth-profile-doctor-migration-safety",
+        "codex-plugin-cold-install",
+        "codex-plugin-install-race",
+        "codex-plugin-pinned-new",
+        "codex-plugin-pinned-old",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
         "runtime-tool-edit",
@@ -853,7 +859,9 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+    ).rejects.toThrow(
+      '--pack must be one of personal-agent, observability, got "personal-admin"',
+    );
   });
 
   it("rejects unknown suite CLI auth modes", async () => {

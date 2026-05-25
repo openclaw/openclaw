@@ -34,6 +34,7 @@ import type {
 } from "../infra/diagnostic-events.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MeetingNotesSourceProviderPlugin as MeetingNotesSourceProviderCapability } from "../meeting-notes/provider-types.js";
 import type { UnifiedModelCatalogEntry, UnifiedModelCatalogKind } from "../model-catalog/types.js";
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
@@ -1830,6 +1831,8 @@ export type SpeechProviderPlugin = {
   label: string;
   aliases?: string[];
   autoSelectOrder?: number;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
@@ -1872,6 +1875,13 @@ export type RealtimeTranscriptionProviderPlugin = {
 };
 
 export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProviderPlugin & {
+  pluginId: string;
+};
+
+/** Meeting-notes source capability registered by a channel or meeting plugin. */
+export type MeetingNotesSourceProviderPlugin = MeetingNotesSourceProviderCapability;
+
+export type PluginMeetingNotesSourceProviderEntry = MeetingNotesSourceProviderPlugin & {
   pluginId: string;
 };
 
@@ -2676,6 +2686,8 @@ export type OpenClawPluginApi = {
   registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  /** Register a meeting-notes source provider (live or imported meeting transcript capability). */
+  registerMeetingNotesSourceProvider: (provider: MeetingNotesSourceProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */

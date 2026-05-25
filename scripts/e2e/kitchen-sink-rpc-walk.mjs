@@ -4,8 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -130,7 +129,7 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
-  const command = resolveOpenClawCommand(runner, args, env, {
+  const command = await resolveOpenClawCommand(runner, args, env, {
     stdio: ["ignore", "pipe", "pipe"],
   });
   return runCommand(command.command, command.args, {
@@ -140,8 +139,9 @@ async function runOpenClaw(runner, args, env, options = {}) {
   });
 }
 
-function resolveOpenClawCommand(runner, args, env, options = {}) {
+async function resolveOpenClawCommand(runner, args, env, options = {}) {
   if (runner.pnpm) {
+    const { createPnpmRunnerSpawnSpec } = await import("../pnpm-runner.mjs");
     return createPnpmRunnerSpawnSpec({
       env,
       pnpmArgs: [...runner.baseArgs, ...args],
@@ -227,7 +227,7 @@ function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
-  const { callGateway } = await loadCallGatewayModule();
+  const { callGateway } = await loadCallGatewayModule(options.runner);
   const payload = await callGateway({
     config: readJson(options.env.OPENCLAW_CONFIG_PATH),
     configPath: options.env.OPENCLAW_CONFIG_PATH,
@@ -241,11 +241,35 @@ async function rpcCall(method, params, options) {
   return unwrapRpcPayload(payload);
 }
 
-async function loadCallGatewayModule() {
-  callGatewayModulePromise ??= import(
-    pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts"))
-  );
+async function loadCallGatewayModule(runner) {
+  callGatewayModulePromise ??= importCallGatewayModule(runner);
   return callGatewayModulePromise;
+}
+
+async function importCallGatewayModule(runner) {
+  if (!usesPackagedOpenClawEntry(runner)) {
+    return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
+  }
+  const distDir = path.join(process.cwd(), "dist");
+  const candidates = fs.existsSync(distDir)
+    ? fs
+        .readdirSync(distDir)
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .toSorted((left, right) => left.localeCompare(right))
+    : [];
+  for (const name of candidates) {
+    const module = await import(pathToFileURL(path.join(distDir, name)).href);
+    if (typeof module.callGateway === "function") {
+      return module;
+    }
+  }
+  throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
+}
+
+function usesPackagedOpenClawEntry(runner) {
+  return Boolean(
+    process.env.OPENCLAW_ENTRY && runner?.baseArgs?.[0] === process.env.OPENCLAW_ENTRY,
+  );
 }
 
 async function retryRpcCall(method, params, options) {
@@ -268,25 +292,58 @@ async function retryRpcCall(method, params, options) {
 function isRetryableGatewayCallError(error) {
   const text = error instanceof Error ? error.message : String(error);
   return (
+    isRetryableTransientNetworkError(error) ||
     text.includes("gateway starting") ||
     text.includes("gateway closed") ||
     text.includes("handshake timeout") ||
-    text.includes("GatewayTransportError") ||
-    text.includes("ECONNREFUSED") ||
-    text.includes("fetch failed")
+    text.includes("GatewayTransportError")
   );
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  const text = await response.text();
-  let body = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
+function isRetryableTransientNetworkError(error, seen = new Set()) {
+  if (!error || seen.has(error)) {
+    return false;
   }
-  return { ok: response.ok, status: response.status, body };
+  seen.add(error);
+  const candidate = error;
+  const message = candidate instanceof Error ? candidate.message : String(candidate);
+  const code = typeof candidate === "object" && candidate !== null ? candidate.code : undefined;
+  const text = `${String(code ?? "")} ${message}`;
+  if (
+    /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
+    /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
+  ) {
+    return true;
+  }
+  if (typeof candidate === "object" && candidate !== null && "cause" in candidate) {
+    return isRetryableTransientNetworkError(candidate.cause, seen);
+  }
+  return false;
+}
+
+export async function fetchJson(url, options = {}) {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await (options.fetchImpl ?? fetch)(url);
+      const text = await response.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      return { ok: response.ok, status: response.status, body };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
+        throw error;
+      }
+      await delay(options.retryDelayMs ?? 250);
+    }
+  }
+  throw lastError ?? new Error(`fetch ${url} failed`);
 }
 
 function configureKitchenSink(env, port) {
@@ -347,18 +404,11 @@ function configureKitchenSink(env, port) {
   writeJson(configPath, config);
 }
 
-function startGateway(runner, port, env, logPath) {
+async function startGateway(runner, port, env, logPath) {
   const log = fs.openSync(logPath, "w");
-  const command = resolveOpenClawCommand(
+  const command = await resolveOpenClawCommand(
     runner,
-    [
-      "gateway",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
+    ["gateway", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
     env,
     {
       stdio: ["ignore", log, log],
@@ -414,7 +464,7 @@ async function waitForGatewayReady(child, port, logPath) {
       lastError = error instanceof Error ? error.message : String(error);
     }
     if (fs.existsSync(logPath) && fs.readFileSync(logPath, "utf8").includes("[gateway] ready")) {
-      return;
+      lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
     await delay(250);
   }
@@ -500,12 +550,21 @@ function assertToolInvokeResult(payload) {
   }
 }
 
-async function sampleProcess(pid) {
-  if (!pid || process.platform === "win32") {
+export async function sampleProcess(pid, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const run = options.runCommand ?? runCommand;
+  if (!pid) {
     return null;
   }
+  if (platform === "win32") {
+    return sampleWindowsProcess(pid, run);
+  }
+  return samplePosixProcess(pid, run);
+}
+
+async function samplePosixProcess(pid, run) {
   try {
-    const { stdout } = await runCommand("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
+    const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
       timeoutMs: 5000,
     });
     const [rssKbRaw, cpuRaw] = stdout.trim().split(/\s+/u);
@@ -523,9 +582,46 @@ async function sampleProcess(pid) {
   }
 }
 
-function assertResourceCeiling(sample) {
+async function sampleWindowsProcess(pid, run) {
+  const safePid = Number(pid);
+  if (!Number.isInteger(safePid) || safePid <= 0) {
+    return null;
+  }
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `$process = Get-Process -Id ${safePid} -ErrorAction Stop`,
+    "$cpu = 0",
+    "if ($null -ne $process.CPU) { $cpu = $process.CPU }",
+    "[Console]::Out.Write(('{0} {1}' -f $process.WorkingSet64, $cpu))",
+  ].join("; ");
+  for (const powershell of ["powershell.exe", "powershell"]) {
+    try {
+      const { stdout } = await run(
+        powershell,
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        { timeoutMs: 5000 },
+      );
+      const [workingSetBytesRaw, cpuSecondsRaw] = stdout.trim().split(/\s+/u);
+      const workingSetBytes = Number.parseInt(workingSetBytesRaw ?? "", 10);
+      const cpuSeconds = Number.parseFloat(cpuSecondsRaw ?? "");
+      if (!Number.isFinite(workingSetBytes)) {
+        return null;
+      }
+      return {
+        rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+        cpuPercent: null,
+        cpuSeconds: Number.isFinite(cpuSeconds) ? cpuSeconds : null,
+      };
+    } catch {
+      // Try the next Windows PowerShell command name.
+    }
+  }
+  return null;
+}
+
+export function assertResourceCeiling(sample) {
   if (!sample) {
-    return;
+    throw new Error("gateway RSS sample was not captured");
   }
   if (sample.rssMiB > MAX_RSS_MIB) {
     throw new Error(`gateway RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.rssMiB} MiB`);
@@ -573,7 +669,7 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-async function main() {
+export async function main() {
   const runner = resolveOpenClawRunner();
   const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, DEFAULT_PORT);
   const { root, env } = makeEnv();
@@ -599,7 +695,7 @@ async function main() {
   ];
   assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
-  const child = startGateway(runner, port, env, logPath);
+  const child = await startGateway(runner, port, env, logPath);
   try {
     await waitForGatewayReady(child, port, logPath);
     const initialSample = await sampleProcess(child.pid);
@@ -708,4 +804,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

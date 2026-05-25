@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotOwnerMaps = {
   channels: ReadonlyMap<string, readonly string[]>;
@@ -36,6 +38,7 @@ export type PluginMetadataSnapshotRegistryDiagnostic = {
 export type PluginMetadataSnapshot = {
   policyHash: string;
   configFingerprint?: string;
+  registrySource?: PluginRegistrySnapshotSource;
   workspaceDir?: string;
   index: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
@@ -46,6 +49,7 @@ export type PluginMetadataSnapshot = {
   normalizePluginId: (pluginId: string) => string;
   owners: PluginMetadataSnapshotOwnerMaps;
   metrics: PluginMetadataSnapshotMetrics;
+  discovery?: PluginDiscoveryResult;
 };
 
 export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
@@ -59,4 +63,9 @@ export type LoadPluginMetadataSnapshotParams = {
   env: NodeJS.ProcessEnv;
   index?: InstalledPluginIndex;
   preferPersisted?: boolean;
+};
+
+export type ResolvePluginMetadataSnapshotParams = LoadPluginMetadataSnapshotParams & {
+  allowCurrent?: boolean;
+  allowWorkspaceScopedCurrent?: boolean;
 };

@@ -39,6 +39,23 @@ mktempfile() {
     echo "$f"
 }
 
+resolve_openclaw_effective_home() {
+    local openclaw_home="${OPENCLAW_HOME:-}"
+    if [[ -z "$openclaw_home" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == "~" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == \~/* ]]; then
+        echo "${HOME}${openclaw_home:1}"
+        return
+    fi
+    echo "$openclaw_home"
+}
+
 DOWNLOADER=""
 detect_downloader() {
     if command -v curl &> /dev/null; then
@@ -267,7 +284,7 @@ detect_os_or_die() {
     OS="unknown"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         OS="macos"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+    elif [[ "$OSTYPE" == "linux"* ]] || [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
         OS="linux"
     fi
 
@@ -321,6 +338,14 @@ ui_error() {
 
 INSTALL_STAGE_TOTAL=3
 INSTALL_STAGE_CURRENT=0
+
+configure_install_stage_total() {
+    INSTALL_STAGE_TOTAL=3
+    INSTALL_STAGE_CURRENT=0
+    if [[ "${VERIFY_INSTALL:-0}" == "1" ]]; then
+        INSTALL_STAGE_TOTAL=4
+    fi
+}
 
 ui_section() {
     local title="$1"
@@ -719,6 +744,81 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
+expand_npm_config_path() {
+    local path="$1"
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    case "$path" in
+        "\${HOME}/"*) path="${HOME:-}/${path#\$\{HOME\}/}" ;;
+        "\$HOME/"*) path="${HOME:-}/${path#\$HOME/}" ;;
+        [~]/*) path="${HOME:-}/${path#\~/}" ;;
+    esac
+    printf '%s\n' "$path"
+}
+
+npm_config_file_has_key() {
+    local file
+    file="$(expand_npm_config_path "$1")" || return 1
+    local key="$2"
+    [[ -f "$file" ]] || return 1
+    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" >/dev/null 2>&1
+}
+
+npm_command_path() {
+    local npm_cmd="$1"
+    local npm_path="$npm_cmd"
+    if [[ "$npm_path" != */* ]]; then
+        npm_path="$(command -v "$npm_cmd" 2>/dev/null)" || return 1
+    fi
+    if command -v node >/dev/null 2>&1; then
+        node -e 'const fs = require("node:fs"); console.log(fs.realpathSync(process.argv[1]));' "$npm_path" 2>/dev/null && return 0
+    fi
+    printf '%s\n' "$npm_path"
+}
+
+npm_builtin_config_path() {
+    local npm_cmd="$1"
+    local npm_path
+    npm_path="$(npm_command_path "$npm_cmd")" || return 1
+    local npm_root
+    npm_root="$(cd "$(dirname "$npm_path")/.." >/dev/null 2>&1 && pwd -P)" || return 1
+    printf '%s\n' "${npm_root}/npmrc"
+}
+
+npm_raw_config_has_key() {
+    local key="$1"
+    local npm_cmd="${2:-npm}"
+    local user_config="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    local global_config="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+    local prefix="${NPM_CONFIG_PREFIX:-${npm_config_prefix:-}}"
+
+    npm_config_file_has_key ".npmrc" "$key" && return 0
+    if [[ -n "$user_config" ]]; then
+        npm_config_file_has_key "$user_config" "$key" && return 0
+    elif [[ -n "${HOME:-}" ]]; then
+        npm_config_file_has_key "${HOME}/.npmrc" "$key" && return 0
+    fi
+    if [[ -n "$global_config" ]]; then
+        npm_config_file_has_key "$global_config" "$key" && return 0
+    else
+        local resolved_global_config=""
+        resolved_global_config="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get globalconfig 2>/dev/null || true)"
+        if [[ -n "$resolved_global_config" && "$resolved_global_config" != "null" && "$resolved_global_config" != "undefined" ]]; then
+            npm_config_file_has_key "$resolved_global_config" "$key" && return 0
+        fi
+    fi
+    if [[ -n "$prefix" ]]; then
+        npm_config_file_has_key "${prefix}/etc/npmrc" "$key" && return 0
+    fi
+    local builtin_config=""
+    builtin_config="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+    if [[ -n "$builtin_config" ]]; then
+        npm_config_file_has_key "$builtin_config" "$key" && return 0
+    fi
+    return 1
+}
+
 run_npm_global_install() {
     local spec="$1"
     local log="$2"
@@ -726,7 +826,7 @@ run_npm_global_install() {
     local freshness_flag="--min-release-age=0"
     local min_release_age=""
     min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
-    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    if ! npm_raw_config_has_key "min-release-age" "npm" && [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
         local before_value=""
         before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
         if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
@@ -1024,7 +1124,7 @@ DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
-GIT_DIR_DEFAULT="${HOME}/openclaw"
+GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
@@ -1596,6 +1696,21 @@ check_node() {
     fi
 }
 
+finish_linux_node_install() {
+    activate_supported_node_on_path || true
+    if ! node_is_at_least_required; then
+        local active_path active_version
+        active_path="$(command -v node 2>/dev/null || echo "not found")"
+        active_version="$(node -v 2>/dev/null || echo "missing")"
+        ui_error "Installed Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+        echo "Upgrade the system Node.js package or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+        exit 1
+    fi
+
+    ui_success "Node.js v$(node -v | cut -d'v' -f2) installed"
+    print_active_node_paths || true
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -1628,9 +1743,18 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
-            promote_supported_node_binary || true
-            ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-            print_active_node_paths || true
+            finish_linux_node_install
+            return 0
+        fi
+
+        if command -v apk &> /dev/null; then
+            ui_info "Installing Node.js via apk (Alpine Linux detected)"
+            if is_root; then
+                run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+            else
+                run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+            fi
+            finish_linux_node_install
             return 0
         fi
 
@@ -1674,9 +1798,7 @@ install_node() {
             exit 1
         fi
 
-        ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
-        activate_supported_node_on_path || true
-        print_active_node_paths || true
+        finish_linux_node_install
     fi
 }
 
@@ -2388,6 +2510,7 @@ install_openclaw_from_git() {
     ensure_pnpm_binary_for_scripts
 
     if [[ ! -d "$repo_dir" ]]; then
+        mkdir -p "$(dirname "$repo_dir")"
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
     fi
 
@@ -2585,10 +2708,12 @@ maybe_open_dashboard() {
 
 resolve_workspace_dir() {
     local profile="${OPENCLAW_PROFILE:-default}"
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
     if [[ "${profile}" != "default" ]]; then
-        echo "${HOME}/.openclaw/workspace-${profile}"
+        echo "${effective_home}/.openclaw/workspace-${profile}"
     else
-        echo "${HOME}/.openclaw/workspace"
+        echo "${effective_home}/.openclaw/workspace"
     fi
 }
 
@@ -2597,9 +2722,18 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
+    local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
+    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
+    if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
         return
+    fi
+    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
+        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
+            return
+        fi
     fi
 
     local workspace
@@ -3033,8 +3167,10 @@ main() {
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
         else
-            local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+            local effective_home
+            effective_home="$(resolve_openclaw_effective_home)"
+            local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+            if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true
@@ -3095,6 +3231,7 @@ main() {
 
 if [[ "${OPENCLAW_INSTALL_SH_NO_RUN:-0}" != "1" ]]; then
     parse_args "$@"
+    configure_install_stage_total
     configure_verbose
     main
 fi

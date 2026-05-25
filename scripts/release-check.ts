@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -9,8 +9,10 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,7 +43,10 @@ import {
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
+  resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -54,6 +59,7 @@ type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
@@ -65,6 +71,7 @@ const requiredPathGroups = [
   }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
+  "scripts/prepare-git-hooks.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-plugin-catalog.json",
@@ -143,6 +150,47 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "zsh",
 ] as const;
 
+export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const skillsDir = join(rootDir, "skills");
+  const errors: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const scriptsDir = join(skillsDir, entry.name, "scripts");
+    let scriptEntries: Dirent[];
+    try {
+      scriptEntries = readdirSync(scriptsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const scriptEntry of scriptEntries) {
+      if (!scriptEntry.isFile() || !scriptEntry.name.endsWith(".sh")) {
+        continue;
+      }
+      const scriptPath = join(scriptsDir, scriptEntry.name);
+      if ((statSync(scriptPath).mode & 0o111) === 0) {
+        errors.push(
+          `skill shell script is not executable: skills/${entry.name}/scripts/${scriptEntry.name}`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
@@ -188,8 +236,59 @@ function checkBundledExtensionMetadata() {
   }
 }
 
+function checkSkillShellScriptsExecutable() {
+  const errors = collectSkillShellScriptExecutableErrors();
+  if (errors.length > 0) {
+    console.error("release-check: skill shell script permission validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
+export function resolveReleaseNpmCommand(
+  args: string[],
+  params: {
+    comSpec?: string;
+    env?: NodeJS.ProcessEnv;
+    execPath?: string;
+    existsSync?: typeof existsSync;
+    platform?: NodeJS.Platform;
+  } = {},
+) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
+}
+
+function execNpm(
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: BufferEncoding;
+    maxBuffer?: number;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+  },
+): string {
+  const invocation = resolveReleaseNpmCommand(args, { env: process.env });
+  return execFileSync(invocation.command, invocation.args, {
+    ...options,
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
+  });
+}
+
 function runPackDry(): PackResult[] {
-  const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
+  const raw = execNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 100,
@@ -198,15 +297,11 @@ function runPackDry(): PackResult[] {
 }
 
 function runPack(packDestination: string): PackResult[] {
-  const raw = execFileSync(
-    "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 100,
-    },
-  );
+  const raw = execNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 100,
+  });
   return JSON.parse(raw) as PackResult[];
 }
 
@@ -223,8 +318,7 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
 }
 
 function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
-  execFileSync(
-    "npm",
+  execNpm(
     [
       "install",
       "-g",
@@ -244,17 +338,11 @@ function installPackedTarball(prefixDir: string, tarballPath: string, cwd: strin
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+  return execNpm(["root", "-g", "--prefix", prefixDir], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-function resolveInstalledBinaryPath(prefixDir: string): string {
-  return process.platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -364,16 +452,13 @@ function verifyPackedInstalledPackage(params: {
   prefixDir: string;
   tmpRoot: string;
 }): void {
-  const installedBinaryVersion = execFileSync(
-    resolveInstalledBinaryPath(params.prefixDir),
-    ["--version"],
-    {
-      cwd: params.tmpRoot,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+  const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
+  const installedBinaryVersion = execFileSync(invocation.command, invocation.args, {
+    cwd: params.tmpRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
@@ -864,6 +949,7 @@ function runCriticalPluginSdkEntrypointImportSmoke() {
 
 async function main() {
   checkAppcastSparkleVersions();
+  checkSkillShellScriptsExecutable();
   checkCliBootstrapExternalImports({
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),
