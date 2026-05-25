@@ -16,19 +16,27 @@
  */
 export class ApiError extends Error {
   override readonly name = "ApiError";
+  public readonly httpStatus: number;
+  public readonly path: string;
+  public readonly bizCode?: number;
+  public readonly bizMessage?: string;
 
   constructor(
     message: string,
     /** HTTP status code returned by the QQ Open Platform. */
-    public readonly httpStatus: number,
+    httpStatus: number,
     /** API path that produced the error (e.g. `/v2/users/{id}/messages`). */
-    public readonly path: string,
+    path: string,
     /** Business error code from the response body (`code` or `err_code`). */
-    public readonly bizCode?: number,
+    bizCode?: number,
     /** Original error message from the response body. */
-    public readonly bizMessage?: string,
+    bizMessage?: string,
   ) {
     super(message);
+    this.httpStatus = httpStatus;
+    this.path = path;
+    this.bizCode = bizCode;
+    this.bizMessage = bizMessage;
   }
 }
 
@@ -70,12 +78,14 @@ export interface MessageResponse {
 // ============ Media Types ============
 
 /** QQ Open Platform media file type codes. */
-export enum MediaFileType {
-  IMAGE = 1,
-  VIDEO = 2,
-  VOICE = 3,
-  FILE = 4,
-}
+export const MediaFileType = {
+  IMAGE: 1,
+  VIDEO: 2,
+  VOICE: 3,
+  FILE: 4,
+} as const;
+
+export type MediaFileType = (typeof MediaFileType)[keyof typeof MediaFileType];
 
 /** Media upload response from the QQ Open Platform. */
 export interface UploadMediaResponse {

@@ -24,8 +24,11 @@ type FakeResponse = FakeResponseValue | FakeResponseHandler;
 class FakeTransport implements OpenClawTransport {
   readonly calls: RequestCall[] = [];
   private readonly eventHub = new EventHub<GatewayEvent>({ replayLimit: 100 });
+  private readonly responses: Record<string, FakeResponse>;
 
-  constructor(private readonly responses: Record<string, FakeResponse>) {}
+  constructor(responses: Record<string, FakeResponse>) {
+    this.responses = responses;
+  }
 
   async request<T = unknown>(
     method: string,

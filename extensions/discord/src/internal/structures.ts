@@ -27,7 +27,11 @@ export type StructureClient = {
 };
 
 export class Base {
-  constructor(protected client: StructureClient) {}
+  protected client: StructureClient;
+
+  constructor(client: StructureClient) {
+    this.client = client;
+  }
 }
 
 export class User<IsPartial extends boolean = false> extends Base {
@@ -112,11 +116,11 @@ export class Guild<IsPartial extends boolean = false> extends Base {
 }
 
 export class GuildMember extends Base {
-  constructor(
-    client: StructureClient,
-    public rawData: APIGuildMember,
-  ) {
+  public rawData: APIGuildMember;
+
+  constructor(client: StructureClient, rawData: APIGuildMember) {
     super(client);
+    this.rawData = rawData;
   }
   get user() {
     return this.rawData.user ? new User(this.client, this.rawData.user) : null;

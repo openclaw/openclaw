@@ -8,12 +8,14 @@ class FakeSocket extends EventEmitter {
   public writable = true;
   public readonly alpnProtocol: string | false;
   public readonly emitSecureConnectOnConnect: boolean;
+  private readonly response?: string;
 
   constructor(
-    private readonly response?: string,
+    response?: string,
     options: { alpnProtocol?: string | false; emitSecureConnectOnConnect?: boolean } = {},
   ) {
     super();
+    this.response = response;
     this.alpnProtocol = options.alpnProtocol ?? "h2";
     this.emitSecureConnectOnConnect = options.emitSecureConnectOnConnect ?? true;
   }

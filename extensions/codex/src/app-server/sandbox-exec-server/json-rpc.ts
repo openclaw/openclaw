@@ -5,11 +5,11 @@ import type { HttpHeader, JsonRpcRequest } from "./types.js";
 export const JSON_RPC_NOT_FOUND = -32004;
 
 export class JsonRpcProtocolError extends Error {
-  constructor(
-    readonly code: number,
-    message: string,
-  ) {
+  readonly code: number;
+
+  constructor(code: number, message: string) {
     super(message);
+    this.code = code;
   }
 }
 

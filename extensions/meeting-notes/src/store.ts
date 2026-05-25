@@ -50,7 +50,11 @@ function sameSessionIdentity(
 }
 
 export class MeetingNotesStore {
-  constructor(private readonly rootDir: string) {}
+  private readonly rootDir: string;
+
+  constructor(rootDir: string) {
+    this.rootDir = rootDir;
+  }
 
   sessionDir(session: MeetingNotesSessionDescriptor): string {
     return path.join(this.rootDir, dateSegment(session.startedAt), safeSegment(session.sessionId));

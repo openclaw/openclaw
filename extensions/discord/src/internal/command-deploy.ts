@@ -23,16 +23,23 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
   private hashesLoaded = false;
+  private readonly params: {
+    clientId: string;
+    commands: BaseCommand[];
+    devGuilds?: string[];
+    hashStorePath?: string;
+    rest: () => RequestClient;
+  };
 
-  constructor(
-    private readonly params: {
-      clientId: string;
-      commands: BaseCommand[];
-      devGuilds?: string[];
-      hashStorePath?: string;
-      rest: () => RequestClient;
-    },
-  ) {}
+  constructor(params: {
+    clientId: string;
+    commands: BaseCommand[];
+    devGuilds?: string[];
+    hashStorePath?: string;
+    rest: () => RequestClient;
+  }) {
+    this.params = params;
+  }
 
   async getCommands(): Promise<APIApplicationCommand[]> {
     return await listApplicationCommands(this.rest, this.params.clientId);

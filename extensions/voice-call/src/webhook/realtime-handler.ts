@@ -322,16 +322,31 @@ export class RealtimeCallHandler {
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
+  private readonly config: VoiceCallRealtimeConfig;
+  private readonly manager: CallManager;
+  private readonly provider: VoiceCallProvider;
+  private readonly realtimeProvider: RealtimeVoiceProviderPlugin;
+  private readonly providerConfig: RealtimeVoiceProviderConfig;
+  private readonly servePath: string;
+  private readonly coreConfig?: OpenClawConfig;
 
   constructor(
-    private readonly config: VoiceCallRealtimeConfig,
-    private readonly manager: CallManager,
-    private readonly provider: VoiceCallProvider,
-    private readonly realtimeProvider: RealtimeVoiceProviderPlugin,
-    private readonly providerConfig: RealtimeVoiceProviderConfig,
-    private readonly servePath: string,
-    private readonly coreConfig?: OpenClawConfig,
-  ) {}
+    config: VoiceCallRealtimeConfig,
+    manager: CallManager,
+    provider: VoiceCallProvider,
+    realtimeProvider: RealtimeVoiceProviderPlugin,
+    providerConfig: RealtimeVoiceProviderConfig,
+    servePath: string,
+    coreConfig?: OpenClawConfig,
+  ) {
+    this.config = config;
+    this.manager = manager;
+    this.provider = provider;
+    this.realtimeProvider = realtimeProvider;
+    this.providerConfig = providerConfig;
+    this.servePath = servePath;
+    this.coreConfig = coreConfig;
+  }
 
   setPublicUrl(url: string): void {
     try {

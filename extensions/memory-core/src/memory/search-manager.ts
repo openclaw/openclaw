@@ -331,8 +331,10 @@ async function getBuiltinMemorySearchManager(params: {
 
 class BorrowedMemoryManager implements MemorySearchManager {
   readonly probeVectorStoreAvailability?: () => Promise<boolean>;
+  private readonly inner: MemorySearchManager;
 
-  constructor(private readonly inner: MemorySearchManager) {
+  constructor(inner: MemorySearchManager) {
+    this.inner = inner;
     if (inner.probeVectorStoreAvailability) {
       const probeVectorStoreAvailability = inner.probeVectorStoreAvailability.bind(inner);
       this.probeVectorStoreAvailability = async () => await probeVectorStoreAvailability();
@@ -438,14 +440,22 @@ class FallbackMemoryManager implements MemorySearchManager {
   private cacheEvicted = false;
   private closed = false;
   private closeReason = "memory search manager is closed";
+  private readonly deps: {
+    primary: MemorySearchManager;
+    fallbackFactory: () => Promise<Maybe<MemorySearchManager>>;
+  };
+  private readonly onClose?: () => void;
 
   constructor(
-    private readonly deps: {
+    deps: {
       primary: MemorySearchManager;
       fallbackFactory: () => Promise<Maybe<MemorySearchManager>>;
     },
-    private readonly onClose?: () => void,
-  ) {}
+    onClose?: () => void,
+  ) {
+    this.deps = deps;
+    this.onClose = onClose;
+  }
 
   async search(
     query: string,

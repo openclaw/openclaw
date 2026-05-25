@@ -122,10 +122,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected override fallbackFrom?: EmbeddingProviderId;
-  protected override fallbackReason?: string;
+  declare protected fallbackFrom?: EmbeddingProviderId;
+  declare protected fallbackReason?: string;
   private providerUnavailableReason?: string;
-  protected override providerRuntime?: EmbeddingProviderRuntime;
+  declare protected providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
     wait: boolean;

@@ -520,9 +520,11 @@ async function runDiscordModelPickerFallback(
 class DiscordModelPickerFallbackButton extends Button {
   label = "modelpick";
   customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
+  private readonly params: DiscordModelPickerFallbackParams;
 
-  constructor(private readonly params: DiscordModelPickerFallbackParams) {
+  constructor(params: DiscordModelPickerFallbackParams) {
     super();
+    this.params = params;
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData) {
@@ -533,9 +535,11 @@ class DiscordModelPickerFallbackButton extends Button {
 class DiscordModelPickerFallbackSelect extends StringSelectMenu {
   customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
   options = [];
+  private readonly params: DiscordModelPickerFallbackParams;
 
-  constructor(private readonly params: DiscordModelPickerFallbackParams) {
+  constructor(params: DiscordModelPickerFallbackParams) {
     super();
+    this.params = params;
   }
 
   override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {

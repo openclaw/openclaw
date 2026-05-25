@@ -4,8 +4,11 @@ const REGISTRY = new Map<string, HealthCheck>();
 
 export class HealthCheckRegistrationError extends Error {
   readonly code = "OC_DOCTOR_DUPLICATE_CHECK";
-  constructor(readonly checkId: string) {
+  readonly checkId: string;
+
+  constructor(checkId: string) {
     super(`health check already registered: ${checkId}`);
+    this.checkId = checkId;
     this.name = "HealthCheckRegistrationError";
   }
 }

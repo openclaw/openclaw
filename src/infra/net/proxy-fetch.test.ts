@@ -45,7 +45,10 @@ const {
   class ProxyAgent {
     static lastCreated: ProxyAgent | undefined;
     readonly proxyUrl: string | undefined;
-    constructor(public readonly options: { uri?: string; proxyTls?: unknown } | string) {
+    public readonly options: { uri?: string; proxyTls?: unknown } | string;
+
+    constructor(options: { uri?: string; proxyTls?: unknown } | string) {
+      this.options = options;
       this.proxyUrl = typeof options === "string" ? options : options.uri;
       ProxyAgent.lastCreated = this;
       proxyAgentSpy(options);
@@ -53,7 +56,10 @@ const {
   }
   class EnvHttpProxyAgent {
     static lastCreated: EnvHttpProxyAgent | undefined;
-    constructor(public readonly options?: Record<string, unknown>) {
+    public readonly options?: Record<string, unknown>;
+
+    constructor(options?: Record<string, unknown>) {
+      this.options = options;
       EnvHttpProxyAgent.lastCreated = this;
       envAgentSpy(options);
     }

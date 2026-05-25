@@ -74,13 +74,19 @@ class DiscordComponentSelectControl extends BaseMessageInteractiveComponent {
   override customIdParser = parseDiscordComponentCustomIdForInteraction;
   readonly type: ComponentType;
   readonly customId: string;
+  private spec: SelectControlSpec;
+  private ctx: AgentComponentContext;
+  private handlers: DiscordComponentControlHandlers;
 
   constructor(
-    private spec: SelectControlSpec,
-    private ctx: AgentComponentContext,
-    private handlers: DiscordComponentControlHandlers,
+    spec: SelectControlSpec,
+    ctx: AgentComponentContext,
+    handlers: DiscordComponentControlHandlers,
   ) {
     super();
+    this.spec = spec;
+    this.ctx = ctx;
+    this.handlers = handlers;
     this.type = spec.type;
     this.customId = spec.customId;
   }
@@ -111,12 +117,13 @@ class DiscordComponentButton extends Button {
   override customId = "__openclaw_discord_component_button_wildcard__";
   override style = ButtonStyle.Primary;
   override customIdParser = parseDiscordComponentCustomIdForInteraction;
+  private ctx: AgentComponentContext;
+  private handlers: DiscordComponentControlHandlers;
 
-  constructor(
-    private ctx: AgentComponentContext,
-    private handlers: DiscordComponentControlHandlers,
-  ) {
+  constructor(ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) {
     super();
+    this.ctx = ctx;
+    this.handlers = handlers;
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {

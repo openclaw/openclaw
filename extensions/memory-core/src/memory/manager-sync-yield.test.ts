@@ -83,9 +83,11 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   protected db = createDbMock();
 
   readonly indexedPaths: string[] = [];
+  private readonly onIndexFile: (count: number) => void;
 
-  constructor(private readonly onIndexFile: (count: number) => void) {
+  constructor(onIndexFile: (count: number) => void) {
     super();
+    this.onIndexFile = onIndexFile;
   }
 
   async syncTargetSessionFiles(files: string[]): Promise<void> {

@@ -287,17 +287,24 @@ export class DiscordVoiceManager {
   private followUsersReconcileBotGuildCursor = 0;
   private readonly followUsersReconcileUserCursors = new Map<string, number>();
   private destroyed = false;
+  private params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  };
 
-  constructor(
-    private params: {
-      client: Client;
-      cfg: OpenClawConfig;
-      discordConfig: DiscordAccountConfig;
-      accountId: string;
-      runtime: RuntimeEnv;
-      botUserId?: string;
-    },
-  ) {
+  constructor(params: {
+    client: Client;
+    cfg: OpenClawConfig;
+    discordConfig: DiscordAccountConfig;
+    accountId: string;
+    runtime: RuntimeEnv;
+    botUserId?: string;
+  }) {
+    this.params = params;
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     this.ownerAllowFrom =
@@ -1825,8 +1832,11 @@ export class DiscordVoiceManager {
 }
 
 export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle(_data: unknown, _client: Client): Promise<void> {
@@ -1835,8 +1845,11 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 }
 
 export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle(_data: unknown, _client: Client): Promise<void> {
@@ -1845,8 +1858,11 @@ export class DiscordVoiceResumedListener extends ResumedListener {
 }
 
 export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
-  constructor(private manager: DiscordVoiceManager) {
+  private manager: DiscordVoiceManager;
+
+  constructor(manager: DiscordVoiceManager) {
     super();
+    this.manager = manager;
   }
 
   async handle(data: APIVoiceState, _client: Client): Promise<void> {

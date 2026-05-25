@@ -21,8 +21,10 @@ export class TelegramPollingLivenessTracker {
   #lastGetUpdatesOffset: number | null = null;
   #inFlightGetUpdates = 0;
   #stallDiagLoggedAt = 0;
+  private readonly options: TelegramPollingLivenessTrackerOptions;
 
-  constructor(private readonly options: TelegramPollingLivenessTrackerOptions = {}) {
+  constructor(options: TelegramPollingLivenessTrackerOptions = {}) {
+    this.options = options;
     this.#lastGetUpdatesAt = this.#now();
     this.#lastGetUpdatesActivityAt = this.#lastGetUpdatesAt;
   }

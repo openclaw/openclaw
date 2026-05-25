@@ -38,8 +38,10 @@ class MockGoogleLiveWebSocket {
   readonly sent: string[] = [];
   binaryType: BinaryType = "blob";
   readyState = MockGoogleLiveWebSocket.OPEN;
+  readonly url: string;
 
-  constructor(readonly url: string) {
+  constructor(url: string) {
+    this.url = url;
     wsInstances.push(this);
   }
 

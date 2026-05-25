@@ -439,8 +439,10 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resumptionHandle: string | undefined;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly config: GoogleRealtimeVoiceBridgeConfig;
 
-  constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
+  constructor(config: GoogleRealtimeVoiceBridgeConfig) {
+    this.config = config;
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
   }
 

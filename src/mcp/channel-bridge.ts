@@ -57,10 +57,18 @@ export class OpenClawChannelBridge {
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
   private readySettled = false;
+  private readonly cfg: OpenClawConfig;
+  private readonly params: {
+    gatewayUrl?: string;
+    gatewayToken?: string;
+    gatewayPassword?: string;
+    claudeChannelMode: ClaudeChannelMode;
+    verbose: boolean;
+  };
 
   constructor(
-    private readonly cfg: OpenClawConfig,
-    private readonly params: {
+    cfg: OpenClawConfig,
+    params: {
       gatewayUrl?: string;
       gatewayToken?: string;
       gatewayPassword?: string;
@@ -68,6 +76,8 @@ export class OpenClawChannelBridge {
       verbose: boolean;
     },
   ) {
+    this.cfg = cfg;
+    this.params = params;
     this.verbose = params.verbose;
     this.claudeChannelMode = params.claudeChannelMode;
     this.readyPromise = new Promise<void>((resolve, reject) => {

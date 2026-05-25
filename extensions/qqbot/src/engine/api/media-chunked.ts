@@ -72,16 +72,20 @@ import type { TokenManager } from "./token.js";
  */
 export class UploadDailyLimitExceededError extends Error {
   override readonly name = "UploadDailyLimitExceededError";
+  public readonly filePath: string;
+  public readonly fileSize: number;
 
   constructor(
     /** Original local file path, or `"<buffer>"` when uploading an in-memory buffer. */
-    public readonly filePath: string,
+    filePath: string,
     /** File size in bytes. */
-    public readonly fileSize: number,
+    fileSize: number,
     /** Original error message from the server. */
     originalMessage: string,
   ) {
     super(originalMessage);
+    this.filePath = filePath;
+    this.fileSize = fileSize;
   }
 }
 

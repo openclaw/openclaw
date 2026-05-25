@@ -30,8 +30,10 @@ vi.mock("./gateway.ts", async (importOriginal) => {
     readonly start = vi.fn();
     readonly stop = vi.fn();
     readonly request = vi.fn(async () => ({}));
+    private opts: { onHello?: (hello: GatewayHelloOk) => void };
 
-    constructor(private opts: { onHello?: (hello: GatewayHelloOk) => void }) {
+    constructor(opts: { onHello?: (hello: GatewayHelloOk) => void }) {
+      this.opts = opts;
       gatewayClients.push({
         start: this.start,
         stop: this.stop,

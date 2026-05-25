@@ -101,11 +101,12 @@ export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
   private readonly walMaintenance: SqliteWalMaintenance;
   private closed = false;
+  readonly dbPath: string;
+  readonly blobDir: string;
 
-  constructor(
-    readonly dbPath: string,
-    readonly blobDir: string,
-  ) {
+  constructor(dbPath: string, blobDir: string) {
+    this.dbPath = dbPath;
+    this.blobDir = blobDir;
     const opened = openDatabase(dbPath);
     this.db = opened.db;
     this.walMaintenance = opened.walMaintenance;

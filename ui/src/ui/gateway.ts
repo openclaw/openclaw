@@ -450,8 +450,11 @@ export class GatewayBrowserClient {
   private deviceTokenRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private eventListeners = new Set<GatewayEventListener>();
+  private opts: GatewayBrowserClientOptions;
 
-  constructor(private opts: GatewayBrowserClientOptions) {}
+  constructor(opts: GatewayBrowserClientOptions) {
+    this.opts = opts;
+  }
 
   start() {
     this.closed = false;

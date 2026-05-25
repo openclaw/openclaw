@@ -33,12 +33,15 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
-  constructor(
-    private handler: DiscordMessageHandler,
-    private logger?: Logger,
-    private onEvent?: () => void,
-  ) {
+  private handler: DiscordMessageHandler;
+  private logger?: Logger;
+  private onEvent?: () => void;
+
+  constructor(handler: DiscordMessageHandler, logger?: Logger, onEvent?: () => void) {
     super();
+    this.handler = handler;
+    this.logger = logger;
+    this.onEvent = onEvent;
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
@@ -55,11 +58,13 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordInteractionListener extends InteractionCreateListener {
-  constructor(
-    private logger?: Logger,
-    private onEvent?: () => void,
-  ) {
+  private logger?: Logger;
+  private onEvent?: () => void;
+
+  constructor(logger?: Logger, onEvent?: () => void) {
     super();
+    this.logger = logger;
+    this.onEvent = onEvent;
   }
 
   async handle(data: DiscordInteractionEvent, client: Client) {
@@ -107,12 +112,15 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
-  constructor(
-    private cfg: OpenClawConfig,
-    private accountId: string,
-    private logger?: Logger,
-  ) {
+  private cfg: OpenClawConfig;
+  private accountId: string;
+  private logger?: Logger;
+
+  constructor(cfg: OpenClawConfig, accountId: string, logger?: Logger) {
     super();
+    this.cfg = cfg;
+    this.accountId = accountId;
+    this.logger = logger;
   }
 
   async handle(data: ThreadUpdateEvent) {

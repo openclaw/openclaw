@@ -2463,6 +2463,8 @@ export function createConfigIO(
   };
 }
 
+export type ConfigIO = ReturnType<typeof createConfigIO>;
+
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
 // module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).

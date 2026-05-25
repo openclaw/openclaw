@@ -23,11 +23,10 @@ export class DirectoryCache<T> {
   private readonly cache = new Map<string, CacheEntry<T>>();
   private lastConfigRef: OpenClawConfig | null = null;
   private readonly maxSize: number;
+  private readonly ttlMs: number;
 
-  constructor(
-    private readonly ttlMs: number,
-    maxSize = 2000,
-  ) {
+  constructor(ttlMs: number, maxSize = 2000) {
+    this.ttlMs = ttlMs;
     this.maxSize = Math.max(1, Math.floor(maxSize));
   }
 

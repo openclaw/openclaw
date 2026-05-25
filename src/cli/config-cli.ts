@@ -304,8 +304,11 @@ const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
 class ConfigSetDryRunValidationError extends Error {
-  constructor(readonly result: ConfigSetDryRunResult) {
+  readonly result: ConfigSetDryRunResult;
+
+  constructor(result: ConfigSetDryRunResult) {
     super("config set dry-run validation failed");
+    this.result = result;
     this.name = "ConfigSetDryRunValidationError";
   }
 }
@@ -513,9 +516,7 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") ||
-    isSchemaRecord(schema.items) ||
-    Array.isArray(schema.items)
+    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 

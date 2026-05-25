@@ -223,15 +223,21 @@ export class GoogleMeetRuntime {
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
+  private readonly params: {
+    config: GoogleMeetConfig;
+    fullConfig: OpenClawConfig;
+    runtime: PluginRuntime;
+    logger: RuntimeLogger;
+  };
 
-  constructor(
-    private readonly params: {
-      config: GoogleMeetConfig;
-      fullConfig: OpenClawConfig;
-      runtime: PluginRuntime;
-      logger: RuntimeLogger;
-    },
-  ) {}
+  constructor(params: {
+    config: GoogleMeetConfig;
+    fullConfig: OpenClawConfig;
+    runtime: PluginRuntime;
+    logger: RuntimeLogger;
+  }) {
+    this.params = params;
+  }
 
   list(): GoogleMeetSession[] {
     this.#refreshHealth();

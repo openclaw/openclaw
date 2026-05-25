@@ -67,15 +67,27 @@ const sendBedrockCommand = vi.fn(async (command: unknown) => {
 
 vi.mock("@aws-sdk/client-bedrock", () => {
   class GetInferenceProfileCommand {
-    constructor(readonly input: { inferenceProfileIdentifier: string }) {}
+    readonly input: { inferenceProfileIdentifier: string };
+
+    constructor(input: { inferenceProfileIdentifier: string }) {
+      this.input = input;
+    }
   }
 
   class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
+    readonly input: Record<string, unknown>;
+
+    constructor(input: Record<string, unknown> = {}) {
+      this.input = input;
+    }
   }
 
   class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
+    readonly input: Record<string, unknown>;
+
+    constructor(input: Record<string, unknown> = {}) {
+      this.input = input;
+    }
   }
 
   class BedrockClient {
@@ -272,7 +284,11 @@ describe("amazon-bedrock provider plugin", () => {
     setBedrockAppProfileControlPlaneForTest((region) => ({
       async getInferenceProfile(input) {
         class GetInferenceProfileCommand {
-          constructor(readonly input: Record<string, unknown> = {}) {}
+          readonly input: Record<string, unknown>;
+
+          constructor(input: Record<string, unknown> = {}) {
+            this.input = input;
+          }
         }
         bedrockClientConfigs.push(region ? { region } : {});
         return await sendBedrockCommand(new GetInferenceProfileCommand(input));

@@ -122,12 +122,14 @@ export class CodexNativeSubagentMonitor {
   private transcriptPollDelaysMs: readonly number[];
   private completionDeliveryRetryDelaysMs: readonly number[];
   private taskRowReconcileTimer?: ReturnType<typeof setInterval>;
+  private readonly runtime: NativeSubagentMonitorRuntime;
 
   constructor(
     client: Pick<CodexAppServerClient, "addNotificationHandler" | "addCloseHandler">,
-    private readonly runtime: NativeSubagentMonitorRuntime = defaultRuntime,
+    runtime: NativeSubagentMonitorRuntime = defaultRuntime,
     options: MonitorOptions = {},
   ) {
+    this.runtime = runtime;
     this.codexHome = normalizeOptionalString(options.codexHome);
     this.transcriptPollDelaysMs =
       options.transcriptPollDelaysMs ?? DEFAULT_TRANSCRIPT_POLL_DELAYS_MS;

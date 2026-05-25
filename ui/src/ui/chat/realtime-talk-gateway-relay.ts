@@ -55,11 +55,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private cancelRequestedForPlayback = false;
   private speechFramesDuringPlayback = 0;
   private lastRelayError: string | undefined;
+  private readonly session: RealtimeTalkGatewayRelaySessionResult;
+  private readonly ctx: RealtimeTalkTransportContext;
 
-  constructor(
-    private readonly session: RealtimeTalkGatewayRelaySessionResult,
-    private readonly ctx: RealtimeTalkTransportContext,
-  ) {}
+  constructor(session: RealtimeTalkGatewayRelaySessionResult, ctx: RealtimeTalkTransportContext) {
+    this.session = session;
+    this.ctx = ctx;
+  }
 
   async start(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia) {

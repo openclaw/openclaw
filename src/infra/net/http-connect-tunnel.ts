@@ -133,13 +133,22 @@ class HttpConnectTunnelAttempt {
   private timeout: NodeJS.Timeout | undefined;
   private settled = false;
   private responseBuffer: ConnectResponseBuffer = Buffer.alloc(0);
+  private readonly params: HttpConnectTunnelParams;
+  private readonly proxy: URL;
+  private readonly resolve: (socket: tls.TLSSocket) => void;
+  private readonly reject: (reason?: unknown) => void;
 
   constructor(
-    private readonly params: HttpConnectTunnelParams,
-    private readonly proxy: URL,
-    private readonly resolve: (socket: tls.TLSSocket) => void,
-    private readonly reject: (reason?: unknown) => void,
-  ) {}
+    params: HttpConnectTunnelParams,
+    proxy: URL,
+    resolve: (socket: tls.TLSSocket) => void,
+    reject: (reason?: unknown) => void,
+  ) {
+    this.params = params;
+    this.proxy = proxy;
+    this.resolve = resolve;
+    this.reject = reject;
+  }
 
   public start(): void {
     try {

@@ -35,16 +35,25 @@ export type {
 } from "./session-binding.types.js";
 
 export class SessionBindingError extends Error {
+  public readonly code: SessionBindingErrorCode;
+  public readonly details?: {
+    channel?: string;
+    accountId?: string;
+    placement?: SessionBindingPlacement;
+  };
+
   constructor(
-    public readonly code: SessionBindingErrorCode,
+    code: SessionBindingErrorCode,
     message: string,
-    public readonly details?: {
+    details?: {
       channel?: string;
       accountId?: string;
       placement?: SessionBindingPlacement;
     },
   ) {
     super(message);
+    this.code = code;
+    this.details = details;
     this.name = "SessionBindingError";
   }
 }

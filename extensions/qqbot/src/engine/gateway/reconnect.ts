@@ -53,11 +53,13 @@ export class ReconnectState {
   private attempts = 0;
   private lastConnectTime = 0;
   private quickDisconnectCount = 0;
+  private readonly accountId: string;
+  private readonly log?: EngineLogger;
 
-  constructor(
-    private readonly accountId: string,
-    private readonly log?: EngineLogger,
-  ) {}
+  constructor(accountId: string, log?: EngineLogger) {
+    this.accountId = accountId;
+    this.log = log;
+  }
 
   /** Call when a WebSocket connection is successfully established. */
   onConnected(): void {

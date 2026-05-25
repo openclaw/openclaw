@@ -32,8 +32,10 @@ export class OpenClawStdioClientTransport implements Transport {
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream: PassThrough | null = null;
   private process?: ChildProcess;
+  private readonly serverParams: OpenClawStdioServerParameters;
 
-  constructor(private readonly serverParams: OpenClawStdioServerParameters) {
+  constructor(serverParams: OpenClawStdioServerParameters) {
+    this.serverParams = serverParams;
     if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
       this.stderrStream = new PassThrough();
     }

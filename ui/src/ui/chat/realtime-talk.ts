@@ -73,13 +73,22 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private readonly client: GatewayBrowserClient;
+  private readonly sessionKey: string;
+  private readonly callbacks: RealtimeTalkCallbacks;
+  private readonly options: RealtimeTalkLaunchOptions;
 
   constructor(
-    private readonly client: GatewayBrowserClient,
-    private readonly sessionKey: string,
-    private readonly callbacks: RealtimeTalkCallbacks = {},
-    private readonly options: RealtimeTalkLaunchOptions = {},
-  ) {}
+    client: GatewayBrowserClient,
+    sessionKey: string,
+    callbacks: RealtimeTalkCallbacks = {},
+    options: RealtimeTalkLaunchOptions = {},
+  ) {
+    this.client = client;
+    this.sessionKey = sessionKey;
+    this.callbacks = callbacks;
+    this.options = options;
+  }
 
   async start(): Promise<void> {
     this.closed = false;

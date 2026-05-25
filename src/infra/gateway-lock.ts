@@ -51,11 +51,11 @@ export type GatewayLockOptions = {
 };
 
 export class GatewayLockError extends Error {
-  constructor(
-    message: string,
-    public override readonly cause?: unknown,
-  ) {
+  public override readonly cause?: unknown;
+
+  constructor(message: string, cause?: unknown) {
     super(message);
+    this.cause = cause;
     this.name = "GatewayLockError";
   }
 }

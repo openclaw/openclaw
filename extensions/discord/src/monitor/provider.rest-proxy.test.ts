@@ -26,10 +26,7 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
             ("httpsProxy" in options || "httpProxy" in options)
           ) {
             const proxyOptions = options as { httpsProxy?: unknown; httpProxy?: unknown };
-            if (
-              proxyOptions.httpsProxy === "bad-proxy" ||
-              proxyOptions.httpProxy === "bad-proxy"
-            ) {
+            if (proxyOptions.httpsProxy === "bad-proxy" || proxyOptions.httpProxy === "bad-proxy") {
               throw new Error("bad env proxy");
             }
           }
@@ -106,10 +103,13 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
 function installUndiciRuntimeDeps(): void {
   const runtime = createMockUndiciRuntime();
   class Pool {
-    constructor(
-      readonly origin: unknown,
-      readonly options: unknown,
-    ) {}
+    readonly origin: unknown;
+    readonly options: unknown;
+
+    constructor(origin: unknown, options: unknown) {
+      this.origin = origin;
+      this.options = options;
+    }
   }
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     ...runtime,

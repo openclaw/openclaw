@@ -216,9 +216,11 @@ export function buildDiscordCommandArgMenu(params: {
 class DiscordCommandArgFallbackButton extends Button {
   label = "cmdarg";
   customId = "cmdarg:seed=1";
+  private readonly params: DiscordCommandArgButtonParams;
 
-  constructor(private readonly params: DiscordCommandArgButtonParams) {
+  constructor(params: DiscordCommandArgButtonParams) {
     super();
+    this.params = params;
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData) {

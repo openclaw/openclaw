@@ -135,11 +135,11 @@ function makeRecoverableFetchError() {
 }
 
 class MockHttpError extends Error {
-  constructor(
-    message: string,
-    public readonly error: unknown,
-  ) {
+  public readonly error: unknown;
+
+  constructor(message: string, error: unknown) {
     super(message);
+    this.error = error;
     this.name = "HttpError";
   }
 }

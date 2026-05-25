@@ -71,9 +71,11 @@ export class ExecApprovalButton extends Button {
   override label = "execapproval";
   customId = "execapproval:seed=1";
   override style = ButtonStyle.Primary;
+  private readonly ctx: ExecApprovalButtonContext;
 
-  constructor(private readonly ctx: ExecApprovalButtonContext) {
+  constructor(ctx: ExecApprovalButtonContext) {
     super();
+    this.ctx = ctx;
   }
 
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {

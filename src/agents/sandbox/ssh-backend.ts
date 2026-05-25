@@ -122,14 +122,19 @@ export async function createSshSandboxBackend(
 
 class SshSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
+  private readonly params: {
+    createParams: CreateSandboxBackendParams;
+    target: string;
+    runtimePaths: ResolvedSshRuntimePaths;
+  };
 
-  constructor(
-    private readonly params: {
-      createParams: CreateSandboxBackendParams;
-      target: string;
-      runtimePaths: ResolvedSshRuntimePaths;
-    },
-  ) {}
+  constructor(params: {
+    createParams: CreateSandboxBackendParams;
+    target: string;
+    runtimePaths: ResolvedSshRuntimePaths;
+  }) {
+    this.params = params;
+  }
 
   asHandle(): SandboxBackendHandle & RemoteShellSandboxHandle {
     return {

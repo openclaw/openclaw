@@ -10,8 +10,10 @@ export class TelegramPollingTransportState {
   #telegramTransport: TelegramTransport | undefined;
   #transportDirty = false;
   #disposed = false;
+  private readonly opts: TelegramPollingTransportStateOpts;
 
-  constructor(private readonly opts: TelegramPollingTransportStateOpts) {
+  constructor(opts: TelegramPollingTransportStateOpts) {
+    this.opts = opts;
     this.#telegramTransport = opts.initialTransport;
   }
 

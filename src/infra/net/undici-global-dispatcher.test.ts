@@ -19,16 +19,28 @@ const {
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
   class Agent {
-    constructor(public readonly options?: Record<string, unknown>) {}
+    public readonly options?: Record<string, unknown>;
+
+    constructor(options?: Record<string, unknown>) {
+      this.options = options;
+    }
   }
 
   class EnvHttpProxyAgent {
     public readonly capturedHttpProxy = process.env.HTTP_PROXY;
-    constructor(public readonly options?: Record<string, unknown>) {}
+    public readonly options?: Record<string, unknown>;
+
+    constructor(options?: Record<string, unknown>) {
+      this.options = options;
+    }
   }
 
   class ProxyAgent {
-    constructor(public readonly url: string) {}
+    public readonly url: string;
+
+    constructor(url: string) {
+      this.url = url;
+    }
   }
 
   class ManagedUndiciDispatcher {
@@ -36,7 +48,11 @@ const {
     #destroyed = false;
     public readonly dispatchCalls: Array<Record<string, unknown>> = [];
     public readonly requestCalls: Array<Record<string, unknown>> = [];
-    constructor(public readonly options?: Record<string, unknown>) {}
+    public readonly options?: Record<string, unknown>;
+
+    constructor(options?: Record<string, unknown>) {
+      this.options = options;
+    }
     get closed(): boolean {
       return this.#closed;
     }

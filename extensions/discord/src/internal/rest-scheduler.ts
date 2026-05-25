@@ -80,11 +80,15 @@ export class RestScheduler<TData> {
   private queueGeneration = 0;
   private queuedRequests = 0;
   private routeBuckets = new Map<string, string>();
+  private readonly options: RestSchedulerOptions;
+  private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>;
 
   constructor(
-    private readonly options: RestSchedulerOptions,
-    private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>,
+    options: RestSchedulerOptions,
+    executor: (request: ScheduledRequest<TData>) => Promise<unknown>,
   ) {
+    this.options = options;
+    this.executor = executor;
     this.laneSchedule = this.buildLaneSchedule(options.lanes);
   }
 
