@@ -3,6 +3,7 @@ import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 
 export type ImageMetadata = {
   width: number;
@@ -103,10 +104,11 @@ export function isImageProcessorUnavailableError(err: unknown): boolean {
 }
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
-  return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .map((value) => Math.min(maxSide, value))
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  return uniqueValues(
+    [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
+      .map((value) => Math.min(maxSide, value))
+      .filter((value) => value > 0),
+  ).toSorted((a, b) => b - a);
 }
 
 function getImageBackendPreference(): ImageBackendPreference {

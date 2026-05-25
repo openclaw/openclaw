@@ -7,6 +7,7 @@ import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList, uniqueStrings } from "../../shared/string-normalization.js";
 import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import {
@@ -61,9 +62,7 @@ function resolveCompactHomePrefixes(): string[] {
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
     .filter((home): home is string => !!home);
-  return [...resolvedHomes, ...realHomes]
-    .filter((home, index, all) => all.indexOf(home) === index)
-    .sort((a, b) => b.length - a.length);
+  return uniqueStrings([...resolvedHomes, ...realHomes]).sort((a, b) => b.length - a.length);
 }
 
 function compactSkillPaths(skills: Skill[]): Skill[] {
@@ -496,20 +495,19 @@ function resolveSkillFilePath(params: {
 }
 
 function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): string[] {
-  return pluginSkillDirs
-    .map((dir) => tryRealpath(dir))
-    .filter((dir): dir is string => Boolean(dir))
-    .filter((dir, index, all) => all.indexOf(dir) === index);
+  return uniqueStrings(
+    pluginSkillDirs.map((dir) => tryRealpath(dir)).filter((dir): dir is string => Boolean(dir)),
+  );
 }
 
 function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
   const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
-  return rawTargets
+  const targetPaths = rawTargets
     .map((dir) => normalizeOptionalString(dir) ?? "")
     .filter(Boolean)
     .map((dir) => tryRealpath(resolveUserPath(dir)))
-    .filter((dir): dir is string => Boolean(dir))
-    .filter((dir, index, all) => all.indexOf(dir) === index);
+    .filter((dir): dir is string => Boolean(dir));
+  return uniqueStrings(targetPaths);
 }
 
 function loadGeneratedPluginSkillRecords(params: {
@@ -846,7 +844,7 @@ function loadSkillEntries(
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
+  const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,

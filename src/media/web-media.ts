@@ -5,6 +5,7 @@ import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
@@ -500,21 +501,21 @@ export function effectiveImageBytesCap(
 
 function buildDescendingLadder(maxSide: number, values: readonly number[]): number[] {
   const normalizedMax = Math.max(1, Math.floor(maxSide));
-  const ladder = [normalizedMax, ...values, ...LOW_IMAGE_SIDE_FALLBACKS]
-    .map((value) => Math.min(normalizedMax, value))
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  const ladder = uniqueValues(
+    [normalizedMax, ...values, ...LOW_IMAGE_SIDE_FALLBACKS]
+      .map((value) => Math.min(normalizedMax, value))
+      .filter((value) => value > 0),
+  ).toSorted((a, b) => b - a);
   if (ladder.length > 1 || normalizedMax <= 1) {
     return ladder;
   }
-  return [
+  const fallbackLadder = [
     normalizedMax,
     Math.floor(normalizedMax * 0.75),
     Math.floor(normalizedMax * 0.5),
     Math.floor(normalizedMax * 0.25),
-  ]
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  ];
+  return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
 export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {

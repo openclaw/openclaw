@@ -1,4 +1,5 @@
 import AjvPkg, { type AnySchema, type ErrorObject, type ValidateFunction } from "ajv";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
@@ -856,7 +857,7 @@ export function formatValidationErrors(errors: ErrorObject[] | null | undefined)
   }
 
   // De-dupe while preserving order.
-  const unique = Array.from(new Set(parts.filter((part) => part.trim())));
+  const unique = uniqueStrings(parts.filter((part) => part.trim()));
   if (!unique.length) {
     const fallback = getAjv().errorsText(errors, { separator: "; " });
     return fallback || "unknown validation error";

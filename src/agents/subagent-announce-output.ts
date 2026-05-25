@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -69,10 +70,6 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
-function readFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
   timing: {
@@ -80,8 +77,8 @@ export function withSubagentOutcomeTiming(
     endedAt?: number;
   },
 ): SubagentRunOutcome {
-  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
-  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const startedAt = asFiniteNumber(timing.startedAt) ?? asFiniteNumber(outcome.startedAt);
+  const endedAt = asFiniteNumber(timing.endedAt) ?? asFiniteNumber(outcome.endedAt);
   const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
   if (typeof startedAt === "number") {
     nextTiming.startedAt = startedAt;

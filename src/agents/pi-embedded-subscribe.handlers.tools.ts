@@ -20,6 +20,10 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -193,13 +197,7 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 }
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const details = (result as { details?: unknown }).details;
-  return details && typeof details === "object" && !Array.isArray(details)
-    ? (details as Record<string, unknown>)
-    : undefined;
+  return readRecordField(asOptionalObjectRecord(result)?.details);
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -430,12 +428,6 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   }
 
   return urls;
-}
-
-function readRecordField(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readStringField(record: Record<string, unknown>, key: string): string | undefined {

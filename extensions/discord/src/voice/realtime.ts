@@ -30,6 +30,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asBoolean, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
@@ -197,8 +198,7 @@ function readProviderConfigBoolean(
   config: RealtimeVoiceProviderConfig | undefined,
   key: string,
 ): boolean | undefined {
-  const value = config?.[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config?.[key]);
 }
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {
@@ -324,7 +324,7 @@ function resolveDiscordRealtimeWakeNames(params: {
     const configured = rawConfigured
       .map((name) => normalizeSupportedRealtimeVoiceActivationName(name))
       .filter((name): name is string => Boolean(name));
-    return sortRealtimeVoiceActivationNames(Array.from(new Set(configured)));
+    return sortRealtimeVoiceActivationNames(uniqueStrings(configured));
   }
   const agent = params.cfg.agents?.list?.find((candidate) => candidate.id === params.agentId);
   const configuredAgentNames = [agent?.name, agent?.identity?.name]
@@ -339,7 +339,7 @@ function resolveDiscordRealtimeWakeNames(params: {
       : [normalizeSupportedRealtimeVoiceActivationName(params.agentId), ...productWakeNames].filter(
           (name): name is string => Boolean(name),
         );
-  return sortRealtimeVoiceActivationNames(Array.from(new Set(defaults)));
+  return sortRealtimeVoiceActivationNames(uniqueStrings(defaults));
 }
 
 function matchesPendingAgentProxyQuestion(consultMessage: string, question: string): boolean {

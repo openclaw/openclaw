@@ -4,6 +4,7 @@ import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/conf
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -218,7 +219,7 @@ async function buildDiscordComponentPayload(params: {
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
-  const uniqueAttachmentNames = [...new Set(attachmentNames)];
+  const uniqueAttachmentNames = uniqueStrings(attachmentNames);
   if (uniqueAttachmentNames.length > 1) {
     throw new Error(
       "Discord component attachments currently support a single file. Use media-gallery for multiple files.",

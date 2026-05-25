@@ -90,6 +90,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import {
@@ -486,7 +487,7 @@ function resolveAgentDedupeKeys(params: {
   if (approvalId) {
     keys.push(`agent:exec-approval-followup:${approvalId}`);
   }
-  return [...new Set(keys)];
+  return uniqueStrings(keys);
 }
 
 function readGatewayDedupeEntry(params: {
@@ -1113,10 +1114,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       // channel hints so subagent spawns from those parent runs are not rejected.
       const isKnownGatewayChannel = (value: string): boolean =>
         isGatewayMessageChannel(value) || isInternalNonDeliveryChannel(value);
-      const channelHints = [request.channel, request.replyChannel]
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean);
+      const channelHints = normalizeStringEntries(
+        [request.channel, request.replyChannel].filter(
+          (value): value is string => typeof value === "string",
+        ),
+      );
       for (const rawChannel of channelHints) {
         const normalized = normalizeMessageChannel(rawChannel);
         if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {

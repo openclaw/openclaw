@@ -43,7 +43,9 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -382,7 +384,7 @@ function parsePath(raw: string): PathSegment[] {
   if (current) {
     parts.push(current);
   }
-  return parts.map((part) => part.trim()).filter(Boolean);
+  return normalizeStringEntries(parts);
 }
 
 function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
@@ -404,10 +406,6 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function formatDoctorHint(message: string): string {
@@ -1057,7 +1055,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
 
   let provider: SecretProviderConfig;
   if (source === "env") {
-    const allowlist = (opts.providerAllowlist ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const allowlist = normalizeStringEntries(opts.providerAllowlist);
     for (const envName of allowlist) {
       if (!isValidEnvSecretRefId(envName)) {
         throw new Error(
@@ -1104,10 +1102,10 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
       ...(providerEnv ? { env: providerEnv } : {}),
       ...(opts.providerPassEnv && opts.providerPassEnv.length > 0
-        ? { passEnv: opts.providerPassEnv.map((entry) => entry.trim()).filter(Boolean) }
+        ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
         : {}),
       ...(opts.providerTrustedDir && opts.providerTrustedDir.length > 0
-        ? { trustedDirs: opts.providerTrustedDir.map((entry) => entry.trim()).filter(Boolean) }
+        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
         : {}),
       ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
       ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
@@ -1978,7 +1976,7 @@ async function runConfigOperations(params: {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
       configPath: shortenHomePath(snapshot.path),
-      inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+      inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,

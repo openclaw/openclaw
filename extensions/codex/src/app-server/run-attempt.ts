@@ -55,6 +55,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
@@ -4990,8 +4991,7 @@ function readString(record: JsonObject, key: string): string | undefined {
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(record[key]);
 }
 
 async function readMirroredSessionHistoryMessages(

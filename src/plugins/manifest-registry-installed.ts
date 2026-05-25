@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -129,10 +130,6 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
     }
   }
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizePackageChannelCommands(

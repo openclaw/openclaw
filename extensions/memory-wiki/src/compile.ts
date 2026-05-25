@@ -5,7 +5,10 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -1128,14 +1131,14 @@ function buildAgentDigestContradictionClusters(
     label: cluster.label,
     kind: "page-note" as const,
     entryCount: cluster.entries.length,
-    paths: [...new Set(cluster.entries.map((entry) => entry.pagePath))].toSorted(),
+    paths: uniqueStrings(cluster.entries.map((entry) => entry.pagePath)).toSorted(),
   }));
   const claimClusters = buildClaimContradictionClusters({ pages }).map((cluster) => ({
     key: cluster.key,
     label: cluster.label,
     kind: "claim-id" as const,
     entryCount: cluster.entries.length,
-    paths: [...new Set(cluster.entries.map((entry) => entry.pagePath))].toSorted(),
+    paths: uniqueStrings(cluster.entries.map((entry) => entry.pagePath)).toSorted(),
   }));
   return [...pageClusters, ...claimClusters].toSorted((left, right) =>
     left.label.localeCompare(right.label),
@@ -1229,7 +1232,7 @@ function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] 
           status: normalizeClaimStatus(claim.status),
           confidence: claim.confidence,
           sourceIds: page.sourceIds,
-          evidenceKinds: [...new Set(claim.evidence.flatMap((entry) => entry.kind ?? []))],
+          evidenceKinds: uniqueStrings(claim.evidence.flatMap((entry) => entry.kind ?? [])),
           privacyTiers: [
             ...new Set(
               [
