@@ -318,7 +318,15 @@ describe("overview view rendering", () => {
             status: "ok",
             profiles: [{ profileId: "openrouter", type: "api_key", status: "ok" }],
             usage: {
-              windows: [{ label: "Credits", usedPercent: 57 }],
+              windows: [
+                {
+                  label: "Credits",
+                  usedPercent: 42,
+                  remainingLabel: "$12.34",
+                  usedLabel: "$8.90",
+                  totalLabel: "$21.24",
+                },
+              ],
             },
           },
           {
@@ -338,7 +346,10 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
-      "Credits 43% left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
+      "Credits $12.34 left OpenRouter · Credits · Z.ai · Tokens (6h) 60% left",
+    );
+    expect(compactText(container.querySelector(".ov-usage-windows"))).toContain(
+      "OpenRouter · Credits $12.34 left",
     );
     expect(compactText(container.querySelector(".ov-usage-note"))).toBe("OpenRouter · Credits.");
     expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("window");

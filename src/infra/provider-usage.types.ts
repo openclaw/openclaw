@@ -1,6 +1,9 @@
 export type UsageWindow = {
   label: string;
   usedPercent: number;
+  remainingLabel?: string;
+  usedLabel?: string;
+  totalLabel?: string;
   resetAt?: number;
 };
 
@@ -23,5 +26,6 @@ export type UsageProviderId =
   | "google-gemini-cli"
   | "minimax"
   | "openai-codex"
+  | "openrouter"
   | "xiaomi"
   | "zai";

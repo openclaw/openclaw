@@ -4,6 +4,9 @@ export type QuotaWindowSummary = {
   displayName: string;
   label: string;
   remaining: number;
+  remainingLabel?: string;
+  usedLabel?: string;
+  totalLabel?: string;
   resetAt?: number;
 };
 
@@ -12,6 +15,14 @@ const SELF_DESCRIBING_QUOTA_LABEL = /\b(balance|budget|credits?|limits?|quota|to
 export function quotaLabelNeedsQuotaSuffix(label: string): boolean {
   const trimmed = label.trim();
   return Boolean(trimmed) && !SELF_DESCRIBING_QUOTA_LABEL.test(trimmed);
+}
+
+export function formatQuotaRemaining(entry: QuotaWindowSummary): string {
+  const remainingLabel = entry.remainingLabel?.trim();
+  if (remainingLabel) {
+    return remainingLabel.toLowerCase() === "unlimited" ? remainingLabel : `${remainingLabel} left`;
+  }
+  return `${entry.remaining}% left`;
 }
 
 export function formatQuotaReset(resetAt?: number): string | null {
@@ -48,6 +59,9 @@ export function collectQuotaWindows(
         displayName: provider.displayName,
         label: (window.label || "").trim(),
         remaining: Math.max(0, Math.min(100, Math.round(100 - window.usedPercent))),
+        remainingLabel: window.remainingLabel,
+        usedLabel: window.usedLabel,
+        totalLabel: window.totalLabel,
         resetAt: window.resetAt,
       })),
     )

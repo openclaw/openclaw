@@ -42,6 +42,8 @@ describe("openrouter provider hooks", () => {
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
+    expect(providers[0]?.resolveUsageAuth).toBeTypeOf("function");
+    expect(providers[0]?.fetchUsageSnapshot).toBeTypeOf("function");
     expect(modelCatalogProvider.liveCatalog).toBeTypeOf("function");
   });
 

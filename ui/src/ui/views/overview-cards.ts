@@ -6,6 +6,7 @@ import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
 import {
   collectQuotaWindows,
+  formatQuotaRemaining,
   formatQuotaReset,
   quotaLabelNeedsQuotaSuffix,
   type QuotaWindowSummary,
@@ -74,12 +75,7 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
   );
   const secondaryHint = secondary
-    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${t(
-        "overview.cards.modelAuthUsageLeft",
-        {
-          pct: String(secondary.remaining),
-        },
-      )}`
+    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${formatQuotaRemaining(secondary)}`
     : null;
   const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
 
@@ -87,9 +83,7 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     kind: "quota",
     tab: "usage",
     label: primaryLabel,
-    value: html`<span class=${valueClass}
-      >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
-    >`,
+    value: html`<span class=${valueClass}>${formatQuotaRemaining(primary)}</span>`,
     hint: [primaryHint.join(" · "), secondaryHint].filter(Boolean).join(" · "),
   };
 }

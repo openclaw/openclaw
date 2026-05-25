@@ -56,6 +56,31 @@ describe("provider-usage.format", () => {
     expect(summary).toBe("A 90% left · B 80% left");
   });
 
+  it("uses provider-native remaining labels when available", () => {
+    const summary = formatUsageWindowSummary(
+      makeSnapshot([
+        {
+          label: "Credits",
+          usedPercent: 42,
+          remainingLabel: "$12.34",
+          usedLabel: "$8.90",
+          totalLabel: "$21.24",
+        },
+        {
+          label: "Unlimited usage",
+          usedPercent: 0,
+          remainingLabel: "unlimited",
+          usedLabel: "$1.23",
+        },
+      ]),
+      { now },
+    );
+
+    expect(summary).toBe(
+      "Credits $12.34 left · $8.90 used of $21.24 · Unlimited usage unlimited · $1.23 used",
+    );
+  });
+
   it("treats non-positive max windows as all windows and clamps overused percentages", () => {
     const summary = formatUsageWindowSummary(
       makeSnapshot([
@@ -158,6 +183,29 @@ describe("provider-usage.format", () => {
       } as UsageSummary,
       opts: { now },
       expected: ["Usage:", "  Claude (Pro)", "    Daily: 75% left · resets 2h"],
+    },
+    {
+      name: "formats native balance report lines",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            windows: [
+              {
+                label: "Credits",
+                usedPercent: 42,
+                remainingLabel: "$12.34",
+                usedLabel: "$8.90",
+                totalLabel: "$21.24",
+              },
+            ],
+          },
+        ],
+      } as UsageSummary,
+      opts: { now },
+      expected: ["Usage:", "  OpenRouter", "    Credits: $12.34 left · $8.90 used of $21.24"],
     },
   ])("$name", ({ summary, opts, expected }) => {
     expect(formatUsageReportLines(summary, opts)).toEqual(expected);

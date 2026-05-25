@@ -32,6 +32,7 @@ describe("provider-usage.shared", () => {
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
+    { value: "openrouter", expected: "openrouter" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },

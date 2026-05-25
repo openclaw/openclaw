@@ -14,6 +14,7 @@ import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
 import {
   collectQuotaWindows,
+  formatQuotaRemaining,
   formatQuotaReset,
   quotaLabelNeedsQuotaSuffix,
   type QuotaWindowSummary,
@@ -431,9 +432,7 @@ export function renderOverview(props: OverviewProps) {
     ? quotaLimitLabel(primaryQuota)
     : t("overview.operator.quota");
   const secondaryQuotaHint = secondaryQuota
-    ? `${quotaIdentity(secondaryQuota)} ${t("overview.cards.modelAuthUsageLeft", {
-        pct: String(secondaryQuota.remaining),
-      })}`
+    ? `${quotaIdentity(secondaryQuota)} ${formatQuotaRemaining(secondaryQuota)}`
     : null;
   const primaryQuotaHint = primaryQuota
     ? [
@@ -762,9 +761,7 @@ export function renderOverview(props: OverviewProps) {
               kind: primaryQuota ? "quota" : "usage",
               label: primaryQuota ? primaryQuotaLabel : t("tabs.usage"),
               value: primaryQuota
-                ? html`${t("overview.cards.modelAuthUsageLeft", {
-                    pct: String(primaryQuota.remaining),
-                  })}`
+                ? html`${formatQuotaRemaining(primaryQuota)}`
                 : t("overview.operator.usageCostMessages", {
                     cost: totalCost,
                     count: totalMessages,
@@ -970,9 +967,7 @@ export function renderOverview(props: OverviewProps) {
                             ? "ov-usage-window__remaining warn"
                             : "ov-usage-window__remaining ok"}
                         >
-                          ${t("overview.cards.modelAuthUsageLeft", {
-                            pct: String(entry.remaining),
-                          })}
+                          ${formatQuotaRemaining(entry)}
                         </strong>
                       </div>`;
                     })}
