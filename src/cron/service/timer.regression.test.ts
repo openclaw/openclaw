@@ -1013,6 +1013,7 @@ describe("cron service timer regressions", () => {
         now += params.job.id === first.id ? 50 : 20;
         return { status: "ok" as const, summary: "ok" };
       }),
+      cronConfig: { maxConcurrentRuns: 1 },
     });
 
     await onTimer(state);
