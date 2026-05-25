@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveTelegramGroupAllowFromContext, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 
@@ -26,6 +26,37 @@ describe("resolveTelegramStreamMode", () => {
 });
 
 describe("resolveTelegramGroupAllowFromContext", () => {
+  it("returns wildcard storeAllowFrom when store read fails with transient I/O error", async () => {
+    const emfileError = Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
+    const warnSpy = vi.spyOn(await import("openclaw/plugin-sdk/runtime-env"), "warn");
+
+    const context = await resolveTelegramGroupAllowFromContext({
+      chatId: 123,
+      accountId: "default",
+      readChannelAllowFromStore: async () => {
+        throw emfileError;
+      },
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(context.storeAllowFrom).toEqual(["*"]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("pairing-store read failed (EMFILE)"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("returns actual store entries when store read succeeds", async () => {
+    const context = await resolveTelegramGroupAllowFromContext({
+      chatId: 123,
+      accountId: "default",
+      readChannelAllowFromStore: async () => ["111222333"],
+      resolveTelegramGroupConfig: () => ({}),
+    });
+
+    expect(context.storeAllowFrom).toEqual(["111222333"]);
+  });
+
   it("expands Telegram access groups before normalizing allowFrom entries", async () => {
     const cfg: OpenClawConfig = {
       accessGroups: {

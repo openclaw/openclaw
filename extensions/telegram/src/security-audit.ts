@@ -1,5 +1,6 @@
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveNativeSkillsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
@@ -93,7 +94,12 @@ export async function collectTelegramSecurityAuditFindings(params: {
   }
 
   const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
-    () => [],
+    (err) => {
+      warn(
+        `pairing-store read failed during audit (${(err as { code?: string }).code ?? "unknown"})`,
+      );
+      return [];
+    },
   );
   const storeHasWildcard = storeAllowFrom.some(
     (value) => (normalizeOptionalString(value) ?? "") === "*",

@@ -14,6 +14,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
@@ -210,11 +211,20 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
-  const storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
-    "telegram",
-    process.env,
-    accountId,
-  ).catch(() => []);
+  let storeAllowFrom: string[];
+  try {
+    storeAllowFrom = await (params.readChannelAllowFromStore ?? readChannelAllowFromStore)(
+      "telegram",
+      process.env,
+      accountId,
+    );
+  } catch (err) {
+    warn(
+      `pairing-store read failed (${(err as { code?: string }).code ?? "unknown"}), ` +
+        "skipping store-based authorization",
+    );
+    storeAllowFrom = ["*"];
+  }
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     threadIdForConfig,

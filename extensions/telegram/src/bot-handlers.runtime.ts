@@ -859,7 +859,13 @@ export const registerTelegramHandlers = ({
   };
 
   const loadStoreAllowFrom = async () =>
-    telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+    telegramDeps.readChannelAllowFromStore("telegram", process.env, accountId).catch((err) => {
+      warn(
+        `pairing-store read failed (${(err as { code?: string }).code ?? "unknown"}), ` +
+          "skipping store-based authorization for this request",
+      );
+      return ["*"];
+    });
 
   const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
     messageCache.record({
