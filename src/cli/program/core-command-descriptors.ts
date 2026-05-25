@@ -61,6 +61,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "security-audit",
+    description: "Scan for leaked credentials, permission issues, and network exposure",
+    hasSubcommands: false,
+  },
+  {
     name: "message",
     description: "Send, read, and manage channel messages",
     hasSubcommands: true,
