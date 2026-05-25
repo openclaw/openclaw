@@ -12,12 +12,9 @@ import {
   buildEmbeddedAttemptToolRunContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   clearActiveEmbeddedRun,
-  compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
-  estimateRenderedLlmBoundaryTokenPressure,
   finalizeHarnessContextEngineTurn,
-  formatPrePromptPrecheckLog,
   formatErrorMessage,
   getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
@@ -26,7 +23,6 @@ import {
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
-  resolveCompactionTimeoutMs,
   resolveModelAuthMode,
   resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
@@ -37,8 +33,6 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
-  shouldPreemptivelyCompactBeforePrompt,
-  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   registerNativeHookRelay,
   resolveBootstrapContextForRun,
   setActiveEmbeddedRun,
@@ -94,7 +88,6 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import {
-  DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -1042,16 +1035,6 @@ export async function runCodexAppServerAttempt(
     sessionId: activeSessionId,
     sessionFile: activeSessionFile,
   });
-  const adoptContextEngineCompactionTranscript = (compactResult: {
-    result?: { sessionId?: string; sessionFile?: string };
-  }): void => {
-    if (compactResult.result?.sessionId) {
-      activeSessionId = compactResult.result.sessionId;
-    }
-    if (compactResult.result?.sessionFile) {
-      activeSessionFile = compactResult.result.sessionFile;
-    }
-  };
   const startupAuthAccountCacheKey = await resolveCodexAppServerAuthAccountCacheKey({
     authProfileId: startupAuthProfileId,
     authProfileStore: params.authProfileStore,
@@ -1179,86 +1162,6 @@ export async function runCodexAppServerAttempt(
       contextEnginePluginId: activeContextEnginePluginId,
       tokenBudget: params.contextTokenBudget,
     });
-  const forceContextEngineCompactionForCodexOverflow = async (
-    error: unknown,
-    options: { threadId?: string } = {},
-  ): Promise<boolean> => {
-    if (!activeContextEngine?.info.ownsCompaction) {
-      return false;
-    }
-    embeddedAgentLog.warn(
-      "codex app-server context-engine prompt overflowed; forcing context-engine compaction",
-      {
-        sessionId: activeSessionId,
-        sessionKey: contextSessionKey,
-        ...(options.threadId ? { threadId: options.threadId } : {}),
-        engineId: activeContextEngine.info.id,
-        tokenBudget: params.contextTokenBudget,
-        error: formatErrorMessage(error),
-      },
-    );
-    try {
-      const runtimeContext = buildActiveContextEngineRuntimeContext();
-      const overflowTokenCount = params.contextTokenBudget ?? params.contextWindowInfo?.tokens;
-      // Bound the plugin-owned compaction with the same finite safety timeout
-      // that protects native runtime compaction, and thread the run-level
-      // abort signal through, so a slow/hung plugin compact() cannot stall
-      // Codex overflow recovery indefinitely.
-      const compactResult = await compactContextEngineWithSafetyTimeout(
-        activeContextEngine,
-        {
-          sessionId: activeSessionId,
-          sessionKey: contextSessionKey,
-          sessionFile: activeSessionFile,
-          tokenBudget: params.contextTokenBudget,
-          force: true,
-          ...(overflowTokenCount ? { currentTokenCount: overflowTokenCount } : {}),
-          compactionTarget: "threshold",
-          runtimeContext: overflowTokenCount
-            ? {
-                ...runtimeContext,
-                currentTokenCount: overflowTokenCount,
-              }
-            : runtimeContext,
-        },
-        resolveCompactionTimeoutMs(params.config),
-        runAbortController.signal,
-      );
-      embeddedAgentLog.info("codex app-server context-engine forced compaction result", {
-        sessionId: activeSessionId,
-        sessionKey: contextSessionKey,
-        engineId: activeContextEngine.info.id,
-        ok: compactResult.ok,
-        compacted: compactResult.compacted,
-        reason: compactResult.reason,
-        tokensBefore: compactResult.result?.tokensBefore,
-        tokensAfter: compactResult.result?.tokensAfter,
-      });
-      if (!compactResult.ok || !compactResult.compacted) {
-        return false;
-      }
-      adoptContextEngineCompactionTranscript(compactResult);
-      const maintenanceRuntimeContext = buildActiveContextEngineRuntimeContext();
-      await runHarnessContextEngineMaintenance({
-        contextEngine: activeContextEngine,
-        sessionId: activeSessionId,
-        sessionKey: contextSessionKey,
-        sessionFile: activeSessionFile,
-        reason: "compaction",
-        runtimeContext: maintenanceRuntimeContext,
-        config: params.config,
-      });
-      return true;
-    } catch (compactErr) {
-      embeddedAgentLog.warn("codex app-server context-engine forced compaction failed", {
-        sessionId: params.sessionId,
-        sessionKey: contextSessionKey,
-        engineId: activeContextEngine.info.id,
-        error: formatErrorMessage(compactErr),
-      });
-      return false;
-    }
-  };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
       hadSessionFile,
@@ -1296,12 +1199,6 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
-  const resetCodexPromptInputs = () => {
-    promptText = params.prompt;
-    developerInstructions = baseDeveloperInstructions;
-    prePromptMessageCount = historyMessages.length;
-    contextEngineProjection = undefined;
-  };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: CodexAppServerThreadBinding | undefined,
   ) => {
@@ -1412,9 +1309,6 @@ export async function runCodexAppServerAttempt(
   const decorateCodexTurnPromptText = (prompt: string) =>
     prependCodexOpenClawPromptContext(prompt, openClawPromptContext);
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
-  const refreshCodexTurnPromptText = () => {
-    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
-  };
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1426,109 +1320,6 @@ export async function runCodexAppServerAttempt(
       promptBuild.developerInstructions,
       buildCodexTurnCollaborationDeveloperInstructions(),
     );
-  const rebuildPromptAfterContextEngineCompaction = async () => {
-    historyMessages =
-      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
-    resetCodexPromptInputs();
-    try {
-      await applyActiveContextEngineProjection(undefined);
-    } catch (assembleErr) {
-      embeddedAgentLog.warn(
-        "context engine assemble failed after forced compaction; using Codex baseline prompt",
-        {
-          error: formatErrorMessage(assembleErr),
-        },
-      );
-    }
-    promptBuild = await buildPromptFromCurrentInputs();
-    refreshCodexTurnPromptText();
-  };
-  const buildCodexProviderBoundaryPrecheck = () => {
-    const contextTokenBudget =
-      typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-        ? Math.floor(params.contextTokenBudget)
-        : typeof params.contextWindowInfo?.tokens === "number" &&
-            Number.isFinite(params.contextWindowInfo.tokens)
-          ? Math.floor(params.contextWindowInfo.tokens)
-          : undefined;
-    if (!contextTokenBudget || contextTokenBudget <= 0) {
-      return undefined;
-    }
-    const reserveTokens =
-      resolveCodexContextEngineProjectionReserveTokens({ config: params.config }) ??
-      DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
-    const renderedDeveloperInstructions = buildRenderedCodexDeveloperInstructions();
-    const renderedChars = codexTurnPromptText.length + renderedDeveloperInstructions.length;
-    return shouldPreemptivelyCompactBeforePrompt({
-      messages: historyMessages,
-      systemPrompt: renderedDeveloperInstructions,
-      prompt: codexTurnPromptText,
-      contextTokenBudget,
-      reserveTokens,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: estimateRenderedLlmBoundaryTokenPressure({
-          systemPrompt: renderedDeveloperInstructions,
-          prompt: codexTurnPromptText,
-        }),
-        source: "codex_app_server_rendered_prompt",
-        renderedChars,
-      },
-    });
-  };
-  const maybeCompactContextEngineForProviderBoundaryPrecheck = async () => {
-    if (!activeContextEngine?.info.ownsCompaction || !contextEngineProjection) {
-      return;
-    }
-    const precheck = buildCodexProviderBoundaryPrecheck();
-    if (!precheck) {
-      return;
-    }
-    embeddedAgentLog.debug(
-      formatPrePromptPrecheckLog({
-        result: precheck,
-        provider: params.provider,
-        modelId: params.modelId,
-        messageCount: historyMessages.length,
-        contextTokenBudget:
-          typeof params.contextTokenBudget === "number"
-            ? params.contextTokenBudget
-            : (params.contextWindowInfo?.tokens ?? 0),
-        reserveTokens:
-          resolveCodexContextEngineProjectionReserveTokens({ config: params.config }) ??
-          DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
-        ...(contextSessionKey ? { sessionKey: contextSessionKey } : {}),
-        ...(activeSessionId ? { sessionId: activeSessionId } : {}),
-        ...(activeSessionFile ? { sessionFile: activeSessionFile } : {}),
-      }),
-    );
-    if (precheck.route === "fits") {
-      return;
-    }
-    const compacted = await forceContextEngineCompactionForCodexOverflow(
-      PREEMPTIVE_OVERFLOW_ERROR_TEXT,
-    );
-    if (!compacted) {
-      throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-    }
-    await rebuildPromptAfterContextEngineCompaction();
-    const afterCompactionPrecheck = buildCodexProviderBoundaryPrecheck();
-    if (!afterCompactionPrecheck || afterCompactionPrecheck.route === "fits") {
-      return;
-    }
-    embeddedAgentLog.warn(
-      "codex app-server provider-boundary precheck still overflowed after compaction",
-      {
-        sessionId: activeSessionId,
-        sessionKey: contextSessionKey,
-        route: afterCompactionPrecheck.route,
-        estimatedPromptTokens: afterCompactionPrecheck.estimatedPromptTokens,
-        promptBudgetBeforeReserve: afterCompactionPrecheck.promptBudgetBeforeReserve,
-        overflowTokens: afterCompactionPrecheck.overflowTokens,
-      },
-    );
-    throw new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-  };
-  await maybeCompactContextEngineForProviderBoundaryPrecheck();
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: contextSessionKey,
@@ -2929,6 +2720,9 @@ export async function runCodexAppServerAttempt(
       }) &&
       restartContextEngineCodexThread
     ) {
+      // Do not try to pre-compact or summarize through OpenClaw here. Codex owns
+      // automatic compaction; OpenClaw may only discard a stale projection thread
+      // and let Codex start cleanly.
       embeddedAgentLog.warn(
         "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
         {
@@ -2938,18 +2732,9 @@ export async function runCodexAppServerAttempt(
       );
       try {
         const preRetrySessionFile = activeSessionFile;
-        const compactedForRetry = await forceContextEngineCompactionForCodexOverflow(
-          turnStartError,
-          {
-            threadId: thread.threadId,
-          },
-        );
         await clearCodexAppServerBinding(preRetrySessionFile);
         if (activeSessionFile !== preRetrySessionFile) {
           await clearCodexAppServerBinding(activeSessionFile);
-        }
-        if (compactedForRetry) {
-          await rebuildPromptAfterContextEngineCompaction();
         }
         thread = await restartContextEngineCodexThread();
         emitCodexAppServerEvent(params, {
