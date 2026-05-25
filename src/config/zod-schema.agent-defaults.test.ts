@@ -151,7 +151,6 @@ describe("agent defaults schema", () => {
       AgentDefaultsSchema.parse({
         agentRuntime: {
           id: "claude-cli",
-          fallback: "none",
         },
       }),
     ).not.toThrow();
