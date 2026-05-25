@@ -5804,6 +5804,68 @@ describe("dispatchReplyFromConfig", () => {
     expect(blockReplySettled).toBe(true);
   });
 
+
+  it("sanitizes internal runtime context before queued and dispatched block replies", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const queuedTexts: string[] = [];
+    const dispatchedTexts: string[] = [];
+    const internalBlock = [
+      "Visible intro.",
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime event.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "[Internal task completion event]",
+      "source: subagent",
+      "task: LEAK_SENTINEL_STRICT_BOUNDARIES",
+      "## Active Subagents",
+      "task_json=should-not-appear",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "Visible outro.",
+    ].join("\n");
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: internalBlock });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          dispatchedTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onBlockReplyQueued: (payload) => {
+          if (payload.text) {
+            queuedTexts.push(payload.text);
+          }
+        },
+      },
+    });
+
+    expect(queuedTexts).toEqual(["Visible intro.\n\nVisible outro."]);
+    expect(dispatchedTexts).toEqual(["Visible intro.\n\nVisible outro."]);
+    for (const text of [...queuedTexts, ...dispatchedTexts]) {
+      expect(text).not.toContain("LEAK_SENTINEL_STRICT_BOUNDARIES");
+      expect(text).not.toContain("## Active Subagents");
+      expect(text).not.toContain("task_json=");
+      expect(text).not.toContain("Internal task completion event");
+      expect(text).not.toContain("source: subagent");
+    }
+  });
+
   it("forwards payload metadata into onBlockReplyQueued context", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

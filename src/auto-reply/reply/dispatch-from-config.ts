@@ -10,6 +10,7 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
@@ -1155,6 +1156,15 @@ export async function dispatchReplyFromConfig(
     return await normalizeReplyMediaPayloadPaths(payload);
   };
 
+  const sanitizeVisibleBlockPayload = (payload: ReplyPayload): ReplyPayload | null => {
+    if (!payload.text) {
+      return payload;
+    }
+    const text = sanitizeUserFacingText(payload.text, { errorContext: Boolean(payload.isError) });
+    const nextPayload = { ...payload, text: text.trim() ? text : undefined };
+    return hasOutboundReplyContent(nextPayload, { trimText: true }) ? nextPayload : null;
+  };
+
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; mirror?: boolean },
@@ -2246,30 +2256,34 @@ export async function dispatchReplyFromConfig(
                 if (payload.isReasoning === true) {
                   return;
                 }
+                const sanitizedPayload = sanitizeVisibleBlockPayload(payload);
+                if (!sanitizedPayload) {
+                  return;
+                }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
                 // and must not be synthesised into the spoken reply.
-                const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                if (payload.text && !isStatusNotice) {
+                const isStatusNotice = isReplyPayloadStatusNotice(sanitizedPayload);
+                if (sanitizedPayload.text && !isStatusNotice) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                   if (accumulatedBlockText.length > 0) {
                     accumulatedBlockText += "\n";
                   }
-                  accumulatedBlockText += payload.text;
+                  accumulatedBlockText += sanitizedPayload.text;
                   if (accumulatedBlockTtsText.length > 0 && !joinsBufferedTtsDirective) {
                     accumulatedBlockTtsText += "\n";
                   }
-                  accumulatedBlockTtsText += payload.text;
+                  accumulatedBlockTtsText += sanitizedPayload.text;
                   blockCount++;
                 }
                 const visiblePayload =
-                  payload.text && cleanBlockTtsDirectiveText && !isStatusNotice
+                  sanitizedPayload.text && cleanBlockTtsDirectiveText && !isStatusNotice
                     ? (() => {
-                        const text = cleanBlockTtsDirectiveText.push(payload.text);
-                        return { ...payload, text: text.trim() ? text : undefined };
+                        const text = cleanBlockTtsDirectiveText.push(sanitizedPayload.text);
+                        return { ...sanitizedPayload, text: text.trim() ? text : undefined };
                       })()
-                    : payload;
+                    : sanitizedPayload;
                 if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                   return;
                 }
