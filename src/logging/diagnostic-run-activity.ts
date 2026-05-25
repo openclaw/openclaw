@@ -9,7 +9,7 @@ type SessionActivity = {
   sessionKey?: string;
   activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
-  activeModelCalls: Set<string>;
+  activeModelCalls: Map<string, ActiveModelCall>;
   lastProgressAt: number;
   lastProgressReason?: string;
 };
@@ -21,6 +21,10 @@ type ActiveTool = {
   lastProgressAt: number;
 };
 
+type ActiveModelCall = {
+  allowActiveAbort: boolean;
+};
+
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
@@ -28,7 +32,7 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type DiagnosticModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model"
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "allowActiveAbort"
 >;
 
 export type DiagnosticSessionActivitySnapshot = {
@@ -37,6 +41,7 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  activeModelCallAllowActiveAbort?: boolean;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
 };
@@ -93,8 +98,8 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
   }
-  for (const call of source.activeModelCalls) {
-    target.activeModelCalls.add(call);
+  for (const [key, call] of source.activeModelCalls) {
+    target.activeModelCalls.set(key, call);
   }
   if (source.lastProgressAt > target.lastProgressAt) {
     target.lastProgressAt = source.lastProgressAt;
@@ -143,7 +148,7 @@ function resolveSessionActivity(params: {
     sessionKey: params.sessionKey,
     activeEmbeddedRuns: new Set(),
     activeTools: new Map(),
-    activeModelCalls: new Set(),
+    activeModelCalls: new Map(),
     lastProgressAt: Date.now(),
   };
   registerSessionActivityRefs(created, params);
@@ -205,7 +210,9 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (!activity) {
     return;
   }
-  activity.activeModelCalls.add(modelCallKey(event));
+  activity.activeModelCalls.set(modelCallKey(event), {
+    allowActiveAbort: event.allowActiveAbort !== false,
+  });
   touchSessionActivity(activity, "model_call:started");
 }
 
@@ -301,6 +308,16 @@ export function getDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
+  let activeModelCallAllowActiveAbort: boolean | undefined;
+  if (activity.activeModelCalls.size > 0) {
+    activeModelCallAllowActiveAbort = true;
+    for (const call of activity.activeModelCalls.values()) {
+      if (!call.allowActiveAbort) {
+        activeModelCallAllowActiveAbort = false;
+        break;
+      }
+    }
+  }
 
   return {
     activeWorkKind,
@@ -308,6 +325,7 @@ export function getDiagnosticSessionActivitySnapshot(
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
+    activeModelCallAllowActiveAbort,
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };

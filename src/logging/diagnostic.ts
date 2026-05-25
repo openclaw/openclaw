@@ -518,6 +518,7 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     params.activity?.hasActiveEmbeddedRun === true &&
+    params.activity.activeModelCallAllowActiveAbort !== false &&
     typeof lastProgressAgeMs === "number" &&
     lastProgressAgeMs >= params.stuckSessionAbortMs
   );
