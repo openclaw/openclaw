@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { analyzeCommandForPolicy } from "./policy.js";
@@ -43,10 +44,6 @@ export function summarizeCommandExplanation(
     riskKinds,
     warningLines: [...new Set(warningLines)],
   };
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
 }
 
 export function summarizeCommandSegmentsForDisplay(
