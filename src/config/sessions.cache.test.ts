@@ -173,6 +173,16 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("keeps disk-loaded clone:false cache hits by reference", () => {
+    const testStore = createSingleSessionStore();
+    fs.writeFileSync(storePath, JSON.stringify(testStore), "utf8");
+
+    const loaded1 = loadSessionStore(storePath, { clone: false });
+    const loaded2 = loadSessionStore(storePath, { clone: false });
+
+    expect(loaded2["session:1"]).toBe(loaded1["session:1"]);
+  });
+
   it("does not cache pre-migration or pre-normalization disk JSON", () => {
     fs.writeFileSync(
       storePath,
@@ -235,7 +245,7 @@ describe("Session Store Cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("does not parse serialized stores when writing the cache", () => {
+  it("does not parse serialized stores when writing or reading object-cache hits", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -252,9 +262,24 @@ describe("Session Store Cache", () => {
     const cached = readSessionStoreCache({ storePath });
 
     expect(cached?.["session:1"].origin?.provider).toBe("openai");
-    expect(parseSpy).toHaveBeenCalledTimes(1);
+    expect(parseSpy).not.toHaveBeenCalled();
 
     parseSpy.mockRestore();
+  });
+
+  it("clones cached session records without invoking prototype setters", () => {
+    const testStore = JSON.parse(
+      `{"session:1":{"sessionId":"id-1","updatedAt":${Date.now()},"displayName":"Test Session 1","__proto__":{"polluted":true}}}`,
+    ) as Record<string, SessionEntry>;
+
+    writeSessionStoreCache({ storePath, store: testStore });
+    const cached = readSessionStoreCache({ storePath });
+    const entry = cached?.["session:1"] as (SessionEntry & { polluted?: boolean }) | undefined;
+
+    expect(entry).toBeDefined();
+    expect(entry?.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(entry, "__proto__")).toBe(true);
+    expect(Object.prototype).not.toHaveProperty("polluted");
   });
 
   it("clones disk-loaded stores from the raw serialized JSON", () => {
