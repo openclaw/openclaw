@@ -214,6 +214,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
     expect(sent).toEqual([{ text: "Preview below", mediaUrls: ["file:///photo.png"] }]);
     expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+    expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
   });
 
   it("keeps media separate across assistant message boundaries", async () => {

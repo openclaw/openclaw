@@ -170,7 +170,7 @@ export function createBlockReplyPipeline(params: {
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
         }
-        if (!isStatusNotice && !reply.hasMedia && reply.trimmedText) {
+        if (!isStatusNotice && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);
         }
         if (!isStatusNotice) {
