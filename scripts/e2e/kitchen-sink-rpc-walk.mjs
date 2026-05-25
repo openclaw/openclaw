@@ -68,7 +68,8 @@ export function makeEnv() {
     env: {
       ...process.env,
       HOME: home,
-      OPENCLAW_HOME: stateDir,
+      USERPROFILE: home,
+      OPENCLAW_HOME: home,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_NO_ONBOARD: "1",

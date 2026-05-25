@@ -21,7 +21,12 @@ describe("kitchen-sink RPC isolated state", () => {
     const { root, env } = makeEnv();
 
     expect(root).toContain("openclaw-kitchen-sink-rpc-");
-    expect(existsSync(env.OPENCLAW_HOME)).toBe(true);
+    expect(env.HOME).toBe(path.join(root, "home"));
+    expect(env.USERPROFILE).toBe(env.HOME);
+    expect(env.OPENCLAW_HOME).toBe(env.HOME);
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(env.HOME, ".openclaw"));
+    expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"));
+    expect(existsSync(env.OPENCLAW_STATE_DIR)).toBe(true);
 
     await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
 
