@@ -1,10 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMediaFields,
   buildPersistedUserTurnMessage,
 } from "./user-turn-transcript.js";
 
 describe("user turn transcript persistence", () => {
+  describe("buildPersistedUserTurnMediaInputsFromFields", () => {
+    it("builds media inputs from structured context media fields", () => {
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPath: "/tmp/a.png",
+          MediaPaths: ["/tmp/a.png", "/tmp/b.jpg"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png", "image/jpeg"],
+        }),
+      ).toEqual([
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.jpg", contentType: "image/jpeg" },
+      ]);
+    });
+
+    it("uses url-backed media fields when no local path is present", () => {
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaUrl: "media://inbound/a.png",
+          MediaType: "image/png",
+        }),
+      ).toEqual([{ url: "media://inbound/a.png", contentType: "image/png" }]);
+    });
+
+    it("does not infer media from absent structured fields", () => {
+      expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
+      expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);
+    });
+  });
+
   describe("buildPersistedUserTurnMediaFields", () => {
     it("omits media fields when there is no structured media", () => {
       expect(buildPersistedUserTurnMediaFields(undefined)).toEqual({});

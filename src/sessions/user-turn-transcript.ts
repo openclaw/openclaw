@@ -24,6 +24,15 @@ export type BuildPersistedUserTurnMessageParams = {
   mediaOnlyText?: string;
 };
 
+export type PersistedUserTurnMediaFieldSource = {
+  MediaPath?: string | null;
+  MediaPaths?: readonly (string | null | undefined)[] | null;
+  MediaUrl?: string | null;
+  MediaUrls?: readonly (string | null | undefined)[] | null;
+  MediaType?: string | null;
+  MediaTypes?: readonly (string | null | undefined)[] | null;
+};
+
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
@@ -55,6 +64,46 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
     path,
     type: mediaTypeForTranscript(media),
   };
+}
+
+function normalizeOptionalTextArray(
+  values: readonly (string | null | undefined)[] | null | undefined,
+): string[] {
+  return (
+    values?.map(normalizeOptionalText).filter((value): value is string => Boolean(value)) ?? []
+  );
+}
+
+export function buildPersistedUserTurnMediaInputsFromFields(
+  fields: PersistedUserTurnMediaFieldSource | null | undefined,
+): PersistedUserTurnMediaInput[] {
+  if (!fields) {
+    return [];
+  }
+
+  const paths = normalizeOptionalTextArray(fields.MediaPaths);
+  const urls = normalizeOptionalTextArray(fields.MediaUrls);
+  const types = normalizeOptionalTextArray(fields.MediaTypes);
+  const singlePath = normalizeOptionalText(fields.MediaPath);
+  const singleUrl = normalizeOptionalText(fields.MediaUrl);
+  const singleType = normalizeOptionalText(fields.MediaType);
+  const mediaCount = Math.max(paths.length, urls.length, singlePath || singleUrl ? 1 : 0);
+  const media: PersistedUserTurnMediaInput[] = [];
+
+  for (let index = 0; index < mediaCount; index += 1) {
+    const path = paths[index] ?? (index === 0 ? singlePath : undefined);
+    const url = urls[index] ?? (index === 0 ? singleUrl : undefined);
+    if (!path && !url) {
+      continue;
+    }
+    media.push({
+      ...(path ? { path } : {}),
+      ...(url ? { url } : {}),
+      contentType: types[index] ?? singleType,
+    });
+  }
+
+  return media;
 }
 
 export function buildPersistedUserTurnMediaFields(
