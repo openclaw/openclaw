@@ -33,7 +33,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { createCronTool } from "./tools/cron-tool.js";
+import { createCronTools } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
@@ -371,7 +371,7 @@ export function createOpenClawTools(
       ? []
       : [
           nodesTool,
-          createCronTool({
+          ...createCronTools({
             agentSessionKey: options?.agentSessionKey,
             currentDeliveryContext: {
               channel: options?.agentChannel,

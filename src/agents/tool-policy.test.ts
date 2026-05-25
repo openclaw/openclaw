@@ -193,3 +193,85 @@ describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76
     );
   });
 });
+
+describe("cron family alias expansion (WOR-317)", () => {
+  const CRON_FAMILY = [
+    "cron",
+    "cron_status",
+    "cron_list",
+    "cron_get",
+    "cron_add",
+    "cron_update",
+    "cron_remove",
+    "cron_run",
+    "cron_runs",
+    "cron_wake",
+  ] as const;
+
+  // The matcher feeds expandToolGroups output into compileGlobPatterns, so
+  // a literal "cron" entry must expand to ["cron", "cron_*"] and cover every
+  // per-action tool name at the deny/allow site. Each test below stands in
+  // for a different policy path (global, per-agent, group, sender, sandbox,
+  // inherited) — they all share this matcher.
+  it("expandToolGroups expands a bare cron entry to the family glob", () => {
+    const expanded = expandToolGroups(["cron"]);
+    expect(expanded).toContain("cron");
+    expect(expanded).toContain("cron_*");
+  });
+
+  it("expandToolGroups deduplicates when cron and an explicit cron_* glob are both present", () => {
+    const expanded = expandToolGroups(["cron", "cron_*", "cron_update"]);
+    expect(expanded.filter((entry) => entry === "cron_*")).toHaveLength(1);
+    expect(expanded).toContain("cron");
+    expect(expanded).toContain("cron_update");
+  });
+
+  it("global-style deny of cron blocks every per-action cron tool", () => {
+    for (const tool of CRON_FAMILY) {
+      expect(isToolAllowedByPolicyName(tool, { deny: ["cron"] })).toBe(false);
+    }
+  });
+
+  it("global-style allow of cron permits every per-action cron tool", () => {
+    for (const tool of CRON_FAMILY) {
+      expect(isToolAllowedByPolicyName(tool, { allow: ["cron"] })).toBe(true);
+    }
+  });
+
+  it("per-agent-style mixed allow includes cron family without breaking siblings", () => {
+    // Simulates an agents.list[X].tools policy that allows cron plus a
+    // sibling tool. The cron family is permitted, the sibling is permitted,
+    // and unrelated tools (e.g. exec) are denied by the implicit allowlist.
+    const policy = { allow: ["cron", "read"] };
+    for (const tool of CRON_FAMILY) {
+      expect(isToolAllowedByPolicyName(tool, policy)).toBe(true);
+    }
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+  });
+
+  it("sandbox-style allow including cron keeps legitimate cron callers working", () => {
+    // SandboxToolPolicy uses the same matcher. An explicit allowlist that
+    // names cron must keep cron_add / cron_update / etc usable.
+    const policy: SandboxToolPolicy = { allow: ["cron", "read"], deny: [] };
+    for (const tool of CRON_FAMILY) {
+      expect(isToolAllowed(policy, tool)).toBe(true);
+    }
+    expect(isToolAllowed(policy, "read")).toBe(true);
+  });
+
+  it("deny overrides allow even when allow names the family", () => {
+    const policy = { allow: ["*"], deny: ["cron"] };
+    for (const tool of CRON_FAMILY) {
+      expect(isToolAllowedByPolicyName(tool, policy)).toBe(false);
+    }
+  });
+
+  it("a specific cron_* deny does not bleed into siblings outside the family", () => {
+    // Denying the family must not deny apply_patch, read, or other tools.
+    const policy = { deny: ["cron"] };
+    expect(isToolAllowedByPolicyName("apply_patch", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+  });
+});

@@ -45,7 +45,8 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "agents_list",
   // Status/scheduling - main agent coordinates
   "session_status",
-  "cron",
+  "cron", // legacy super-tool (kept for skills that hardcode this name)
+  "cron_*", // per-action cron tools (cron_add, cron_update, etc. - WOR-317)
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
 ];

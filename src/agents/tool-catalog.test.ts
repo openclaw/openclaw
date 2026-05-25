@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCoreToolProfilePolicy } from "./tool-catalog.js";
+import { CORE_TOOL_GROUPS, resolveCoreToolProfilePolicy } from "./tool-catalog.js";
 
 function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
   const policy = resolveCoreToolProfilePolicy(profile);
@@ -16,6 +16,18 @@ function requirePolicyAllow(profile: Parameters<typeof resolveCoreToolProfilePol
   }
   return allow;
 }
+
+const CRON_PER_ACTION_TOOL_IDS = [
+  "cron_status",
+  "cron_list",
+  "cron_get",
+  "cron_add",
+  "cron_update",
+  "cron_remove",
+  "cron_run",
+  "cron_runs",
+  "cron_wake",
+] as const;
 
 describe("tool-catalog", () => {
   it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {
@@ -41,6 +53,15 @@ describe("tool-catalog", () => {
       "subagents",
       "session_status",
       "cron",
+      "cron_status",
+      "cron_list",
+      "cron_get",
+      "cron_add",
+      "cron_update",
+      "cron_remove",
+      "cron_run",
+      "cron_runs",
+      "cron_wake",
       "update_plan",
       "image",
       "image_generate",
@@ -66,5 +87,34 @@ describe("tool-catalog", () => {
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     const policy = requireCoreToolProfilePolicy("full");
     expect(policy.allow).toEqual(["*"]);
+  });
+
+  // WOR-317: per-action cron tools must be first-class members of the coding
+  // profile and the openclaw tool group. Without this, the default coding
+  // profile filters them out of filterToolsByPolicy and users only see the
+  // legacy super-tool.
+  it("registers every cron_* per-action tool in the coding profile allowlist", () => {
+    const allow = requirePolicyAllow("coding");
+    for (const id of CRON_PER_ACTION_TOOL_IDS) {
+      expect(allow).toContain(id);
+    }
+  });
+
+  it("registers every cron_* per-action tool in the openclaw tool group", () => {
+    const groups = CORE_TOOL_GROUPS as Record<string, string[] | undefined>;
+    const openclawGroup = groups["group:openclaw"];
+    expect(openclawGroup).toBeDefined();
+    for (const id of CRON_PER_ACTION_TOOL_IDS) {
+      expect(openclawGroup).toContain(id);
+    }
+  });
+
+  it("registers every cron_* per-action tool in the automation section group", () => {
+    const groups = CORE_TOOL_GROUPS as Record<string, string[] | undefined>;
+    const automation = groups["group:automation"];
+    expect(automation).toBeDefined();
+    for (const id of CRON_PER_ACTION_TOOL_IDS) {
+      expect(automation).toContain(id);
+    }
   });
 });
