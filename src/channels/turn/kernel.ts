@@ -15,9 +15,14 @@ import {
 } from "./durable-delivery.js";
 export {
   buildChannelInboundEventContext,
+  buildChannelTurnContext,
   filterChannelInboundSupplementalContext,
 } from "../inbound-event/context.js";
-export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
+export type {
+  BuildChannelInboundEventContextParams,
+  BuildChannelTurnContextParams,
+  BuiltChannelTurnContext,
+} from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
   listTrackedChannelBotPairsForTests,

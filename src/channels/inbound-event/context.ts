@@ -100,6 +100,25 @@ export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   To: string;
   InboundEventKind: InboundEventKind;
 };
+export type BuildChannelTurnContextParams = Omit<
+  BuildChannelInboundEventContextParams,
+  "message"
+> & {
+  message: BuildChannelInboundEventContextParams["message"] & {
+    inboundTurnKind?: InboundEventKind;
+  };
+};
+export type BuildChannelTurnContextAsyncParams = Omit<
+  BuildChannelInboundEventContextAsyncParams,
+  "message"
+> & {
+  message: BuildChannelInboundEventContextAsyncParams["message"] & {
+    inboundTurnKind?: InboundEventKind;
+  };
+};
+export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
+  InboundTurnKind: InboundEventKind;
+};
 
 type FinalizeInboundContextFn = <T extends Record<string, unknown>>(
   ctx: T,
@@ -527,4 +546,28 @@ export function buildChannelInboundEventContext(
   return isPromiseLike(result)
     ? result.then((finalized) => finalized.context as BuiltChannelInboundEventContext)
     : (result.context as BuiltChannelInboundEventContext);
+}
+
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextAsyncParams,
+): Promise<BuiltChannelTurnContext>;
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextParams,
+): BuiltChannelTurnContext;
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextParams | BuildChannelTurnContextAsyncParams,
+): MaybePromise<BuiltChannelTurnContext> {
+  const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
+  const ctx = buildChannelInboundEventContext({
+    ...params,
+    message: {
+      ...params.message,
+      ...(inboundEventKind ? { inboundEventKind } : {}),
+    },
+  });
+  const finish = (built: BuiltChannelInboundEventContext): BuiltChannelTurnContext => ({
+    ...built,
+    InboundTurnKind: built.InboundEventKind,
+  });
+  return isPromiseLike(ctx) ? ctx.then(finish) : finish(ctx);
 }

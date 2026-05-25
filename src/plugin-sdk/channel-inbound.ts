@@ -1,21 +1,22 @@
 // Shared inbound parsing helpers for channel plugins.
 import {
   buildChannelInboundEventContext,
+  buildChannelTurnContext,
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
+  type BuildChannelTurnContextAsyncParams,
+  type BuildChannelTurnContextParams,
   type BuiltChannelInboundEventContext,
+  type BuiltChannelTurnContext,
   type ChannelInboundSupplementalResolutionOptions,
   type FinalizeChannelInboundContextAsyncParams,
   type FinalizeChannelInboundContextParams,
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
-import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-
-type MaybePromise<T> = T | Promise<T>;
 
 export {
   createInboundDebouncer,
@@ -75,6 +76,7 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   buildChannelInboundEventContext,
+  buildChannelTurnContext,
   // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
@@ -85,60 +87,15 @@ export {
 export type {
   BuildChannelInboundEventContextAsyncParams,
   BuildChannelInboundEventContextParams,
+  BuildChannelTurnContextAsyncParams,
+  BuildChannelTurnContextParams,
   BuiltChannelInboundEventContext,
+  BuiltChannelTurnContext,
   ChannelInboundSupplementalResolutionOptions,
   FinalizeChannelInboundContextAsyncParams,
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };
-
-export type BuildChannelTurnContextParams = Omit<
-  BuildChannelInboundEventContextParams,
-  "message"
-> & {
-  message: BuildChannelInboundEventContextParams["message"] & {
-    inboundTurnKind?: InboundEventKind;
-  };
-};
-export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
-  InboundTurnKind: InboundEventKind;
-};
-export type BuildChannelTurnContextAsyncParams = Omit<
-  BuildChannelInboundEventContextAsyncParams,
-  "message"
-> & {
-  message: BuildChannelInboundEventContextAsyncParams["message"] & {
-    inboundTurnKind?: InboundEventKind;
-  };
-};
-
-function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
-  return Boolean(value) && typeof (value as { then?: unknown }).then === "function";
-}
-
-export function buildChannelTurnContext(
-  params: BuildChannelTurnContextAsyncParams,
-): Promise<BuiltChannelTurnContext>;
-export function buildChannelTurnContext(
-  params: BuildChannelTurnContextParams,
-): BuiltChannelTurnContext;
-export function buildChannelTurnContext(
-  params: BuildChannelTurnContextParams | BuildChannelTurnContextAsyncParams,
-): MaybePromise<BuiltChannelTurnContext> {
-  const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
-  const ctx = buildChannelInboundEventContext({
-    ...params,
-    message: {
-      ...params.message,
-      ...(inboundEventKind ? { inboundEventKind } : {}),
-    },
-  });
-  const finish = (built: BuiltChannelInboundEventContext): BuiltChannelTurnContext => ({
-    ...built,
-    InboundTurnKind: built.InboundEventKind,
-  });
-  return isPromiseLike(ctx) ? ctx.then(finish) : finish(ctx);
-}
 
 /**
  * @deprecated Prefer `filterChannelInboundSupplementalContext`, or
