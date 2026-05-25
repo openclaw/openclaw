@@ -91,6 +91,7 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        compactionCheckpointMaxBytes: z.union([z.string(), z.number()]).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -142,6 +143,20 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["highWaterBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.compactionCheckpointMaxBytes !== undefined) {
+          try {
+            parseByteSize(
+              normalizeStringifiedOptionalString(val.compactionCheckpointMaxBytes) ?? "",
+              { defaultUnit: "b" },
+            );
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["compactionCheckpointMaxBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

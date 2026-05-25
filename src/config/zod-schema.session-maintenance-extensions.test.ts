@@ -45,6 +45,7 @@ describe("SessionSchema maintenance extensions", () => {
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
+        compactionCheckpointMaxBytes: "256mb",
       },
     });
     expect(result.success).toBe(true);
@@ -75,5 +76,13 @@ describe("SessionSchema maintenance extensions", () => {
         },
       }),
     ).toThrow(/maxDiskBytes|size/i);
+
+    expect(() =>
+      SessionSchema.parse({
+        maintenance: {
+          compactionCheckpointMaxBytes: "huge",
+        },
+      }),
+    ).toThrow(/compactionCheckpointMaxBytes|size/i);
   });
 });

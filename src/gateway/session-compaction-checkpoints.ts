@@ -7,6 +7,7 @@ import {
   SessionManager,
   type FileEntry as PiSessionFileEntry,
 } from "@earendil-works/pi-coding-agent";
+import { parseByteSize } from "../cli/parse-bytes.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
@@ -15,14 +16,37 @@ import type {
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
+import type { SessionMaintenanceConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/session-compaction-checkpoints");
 const MAX_COMPACTION_CHECKPOINTS_PER_SESSION = 25;
 export const MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-export const MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
+/**
+ * Default per-session disk budget for retained compaction checkpoint
+ * snapshots. Overridable via `session.maintenance.compactionCheckpointMaxBytes`
+ * so operators on tight disks can shrink retention without code changes.
+ */
+export const DEFAULT_COMPACTION_CHECKPOINT_MAX_RETAINED_BYTES_PER_SESSION = 128 * 1024 * 1024;
+
+function resolveCompactionCheckpointRetainedBytes(
+  maintenance: SessionMaintenanceConfig | undefined,
+): number {
+  const raw = maintenance?.compactionCheckpointMaxBytes;
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return DEFAULT_COMPACTION_CHECKPOINT_MAX_RETAINED_BYTES_PER_SESSION;
+  }
+  try {
+    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    return parsed > 0 ? parsed : DEFAULT_COMPACTION_CHECKPOINT_MAX_RETAINED_BYTES_PER_SESSION;
+  } catch {
+    return DEFAULT_COMPACTION_CHECKPOINT_MAX_RETAINED_BYTES_PER_SESSION;
+  }
+}
 
 export type CapturedCompactionCheckpointSnapshot = {
   sessionId: string;
@@ -54,6 +78,7 @@ function checkpointSnapshotBytes(
 function trimSessionCheckpoints(
   checkpoints: SessionCompactionCheckpoint[] | undefined,
   snapshotBytesByPath: ReadonlyMap<string, number> = new Map(),
+  maxRetainedBytesPerSession: number = DEFAULT_COMPACTION_CHECKPOINT_MAX_RETAINED_BYTES_PER_SESSION,
 ): {
   kept: SessionCompactionCheckpoint[] | undefined;
   removed: SessionCompactionCheckpoint[];
@@ -66,17 +91,13 @@ function trimSessionCheckpoints(
   const keptNewestFirst: SessionCompactionCheckpoint[] = [];
   const byteRemovedNewestFirst: SessionCompactionCheckpoint[] = [];
   let retainedBytes = 0;
-  for (let index = countTrimmed.length - 1; index >= 0; index -= 1) {
-    const checkpoint = countTrimmed[index];
+  for (const checkpoint of countTrimmed.toReversed()) {
     if (!checkpoint) {
       continue;
     }
     const checkpointBytes = checkpointSnapshotBytes(checkpoint, snapshotBytesByPath);
     const keepNewestCheckpoint = keptNewestFirst.length === 0;
-    if (
-      keepNewestCheckpoint ||
-      retainedBytes + checkpointBytes <= MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION
-    ) {
+    if (keepNewestCheckpoint || retainedBytes + checkpointBytes <= maxRetainedBytesPerSession) {
       keptNewestFirst.push(checkpoint);
       retainedBytes += checkpointBytes;
     } else {
@@ -512,6 +533,9 @@ export async function persistSessionCompactionCheckpoint(params: {
     ...existingCheckpoints,
     checkpoint,
   ]);
+  const maxRetainedBytes = resolveCompactionCheckpointRetainedBytes(
+    params.cfg.session?.maintenance,
+  );
 
   await updateSessionStore(target.storePath, (store) => {
     const existing = store[target.canonicalKey];
@@ -520,7 +544,7 @@ export async function persistSessionCompactionCheckpoint(params: {
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
-    trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
+    trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath, maxRetainedBytes);
     store[target.canonicalKey] = {
       ...existing,
       updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
