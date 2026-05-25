@@ -5,6 +5,22 @@ import { isPathInside } from "../infra/path-guards.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
 
+// Cap the allowed-roots hint so a misconfigured config with hundreds of
+// roots cannot blow up the error message length. The first 4 roots are
+// usually enough context (workspace + state + media-inbound + media-outbound)
+// for the operator to pick the right destination.
+const ALLOWED_ROOTS_HINT_LIMIT = 4;
+
+function formatAllowedRootsHint(roots: readonly string[]): string {
+  if (roots.length === 0) {
+    return "<no roots configured>";
+  }
+  const visible = roots.slice(0, ALLOWED_ROOTS_HINT_LIMIT);
+  const overflow = roots.length - visible.length;
+  const formatted = visible.join(", ");
+  return overflow > 0 ? `${formatted}, +${overflow} more` : formatted;
+}
+
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -65,7 +81,7 @@ export async function assertLocalMediaAllowed(
         if (firstSegment.startsWith("workspace-")) {
           throw new LocalMediaAccessError(
             "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaPath}`,
+            `Local media path is not under an allowed directory: ${mediaPath} (allowed roots: ${formatAllowedRootsHint(roots)})`,
           );
         }
       }
@@ -92,6 +108,6 @@ export async function assertLocalMediaAllowed(
 
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Local media path is not under an allowed directory: ${mediaPath}`,
+    `Local media path is not under an allowed directory: ${mediaPath} (allowed roots: ${formatAllowedRootsHint(roots)})`,
   );
 }
