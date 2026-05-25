@@ -14,6 +14,7 @@ import {
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { DOCTOR_FIX_HINT } from "./doctor/shared/doctor-fix-hint.js";
 
 export const MEMORY_SYSTEM_PROMPT = [
   "Memory system not found in workspace.",
@@ -151,7 +152,7 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
       `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
       `OpenClaw uses ${CANONICAL_ROOT_MEMORY_FILENAME} as the canonical durable memory file.`,
       `Dreaming writes durable promotions to ${CANONICAL_ROOT_MEMORY_FILENAME}, so older facts in ${LEGACY_ROOT_MEMORY_FILENAME} can be shadowed.`,
-      `Run "openclaw doctor --fix" to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
+      `${DOCTOR_FIX_HINT} to merge the legacy file into ${CANONICAL_ROOT_MEMORY_FILENAME} with a backup.`,
     ].join("\n");
   }
   return null;

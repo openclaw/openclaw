@@ -3,6 +3,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
@@ -11,8 +12,7 @@ import {
 const LEGACY_WEB_SEARCH_RULES: LegacyConfigRule[] = [
   {
     path: ["tools", "web", "search"],
-    message:
-      'tools.web.search provider-owned config moved to plugins.entries.<plugin>.config.webSearch. Run "openclaw doctor --fix".',
+    message: `tools.web.search provider-owned config moved to plugins.entries.<plugin>.config.webSearch. ${DOCTOR_FIX_HINT}`,
     match: (_value, root) => listLegacyWebSearchConfigPaths(root).length > 0,
     requireSourceLiteral: true,
   },

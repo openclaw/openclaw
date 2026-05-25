@@ -4,6 +4,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 const RETIRED_QUEUE_MODES = new Set(["queue", "steer-backlog", "steer+backlog"]);
 
@@ -37,14 +38,12 @@ function migrateQueueMode(params: {
 const QUEUE_MODE_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "queue", "mode"],
-    message:
-      'messages.queue.mode uses a retired queue mode; use steer, followup, collect, or interrupt. Run "openclaw doctor --fix".',
+    message: `messages.queue.mode uses a retired queue mode; use steer, followup, collect, or interrupt. ${DOCTOR_FIX_HINT}`,
     match: isRetiredQueueMode,
   },
   {
     path: ["messages", "queue", "byChannel"],
-    message:
-      'messages.queue.byChannel contains a retired queue mode; use steer, followup, collect, or interrupt. Run "openclaw doctor --fix".',
+    message: `messages.queue.byChannel contains a retired queue mode; use steer, followup, collect, or interrupt. ${DOCTOR_FIX_HINT}`,
     match: hasRetiredQueueModeByChannel,
   },
 ];

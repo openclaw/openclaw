@@ -9,6 +9,7 @@ import {
 import { resolveStateDir } from "../config/paths.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { DOCTOR_FIX_HINT } from "./doctor/shared/doctor-fix-hint.js";
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
@@ -84,7 +85,7 @@ export async function noteSessionLockHealth(params?: {
 
   if (staleCount > 0 && !shouldRepair) {
     lines.push(`- ${staleCount} lock file${staleCount === 1 ? " is" : "s are"} stale.`);
-    lines.push('- Run "openclaw doctor --fix" to remove stale lock files automatically.');
+    lines.push(`- ${DOCTOR_FIX_HINT} to remove stale lock files automatically.`);
   }
   if (shouldRepair && removedCount > 0) {
     lines.push(

@@ -4,6 +4,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 function hasLegacyRotateBytes(value: unknown): boolean {
   const maintenance = getRecord(value);
@@ -17,15 +18,13 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
 
 const LEGACY_SESSION_MAINTENANCE_ROTATE_BYTES_RULE: LegacyConfigRule = {
   path: ["session", "maintenance"],
-  message:
-    'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
+  message: `session.maintenance.rotateBytes is deprecated and ignored; ${DOCTOR_FIX_HINT} to remove it.`,
   match: hasLegacyRotateBytes,
 };
 
 const LEGACY_SESSION_PARENT_FORK_MAX_TOKENS_RULE: LegacyConfigRule = {
   path: ["session"],
-  message:
-    'session.parentForkMaxTokens was removed; parent fork sizing is automatic. Run "openclaw doctor --fix" to remove it.',
+  message: `session.parentForkMaxTokens was removed; parent fork sizing is automatic. ${DOCTOR_FIX_HINT} to remove it.`,
   match: hasLegacyParentForkMaxTokens,
 };
 

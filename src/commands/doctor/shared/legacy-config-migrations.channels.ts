@@ -5,6 +5,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
@@ -357,26 +358,22 @@ function hasLegacyThreadBindingSpawnSplitInAnyChannel(value: unknown): boolean {
 const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
     path: ["session", "threadBindings"],
-    message:
-      'session.threadBindings.ttlHours was renamed to session.threadBindings.idleHours. Run "openclaw doctor --fix".',
+    message: `session.threadBindings.ttlHours was renamed to session.threadBindings.idleHours. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyThreadBindingTtl(value),
   },
   {
     path: ["channels"],
-    message:
-      'channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
+    message: `channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
   },
   {
     path: ["session", "threadBindings"],
-    message:
-      'session.threadBindings.spawnSubagentSessions/spawnAcpSessions were replaced by session.threadBindings.spawnSessions. Run "openclaw doctor --fix".',
+    message: `session.threadBindings.spawnSubagentSessions/spawnAcpSessions were replaced by session.threadBindings.spawnSessions. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyThreadBindingSpawnSplit(value),
   },
   {
     path: ["channels"],
-    message:
-      'channels.<id>.threadBindings.spawnSubagentSessions/spawnAcpSessions were replaced by channels.<id>.threadBindings.spawnSessions. Run "openclaw doctor --fix".',
+    message: `channels.<id>.threadBindings.spawnSubagentSessions/spawnAcpSessions were replaced by channels.<id>.threadBindings.spawnSessions. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyThreadBindingSpawnSplitInAnyChannel(value),
   },
 ];
@@ -384,28 +381,23 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
 const GROUP_ROUTING_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "allowFrom"],
-    message:
-      'routing.allowFrom was removed; use channels.whatsapp.allowFrom instead. Run "openclaw doctor --fix".',
+    message: `routing.allowFrom was removed; use channels.whatsapp.allowFrom instead. ${DOCTOR_FIX_HINT}`,
   },
   {
     path: ["routing", "groupChat", "requireMention"],
-    message:
-      'routing.groupChat.requireMention was removed; use channels.<channel>.groups."*".requireMention instead. Run "openclaw doctor --fix".',
+    message: `routing.groupChat.requireMention was removed; use channels.<channel>.groups."*".requireMention instead. ${DOCTOR_FIX_HINT}`,
   },
   {
     path: ["routing", "groupChat", "historyLimit"],
-    message:
-      'routing.groupChat.historyLimit was moved; use messages.groupChat.historyLimit instead. Run "openclaw doctor --fix".',
+    message: `routing.groupChat.historyLimit was moved; use messages.groupChat.historyLimit instead. ${DOCTOR_FIX_HINT}`,
   },
   {
     path: ["routing", "groupChat", "mentionPatterns"],
-    message:
-      'routing.groupChat.mentionPatterns was moved; use messages.groupChat.mentionPatterns instead. Run "openclaw doctor --fix".',
+    message: `routing.groupChat.mentionPatterns was moved; use messages.groupChat.mentionPatterns instead. ${DOCTOR_FIX_HINT}`,
   },
   {
     path: ["channels", "telegram", "requireMention"],
-    message:
-      'channels.telegram.requireMention was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
+    message: `channels.telegram.requireMention was removed; use channels.telegram.groups."*".requireMention instead. ${DOCTOR_FIX_HINT}`,
   },
 ];
 

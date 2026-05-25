@@ -12,11 +12,11 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
-  message:
-    'gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. Run "openclaw doctor --fix".',
+  message: `gateway.bind host aliases (for example 0.0.0.0/localhost) are legacy; use bind modes (lan/loopback/custom/tailnet/auto) instead. ${DOCTOR_FIX_HINT}`,
   match: (value) => isLegacyGatewayBindHostAlias(value),
   requireSourceLiteral: true,
 };

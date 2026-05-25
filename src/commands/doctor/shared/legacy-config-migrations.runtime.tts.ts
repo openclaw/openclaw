@@ -6,6 +6,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
@@ -241,14 +242,12 @@ function visitKnownTtsConfigLocations(
 const LEGACY_TTS_PROVIDER_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
-    message:
-      'messages.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and messages.tts.providers.<provider>. Run "openclaw doctor --fix".',
+    message: `messages.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and messages.tts.providers.<provider>. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyTtsProviderKeys(value),
   },
   {
     path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
+    message: `plugins.entries.voice-call.config.tts legacy provider aliases/keys are legacy; use provider: "microsoft" and plugins.entries.voice-call.config.tts.providers.<provider>. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyPluginEntryTtsProviderKeys(value),
   },
 ];
@@ -256,24 +255,22 @@ const LEGACY_TTS_PROVIDER_RULES: LegacyConfigRule[] = [
 const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "tts"],
-    message: 'messages.tts.enabled is legacy; use messages.tts.auto. Run "openclaw doctor --fix".',
+    message: `messages.tts.enabled is legacy; use messages.tts.auto. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyTtsEnabled(value),
   },
   {
     path: ["agents"],
-    message: 'agents.*.tts.enabled is legacy; use agents.*.tts.auto. Run "openclaw doctor --fix".',
+    message: `agents.*.tts.enabled is legacy; use agents.*.tts.auto. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyTtsEnabledInAgentLocations(value),
   },
   {
     path: ["channels"],
-    message:
-      'channels.*.tts.enabled is legacy; use channels.*.tts.auto. Run "openclaw doctor --fix".',
+    message: `channels.*.tts.enabled is legacy; use channels.*.tts.auto. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyTtsEnabledInChannelLocations(value),
   },
   {
     path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. Run "openclaw doctor --fix".',
+    message: `plugins.entries.voice-call.config.tts.enabled is legacy; use plugins.entries.voice-call.config.tts.auto. ${DOCTOR_FIX_HINT}`,
     match: (value) => hasLegacyTtsEnabledInPluginLocations(value),
   },
 ];

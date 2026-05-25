@@ -4,6 +4,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 function isLegacyMemoryPressureBundleConfig(value: unknown): boolean {
   return typeof value === "boolean" || getRecord(value) !== null;
@@ -11,8 +12,7 @@ function isLegacyMemoryPressureBundleConfig(value: unknown): boolean {
 
 const MEMORY_PRESSURE_BUNDLE_RULE: LegacyConfigRule = {
   path: ["diagnostics", "memoryPressureBundle"],
-  message:
-    'diagnostics.memoryPressureBundle was renamed; use diagnostics.memoryPressureSnapshot instead. Run "openclaw doctor --fix".',
+  message: `diagnostics.memoryPressureBundle was renamed; use diagnostics.memoryPressureSnapshot instead. ${DOCTOR_FIX_HINT}`,
   match: isLegacyMemoryPressureBundleConfig,
   requireSourceLiteral: true,
 };

@@ -9,6 +9,7 @@ import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { DOCTOR_FIX_HINT } from "./doctor/shared/doctor-fix-hint.js";
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -286,7 +287,7 @@ export async function noteSessionTranscriptHealth(params?: {
     lines.push(`- ...and ${broken.length - 20} more.`);
   }
   if (!shouldRepair) {
-    lines.push('- Run "openclaw doctor --fix" to rewrite affected files to their active branch.');
+    lines.push(`- ${DOCTOR_FIX_HINT} to rewrite affected files to their active branch.`);
   } else if (repairedCount > 0) {
     lines.push(`- Repaired ${repairedCount} transcript file${repairedCount === 1 ? "" : "s"}.`);
   }

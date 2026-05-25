@@ -3,19 +3,18 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
 const X_SEARCH_RULE: LegacyConfigRule = {
   path: ["tools", "web", "x_search", "apiKey"],
-  message:
-    'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
+  message: `tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. ${DOCTOR_FIX_HINT}`,
 };
 
 const BUNDLED_DISCOVERY_COMPAT_RULE: LegacyConfigRule = {
   path: ["plugins", "allow"],
-  message:
-    'plugins.allow now gates bundled provider discovery by default; run "openclaw doctor --fix" to preserve legacy bundled provider compatibility as plugins.bundledDiscovery="compat", or set plugins.bundledDiscovery="allowlist" to keep the stricter behavior.',
+  message: `plugins.allow now gates bundled provider discovery by default; ${DOCTOR_FIX_HINT} to preserve legacy bundled provider compatibility as plugins.bundledDiscovery="compat", or set plugins.bundledDiscovery="allowlist" to keep the stricter behavior.`,
   requireSourceLiteral: true,
   match: (value, root) => {
     if (!Array.isArray(value) || value.length === 0) {
