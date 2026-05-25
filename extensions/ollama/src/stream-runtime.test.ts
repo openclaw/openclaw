@@ -2139,6 +2139,47 @@ describe("createOllamaStreamFn streaming events", () => {
     );
   });
 
+  it("does not re-sanitize visible Kimi stream output before done", async () => {
+    const visibleAnswer =
+      "This visible answer is intentionally long enough to look like a reasoning prefix if it is sanitized a second time. ️ keep this marker visible.";
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content:
+              "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️",
+          },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: visibleAnswer },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":3,"eval_count":4}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const textEnd = events.find((event) => event.type === "text_end");
+        const doneEvent = events.at(-1);
+
+        expect(textEnd?.content).toBe(visibleAnswer);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([{ type: "text", text: visibleAnswer }]);
+        }
+      },
+    );
+  });
+
   it("does not leak Kimi inline reasoning when a boundary is followed by tool calls only", async () => {
     const hiddenPrefix =
       "I should think privately and not leak this planning text in the answer. " +

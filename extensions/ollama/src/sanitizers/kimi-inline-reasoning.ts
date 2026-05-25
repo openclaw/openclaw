@@ -70,8 +70,5 @@ export function createKimiInlineReasoningSanitizer(): OllamaVisibleContentSaniti
       const resolution = resolveInlineReasoningVisibleText({ text, final: true });
       return resolution.kind === "visible" ? resolution.text : text;
     },
-    shouldSanitizeFinalMessage() {
-      return !bypassInlineReasoning;
-    },
   };
 }

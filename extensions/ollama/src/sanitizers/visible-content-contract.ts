@@ -5,5 +5,4 @@ export type OllamaVisibleContentStreamResolution =
 export type OllamaVisibleContentSanitizer = {
   resolveStreamText(params: { text: string; final: boolean }): OllamaVisibleContentStreamResolution;
   sanitizeFinalText(text: string): string;
-  shouldSanitizeFinalMessage(): boolean;
 };
