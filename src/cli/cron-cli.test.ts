@@ -316,16 +316,7 @@ describe("cron cli", () => {
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
-        args: [
-          "cron",
-          "run",
-          "job-1",
-          "--wait",
-          "--wait-timeout",
-          "1s",
-          "--poll-interval",
-          "1ms",
-        ],
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
@@ -1013,6 +1004,28 @@ describe("cron cli", () => {
     ]);
     expect(params?.schedule?.kind).toBe("cron");
     expect(params?.schedule?.staggerMs).toBe(0);
+  });
+
+  it("accepts --at '+duration' format (issue 86230)", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Plus duration",
+      "--at",
+      "+30m",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+    expect(params?.schedule?.kind).toBe("at");
+    const at = params?.schedule?.at;
+    expect(at).toBeDefined();
+    if (at) {
+      const parsed = new Date(at);
+      const diff = parsed.getTime() - Date.now();
+      expect(diff).toBeGreaterThan(29 * 60 * 1000);
+      expect(diff).toBeLessThan(31 * 60 * 1000);
+    }
   });
 
   it("rejects --stagger with --exact on add", async () => {

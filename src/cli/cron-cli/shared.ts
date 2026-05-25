@@ -167,6 +167,9 @@ export function parseAt(input: string, tz?: string): string | null {
     return null;
   }
 
+  // Accept optional leading '+' for duration syntax (e.g., "+30m").
+  const normalizedForDuration = raw.startsWith("+") ? raw.slice(1) : raw;
+
   // If a timezone is provided and the input looks like an offset-less ISO datetime,
   // resolve it in the given IANA timezone so users get the time they expect.
   if (tz && isOffsetlessIsoDateTime(raw)) {
@@ -177,7 +180,7 @@ export function parseAt(input: string, tz?: string): string | null {
   if (absolute !== null) {
     return new Date(absolute).toISOString();
   }
-  const dur = parseDurationMs(raw);
+  const dur = parseDurationMs(normalizedForDuration);
   if (dur !== null) {
     return new Date(Date.now() + dur).toISOString();
   }

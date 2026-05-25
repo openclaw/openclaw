@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  parseAt,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -278,5 +279,49 @@ describe("coerceCronDeliveryPreviews", () => {
         },
       }).size,
     ).toBe(0);
+  });
+});
+
+describe("parseAt", () => {
+  const FIXED_NOW = 1_750_000_000_000; // 2025-06-16T12:26:40.000Z
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("parses bare duration like '30m'", () => {
+    const result = parseAt("30m");
+    expect(result).not.toBeNull();
+    const parsed = new Date(result!);
+    const diff = parsed.getTime() - FIXED_NOW;
+    expect(diff).toBe(30 * 60 * 1000);
+  });
+
+  it("parses +duration like '+30m' (issue 86230)", () => {
+    const result = parseAt("+30m");
+    expect(result).not.toBeNull();
+    const parsed = new Date(result!);
+    const diff = parsed.getTime() - FIXED_NOW;
+    expect(diff).toBe(30 * 60 * 1000);
+  });
+
+  it("parses ISO datetime with offset", () => {
+    const result = parseAt("2025-06-16T12:30:00Z");
+    expect(result).toBe("2025-06-16T12:30:00.000Z");
+  });
+
+  it("rejects empty string", () => {
+    expect(parseAt("")).toBeNull();
+    expect(parseAt("   ")).toBeNull();
+  });
+
+  it("rejects invalid duration", () => {
+    expect(parseAt("bad")).toBeNull();
+    expect(parseAt("+bad")).toBeNull();
   });
 });
