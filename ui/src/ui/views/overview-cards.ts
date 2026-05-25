@@ -62,6 +62,9 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
     return null;
   }
   const reset = formatQuotaReset(primary.resetAt);
+  const primaryLabel = primary.label
+    ? t("overview.operator.quotaLimitLabel", { label: primary.label })
+    : t("overview.operator.providerQuota");
   const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
     Boolean,
   );
@@ -81,7 +84,7 @@ function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null
   return {
     kind: "quota",
     tab: "usage",
-    label: t("tabs.usage"),
+    label: primaryLabel,
     value: html`<span class=${valueClass}
       >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
     >`,
@@ -135,7 +138,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const authLoading = props.modelAuthStatus === null;
   const authProviders = props.modelAuthStatus?.providers ?? [];
   const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
-  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(monitoredProviders));
+  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(authProviders));
 
   const cronValue =
     cronEnabled == null

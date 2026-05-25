@@ -11,7 +11,6 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { icons } from "../icons.ts";
-import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
@@ -692,14 +691,14 @@ function renderChatSessionPickerPopover(
 }
 
 function renderChatQuotaPill(state: AppViewState) {
-  const windows = collectQuotaWindowsFromAuthStatus(
-    state.modelAuthStatusResult,
-    isMonitoredAuthProvider,
-  );
+  const windows = collectQuotaWindowsFromAuthStatus(state.modelAuthStatusResult, () => true);
   const primary = windows[0];
   if (!primary) {
     return "";
   }
+  const primaryLabel = primary.label
+    ? t("overview.operator.quotaLimitLabel", { label: primary.label })
+    : t("overview.operator.providerQuota");
   const secondary = windows.find(
     (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
   );
@@ -735,7 +734,7 @@ function renderChatQuotaPill(state: AppViewState) {
         state.setTab("usage");
       }}
     >
-      <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
+      <span class="chat-controls__quota-label">${primaryLabel}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>
     </a>
   `;

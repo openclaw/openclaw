@@ -279,13 +279,62 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     const quota = container.querySelector('[data-kind="quota"]');
-    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Codex · 3h 82% left");
+    expect(compactText(quota)).toBe("Week quota 28% left Codex · Week · Codex · 3h 82% left");
     expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
       "Provider Usage Compact view of model usage, costs, and quota signals.",
     );
     expect(compactText(container.querySelector(".ov-usage-windows"))).toBe(
       "Codex · Week 28% left Codex · 3h 82% left",
     );
+    expect(compactText(container.querySelector(".ov-usage-note"))).toBe("Codex · Week quota.");
+  });
+
+  it("labels provider-specific quota shapes without assuming time windows", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      connected: true,
+      usageResult: {
+        totals: { totalCost: 0, totalTokens: 0 },
+        aggregates: { messages: { total: 0 } },
+      } as OverviewProps["usageResult"],
+      modelAuthStatus: {
+        ts: Date.now(),
+        providers: [
+          {
+            provider: "google-gemini-cli",
+            displayName: "Gemini",
+            status: "ok",
+            profiles: [{ profileId: "gemini", type: "oauth", status: "ok" }],
+            usage: {
+              windows: [
+                { label: "Pro", usedPercent: 20 },
+                { label: "Flash", usedPercent: 0 },
+              ],
+            },
+          },
+          {
+            provider: "zai",
+            displayName: "Z.ai",
+            status: "ok",
+            profiles: [{ profileId: "zai", type: "api_key", status: "ok" }],
+            usage: {
+              windows: [{ label: "Tokens (6h)", usedPercent: 40 }],
+            },
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(compactText(container.querySelector('[data-kind="quota"]'))).toBe(
+      "Tokens (6h) quota 60% left Z.ai · Tokens (6h) · Gemini · Pro 80% left",
+    );
+    expect(compactText(container.querySelector(".ov-usage-note"))).toBe(
+      "Z.ai · Tokens (6h) quota.",
+    );
+    expect(compactText(container.querySelector(".ov-usage-note"))).not.toContain("window");
   });
 
   it("does not call provider quota unavailable while auth status is still loading", async () => {

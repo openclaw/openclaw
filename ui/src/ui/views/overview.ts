@@ -12,7 +12,11 @@ import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
-import { collectQuotaWindows, formatQuotaReset } from "../provider-quota-summary.ts";
+import {
+  collectQuotaWindows,
+  formatQuotaReset,
+  type QuotaWindowSummary,
+} from "../provider-quota-summary.ts";
 import { resolveSessionDisplayName } from "../session-display.ts";
 import type { UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -135,6 +139,16 @@ function blurDigitRuns(value: string): TemplateResult {
 
 function tCount(singularKey: string, pluralKey: string, count: number): string {
   return t(count === 1 ? singularKey : pluralKey, { count: String(count) });
+}
+
+function quotaLimitLabel(entry: QuotaWindowSummary): string {
+  return entry.label
+    ? t("overview.operator.quotaLimitLabel", { label: entry.label })
+    : t("overview.operator.providerQuota");
+}
+
+function quotaIdentity(entry: QuotaWindowSummary): string {
+  return [entry.displayName, entry.label].filter(Boolean).join(" · ");
 }
 
 function summarizeLogLines(lines: string[]) {
@@ -385,14 +399,13 @@ export function renderOverview(props: OverviewProps) {
       job.enabled && job.state?.nextRunAtMs != null && Date.now() - job.state.nextRunAtMs > 300_000,
   );
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
-  const monitoredProviders = (props.modelAuthStatus?.providers ?? []).filter(
-    isMonitoredAuthProvider,
-  );
+  const authProviders = props.modelAuthStatus?.providers ?? [];
+  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
   const expiredProviders = monitoredProviders.filter(
     (provider) => provider.status === "expired" || provider.status === "missing",
   );
   const expiringProviders = monitoredProviders.filter((provider) => provider.status === "expiring");
-  const quotaWindows = collectQuotaWindows(monitoredProviders);
+  const quotaWindows = collectQuotaWindows(authProviders);
   const primaryQuota = quotaWindows[0];
   const sameProviderSecondaryQuota = quotaWindows.find(
     (entry) =>
@@ -413,15 +426,17 @@ export function renderOverview(props: OverviewProps) {
     : [];
   const hasMultipleQuotaWindows = quotaCardWindows.length > 1;
   const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
+  const primaryQuotaLabel = primaryQuota
+    ? quotaLimitLabel(primaryQuota)
+    : t("overview.operator.quota");
   const secondaryQuotaHint = secondaryQuota
-    ? `${[secondaryQuota.displayName, secondaryQuota.label].filter(Boolean).join(" · ")} ${t(
-        "overview.cards.modelAuthUsageLeft",
-        { pct: String(secondaryQuota.remaining) },
-      )}`
+    ? `${quotaIdentity(secondaryQuota)} ${t("overview.cards.modelAuthUsageLeft", {
+        pct: String(secondaryQuota.remaining),
+      })}`
     : null;
   const primaryQuotaHint = primaryQuota
     ? [
-        [primaryQuota.displayName, primaryQuota.label].filter(Boolean).join(" · "),
+        quotaIdentity(primaryQuota),
         secondaryQuotaHint,
         !secondaryQuotaHint && primaryQuotaReset
           ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
@@ -436,19 +451,28 @@ export function renderOverview(props: OverviewProps) {
     props.attentionItems.length - visibleAttentionItems.length,
   );
   const quotaStatusNote = primaryQuota
-    ? primaryQuotaReset
-      ? t("overview.operator.usageQuotaResets", {
-          provider: primaryQuota.displayName,
-          window: primaryQuota.label,
-          time: primaryQuotaReset,
-        })
-      : t("overview.operator.usageQuotaWindow", {
-          provider: primaryQuota.displayName,
-          window: primaryQuota.label,
-        })
+    ? primaryQuota.label
+      ? primaryQuotaReset
+        ? t("overview.operator.usageQuotaResets", {
+            provider: primaryQuota.displayName,
+            window: primaryQuota.label,
+            time: primaryQuotaReset,
+          })
+        : t("overview.operator.usageQuotaWindow", {
+            provider: primaryQuota.displayName,
+            window: primaryQuota.label,
+          })
+      : primaryQuotaReset
+        ? t("overview.operator.usageProviderQuotaResets", {
+            provider: primaryQuota.displayName,
+            time: primaryQuotaReset,
+          })
+        : t("overview.operator.usageProviderQuota", {
+            provider: primaryQuota.displayName,
+          })
     : props.modelAuthStatus === null
       ? t("overview.operator.usageQuotaLoading")
-      : monitoredProviders.length > 0
+      : authProviders.length > 0
         ? t("overview.operator.usageQuotaNoWindows")
         : t("overview.operator.usageQuotaNotConfigured");
   const logSummary = summarizeLogLines(props.overviewLogLines);
@@ -721,7 +745,7 @@ export function renderOverview(props: OverviewProps) {
             })}
             ${renderSummaryTile({
               kind: primaryQuota ? "quota" : "usage",
-              label: t("tabs.usage"),
+              label: primaryQuota ? primaryQuotaLabel : t("tabs.usage"),
               value: primaryQuota
                 ? html`${t("overview.cards.modelAuthUsageLeft", {
                     pct: String(primaryQuota.remaining),
@@ -888,7 +912,7 @@ export function renderOverview(props: OverviewProps) {
               <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
               <div class="ov-usage-metrics">
                 <div class="stat">
-                  <div class="stat-label">${t("overview.operator.quota")}</div>
+                  <div class="stat-label">${primaryQuotaLabel}</div>
                   <div
                     class="stat-value ${primaryQuota?.remaining != null &&
                     primaryQuota.remaining <= 25

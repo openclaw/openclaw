@@ -2034,7 +2034,7 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Week quota 28%");
     expect(quota?.getAttribute("href")).toBe("/usage");
     expect(quota?.getAttribute("title")).toContain("Codex · Week");
 
