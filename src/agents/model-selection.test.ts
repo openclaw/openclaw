@@ -918,6 +918,44 @@ describe("model-selection", () => {
       ]);
     });
 
+    it("does not apply provider wildcard aliases to catalog metadata", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/*": { alias: "OpenRouter Wildcard" },
+              "openrouter/qwen/qwen3-coder:free": { alias: "Qwen Coder Free" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          { provider: "openrouter", id: "*", name: "Wildcard Catalog Row" },
+          {
+            provider: "openrouter",
+            id: "qwen/qwen3-coder:free",
+            name: "Qwen3 Coder Free",
+          },
+        ],
+        defaultProvider: "openrouter",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("openrouter/*")).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "openrouter", id: "*", name: "Wildcard Catalog Row" },
+        {
+          provider: "openrouter",
+          id: "qwen/qwen3-coder:free",
+          name: "Qwen3 Coder Free",
+          alias: "Qwen Coder Free",
+        },
+      ]);
+    });
+
     it("keeps configured provider models visible when the catalog is otherwise allow-any", () => {
       const cfg: OpenClawConfig = {
         agents: {
