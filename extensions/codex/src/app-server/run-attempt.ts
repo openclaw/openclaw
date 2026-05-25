@@ -3984,7 +3984,9 @@ function shouldEnableCodexAppServerNativeToolSurface(
   // native-owned tool (read, write, edit, exec, etc.). This ensures that when
   // users request native tools in their allowlist, they actually get them.
   const hasNativeRequest = toolsAllow.some((name) =>
-    CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES.includes(normalizeCodexDynamicToolName(name)),
+    (CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES as readonly string[]).includes(
+      normalizeCodexDynamicToolName(name),
+    ),
   );
   return (
     (hasWildcardCodexToolsAllow(toolsAllow) || hasNativeRequest) &&
