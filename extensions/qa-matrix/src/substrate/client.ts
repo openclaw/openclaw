@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
@@ -203,7 +204,7 @@ export function buildMatrixQaMessageContent(params: {
   threadRootEventId?: string;
 }): MatrixQaSendMessageContent {
   const body = params.body;
-  const uniqueMentionUserIds = [...new Set(params.mentionUserIds?.filter(Boolean) ?? [])];
+  const uniqueMentionUserIds = uniqueStrings(params.mentionUserIds?.filter(Boolean) ?? []);
   const formattedParts: string[] = [];
   let cursor = 0;
   let usedFormattedMention = false;

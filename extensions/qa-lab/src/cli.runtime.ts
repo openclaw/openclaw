@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
@@ -221,7 +222,7 @@ function resolveQaRuntimeParityTierScenarioIds(params: {
       `--runtime-parity-tier matched no scenarios for ${params.runtimeParityTiers.join(", ")}.`,
     );
   }
-  return [...new Set([...params.scenarioIds, ...matchingScenarioIds])];
+  return uniqueStrings([...params.scenarioIds, ...matchingScenarioIds]);
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
