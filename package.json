@@ -1816,6 +1816,7 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.2.7",
     "@openclaw/proxyline": "0.3.3",
+    "@silvia-odwyer/photon-node": "0.3.4",
     "ajv": "8.20.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
@@ -1862,7 +1863,7 @@
     "@types/markdown-it": "14.1.2",
     "@types/node": "25.9.1",
     "@types/ws": "8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260519.1",
+    "@typescript/native-preview": "7.0.0-dev.20260524.1",
     "@vitest/coverage-v8": "4.1.7",
     "jscpd": "4.2.3",
     "jsdom": "29.1.1",
@@ -1877,7 +1878,6 @@
     "vitest": "4.1.7"
   },
   "optionalDependencies": {
-    "sharp": "0.34.5",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {

@@ -76,7 +76,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["audio-decode", "baileys", "jimp"],
+    pluginLocalRuntimeDeps: ["audio-decode", "baileys"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

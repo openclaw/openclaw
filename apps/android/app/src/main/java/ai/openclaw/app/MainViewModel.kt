@@ -330,6 +330,10 @@ class MainViewModel(
     _requestedHomeDestination.value = null
   }
 
+  fun requestHomeDestination(destination: HomeDestination) {
+    _requestedHomeDestination.value = destination
+  }
+
   fun clearChatDraft() {
     _chatDraft.value = null
   }

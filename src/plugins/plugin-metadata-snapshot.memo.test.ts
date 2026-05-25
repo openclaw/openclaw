@@ -9,6 +9,7 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   loadPluginMetadataSnapshot,
@@ -259,6 +260,24 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(third.plugins[0]?.commandAliases?.[0]?.name).toBe("demo-command");
     expect(second.manifestRegistry.plugins[0]).toBe(second.plugins[0]);
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
+  });
+
+  it("clears the process memo at plugin metadata lifecycle boundaries", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    clearPluginMetadataLifecycleCaches();
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
   it("keeps hot persisted snapshots for alternating config callers", () => {

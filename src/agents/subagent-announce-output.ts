@@ -335,18 +335,39 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-export function buildChildCompletionFindings(
-  children: Array<{
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    endedAt?: number;
-    completion?: {
-      resultText?: string | null;
+type ChildCompletionRow = {
+  childSessionKey: string;
+  task: string;
+  label?: string;
+  createdAt: number;
+  endedAt?: number;
+  frozenResultText?: string | null;
+  completion?: {
+    resultText?: string | null;
+    fallbackResultText?: string | null;
+  };
+  delivery?: {
+    payload?: {
+      frozenResultText?: string | null;
+      fallbackFrozenResultText?: string | null;
     };
-    outcome?: SubagentRunOutcome;
-  }>,
+  };
+  outcome?: SubagentRunOutcome;
+};
+
+function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
+  return (
+    child.completion?.resultText ??
+    child.delivery?.payload?.frozenResultText ??
+    child.completion?.fallbackResultText ??
+    child.delivery?.payload?.fallbackFrozenResultText ??
+    child.frozenResultText ??
+    undefined
+  )?.trim();
+}
+
+export function buildChildCompletionFindings(
+  children: Array<ChildCompletionRow>,
 ): string | undefined {
   const sorted = [...children].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
@@ -359,7 +380,7 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = child.completion?.resultText?.trim();
+    const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
     if (
       child.outcome?.status === "ok" &&
@@ -395,8 +416,16 @@ export function dedupeLatestChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
+    frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
     };
     outcome?: SubagentRunOutcome;
   }>,
@@ -420,8 +449,16 @@ export function filterCurrentDirectChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
+    frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
     };
     outcome?: SubagentRunOutcome;
   }>,

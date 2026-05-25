@@ -5,7 +5,7 @@
   "description": "OpenClaw media understanding runtime package",
   "type": "module",
   "dependencies": {
-    "sharp": "0.34.5"
+    "@silvia-odwyer/photon-node": "0.3.4"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

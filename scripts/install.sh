@@ -744,25 +744,27 @@ auto_install_build_tools_for_npm_failure() {
     return 0
 }
 
-expand_npm_config_path() {
-    local path="$1"
-    if [[ -z "$path" ]]; then
+resolve_npm_config_path() {
+    local raw="$1"
+    if [[ -z "$raw" || "$raw" == "null" || "$raw" == "undefined" ]]; then
         return 1
     fi
-    case "$path" in
-        "\${HOME}/"*) path="${HOME:-}/${path#\$\{HOME\}/}" ;;
-        "\$HOME/"*) path="${HOME:-}/${path#\$HOME/}" ;;
-        [~]/*) path="${HOME:-}/${path#\~/}" ;;
-    esac
-    printf '%s\n' "$path"
+    if [[ "$raw" == \~/* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"~/"}"
+        return 0
+    fi
+    if [[ "$raw" == "\${HOME}/"* && -n "${HOME:-}" ]]; then
+        printf '%s\n' "${HOME}/${raw#"\${HOME}/"}"
+        return 0
+    fi
+    printf '%s\n' "$raw"
 }
 
 npm_config_file_has_key() {
-    local file
-    file="$(expand_npm_config_path "$1")" || return 1
+    local file="$1"
     local key="$2"
     [[ -f "$file" ]] || return 1
-    grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" >/dev/null 2>&1
+    grep -Eiq "^[[:space:]]*${key}[[:space:]]*=" "$file"
 }
 
 npm_command_path() {
@@ -786,36 +788,39 @@ npm_builtin_config_path() {
     printf '%s\n' "${npm_root}/npmrc"
 }
 
-npm_raw_config_has_key() {
-    local key="$1"
-    local npm_cmd="${2:-npm}"
-    local user_config="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
-    local global_config="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
-    local prefix="${NPM_CONFIG_PREFIX:-${npm_config_prefix:-}}"
+npm_config_has_raw_key() {
+    local npm_cmd="$1"
+    local key="$2"
+    local raw=""
+    local file=""
+    local -a files=()
 
-    npm_config_file_has_key ".npmrc" "$key" && return 0
-    if [[ -n "$user_config" ]]; then
-        npm_config_file_has_key "$user_config" "$key" && return 0
+    raw="${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
     elif [[ -n "${HOME:-}" ]]; then
-        npm_config_file_has_key "${HOME}/.npmrc" "$key" && return 0
+        files+=("${HOME}/.npmrc")
     fi
-    if [[ -n "$global_config" ]]; then
-        npm_config_file_has_key "$global_config" "$key" && return 0
-    else
-        local resolved_global_config=""
-        resolved_global_config="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$npm_cmd" config get globalconfig 2>/dev/null || true)"
-        if [[ -n "$resolved_global_config" && "$resolved_global_config" != "null" && "$resolved_global_config" != "undefined" ]]; then
-            npm_config_file_has_key "$resolved_global_config" "$key" && return 0
+
+    raw="${NPM_CONFIG_GLOBALCONFIG:-${npm_config_globalconfig:-}}"
+    if [[ -n "$raw" ]]; then
+        file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+        [[ -n "$file" ]] && files+=("$file")
+    fi
+
+    raw="$(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" config get globalconfig --global 2>/dev/null || true)"
+    file="$(resolve_npm_config_path "$raw" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+
+    file="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
+    [[ -n "$file" ]] && files+=("$file")
+
+    for file in "${files[@]}"; do
+        if npm_config_file_has_key "$file" "$key"; then
+            return 0
         fi
-    fi
-    if [[ -n "$prefix" ]]; then
-        npm_config_file_has_key "${prefix}/etc/npmrc" "$key" && return 0
-    fi
-    local builtin_config=""
-    builtin_config="$(npm_builtin_config_path "$npm_cmd" 2>/dev/null || true)"
-    if [[ -n "$builtin_config" ]]; then
-        npm_config_file_has_key "$builtin_config" "$key" && return 0
-    fi
+    done
     return 1
 }
 
@@ -825,17 +830,19 @@ run_npm_global_install() {
 
     local freshness_flag="--min-release-age=0"
     local min_release_age=""
-    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
-    if ! npm_raw_config_has_key "min-release-age" "npm" && [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age --global 2>/dev/null || true)"
+    if npm_config_has_raw_key npm "min-release-age"; then
+        freshness_flag="--min-release-age=0"
+    elif [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
         local before_value=""
-        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before --global 2>/dev/null || true)"
         if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
             freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
         fi
     fi
 
     local -a cmd
-    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
@@ -1127,7 +1134,6 @@ USE_BETA=${OPENCLAW_BETA:-0}
 GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
-SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 NPM_SILENT_FLAG="--silent"
 VERBOSE="${OPENCLAW_VERBOSE:-0}"
@@ -1170,8 +1176,6 @@ Environment variables:
   OPENCLAW_NO_ONBOARD=1
   OPENCLAW_VERBOSE=1
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
-  SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
-
 Examples:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
@@ -2528,7 +2532,7 @@ install_openclaw_from_git() {
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-    CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"

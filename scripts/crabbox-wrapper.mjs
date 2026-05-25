@@ -10,7 +10,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoLocal = resolveCrabboxBinary(process.env, process.platform);
 const pathLocal = resolvePathBinary("crabbox", process.env, process.platform);
 const binary =
-  repoLocal ?? pathLocal ?? resolveGitCommonCrabboxBinary(process.env, process.platform) ?? "crabbox";
+  repoLocal ??
+  pathLocal ??
+  resolveGitCommonCrabboxBinary(process.env, process.platform) ??
+  "crabbox";
 const args = process.argv.slice(2);
 
 if (args[0] === "--") {
@@ -470,6 +473,21 @@ function absolutizeLocalRunPaths(commandArgs) {
   return normalizedArgs;
 }
 
+function shellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function shellJoin(commandArgs) {
+  return commandArgs.map(shellQuote).join(" ");
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -511,20 +529,137 @@ function isChangedGateCommand(commandArgs) {
   );
 }
 
-function headInRemoteRefs() {
-  const refs = gitOutput([
-    "for-each-ref",
-    "--contains",
-    "HEAD",
-    "--format=%(refname)",
-    "refs/remotes",
-  ]);
-  return refs.status === 0 && refs.stdout !== "";
-}
-
 function mergeBaseForChangedGate() {
   const base = gitOutput(["merge-base", "origin/main", "HEAD"]);
   return base.status === 0 && base.stdout ? base.stdout : "origin/main";
+}
+
+function remoteGitBootstrapForChangedGate(changedGateBase) {
+  const quotedBase = shellQuote(changedGateBase);
+  return [
+    "if ! git rev-parse --git-dir >/dev/null 2>&1; then",
+    "git init -q;",
+    "git remote add origin https://github.com/openclaw/openclaw.git 2>/dev/null || git remote set-url origin https://github.com/openclaw/openclaw.git;",
+    `git fetch -q --depth=1 origin ${quotedBase}:refs/remotes/origin/main;`,
+    "git reset --mixed --quiet refs/remotes/origin/main;",
+    "git add -A;",
+    "if ! git diff --cached --quiet; then git -c user.name=OpenClaw -c user.email=ci@openclaw.local commit -q --no-gpg-sign -m remote-changed-gate-tree; fi;",
+    "fi",
+  ].join(" ");
+}
+
+function isWindowsRemoteTarget(commandArgs) {
+  return (
+    optionValue(commandArgs, "--target") === "windows" || hasOption(commandArgs, "--windows-mode")
+  );
+}
+
+function isAwsMacosRemoteTarget(commandArgs, providerName) {
+  return (
+    commandArgs[0] === "run" &&
+    providerName === "aws" &&
+    optionValue(commandArgs, "--target") === "macos"
+  );
+}
+
+function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
+  if (!changedGateBase || commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteGitBootstrapForChangedGate(changedGateBase)} && ${originalShellCommand}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
+}
+
+function remoteAwsMacosJsBootstrap() {
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
+  return [
+    "openclaw_crabbox_bootstrap_macos_js() {",
+    'tool_root="${OPENCLAW_CRABBOX_MACOS_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
+    'pnpm_home="${PNPM_HOME:-$tool_root/pnpm-home}";',
+    `node_version=${shellQuote(nodeVersion)};`,
+    'arch="$(uname -m)";',
+    'case "$arch" in arm64) node_arch=arm64 ;; x86_64) node_arch=x64 ;; *) echo "unsupported macOS arch: $arch" >&2; return 2 ;; esac;',
+    'node_dir="$tool_root/node-v${node_version}-darwin-${node_arch}";',
+    'export PATH="$node_dir/bin:$pnpm_home:$PATH";',
+    'if [ ! -x "$node_dir/bin/node" ]; then',
+    'tmp_dir="$(mktemp -d)" || return 1;',
+    'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
+    'base_url="https://nodejs.org/dist/v${node_version}";',
+    'mkdir -p "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSLo "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | shasum -a 256 -c -) || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$node_dir" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$tmp_dir";',
+    "fi;",
+    'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+    'export PNPM_HOME="$pnpm_home";',
+    'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+    'export PATH="$PNPM_HOME:$PATH";',
+    'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+    "node --version >&2;",
+    "pnpm --version >&2;",
+    "};",
+    "openclaw_crabbox_bootstrap_macos_js",
+  ].join(" ");
+}
+
+function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
+  if (
+    !isAwsMacosRemoteTarget(commandArgs, providerName) ||
+    !commandRuntimeEntrypoint(runCommandArgs(commandArgs))
+  ) {
+    return commandArgs;
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const remoteCommand = normalizedArgs.slice(start);
+  const originalShellCommand =
+    hasOption(normalizedArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand);
+  const shellCommand = `${remoteAwsMacosJsBootstrap()} && { ${originalShellCommand}\n}`;
+
+  if (!hasOption(normalizedArgs, "--shell")) {
+    normalizedArgs.splice(optionEnd, 0, "--shell");
+  }
+
+  const updatedBounds = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(
+    updatedBounds.start,
+    normalizedArgs.length - updatedBounds.start,
+    shellCommand,
+  );
+  return normalizedArgs;
 }
 
 function isSparseCheckout() {
@@ -544,10 +679,7 @@ function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName
   if (commandArgs[0] !== "run" || isLocalContainerProvider(providerName)) {
     return false;
   }
-  if (
-    hasOption(commandArgs, "--no-sync") ||
-    hasOption(commandArgs, "--id")
-  ) {
+  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--id")) {
     return false;
   }
 
@@ -738,13 +870,14 @@ if (provider === "blacksmith-testbox") {
 let childCwd = repoRoot;
 let cleanupChildCwd = () => {};
 let cleanupDone = false;
+let remoteChangedGateBase = "";
 if (shouldUseFullCheckoutForCleanSparseRemoteSync(normalizedArgs, provider)) {
   const runWords = runCommandArgs(normalizedArgs);
-  const changedGateBase =
-    isChangedGateCommand(runWords) && !headInRemoteRefs() ? mergeBaseForChangedGate() : "";
+  const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
   const checkout = prepareFullCheckoutForSync({ changedGateBase });
   childCwd = checkout.dir;
   cleanupChildCwd = () => checkout.cleanup();
+  remoteChangedGateBase = checkout.changedGateBase;
   console.error(
     `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
   );
@@ -765,13 +898,19 @@ function cleanupOnce() {
 
 const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(normalizedArgs));
 if (normalizedArgs[0] === "run" && provider === "aws" && runtimeEntrypoint) {
-  const id = optionValue(normalizedArgs, "--id");
-  const hydrate = id
-    ? `pnpm crabbox:hydrate -- --id ${id}`
-    : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
-  console.error(
-    `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
-  );
+  if (isAwsMacosRemoteTarget(normalizedArgs, provider)) {
+    console.error(
+      `[crabbox] provider=aws macOS raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; bootstrapping a pinned user-local Node toolchain before the command`,
+    );
+  } else {
+    const id = optionValue(normalizedArgs, "--id");
+    const hydrate = id
+      ? `pnpm crabbox:hydrate -- --id ${id}`
+      : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
+    console.error(
+      `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
+    );
+  }
 }
 
 const childEnv = { ...process.env };
@@ -797,7 +936,13 @@ if (
   );
 }
 
-const childArgs = childCwd === repoRoot ? normalizedArgs : absolutizeLocalRunPaths(normalizedArgs);
+const childArgs =
+  childCwd === repoRoot
+    ? injectRemoteAwsMacosJsBootstrap(normalizedArgs, provider)
+    : injectRemoteChangedGateGitBootstrap(
+        injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(normalizedArgs), provider),
+        remoteChangedGateBase,
+      );
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,

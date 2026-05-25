@@ -20,6 +20,7 @@ import {
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -51,6 +52,8 @@ let pluginMetadataSnapshotMemos: PluginMetadataSnapshotMemo[] = [];
 export function clearLoadPluginMetadataSnapshotMemo(): void {
   pluginMetadataSnapshotMemos = [];
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginMetadataSnapshotMemo);
 
 const MEMO_RELEVANT_ENV_KEYS = [
   "APPDATA",

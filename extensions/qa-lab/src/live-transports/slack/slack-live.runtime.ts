@@ -200,6 +200,12 @@ type SlackQaScenarioResult = {
   requestStartedAt?: string;
   responseObservedAt?: string;
   rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "approval-request-to-resolution" | "request-to-observed-message";
+  };
   status: "fail" | "pass";
   title: string;
 };
@@ -1859,6 +1865,12 @@ export async function runSlackQaLive(params: {
               rttMs: approval.rttMs,
               requestStartedAt: approval.requestStartedAt.toISOString(),
               responseObservedAt: approval.responseObservedAt.toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: approval.rttMs,
+                requestStartedAt: approval.requestStartedAt.toISOString(),
+                responseObservedAt: approval.responseObservedAt.toISOString(),
+                source: "approval-request-to-resolution",
+              },
             });
             break;
           }
@@ -1911,6 +1923,12 @@ export async function runSlackQaLive(params: {
               rttMs,
               requestStartedAt: requestStartedAt.toISOString(),
               responseObservedAt: responseObservedAt.toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: rttMs,
+                requestStartedAt: requestStartedAt.toISOString(),
+                responseObservedAt: responseObservedAt.toISOString(),
+                source: "request-to-observed-message",
+              },
             });
           } else {
             await waitForSlackNoReply({

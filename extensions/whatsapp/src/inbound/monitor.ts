@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
+import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
@@ -942,9 +943,10 @@ export async function attachWebInboxToSocket(
       payload: AnyMessageContent,
       options?: MiscMessageGenerationOptions,
     ) => {
+      const previewPayload = await addWhatsAppImagePreviewFields(payload);
       const result = await sendTrackedMessage(
         chatJid,
-        await applyOutboundMentionsToContent(chatJid, payload),
+        await applyOutboundMentionsToContent(chatJid, previewPayload),
         options,
       );
       return normalizeWhatsAppSendResult(result, "media");
