@@ -1571,6 +1571,7 @@ export async function runReplyAgent(params: {
       activeModel: modelUsed,
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
+      cfg,
     });
     if (fallbackTransition.stateChanged && !preserveUserFacingSessionState) {
       if (fallbackStateEntry) {
@@ -1694,6 +1695,7 @@ export async function runReplyAgent(params: {
         activeProvider: providerUsed,
         activeModel: modelUsed,
         attempts: fallbackAttempts,
+        cfg,
       });
       if (fallbackNotice) {
         fallbackNoticePayloads.push(

@@ -44,31 +44,54 @@ export function isCliRuntimeAliasForProvider(params: {
   });
 }
 
-function canonicalizeRuntimeAliasProvider(provider: string): string {
+type RuntimeAliasComparisonOptions = {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+};
+
+function canonicalizeRuntimeAliasProvider(
+  provider: string,
+  options: RuntimeAliasComparisonOptions = {},
+): string {
   const normalized = normalizeProviderId(provider);
   return (
     RUNTIME_COMPARISON_PROVIDER_ALIASES.get(normalized) ??
-    listCliRuntimeModelBackendBindings().find((binding) => binding.runtime === normalized)
-      ?.provider ??
+    listCliRuntimeModelBackendBindings({
+      config: options.config,
+      env: options.env,
+      includeSetupRegistry:
+        options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
+    }).find((binding) => binding.runtime === normalized)?.provider ??
     provider
   );
 }
 
-function normalizeRuntimeModelRefForComparison(raw: string): string {
+function normalizeRuntimeModelRefForComparison(
+  raw: string,
+  options: RuntimeAliasComparisonOptions = {},
+): string {
   const trimmed = raw.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
-    return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed));
+    return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed, options));
   }
   const provider = trimmed.slice(0, slash).trim();
   const model = trimmed.slice(slash + 1).trim();
-  const canonicalProvider = normalizeProviderId(canonicalizeRuntimeAliasProvider(provider));
+  const canonicalProvider = normalizeProviderId(
+    canonicalizeRuntimeAliasProvider(provider, options),
+  );
   return model ? `${canonicalProvider}/${model}` : canonicalProvider;
 }
 
-export function areRuntimeModelRefsEquivalent(left: string, right: string): boolean {
+export function areRuntimeModelRefsEquivalent(
+  left: string,
+  right: string,
+  options: RuntimeAliasComparisonOptions = {},
+): boolean {
   return (
-    normalizeRuntimeModelRefForComparison(left) === normalizeRuntimeModelRefForComparison(right)
+    normalizeRuntimeModelRefForComparison(left, options) ===
+    normalizeRuntimeModelRefForComparison(right, options)
   );
 }
 
