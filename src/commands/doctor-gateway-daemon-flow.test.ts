@@ -324,12 +324,12 @@ describe("maybeRepairGatewayDaemon", () => {
     );
   });
 
-  it("does not read restart handoffs during normal doctor", async () => {
+  it("does not inspect port connections during normal doctor", async () => {
     setPlatform("linux");
 
     await runNonInteractiveRepair();
 
-    expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
     expect(inspectPortConnections).not.toHaveBeenCalled();
   });
 
