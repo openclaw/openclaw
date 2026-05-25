@@ -30,6 +30,7 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -864,7 +865,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = stripUnsupportedCitationControlMarkers(parsed.text);
+  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
