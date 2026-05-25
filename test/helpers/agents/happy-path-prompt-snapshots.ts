@@ -34,11 +34,11 @@ const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
 const CODEX_PROMPT_PERSONALITY = "pragmatic";
-const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
+const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.posix.join(
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.instructions.md`,
 );
-const CODEX_MODEL_PROMPT_SOURCE_PATH = path.join(
+const CODEX_MODEL_PROMPT_SOURCE_PATH = path.posix.join(
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.source.json`,
 );
@@ -124,35 +124,35 @@ const codexApi = loadBundledPluginPublicSurfaceSourceSync({
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "MEMORY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "MEMORY.md"),
     content: "<MEMORY.md contents will be here>",
   },
 ] as const;
 
 const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
+    path: path.posix.join(WORKSPACE_DIR, "TOOLS.md"),
     content: "<TOOLS.md contents will be here>",
   },
 ] as const;
 
 const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   {
-    path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
+    path: path.posix.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "SOUL.md"),
+    path: path.posix.join(WORKSPACE_DIR, "SOUL.md"),
     content: "<SOUL.md contents will be here>",
   },
   {
-    path: path.join(WORKSPACE_DIR, "USER.md"),
+    path: path.posix.join(WORKSPACE_DIR, "USER.md"),
     content: "<USER.md contents will be here>",
   },
 ] as const;
 
 const CODEX_HEARTBEAT_CONTEXT_FILE = {
-  path: path.join(WORKSPACE_DIR, "HEARTBEAT.md"),
+  path: path.posix.join(WORKSPACE_DIR, "HEARTBEAT.md"),
   content: "<HEARTBEAT.md contents will be here>",
 } as const;
 
@@ -888,11 +888,11 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Codex model prompt fixtures:",
     "",
-    `- ${path.relative(
+    `- ${path.posix.relative(
       CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
       CODEX_MODEL_PROMPT_FIXTURE_PATH,
     )}`,
-    `- ${path.relative(
+    `- ${path.posix.relative(
       CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
       CODEX_MODEL_PROMPT_SOURCE_PATH,
     )}`,

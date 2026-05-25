@@ -14,12 +14,9 @@ import {
 } from "./prompt-snapshot-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const oxfmtPath = path.resolve(
-  repoRoot,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "oxfmt.cmd" : "oxfmt",
-);
+const oxfmtPath = path.resolve(repoRoot, "node_modules", "oxfmt", "bin", "oxfmt");
+const oxfmtCommand = process.execPath;
+const oxfmtArgsPrefix = [oxfmtPath];
 const execFileAsync = promisify(execFile);
 
 type PromptSnapshotFile = ReturnType<typeof createHappyPathPromptSnapshotFiles>[number];
@@ -45,7 +42,7 @@ async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   if (filePaths.length === 0) {
     return;
   }
-  await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
+  await execFileAsync(oxfmtCommand, [...oxfmtArgsPrefix, "--write", "--threads=1", ...filePaths], {
     cwd: repoRoot,
   });
 }

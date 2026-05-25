@@ -38,6 +38,10 @@ import {
   readStringParam,
   ToolInputError,
 } from "./common.js";
+import {
+  readRuntimeExecutionPacket,
+  validateRuntimeExecutionPacket,
+} from "./runtime-packet-lint.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -194,6 +198,22 @@ function createSessionsSpawnToolSchema(params: {
         description: 'Light bootstrap context; runtime="subagent" only.',
       }),
     ),
+    executionPacket: Type.Optional(
+      Type.Object(
+        {
+          foundationRefs: Type.Optional(Type.Object({}, { additionalProperties: true })),
+          taskDoctrineRefs: Type.Optional(Type.Object({}, { additionalProperties: true })),
+          domainMethodologyRefs: Type.Optional(Type.Object({}, { additionalProperties: true })),
+          foundationConflictRule: Type.Optional(Type.String()),
+          confidenceLoop: Type.Optional(Type.Object({}, { additionalProperties: true })),
+        },
+        {
+          additionalProperties: true,
+          description:
+            "Bounded execution packet for side-effectful delegated work. Required when the task edits, writes, builds, patches, restarts, deploys, or otherwise mutates state.",
+        },
+      ),
+    ),
 
     // Inline attachments (snapshot-by-value).
     // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -308,6 +328,18 @@ export function createSessionsSpawnTool(
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      const packetLint = validateRuntimeExecutionPacket({
+        action: "sessions_spawn",
+        taskText: task,
+        executionPacket: readRuntimeExecutionPacket(params),
+      });
+      if (!packetLint.ok) {
+        return jsonResult({
+          status: "error",
+          error: packetLint.error,
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
           status: "error",

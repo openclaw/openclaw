@@ -6,10 +6,70 @@
       "class": "core-runtime",
       "risk": ["protocol-client"]
     },
+    "@anthropic-ai/sdk": {
+      "owner": "provider:amazon-bedrock-mantle",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.amazon-bedrock-mantle.enabled"],
+      "risk": ["provider-sdk", "network"]
+    },
+    "@anthropic-ai/vertex-sdk": {
+      "owner": "provider:anthropic-vertex",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.anthropic-vertex.enabled"],
+      "risk": ["provider-sdk", "network"]
+    },
+    "@aws-sdk/client-bedrock": {
+      "owner": "provider:amazon-bedrock",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.amazon-bedrock.enabled"],
+      "risk": ["provider-sdk", "network"]
+    },
+    "@aws-sdk/client-bedrock-runtime": {
+      "owner": "provider:amazon-bedrock",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.amazon-bedrock.enabled"],
+      "risk": ["provider-sdk", "network"]
+    },
+    "@aws-sdk/credential-provider-node": {
+      "owner": "provider:amazon-bedrock",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.amazon-bedrock.enabled"],
+      "risk": ["credentials", "provider-sdk", "network"]
+    },
+    "@aws/bedrock-token-generator": {
+      "owner": "provider:amazon-bedrock-mantle",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.amazon-bedrock-mantle.enabled"],
+      "risk": ["credentials", "provider-sdk", "network"]
+    },
     "@clack/prompts": {
       "owner": "core:cli",
       "class": "core-runtime",
       "risk": ["interactive-cli"]
+    },
+    "@google/genai": {
+      "owner": "provider:google",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.google.enabled"],
+      "risk": ["provider-sdk", "network"]
+    },
+    "@grammyjs/runner": {
+      "owner": "channel:telegram",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.telegram.enabled"],
+      "risk": ["bot-channel", "long-polling", "network"]
+    },
+    "@grammyjs/transformer-throttler": {
+      "owner": "channel:telegram",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.telegram.enabled"],
+      "risk": ["bot-channel", "rate-limiting"]
+    },
+    "@homebridge/ciao": {
+      "owner": "plugin:bonjour-discovery",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.bonjour.enabled"],
+      "risk": ["mdns", "network-discovery"]
     },
     "@lydell/node-pty": {
       "owner": "core:tui-terminal",
@@ -56,6 +116,24 @@
       ],
       "risk": ["native", "parser", "untrusted-files"]
     },
+    "@slack/bolt": {
+      "owner": "channel:slack",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.slack.enabled"],
+      "risk": ["bot-channel", "network", "webhook"]
+    },
+    "@slack/types": {
+      "owner": "channel:slack",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.slack.enabled"],
+      "risk": ["bot-channel", "protocol-types"]
+    },
+    "@slack/web-api": {
+      "owner": "channel:slack",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.slack.enabled"],
+      "risk": ["bot-channel", "network"]
+    },
     "ajv": {
       "owner": "core:json-schema-validation",
       "class": "core-runtime",
@@ -101,6 +179,12 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
+    "grammy": {
+      "owner": "channel:telegram",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.telegram.enabled"],
+      "risk": ["bot-channel", "network"]
+    },
     "https-proxy-agent": {
       "owner": "core:proxy",
       "class": "core-runtime",
@@ -142,10 +226,28 @@
       "class": "core-runtime",
       "risk": ["parser", "markdown"]
     },
+    "minimatch": {
+      "owner": "plugin:file-transfer",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.file-transfer.enabled"],
+      "risk": ["filesystem", "glob-matching"]
+    },
+    "node-edge-tts": {
+      "owner": "plugin:microsoft-speech",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.microsoft.enabled"],
+      "risk": ["speech-synthesis", "network"]
+    },
     "openai": {
       "owner": "provider:openai",
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
+    },
+    "openshell": {
+      "owner": "plugin:openshell-sandbox",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.openshell.enabled"],
+      "risk": ["process-execution", "sandbox"]
     },
     "playwright-core": {
       "owner": "core:browser",
@@ -184,6 +286,17 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
+    "tokenjuice": {
+      "owner": "plugin:tokenjuice",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.tokenjuice.enabled"],
+      "risk": ["output-compaction", "token-counting"]
+    },
+    "tree-sitter-bash": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["parser", "shell-command-analysis", "wasm"]
+    },
     "tslog": {
       "owner": "core:logging",
       "class": "core-runtime",
@@ -203,6 +316,11 @@
       "owner": "core:web-push",
       "class": "core-runtime",
       "risk": ["network", "push-notifications", "crypto"]
+    },
+    "web-tree-sitter": {
+      "owner": "core:command-explainer",
+      "class": "core-runtime",
+      "risk": ["parser", "shell-command-analysis", "wasm"]
     },
     "ws": {
       "owner": "core:gateway-websocket",
