@@ -125,7 +125,10 @@ export type MemoryPluginPublicArtifact = {
 };
 
 export type MemoryPluginPublicArtifactsProvider = {
-  listArtifacts(params: { cfg: OpenClawConfig }): Promise<MemoryPluginPublicArtifact[]>;
+  listArtifacts(params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+  }): Promise<MemoryPluginPublicArtifact[]>;
 };
 
 export type MemoryPluginCapability = {
@@ -209,11 +212,15 @@ function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability):
   registerMemoryCapability(pluginId, { ...current, ...patch });
 }
 
-export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
-  return memoryPluginState.capability
+export function getMemoryCapabilityRegistration(params?: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): MemoryPluginCapabilityRegistration | undefined {
+  const registration = resolveSelectedMemoryCapability(params);
+  return registration
     ? {
-        pluginId: memoryPluginState.capability.pluginId,
-        capability: { ...memoryPluginState.capability.capability },
+        pluginId: registration.pluginId,
+        capability: { ...registration.capability },
       }
     : undefined;
 }

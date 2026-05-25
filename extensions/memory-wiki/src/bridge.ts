@@ -249,9 +249,9 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
-  // Skip pruning when memory-core is not loaded (e.g. CLI context) to avoid
-  // removing all bridge-imported entries. See #68373.
-  const memoryCapability = getMemoryCapabilityRegistration();
+  // Skip pruning when no selected recall capability is active (e.g. CLI context)
+  // to avoid removing all bridge-imported entries. See #68373.
+  const memoryCapability = getMemoryCapabilityRegistration({ cfg: params.appConfig });
   const removedCount = memoryCapability
     ? await pruneImportedSourceEntries({
         vaultRoot: params.config.vault.path,

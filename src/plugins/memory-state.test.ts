@@ -341,6 +341,12 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+    expect(
+      getMemoryCapabilityRegistration({
+        cfg: cfg as never,
+        agentId: "main",
+      })?.pluginId,
+    ).toBe("memory-core");
 
     expect(
       buildMemoryPromptSection({
@@ -364,6 +370,12 @@ describe("memory plugin state", () => {
         contentType: "markdown",
       },
     ]);
+    expect(
+      getMemoryCapabilityRegistration({
+        cfg: cfg as never,
+        agentId: "honcho-agent",
+      })?.pluginId,
+    ).toBe("openclaw-honcho");
   });
 
   it("returns no selected capability when the recall slot is disabled", () => {
@@ -387,6 +399,7 @@ describe("memory plugin state", () => {
       }),
     ).toEqual([]);
     expect(resolveMemoryFlushPlan({ cfg: cfg as never })).toBeNull();
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
   });
 
   it("passes citations mode through to the prompt builder", () => {
