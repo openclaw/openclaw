@@ -74,7 +74,23 @@ curl -X POST http://127.0.0.1:18800/v1/events \
    # 或 REST：GET /v1/evolution/export?days=30
    ```
 
-2. **商业模型离线生成进化包**（在可访问强模型的机器上，用导出 JSON 生成 `evolution-pack.json`，具体 prompt 见 Pack `enterprise-learning` 文档）
+2. **商业模型离线生成进化包**（在可访问强模型的机器上）
+
+   **方式 A — 全自动（需 API Key）**
+
+   ```bash
+   ANTHROPIC_API_KEY=sk-ant-... node scripts/generate-evolution-pack.mjs \
+     --input evolution-data.json --output evolution-pack.json
+   ```
+
+   **方式 B — 运维辅助（无 API Key，粘贴到 Claude/GPT）**
+
+   ```bash
+   node scripts/claworks-evolution-export-helper.mjs --input evolution-data.json > evolution-offline.txt
+   # 或：pnpm claworks:evolution:export-helper -- --input evolution-data.json
+   ```
+
+   输出包含 EvolutionPack JSON 骨架 + 结构化 prompt；将 prompt 交给商业模型，将其 JSON 响应保存为 `evolution-pack.json`。Pack `enterprise-learning` 文档有字段说明。
 
 3. **导入并热更新**（回到内网 Gateway）
    ```bash

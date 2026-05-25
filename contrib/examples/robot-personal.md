@@ -15,7 +15,7 @@
 
 1. 飞书是主入口；IM 意图走 classify，不直接 REST 乱写。
 2. 任务/审批/会议/故障/日报走 enterprise-general Pack。
-3. 知识库：工作文档目录自动同步（filesystem-kb）+ 飞书问答。
+3. 知识库：iMac OpenClaw `knowledge_base/content/` 自动同步（filesystem-kb）+ 批量入库脚本；见 `docs/claworks/oriosearch-kb-setup.md`。
 4. LLM 使用自托管 Qwen（`qwen-local`），不走阿里云 qwen 插件通道。
 5. 删除、改生产配置、传播凭证 — 拒绝。
 

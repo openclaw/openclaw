@@ -18,16 +18,16 @@ pnpm claworks:publish:dry-run   # 根包 claworks CLI（可选）
 
 ## 包结构
 
-| 项 | 说明 |
-| --- | --- |
-| 包名 | `@claworks/runtime` |
-| 版本 | `packages/claworks-runtime/package.json` |
-| 入口 | `dist/index.mjs` + `dist/index.d.mts` |
-| 子路径 | `./kernel`, `./pack-loader`, `./claworks`, `./planes/data`, `./planes/orch`, `./interfaces` |
-| `files` | `dist/`, `README.md` |
-| `prepublishOnly` | 自动 `pnpm run build`（tsdown） |
+| 项               | 说明                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| 包名             | `@claworks/runtime`                                                                         |
+| 版本             | `packages/claworks-runtime/package.json`                                                    |
+| 入口             | `dist/index.mjs` + `dist/index.d.mts`                                                       |
+| 子路径           | `./kernel`, `./pack-loader`, `./claworks`, `./planes/data`, `./planes/orch`, `./interfaces` |
+| `files`          | `dist/`, `README.md`                                                                        |
+| `prepublishOnly` | 自动 `pnpm run build`（tsdown）                                                             |
 
-仓内开发使用 `exports` 指向 `src/`；`publishConfig.exports` 指向 `dist/`（npm  tarball 仅含编译产物）。
+仓内开发使用 `exports` 指向 `src/`；`publishConfig.exports` 指向 `dist/`（npm tarball 仅含编译产物）。
 
 ---
 

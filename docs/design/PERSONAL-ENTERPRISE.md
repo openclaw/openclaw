@@ -20,7 +20,8 @@ set -a && source ~/.claworks/personal.env && set +a
 | `CLAWORKS_QWEN_BASE_URL`    | 自托管 OpenAI 兼容根 URL（含 `/v1`） |
 | `CLAWORKS_QWEN_CHAT_MODEL`  | 对话模型 id                          |
 | `CLAWORKS_QWEN_EMBED_MODEL` | 向量嵌入模型 id（KB 用）             |
-| `CLAWORKS_KB_WATCH_DIRS`    | filesystem-kb 监视目录               |
+| `CLAWORKS_KB_WATCH_DIRS`    | filesystem-kb 监视目录（OpenClaw KB 见 `docs/claworks/oriosearch-kb-setup.md`） |
+| `CLAWORKS_OPENCLAW_KB_ROOT` | iMac 挂载的 `knowledge_base` 根路径                                              |
 
 ---
 
@@ -94,3 +95,4 @@ pnpm claworks:kb-smoke
 - `contrib/examples/robot-personal.md` — 复制为 `~/.claworks/robot.md` 可选
 - `claworks-packs/personal-enterprise/` — KB 目录同步 Playbook
 - `connectors/filesystem-kb/` — 文件夹监视 Connector
+- `docs/claworks/oriosearch-kb-setup.md` — OpenClaw 知识库 SMB 挂载、批量入库、本体导入

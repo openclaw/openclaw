@@ -324,6 +324,11 @@ curl -X POST http://127.0.0.1:18800/v1/packs/reload
 | `CLAWORKS_PACKS_DIR`       | `../claworks-packs`        | Pack YAML 源目录                                    |
 | `CLAWORKS_PRODUCT_PROFILE` | `extended`                 | 插件集合 (`core`/`extended`/`personal_work`/`full`) |
 | `CLAWORKS_INIT_PROFILE`    | `enterprise`               | Pack 预置 (`core`/`enterprise`)                     |
+| `CLAWORKS_OPENCLAW_KB_ROOT`| —                          | OpenClaw `knowledge_base` 挂载路径（personal_work） |
+| `CLAWORKS_KB_WATCH_DIRS`   | —                          | filesystem-kb 监视目录（通常 `…/content`）          |
+| `CLAWORKS_ORIOSEARCH_URL`  | —                          | 自托管 OrioSearch（Tavily 兼容联网搜索）            |
+
+OpenClaw 知识库 SMB 挂载与七类 Markdown 批量入库见 [`docs/claworks/oriosearch-kb-setup.md`](docs/claworks/oriosearch-kb-setup.md)。
 
 ---
 

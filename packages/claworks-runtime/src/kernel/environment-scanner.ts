@@ -93,6 +93,15 @@ export type WebSearchResult = {
   snippet: string;
 };
 
+/** OrioSearch / Tavily-compatible base URL (CLAWORKS_ORIOSEARCH_URL → ORIOSEARCH_URL). */
+export function resolveOriosearchBaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const raw = env.CLAWORKS_ORIOSEARCH_URL?.trim() || env.ORIOSEARCH_URL?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  return raw.replace(/\/$/, "");
+}
+
 export type EnvironmentScanner = {
   scan(scope?: ScanScope): Promise<ScanResult>;
   scanEnvVars(): Promise<EnvVarHint[]>;
@@ -518,6 +527,29 @@ export function createEnvironmentScanner(): EnvironmentScanner {
     },
 
     async webSearch(query: string, limit = 5): Promise<WebSearchResult[]> {
+      const oriosearch = resolveOriosearchBaseUrl();
+      if (oriosearch) {
+        try {
+          const resp = await fetch(`${oriosearch}/search`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query, max_results: limit }),
+          });
+          if (resp.ok) {
+            const data = (await resp.json()) as {
+              results?: Array<{ title?: string; url?: string; content?: string }>;
+            };
+            return (data.results ?? []).slice(0, limit).map((r) => ({
+              title: r.title ?? "",
+              url: r.url ?? "",
+              snippet: r.content ?? "",
+            }));
+          }
+        } catch {
+          // fall through to other providers
+        }
+      }
+
       const searxng = process.env.SEARXNG_URL;
       const brave = process.env.BRAVE_SEARCH_API_KEY;
       const serper = process.env.SERPER_API_KEY;
