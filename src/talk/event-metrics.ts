@@ -1,8 +1,4 @@
-export function talkEventPayloadRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+export { asOptionalRecord as talkEventPayloadRecord } from "../shared/record-coerce.js";
 
 export function firstFiniteTalkEventNumber(
   record: Record<string, unknown> | undefined,
