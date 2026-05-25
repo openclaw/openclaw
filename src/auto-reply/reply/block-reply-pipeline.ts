@@ -254,7 +254,8 @@ export function createBlockReplyPipeline(params: {
       if (bufferedText) {
         bufferedAssistantMessageIndex = undefined;
         bufferedKeys.clear();
-        const mergedText = reply.hasText ? `${bufferedText}${payload.text}` : bufferedText;
+        const joiner = coalescing?.joiner ?? "";
+        const mergedText = reply.hasText ? `${bufferedText}${joiner}${payload.text}` : bufferedText;
         sendPayload({ ...payload, text: mergedText }, /* bypassSeenCheck */ false);
       } else {
         sendPayload(payload, /* bypassSeenCheck */ false);
@@ -263,12 +264,7 @@ export function createBlockReplyPipeline(params: {
     }
     if (coalescer) {
       const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-      if (
-        assistantMessageIndex !== undefined &&
-        bufferedAssistantMessageIndex !== undefined &&
-        assistantMessageIndex !== bufferedAssistantMessageIndex &&
-        coalescer.hasBuffered()
-      ) {
+      if (assistantMessageIndex !== bufferedAssistantMessageIndex && coalescer.hasBuffered()) {
         // Logical assistant blocks must not be merged together by the generic
         // coalescer. Force-flush the previous buffered block before starting a
         // new assistant-message block.

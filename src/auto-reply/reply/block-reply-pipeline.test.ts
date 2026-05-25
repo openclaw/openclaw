@@ -205,6 +205,29 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.getSentMediaUrls()).toStrictEqual([]);
   });
 
+  it("flushes across undefined assistantMessageIndex gaps", async () => {
+    const sent: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 100,
+        maxChars: 200,
+        idleMs: 1000,
+        joiner: "\n\n",
+      },
+    });
+
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 0 }));
+    pipeline.enqueue({ text: "Gap" });
+    pipeline.enqueue(setReplyPayloadMetadata({ text: "Beta" }, { assistantMessageIndex: 1 }));
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual(["Alpha", "Gap", "Beta"]);
+  });
+
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
     const sent: string[] = [];
     const pipeline = createBlockReplyPipeline({
@@ -315,6 +338,30 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     expect(pipeline.hasSentPayload({ text: "Description", mediaUrl: "file:///photo.jpg" })).toBe(
       false,
     );
+  });
+
+  it("uses configured joiner when merging buffered text into a media payload with text", async () => {
+    const sent: Array<{ text?: string; mediaUrl?: string }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrl: payload.mediaUrl });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    pipeline.enqueue({ text: "Caption:" });
+    pipeline.enqueue({ text: "Check this image", mediaUrl: "file:///photo.jpg" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toBe("Caption:\n\nCheck this image");
+    expect(sent[0]?.mediaUrl).toBe("file:///photo.jpg");
   });
 
   it("merges coalesced text into media payload as a single delivery", async () => {
