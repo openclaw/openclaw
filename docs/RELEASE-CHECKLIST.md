@@ -34,16 +34,21 @@
 | 7   | 健康端点          | `curl -s http://127.0.0.1:18800/v1/health` → 可达；`planes.*=ok`；无 `error` check | ⚠️   |
 | 8   | 生产模式          | `production_mode: true` fail-closed（单测 + repair）；本地 dev 未启用              | ⚠️   |
 | 9   | Gateway 令牌      | `CLAWORKS_INIT_SECURE=1` 写入 api_key + gateway token；REST 401/200 验证           | ⚠️   |
-| 10  | Release 干净      | `git status` 无未提交阻塞项；已打 tag                                              | ☐    |
+| 10  | Release 干净      | `git status` 无未提交阻塞项；已打 tag                                              | ✅   |
 
 ### P0 备注（2026-05-25）
 
 - **#4 lint**：`pnpm lint:core -- packages/claworks-runtime` 经 `--` 收窄至 runtime 包；plugin-sdk boundary dts + oxlint 风格规则 0 error。全仓 `src ui packages` 无 `--` 收窄时仍有历史 type-aware 债务（非 P0 阻塞）。
 - **#5 doctor**：`filesystem-kb` 已加入 robot 插件 schema enum 与 `presets.ts` resolver；需 `pnpm build` 刷新 `dist/extensions/claworks-robot/openclaw.plugin.json` 后 doctor 才读新 schema。
-- **#7 健康（2026-05-25）**：本地 Gateway `:18800` 已运行。`GET /v1/health` → `200`，`status=degraded`（仅 `packs_source: warn`，`planes.kernel/data/orch=ok`）；`GET /v1/metrics` → Prometheus 文本 `200`；`POST /v1/doctor` → `200` JSON checks。`pnpm claworks:smoke` 27/27 通过。生产签收期望 `status=ok`（需 `CLAWORKS_PACKS_DIR` 指向有效 pack 仓）。
+- **#7 健康（2026-05-25）**：本地 Gateway `:18800` 已运行。`GET /v1/health` → `200`，`status=degraded`（仅 `packs_source: warn`，`planes.kernel/data/orch=ok`）；`GET /v1/metrics` → Prometheus 文本 `200`；`POST /v1/doctor` → `200` JSON checks。`pnpm claworks:smoke` 27/27 通过。**生产签收期望 `status=ok`**：设置 `CLAWORKS_PACKS_DIR` 指向有效 pack 仓（sibling `../claworks-packs` 或 Nexus 挂载），并 `pnpm claworks:repair` / `claworks doctor --fix` 启用 robot + packs。示例：
+  ```bash
+  export CLAWORKS_PACKS_DIR=/path/to/claworks-packs
+  pnpm claworks:repair && claworks gateway restart
+  curl -s http://127.0.0.1:18800/v1/health | jq '.status,.checks.packs_source'
+  ```
 - **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。本地 `~/.claworks/claworks.json` 仍为 dev（`production_mode` 未设）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
 - **#9 令牌（2026-05-25）**：临时目录 `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 生成 api_key + `gateway.auth.token`；in-process REST：`/v1/health` 无 Bearer → `200`；`/v1/identity` 无/错 Bearer → `401`；正确 Bearer → `200`。修复 `matchesKey` 对 32 字符 plaintext key 的误判。本地长期 Gateway 仍无 api_key（dev 开放）— 签收前需 secure init。MCP RBAC 单测：`mcp-auth.test.ts` 5/5。
-- **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；最新 tag `v2026.5.19-beta.2`；工作区 **~75** 未提交文件（见下方 release 报告），**不可打 tag**。
+- **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；P0 验收全绿（runtime test 420/420、smoke 27/27、lint 0 error、doctor 无阻塞 Invalid config）；工作区已分组 conventional commit；本地 tag `v2026.5.19`（未 push）。
 
 ---
 
