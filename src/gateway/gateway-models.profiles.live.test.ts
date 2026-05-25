@@ -240,7 +240,7 @@ function resolveGatewayLiveModelTimeoutMs(
   liveModelTimeoutRaw = process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS,
   stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
 ): number {
-  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 120_000));
+  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 300_000));
   return Math.max(stepTimeoutMs, requested);
 }
 
@@ -663,6 +663,10 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
 
   it("falls back to the shared live timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("", "45000", 30_000)).toBe(45_000);
+  });
+
+  it("defaults to the release live model budget", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("", undefined, 90_000)).toBe(300_000);
   });
 
   it("never goes below the probe timeout", () => {
