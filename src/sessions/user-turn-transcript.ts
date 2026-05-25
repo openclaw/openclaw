@@ -250,7 +250,7 @@ export function buildPersistedUserTurnMediaInputsFromFields(
       ...(mediaPath ? { path: mediaPath } : {}),
       ...(url ? { url } : {}),
       contentType: resolveTranscriptMediaType({
-        explicitType: types[index] ?? singleType,
+        explicitType: types[index] ?? (index === 0 ? singleType : undefined),
         mediaPath,
         mediaUrl: url,
       }),

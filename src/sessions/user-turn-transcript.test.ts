@@ -83,6 +83,19 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("does not reuse singular media type for later media paths", () => {
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPath: "/tmp/a.png",
+          MediaPaths: ["/tmp/a.png", "/tmp/report.pdf"],
+          MediaType: "image/png",
+        }),
+      ).toEqual([
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+      ]);
+    });
+
     it("resolves staged relative media paths against the media workspace", () => {
       const workspaceDir = createTempDir("openclaw-user-turn-media-");
 
