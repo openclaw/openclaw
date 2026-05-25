@@ -1,6 +1,8 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
+import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderStreamFn: vi.fn(() => undefined),
@@ -16,38 +18,16 @@ const googleModel = {
   id: "gemini-3.5-flash",
 } as never;
 
-describe("registerProviderStreamForModel", () => {
-  it("fails closed for Google Generative AI models when models.providers.google is missing", () => {
-    expect(() =>
-      registerProviderStreamForModel({
-        model: googleModel,
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                api: "openai-responses",
-                apiKey: "openai-key",
-              },
-            },
-          },
-        } as OpenClawConfig,
-      }),
-    ).toThrow(/models\.providers\.google/);
-  });
+const streamFn = (() => undefined) as unknown as StreamFn;
 
-  it("fails closed before a Google model can fall through to an OpenAI provider config", () => {
+describe("registerProviderStreamForModel", () => {
+  it("preserves env-only Google Generative AI routing when models.providers.google is missing", () => {
+    vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
+
     expect(() =>
       registerProviderStreamForModel({
         model: googleModel,
         cfg: {
-          agents: {
-            defaults: {
-              model: {
-                primary: "openai/gpt-5.5",
-                fallbacks: ["google/gemini-3.5-flash"],
-              },
-            },
-          },
           models: {
             providers: {
               openai: {
@@ -57,9 +37,18 @@ describe("registerProviderStreamForModel", () => {
             },
           },
         } as OpenClawConfig,
+        env: {
+          GEMINI_API_KEY: "google-env-key",
+        } as NodeJS.ProcessEnv,
       }),
-    ).toThrow(
-      /Google model "google\/gemini-3\.5-flash" requires models\.providers\.google with api "google-generative-ai"/,
+    ).not.toThrow();
+    expect(createTransportAwareStreamFnForModel).toHaveBeenCalledWith(
+      googleModel,
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GEMINI_API_KEY: "google-env-key",
+        }),
+      }),
     );
   });
 
@@ -78,11 +67,11 @@ describe("registerProviderStreamForModel", () => {
           },
         } as OpenClawConfig,
       }),
-    ).toThrow(/api "google-generative-ai"/);
+    ).toThrow(/models\.providers\.google api "openai-responses"/);
   });
 
-  it("does not include configured API keys in the missing Google provider error", () => {
-    const secret = "sk-openai-secret-that-must-not-leak";
+  it("does not include configured API keys in the mismatched Google provider error", () => {
+    const secret = "sk-google-secret-that-must-not-leak";
 
     try {
       registerProviderStreamForModel({
@@ -90,7 +79,7 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              openai: {
+              google: {
                 api: "openai-responses",
                 apiKey: secret,
               },
@@ -106,6 +95,8 @@ describe("registerProviderStreamForModel", () => {
   });
 
   it("allows Google Generative AI models when the Google provider is explicitly configured", () => {
+    vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
+
     expect(() =>
       registerProviderStreamForModel({
         model: googleModel,
