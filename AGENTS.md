@@ -126,6 +126,7 @@ Skills own workflows; root owns hard policy and routing.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
+- PR create/refresh: keep PR branches takeover-ready. Use a branch maintainers can push to, or for fork PRs ensure `maintainer_can_modify` / GitHub's `Allow edits by maintainers` is enabled unless explicitly told otherwise or GitHub's Actions/secrets warning makes that unsafe.
 - GitHub issue/PR create: read `$agent-transcript`; ask about sanitized transcript logs when available.
 - Real behavior proof section is parsed. Use exact `field: value` labels: `Behavior addressed`, `Real environment tested`, `Exact steps or command run after this patch`, `Evidence after fix`, `Observed result after fix`, `What was not tested`.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
