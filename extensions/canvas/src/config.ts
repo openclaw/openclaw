@@ -5,6 +5,7 @@ import {
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type CanvasHostConfig = {
   enabled?: boolean;
@@ -21,10 +22,6 @@ type CanvasPluginConfigSchema = {
   parse: (value: unknown) => CanvasPluginConfig;
   uiHints: Record<string, { label: string; help?: string; advanced?: boolean }>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
