@@ -7,6 +7,7 @@ import {
   createGauntletPrebuildCommand,
   parseTimedMetrics,
   runMeasuredCommand,
+  runMeasuredCommandLive,
 } from "../../scripts/check-plugin-gateway-gauntlet.mjs";
 import {
   buildGauntletPrebuildEnv,
@@ -308,6 +309,46 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+  });
+
+  it("captures output from live measured commands", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "console.log('live stdout'); console.error('live stderr')"],
+      label: "live",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+  });
+
+  it("bounds captured output from live measured commands", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(32))"],
+      label: "live-bounded",
+      phase: "probe",
+      timeoutMs: 1000,
+      timeMode: "none",
+      maxBufferBytes: 12,
+    });
+
+    expect(row.status).toBe(0);
+    const log = await fs.readFile(row.logPath, "utf8");
+    expect(log).toContain("x".repeat(12));
+    expect(log).toContain("[stdout truncated after 12 bytes]");
   });
 
   it("cleans the isolated run root after a successful dry run", async () => {
