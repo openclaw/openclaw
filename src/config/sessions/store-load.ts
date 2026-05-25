@@ -448,6 +448,7 @@ export function loadSessionStore(
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
+      takeOwnership: serializedFromDisk !== undefined,
     });
   }
 

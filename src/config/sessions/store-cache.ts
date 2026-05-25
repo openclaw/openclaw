@@ -376,8 +376,13 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  takeOwnership?: boolean;
 }): void {
-  const store = cloneSessionStoreRecord(params.store);
+  const store =
+    params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
+  if (params.takeOwnership === true) {
+    internSessionStoreLargeStrings(store);
+  }
   SESSION_STORE_CACHE.set(params.storePath, {
     store,
     mtimeMs: params.mtimeMs,

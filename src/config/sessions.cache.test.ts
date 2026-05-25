@@ -173,6 +173,16 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("keeps disk-loaded clone:false cache hits by reference", () => {
+    const testStore = createSingleSessionStore();
+    fs.writeFileSync(storePath, JSON.stringify(testStore), "utf8");
+
+    const loaded1 = loadSessionStore(storePath, { clone: false });
+    const loaded2 = loadSessionStore(storePath, { clone: false });
+
+    expect(loaded2["session:1"]).toBe(loaded1["session:1"]);
+  });
+
   it("does not cache pre-migration or pre-normalization disk JSON", () => {
     fs.writeFileSync(
       storePath,
