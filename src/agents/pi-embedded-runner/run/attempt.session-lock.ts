@@ -13,6 +13,15 @@ type ActiveWriteLockState = {
   active: boolean;
 };
 
+const ACTIVE_EMBEDDED_PROMPT_HOLDERS = new Map<string, () => void>();
+
+export class EmbeddedAttemptSessionContendedError extends Error {
+  constructor(sessionFile: string) {
+    super(`embedded prompt lock already held for session file: ${sessionFile}`);
+    this.name = "EmbeddedAttemptSessionContendedError";
+  }
+}
+
 type LockOptions = {
   sessionFile: string;
   timeoutMs: number;
@@ -630,15 +639,27 @@ export type EmbeddedAttemptSessionLockController = {
   ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  dispose(): void;
 };
 
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
 }): Promise<EmbeddedAttemptSessionLockController> {
+  const sessionFile = params.lockOptions.sessionFile;
+
+  if (ACTIVE_EMBEDDED_PROMPT_HOLDERS.has(sessionFile)) {
+    throw new EmbeddedAttemptSessionContendedError(sessionFile);
+  }
+
+  const releaseHolder = () => {
+    ACTIVE_EMBEDDED_PROMPT_HOLDERS.delete(sessionFile);
+  };
+  ACTIVE_EMBEDDED_PROMPT_HOLDERS.set(sessionFile, releaseHolder);
+
   const acquireLock = async (): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
-      sessionFile: params.lockOptions.sessionFile,
+      sessionFile,
       timeoutMs: params.lockOptions.timeoutMs,
       staleMs: params.lockOptions.staleMs,
       maxHoldMs: params.lockOptions.maxHoldMs,
@@ -707,6 +728,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
 
     takeoverDetected = true;
+    releaseHolder();
     throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
   }
 
@@ -871,6 +893,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    dispose(): void {
+      releaseHolder();
     },
   };
 }

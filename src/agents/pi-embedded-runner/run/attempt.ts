@@ -5038,6 +5038,7 @@ export async function runEmbeddedAttempt(
       promptError ?? new Error("run exited before diagnostic completion"),
     );
     restoreSkillEnv?.();
+    sessionLockController.dispose();
   }
 }
 export { testing as __testing };
