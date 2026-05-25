@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   normalizeOptionalString,
   readStringValue,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -1107,7 +1108,7 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 }
 
 export async function stopAllChromeMcpSessions(): Promise<void> {
-  const names = [...new Set([...sessions.keys()].map((key) => JSON.parse(key)[0] as string))];
+  const names = uniqueStrings([...sessions.keys()].map((key) => JSON.parse(key)[0] as string));
   for (const name of names) {
     await closeChromeMcpSession(name).catch(() => {});
   }

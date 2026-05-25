@@ -1,3 +1,4 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -47,7 +48,7 @@ function parseModelIds(input: string): string[] {
     .split(/[\n,]/)
     .map((model) => model.trim())
     .filter(Boolean);
-  return Array.from(new Set(parsed));
+  return uniqueStrings(parsed);
 }
 
 function buildModelDefinition(modelId: string) {

@@ -1,3 +1,4 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildPollResponseContent,
   isPollStartType,
@@ -15,8 +16,8 @@ function normalizeOptionIndexes(indexes: number[]): number[] {
 }
 
 function normalizeOptionIds(optionIds: string[]): string[] {
-  return Array.from(
-    new Set(optionIds.map((optionId) => optionId.trim()).filter((optionId) => optionId.length > 0)),
+  return uniqueStrings(
+    optionIds.map((optionId) => optionId.trim()).filter((optionId) => optionId.length > 0),
   );
 }
 
