@@ -264,7 +264,7 @@ openclaw plugins install -l ../openclaw-claworks-extension/extensions/claworks
 Agent 可用 **22 个** `cw_*` 工具（查询对象、触发 Playbook、KB、HITL 等）。  
 完整列表：`CW-TOOLS-MATRIX.md`
 
-多 Gateway 实例（A2A mesh，非已废弃的 ClawTwin/ClawOps 分离）见 [`contrib/examples/a2a-peer-mesh.zh.md`](../../contrib/examples/a2a-peer-mesh.zh.md) 与 extension `skills/claworks-multi/SKILL.md`。
+多 Gateway 实例（推荐多 monolith；可选 twin/ops 1:1；A2A mesh — **非**已废弃的 ClawTwin/ClawOps 分离）见 [`MULTI-INSTANCE-DEPLOYMENT.md`](../MULTI-INSTANCE-DEPLOYMENT.md)、[`contrib/examples/a2a-peer-mesh.zh.md`](../../contrib/examples/a2a-peer-mesh.zh.md)。
 
 ---
 

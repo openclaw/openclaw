@@ -31,16 +31,22 @@
 
 ## 本目录文件
 
-| 文件                                                  | 说明                                             |
-| ----------------------------------------------------- | ------------------------------------------------ |
-| `robot.md`                                            | 机器人宪法示例（行为准则、RBAC、HITL 规则）      |
-| `robot-personal.md`                                   | 个人版机器人宪法（OpenClaw 个人 + 企业混合模式） |
-| `claworks-production.openclaw.fragment.json`          | 生产部署 OpenClaw 片段配置                       |
-| `claworks-personal-enterprise.openclaw.fragment.json` | 个人企业混合 OpenClaw 片段配置                   |
-| `claworks-personal.env.example`                       | 环境变量示例（个人部署）                         |
-| `a2a-peer-mesh.openclaw.fragment.json`                | A2A 多机器人对等网格配置                         |
-| `a2a-peer-mesh.zh.md`                                 | A2A 对等网格架构说明（中文）                     |
-| `playbooks/patrol_pending_runs_alert.yaml`            | `robot.patrol` 巡逻积压告警示例 Playbook         |
+| 文件                                                    | 说明                                             |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `robot.md`                                              | 机器人宪法示例（行为准则、RBAC、HITL 规则）      |
+| `robot-personal.md`                                     | 个人版机器人宪法（OpenClaw 个人 + 企业混合模式） |
+| `claworks-production.openclaw.fragment.json`            | 生产部署 OpenClaw 片段配置                       |
+| `claworks-personal-enterprise.openclaw.fragment.json`   | 个人企业混合 OpenClaw 片段配置                   |
+| `claworks-personal.env.example`                         | 环境变量示例（个人部署）                         |
+| `a2a-peer-mesh.openclaw.fragment.json`                  | A2A 双 Gateway 最小 peer 配置                    |
+| `a2a-peer-mesh.zh.md`                                   | A2A 双机 walkthrough（中文）                     |
+| `multi-instance-monolith-mfg.claworks.fragment.json`    | 多 monolith — 制造域 `claworks.json` 片段        |
+| `multi-instance-monolith-supply.claworks.fragment.json` | 多 monolith — 供应链域片段                       |
+| `multi-instance-twin-ops.claworks.fragment.json`        | 可选 twin/ops 1:1 拆分（双 `claworks.json`）     |
+| `multi-instance.openclaw.bridge.fragment.json`          | OpenClaw 侧多实例 `cw_*` 桥接片段                |
+
+多实例部署总览：[`docs/MULTI-INSTANCE-DEPLOYMENT.md`](../docs/MULTI-INSTANCE-DEPLOYMENT.md)。
+| `playbooks/patrol_pending_runs_alert.yaml` | `robot.patrol` 巡逻积压告警示例 Playbook |
 
 ---
 

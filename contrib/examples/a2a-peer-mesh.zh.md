@@ -1,5 +1,8 @@
 # ClaWorks Phase 2：A2A 双机器人示例
 
+> 多实例架构选型与运维清单：[`docs/MULTI-INSTANCE-DEPLOYMENT.md`](../../docs/MULTI-INSTANCE-DEPLOYMENT.md)。  
+> 已废弃的 ClawTwin/ClawOps 三服务栈见 [`docs/legacy/docker-compose-clawtwin-clawops.yml`](../../docs/legacy/docker-compose-clawtwin-clawops.yml)。
+
 ## 拓扑
 
 - **alarm-robot**（本机 `:18800`）：接收告警，Playbook 中 `a2a_delegate` 委托维修机器人。

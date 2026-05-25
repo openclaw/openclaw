@@ -2,7 +2,7 @@
 
 **用途**：日常启停、新机器初始化、交付前核对。  
 **更新**：2026-05-24  
-**相关**：[`DEPLOYMENT.md`](../DEPLOYMENT.md) · [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) · [`design/ECOSYSTEM-LAYOUT.md`](design/ECOSYSTEM-LAYOUT.md)
+**相关**：[`DEPLOYMENT.md`](../DEPLOYMENT.md) · [`MULTI-INSTANCE-DEPLOYMENT.md`](MULTI-INSTANCE-DEPLOYMENT.md) · [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) · [`design/ECOSYSTEM-LAYOUT.md`](design/ECOSYSTEM-LAYOUT.md)
 
 ---
 
