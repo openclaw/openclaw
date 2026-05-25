@@ -34,6 +34,7 @@ type ProbeTransition = {
 type GatewaySample = {
   cpuCoreRatio: number | null;
   cpuMs: number | null;
+  exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
@@ -77,6 +78,15 @@ type BenchmarkFailure = {
   id: string;
   reason: string;
   sampleIndex: number;
+};
+
+type ChildExit = {
+  exitCode: number | null;
+  signal: string | null;
+};
+
+type StopChildResult = ChildExit & {
+  exitedBeforeTeardown: boolean;
 };
 
 type PluginFixtureResult = {
@@ -407,6 +417,17 @@ function collectResultFailures(
           reason: `missing ${missing.join(", ")}`,
           sampleIndex: index + 1,
         });
+        return;
+      }
+      if (sample.exitedBeforeTeardown === true) {
+        failures.push({
+          id: result.id,
+          reason:
+            sample.signal == null
+              ? `child exited ${sample.exitCode ?? "before teardown"}`
+              : `child exited by ${sample.signal}`,
+          sampleIndex: index + 1,
+        });
       }
     });
   }
@@ -687,36 +708,52 @@ function sanitizedEnv(
   return env;
 }
 
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
+async function stopChild(child: ChildProcessWithoutNullStreams): Promise<StopChildResult> {
+  const currentExit = (): ChildExit | null =>
+    child.exitCode != null || child.signalCode != null
+      ? { exitCode: child.exitCode, signal: child.signalCode }
+      : null;
+
+  const existingExit = currentExit();
+  if (existingExit != null) {
+    return { ...existingExit, exitedBeforeTeardown: true };
   }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
+
+  let observedExit: ChildExit | null = null;
+  const exited = new Promise<ChildExit>((resolve) => {
+    child.once("exit", (exitCode, signal) => {
+      observedExit = { exitCode, signal };
+      resolve(observedExit);
+    });
   });
-  killProcessTree(child, "SIGTERM");
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const queuedExit = observedExit ?? currentExit();
+  if (queuedExit != null) {
+    return { ...queuedExit, exitedBeforeTeardown: true };
+  }
+
+  const sentTeardownSignal = killProcessTree(child, "SIGTERM");
   const timeout = delay(2000).then(() => {
     if (child.exitCode == null && child.signalCode == null) {
       killProcessTree(child, "SIGKILL");
     }
     return exited;
   });
-  return Promise.race([exited, timeout]);
+  const exit = await Promise.race([exited, timeout]);
+  return { ...exit, exitedBeforeTeardown: !sentTeardownSignal };
 }
 
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): boolean {
   if (process.platform !== "win32" && child.pid !== undefined) {
     try {
       process.kill(-child.pid, signal);
-      return;
+      return true;
     } catch {
       // Fall back to the direct child below.
     }
   }
-  child.kill(signal);
+  return child.kill(signal);
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
@@ -975,6 +1012,7 @@ async function runGatewaySample(options: {
   return {
     cpuCoreRatio,
     cpuMs,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     exitCode: exit.exitCode,
     firstOutputMs,
     gatewayReadyLogLine,
@@ -1109,6 +1147,7 @@ export const testing = {
   parsePositiveInt,
   resolveEntry,
   sanitizedEnv,
+  stopChild,
   summarizeCase,
   waitForProbe,
   writeConfig,
