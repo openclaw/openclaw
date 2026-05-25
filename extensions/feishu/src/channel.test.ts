@@ -423,12 +423,12 @@ describe("feishuPlugin actions", () => {
     const card = requireRecord(sendCardArgs.card, "card");
     expect(requireRecord(card.body, "card body").elements).toEqual([
       {
-        tag: "action",
-        actions: [
+        tag: "button",
+        text: { tag: "plain_text", content: "Run help" },
+        type: "default",
+        behaviors: [
           {
-            tag: "button",
-            text: { tag: "plain_text", content: "Run help" },
-            type: "default",
+            type: "callback",
             value: {
               oc: "ocf1",
               k: "quick",

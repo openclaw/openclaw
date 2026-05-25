@@ -448,7 +448,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       content: "Approve the request?",
     });
     expect(
-      renderedCard?.body?.elements?.some((element: { tag?: string }) => element.tag === "action"),
+      renderedCard?.body?.elements?.some((element: { tag?: string }) => element.tag === "button"),
     ).toBe(true);
     const { presentation: _presentation, ...coreRenderedPayload } = rendered;
     const result = await feishuOutbound.sendPayload?.({
@@ -538,19 +538,21 @@ describe("feishuOutbound.sendPayload native cards", () => {
       tag: "markdown",
       content: "Approve the request?",
     });
-    const actionElement = card.body.elements.find(
-      (element: { tag?: string }) => element.tag === "action",
+    const buttonElements = card.body.elements.filter(
+      (element: { tag?: string }) => element.tag === "button",
     );
-    expect(actionElement?.actions[0]?.text).toEqual({ tag: "plain_text", content: "Approve" });
-    expect(actionElement?.actions[0]?.type).toBe("primary");
-    expect(actionElement?.actions[0]?.value?.oc).toBe("ocf1");
-    expect(actionElement?.actions[0]?.value?.k).toBe("quick");
-    expect(actionElement?.actions[0]?.value?.q).toBe("/approve req_1 allow-once");
-    expect(actionElement?.actions[1]?.text).toEqual({ tag: "plain_text", content: "Deny" });
-    expect(actionElement?.actions[1]?.type).toBe("danger");
-    expect(actionElement?.actions[1]?.value?.oc).toBe("ocf1");
-    expect(actionElement?.actions[1]?.value?.k).toBe("quick");
-    expect(actionElement?.actions[1]?.value?.q).toBe("/approve req_1 deny");
+    expect(buttonElements[0]?.text).toEqual({ tag: "plain_text", content: "Approve" });
+    expect(buttonElements[0]?.type).toBe("primary");
+    expect(buttonElements[0]?.behaviors?.[0]?.type).toBe("callback");
+    expect(buttonElements[0]?.behaviors?.[0]?.value?.oc).toBe("ocf1");
+    expect(buttonElements[0]?.behaviors?.[0]?.value?.k).toBe("quick");
+    expect(buttonElements[0]?.behaviors?.[0]?.value?.q).toBe("/approve req_1 allow-once");
+    expect(buttonElements[1]?.text).toEqual({ tag: "plain_text", content: "Deny" });
+    expect(buttonElements[1]?.type).toBe("danger");
+    expect(buttonElements[1]?.behaviors?.[0]?.type).toBe("callback");
+    expect(buttonElements[1]?.behaviors?.[0]?.value?.oc).toBe("ocf1");
+    expect(buttonElements[1]?.behaviors?.[0]?.value?.k).toBe("quick");
+    expect(buttonElements[1]?.behaviors?.[0]?.value?.q).toBe("/approve req_1 deny");
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "native_card_msg");
   });
@@ -587,11 +589,13 @@ describe("feishuOutbound.sendPayload native cards", () => {
       tag: "markdown",
       content: "<font color='grey'>&lt;/font&gt;&lt;at id=\"ou_2\"&gt;Injected&lt;/at&gt;</font>",
     });
-    const actionElement = card.body.elements.find(
-      (element: { tag?: string }) => element.tag === "action",
+    const buttonElement = card.body.elements.find(
+      (element: { tag?: string }) => element.tag === "button",
     );
-    expect(actionElement?.actions[0]?.text).toEqual({ tag: "plain_text", content: "Open" });
-    expect(actionElement?.actions[0]?.url).toBe("https://example.com/path");
+    expect(buttonElement?.text).toEqual({ tag: "plain_text", content: "Open" });
+    expect(buttonElement?.behaviors).toEqual([
+      { type: "open_url", default_url: "https://example.com/path" },
+    ]);
     expect(JSON.stringify(card)).not.toContain("javascript:");
   });
 
@@ -649,21 +653,16 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(card.body.elements).toEqual([
       { tag: "markdown", content: '&lt;at id="ou_1"&gt;ping&lt;/at&gt;' },
       {
-        tag: "action",
-        actions: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "Promote" },
-            type: "primary",
-            url: "https://example.com/promote",
-          },
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: "Good link" },
-            type: "default",
-            url: "https://example.com",
-          },
-        ],
+        tag: "button",
+        text: { tag: "plain_text", content: "Promote" },
+        type: "primary",
+        behaviors: [{ type: "open_url", default_url: "https://example.com/promote" }],
+      },
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Good link" },
+        type: "default",
+        behaviors: [{ type: "open_url", default_url: "https://example.com" }],
       },
     ]);
     expect(JSON.stringify(card)).not.toContain("file://");

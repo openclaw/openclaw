@@ -92,6 +92,36 @@ function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, u
   return card;
 }
 
+function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
+  const trimmed = typeof url === "string" ? url.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeNativeFeishuButtonBehavior(
+  behavior: unknown,
+): Record<string, unknown> | undefined {
+  if (!isRecord(behavior)) {
+    return undefined;
+  }
+  if (behavior.type === "open_url") {
+    const safeUrl =
+      resolveSafeFeishuButtonUrl(behavior.default_url) ?? resolveSafeFeishuButtonUrl(behavior.url);
+    return safeUrl ? { type: "open_url", default_url: safeUrl } : undefined;
+  }
+  if (behavior.type === "callback" && isRecord(behavior.value) && behavior.value.oc === "ocf1") {
+    return { type: "callback", value: behavior.value };
+  }
+  return undefined;
+}
+
 function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
   if (!isRecord(button)) {
     return undefined;
@@ -109,6 +139,21 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
       : button.type === "primary" || button.type === "success"
         ? "primary"
         : undefined;
+  const behaviors = Array.isArray(button.behaviors)
+    ? button.behaviors
+        .map((behavior) => sanitizeNativeFeishuButtonBehavior(behavior))
+        .filter((behavior): behavior is Record<string, unknown> => Boolean(behavior))
+    : [];
+  const rootSafeUrl = resolveSafeFeishuButtonUrl(button.url);
+  if (rootSafeUrl) {
+    behaviors.push({ type: "open_url", default_url: rootSafeUrl });
+  }
+  if (isRecord(button.value) && button.value.oc === "ocf1") {
+    behaviors.push({ type: "callback", value: button.value });
+  }
+  if (behaviors.length === 0) {
+    return undefined;
+  }
   const rendered: Record<string, unknown> = {
     tag: "button",
     text: { tag: "plain_text", content: text },
@@ -118,59 +163,47 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
         : style === "primary" || style === "success"
           ? "primary"
           : "default",
+    behaviors,
   };
-  const safeUrl = (() => {
-    const trimmed = typeof button.url === "string" ? button.url.trim() : "";
-    if (!trimmed) {
-      return undefined;
-    }
-    try {
-      const parsed = new URL(trimmed);
-      return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (safeUrl) {
-    rendered.url = safeUrl;
-  }
-  if (isRecord(button.value) && button.value.oc === "ocf1") {
-    rendered.value = button.value;
-  }
-  return rendered.url || rendered.value ? rendered : undefined;
+  return rendered;
 }
 
-function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unknown> | undefined {
+function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unknown>[] {
   if (!isRecord(element) || typeof element.tag !== "string") {
-    return undefined;
+    return [];
   }
   if (element.tag === "hr") {
-    return { tag: "hr" };
+    return [{ tag: "hr" }];
   }
   if (element.tag === "markdown" && typeof element.content === "string") {
-    return {
-      tag: "markdown",
-      content: element.content.replace(/[&<>]/g, (char) => {
-        switch (char) {
-          case "&":
-            return "&amp;";
-          case "<":
-            return "&lt;";
-          case ">":
-            return "&gt;";
-          default:
-            return char;
-        }
-      }),
-    };
+    return [
+      {
+        tag: "markdown",
+        content: element.content.replace(/[&<>]/g, (char) => {
+          switch (char) {
+            case "&":
+              return "&amp;";
+            case "<":
+              return "&lt;";
+            case ">":
+              return "&gt;";
+            default:
+              return char;
+          }
+        }),
+      },
+    ];
+  }
+  if (element.tag === "button") {
+    const button = sanitizeNativeFeishuCardButton(element);
+    return button ? [button] : [];
   }
   if (element.tag === "action" && Array.isArray(element.actions)) {
-    const actions = element.actions
+    return element.actions
       .map((action) => sanitizeNativeFeishuCardButton(action))
       .filter((action): action is Record<string, unknown> => Boolean(action));
-    return actions.length > 0 ? { tag: "action", actions } : undefined;
   }
-  return undefined;
+  return [];
 }
 
 function sanitizeNativeFeishuCard(
@@ -179,7 +212,7 @@ function sanitizeNativeFeishuCard(
   const body = isRecord(card.body) ? card.body : undefined;
   const rawElements = Array.isArray(body?.elements) ? body.elements : [];
   const elements = rawElements
-    .map((element) => sanitizeNativeFeishuCardElement(element))
+    .flatMap((element) => sanitizeNativeFeishuCardElements(element))
     .filter((element): element is Record<string, unknown> => Boolean(element));
   if (elements.length === 0) {
     return undefined;

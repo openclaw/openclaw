@@ -116,6 +116,15 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
   if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
     return true;
   }
+  if (
+    node.tag === "button" &&
+    Array.isArray(node.behaviors) &&
+    node.behaviors.some(
+      (behavior) => isRecord(behavior) && hasLegacyFeishuCardCommandValue(behavior.value),
+    )
+  ) {
+    return true;
+  }
 
   return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
 }

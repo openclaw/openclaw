@@ -75,7 +75,7 @@ Docs: https://docs.openclaw.ai
 - Doctor: warn and continue when the cron job store exists but cannot be read so later health checks still run. Fixes #86102. (#86384) Thanks @1052326311.
 - Discord: suppress a bot's previous reply body and referenced media from prompt context when a user replies to that bot message, while keeping reply metadata for routing. (#86238) Thanks @fuller-stack-dev.
 - Discord: restore bare numeric channel IDs for outbound message-tool sends while keeping explicit DM targets unambiguous. (#86571) Thanks @joshavant.
-- Feishu: render presentation buttons as native interactive card actions for message-tool sends instead of flattening them into fallback text. (#86017) Thanks @NianJiuZst.
+- Feishu: render presentation buttons as native interactive card actions for message-tool and outbound sends instead of flattening them into fallback text. (#86017) Thanks @NianJiuZst.
 - Docker E2E: avoid rebuilding the Control UI twice while preparing the shared OpenClaw package tarball for package-backed scenario runs.
 - Tests: avoid rebuilding the Control UI twice during the installer Docker smoke now that `pnpm build` includes `ui:build`.
 - Tests: give QA config mutation RPCs enough native Windows budget to finish gateway config writes and restart settle after hot scenario runs.

@@ -49,6 +49,7 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
 function buildFeishuPayloadButton(
   button: MessagePresentationButton,
 ): Record<string, unknown> | undefined {
+  const behaviors: Record<string, unknown>[] = [];
   const rendered: Record<string, unknown> = {
     tag: "button",
     text: {
@@ -60,53 +61,57 @@ function buildFeishuPayloadButton(
   if (button.url) {
     const safeUrl = resolveSafeFeishuButtonUrl(button.url);
     if (safeUrl) {
-      rendered.url = safeUrl;
+      behaviors.push({ type: "open_url", default_url: safeUrl });
     }
   }
   if (button.value) {
-    rendered.value = createFeishuCardInteractionEnvelope({
-      k: "quick",
-      a: "feishu.payload.button",
-      q: button.value,
+    behaviors.push({
+      type: "callback",
+      value: createFeishuCardInteractionEnvelope({
+        k: "quick",
+        a: "feishu.payload.button",
+        q: button.value,
+      }),
     });
   }
-  return rendered.url || rendered.value ? rendered : undefined;
+  if (behaviors.length === 0) {
+    return undefined;
+  }
+  rendered.behaviors = behaviors;
+  return rendered;
 }
 
-export function buildFeishuCardElementForBlock(
+export function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
-): Record<string, unknown> | undefined {
+): Record<string, unknown>[] {
   if (block.type === "text") {
-    return { tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) };
+    return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) }];
   }
   if (block.type === "context") {
-    return {
-      tag: "markdown",
-      content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
-    };
+    return [
+      {
+        tag: "markdown",
+        content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
+      },
+    ];
   }
   if (block.type === "divider") {
-    return { tag: "hr" };
+    return [{ tag: "hr" }];
   }
   if (block.type === "buttons") {
-    const actions = block.buttons
+    return block.buttons
       .map((button) => buildFeishuPayloadButton(button))
       .filter((button): button is Record<string, unknown> => Boolean(button));
-    if (actions.length === 0) {
-      return undefined;
-    }
-    return {
-      tag: "action",
-      actions,
-    };
   }
   const labels = block.options.map((option) => `- ${option.label}`).join("\n");
-  return {
-    tag: "markdown",
-    content: `${escapeFeishuCardMarkdownText(
-      block.placeholder?.trim() || "Options",
-    )}:\n${escapeFeishuCardMarkdownText(labels)}`,
-  };
+  return [
+    {
+      tag: "markdown",
+      content: `${escapeFeishuCardMarkdownText(
+        block.placeholder?.trim() || "Options",
+      )}:\n${escapeFeishuCardMarkdownText(labels)}`,
+    },
+  ];
 }
 
 function resolvePresentationHeaderTemplate(tone: NormalizedMessagePresentation["tone"]) {
@@ -135,8 +140,7 @@ export function buildFeishuPresentationCardElements(params: {
     });
   }
   for (const block of params.presentation.blocks) {
-    const element = buildFeishuCardElementForBlock(block);
-    if (element) {
+    for (const element of buildFeishuCardElementsForBlock(block)) {
       elements.push(element);
     }
   }
