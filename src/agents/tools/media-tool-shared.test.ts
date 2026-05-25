@@ -56,6 +56,36 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
+
+  it("adds channel inbound attachment roots only for the current channel context", () => {
+    const accountRoot = path.join("/tmp", "openclaw-imessage-work");
+    const sharedRoot = path.join("/tmp", "openclaw-imessage-shared");
+    const cfg = {
+      channels: {
+        imessage: {
+          attachmentRoots: [sharedRoot],
+          accounts: {
+            work: {
+              attachmentRoots: [accountRoot],
+            },
+          },
+        },
+      },
+    };
+
+    const withoutChannel = resolveMediaToolLocalRoots(undefined, { cfg });
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
+    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+
+    const withImessage = resolveMediaToolLocalRoots(undefined, {
+      cfg,
+      channelId: "imessage",
+      accountId: "work",
+    });
+    const normalizedRoots = withImessage.map(normalizeHostPath);
+    expect(normalizedRoots).toContain(normalizeHostPath(accountRoot));
+    expect(normalizedRoots).toContain(normalizeHostPath(sharedRoot));
+  });
 });
 
 describe("resolveModelFromRegistry", () => {
