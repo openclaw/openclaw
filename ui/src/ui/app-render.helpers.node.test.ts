@@ -979,6 +979,7 @@ describe("switchChatSession", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
+      agentId: "main",
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
