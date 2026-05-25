@@ -455,6 +455,31 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   const variants = record[unionKey] as unknown[];
   const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+
+  // When all non-null variants are const string literals, merge them into an enum
+  // array instead of picking just the first. This preserves the full set of
+  // allowed values for DeepSeek models (which strip anyOf/oneOf).
+  if (
+    nonNullVariants.length > 1 &&
+    nonNullVariants.every(
+      (v): v is Record<string, unknown> =>
+        typeof v === "object" &&
+        v !== null &&
+        !Array.isArray(v) &&
+        "const" in v &&
+        typeof v.const === "string"
+    )
+  ) {
+    const enumValues = nonNullVariants.map(
+      (v) => (v as Record<string, unknown>).const as string
+    );
+    return {
+      type: "string",
+      enum: enumValues,
+      ...normalized,
+    };
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
