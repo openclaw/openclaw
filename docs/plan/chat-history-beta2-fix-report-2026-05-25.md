@@ -82,7 +82,7 @@ The following validation passed on the main-port branch:
 - `corepack pnpm vitest run test/scripts/list-prod-store-packages.test.ts src/gateway/session-utils.fs.test.ts src/gateway/server.chat.gateway-server-chat-b.test.ts -t 'chat.history turns mode bounds response items|chat.history turns mode preserves recent visible turns|chat.history raw-messages preserves raw tool payloads|chat.history messages mode omits raw tool payloads|readRecentSessionMessagesDetailedAsync|list-prod-store-packages'`
 - `git diff --check origin/main...HEAD`
 - `CI=true corepack pnpm check:changed`
-- `CODEX_HOME=/home/lumadmin/.openclaw/codex-home /usr/bin/codex review --base origin/main`
+- `CODEX_HOME=<codex-home> /usr/bin/codex review --base origin/main`
 
 Codex review result: no discrete correctness, security, performance, or maintainability regressions were identified.
 
