@@ -232,7 +232,19 @@
           "inputImageInputName": { "type": "string" },
           "outputNodeId": { "type": "string" },
           "pollIntervalMs": { "type": "integer", "minimum": 100 },
-          "timeoutMs": { "type": "integer", "minimum": 1000 }
+          "timeoutMs": { "type": "integer", "minimum": 1000 },
+          "dimensions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["widthNodeId", "heightNodeId"],
+            "properties": {
+              "widthNodeId": { "type": "string" },
+              "widthInputName": { "type": "string" },
+              "heightNodeId": { "type": "string" },
+              "heightInputName": { "type": "string" },
+              "baseSize": { "type": "integer", "minimum": 1 }
+            }
+          }
         }
       },
       "video": {

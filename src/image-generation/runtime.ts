@@ -98,6 +98,7 @@ export async function generateImage(
       });
       const sanitized = resolveImageGenerationOverrides({
         provider,
+        ctx: { cfg: params.cfg, agentDir: params.agentDir },
         size: params.size,
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,

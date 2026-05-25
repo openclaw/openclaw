@@ -122,6 +122,10 @@ export type ImageGenerationProviderCapabilities = {
   output?: ImageGenerationOutputCapabilities;
 };
 
+export type ImageGenerationCapabilitiesResolver = (
+  ctx?: ImageGenerationProviderConfiguredContext,
+) => ImageGenerationProviderCapabilities;
+
 export type ImageGenerationProvider = {
   id: string;
   aliases?: string[];
@@ -130,7 +134,14 @@ export type ImageGenerationProvider = {
   /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
   defaultTimeoutMs?: number;
   models?: string[];
-  capabilities: ImageGenerationProviderCapabilities;
+  capabilities: ImageGenerationProviderCapabilities | ImageGenerationCapabilitiesResolver;
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };
+
+export function resolveProviderCapabilities(
+  capabilities: ImageGenerationProviderCapabilities | ImageGenerationCapabilitiesResolver,
+  ctx?: ImageGenerationProviderConfiguredContext,
+): ImageGenerationProviderCapabilities {
+  return typeof capabilities === "function" ? capabilities(ctx) : capabilities;
+}

@@ -38,6 +38,7 @@ import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import { resolveProviderCapabilities } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
@@ -2051,7 +2052,7 @@ export function registerCapabilityCli(program: Command) {
           label: provider.label,
           defaultModel: provider.defaultModel,
           models: provider.models ?? [],
-          capabilities: provider.capabilities,
+          capabilities: resolveProviderCapabilities(provider.capabilities, { cfg }),
         }));
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, providerSummaryText);
       });

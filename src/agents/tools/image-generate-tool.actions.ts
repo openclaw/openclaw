@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listRuntimeImageGenerationProviders } from "../../image-generation/runtime.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import { resolveProviderCapabilities } from "../../image-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildImageGenerationTaskStatusListDetails,
@@ -33,33 +34,35 @@ export function formatImageGenerationAuthHint(provider: {
 }
 
 export function listSupportedImageGenerationModes(provider: ImageGenerationProvider): string[] {
-  return ["generate", ...(provider.capabilities.edit.enabled ? ["edit"] : [])];
+  const caps = resolveProviderCapabilities(provider.capabilities);
+  return ["generate", ...(caps.edit.enabled ? ["edit"] : [])];
 }
 
 export function summarizeImageGenerationCapabilities(provider: ImageGenerationProvider): string {
-  const caps: string[] = [];
-  if (provider.capabilities.edit.enabled) {
-    const maxRefs = provider.capabilities.edit.maxInputImages;
-    caps.push(
+  const caps = resolveProviderCapabilities(provider.capabilities);
+  const result: string[] = [];
+  if (caps.edit.enabled) {
+    const maxRefs = caps.edit.maxInputImages;
+    result.push(
       `editing${typeof maxRefs === "number" ? ` up to ${maxRefs} ref${maxRefs === 1 ? "" : "s"}` : ""}`,
     );
   }
-  if ((provider.capabilities.geometry?.resolutions?.length ?? 0) > 0) {
-    caps.push(`resolutions ${provider.capabilities.geometry?.resolutions?.join("/")}`);
+  if ((caps.geometry?.resolutions?.length ?? 0) > 0) {
+    result.push(`resolutions ${caps.geometry?.resolutions?.join("/")}`);
   }
-  if ((provider.capabilities.geometry?.sizes?.length ?? 0) > 0) {
-    caps.push(`sizes ${provider.capabilities.geometry?.sizes?.join(", ")}`);
+  if ((caps.geometry?.sizes?.length ?? 0) > 0) {
+    result.push(`sizes ${caps.geometry?.sizes?.join(", ")}`);
   }
-  if ((provider.capabilities.geometry?.aspectRatios?.length ?? 0) > 0) {
-    caps.push(`aspect ratios ${provider.capabilities.geometry?.aspectRatios?.join(", ")}`);
+  if ((caps.geometry?.aspectRatios?.length ?? 0) > 0) {
+    result.push(`aspect ratios ${caps.geometry?.aspectRatios?.join(", ")}`);
   }
-  if ((provider.capabilities.output?.formats?.length ?? 0) > 0) {
-    caps.push(`formats ${provider.capabilities.output?.formats?.join("/")}`);
+  if ((caps.output?.formats?.length ?? 0) > 0) {
+    result.push(`formats ${caps.output?.formats?.join("/")}`);
   }
-  if ((provider.capabilities.output?.backgrounds?.length ?? 0) > 0) {
-    caps.push(`backgrounds ${provider.capabilities.output?.backgrounds?.join("/")}`);
+  if ((caps.output?.backgrounds?.length ?? 0) > 0) {
+    result.push(`backgrounds ${caps.output?.backgrounds?.join("/")}`);
   }
-  return caps.join("; ");
+  return result.join("; ");
 }
 
 export function createImageGenerateListActionResult(params: {

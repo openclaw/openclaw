@@ -6,6 +6,7 @@ import {
   DEFAULT_COMFY_MODEL,
   setComfyFetchGuardForTesting,
   isComfyCapabilityConfigured,
+  isComfyDimensionsConfigured,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
@@ -23,11 +24,11 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         agentDir,
         capability: "image",
       }),
-    capabilities: {
+    capabilities: (ctx) => ({
       generate: {
         maxCount: 1,
-        supportsSize: false,
-        supportsAspectRatio: false,
+        supportsSize: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
+        supportsAspectRatio: isComfyDimensionsConfigured({ cfg: ctx?.cfg, capability: "image" }),
         supportsResolution: false,
       },
       edit: {
@@ -38,7 +39,7 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         supportsAspectRatio: false,
         supportsResolution: false,
       },
-    },
+    }),
     async generateImage(req) {
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("Comfy image generation currently supports at most one reference image");
@@ -54,6 +55,8 @@ export function buildComfyImageGenerationProvider(): ImageGenerationProvider {
         capability: "image",
         outputKinds: ["images"],
         inputImage: req.inputImages?.[0],
+        aspectRatio: req.aspectRatio,
+        size: req.size,
       });
 
       const images: GeneratedImageAsset[] = result.assets.map((asset) => ({
