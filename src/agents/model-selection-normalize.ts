@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
@@ -16,6 +17,7 @@ export type ModelRef = {
 
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  config?: OpenClawConfig;
 };
 
 export function modelKey(provider: string, model: string) {
@@ -51,6 +53,7 @@ function normalizeProviderModelId(
   const staticModelId = normalizeStaticProviderModelId(provider, model, {
     allowManifestNormalization: options?.allowManifestNormalization,
     manifestPlugins: options?.manifestPlugins,
+    config: options?.config,
   });
   if (options?.allowPluginNormalization === false) {
     return staticModelId;

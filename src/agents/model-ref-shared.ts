@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -12,6 +13,9 @@ type StaticModelRef = {
 export type ProviderModelIdNormalizationOptions = {
   allowManifestNormalization?: boolean;
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
 };
 
 export function modelKey(provider: string, model: string): string {
@@ -43,6 +47,9 @@ export function normalizeStaticProviderModelId(
     normalizeProviderModelIdWithManifest({
       provider: normalizedProvider,
       plugins: options.manifestPlugins,
+      config: options.config,
+      env: options.env,
+      workspaceDir: options.workspaceDir,
       context: {
         provider: normalizedProvider,
         modelId: model,

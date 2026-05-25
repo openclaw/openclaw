@@ -192,6 +192,7 @@ export function inferUniqueProviderFromConfiguredModels(
       const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: false,
+        config: params.cfg,
         manifestPlugins: params.manifestPlugins,
       });
       if (!parsed) {
@@ -220,6 +221,7 @@ export function inferUniqueProviderFromConfiguredModels(
         const normalizedModelId = normalizeConfiguredProviderCatalogModelId(providerId, modelId, {
           allowManifestNormalization: params.allowManifestNormalization,
           manifestPlugins: params.manifestPlugins,
+          config: params.cfg,
         });
         if (
           modelId === model ||
@@ -310,6 +312,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      config: params.cfg,
     });
     if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
       return parsed;
@@ -329,6 +332,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      config: params.cfg,
     });
   }
 
@@ -350,6 +354,7 @@ export function resolveConfiguredOpenRouterCompatAlias(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      config: params.cfg,
     });
   }
   if (normalized !== OPENROUTER_COMPAT_FREE_ALIAS || !params.cfg) {
@@ -361,6 +366,7 @@ export function resolveConfiguredOpenRouterCompatAlias(
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
+    config: params.cfg,
   });
 }
 
@@ -380,6 +386,7 @@ function parseModelRefWithCompatAlias(
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
+      config: params.cfg,
     })
   );
 }
@@ -423,10 +430,12 @@ function resolveExactConfiguredProviderRef(
       normalizeStaticProviderModelId(provider, modelRaw.trim(), {
         allowManifestNormalization: params.allowManifestNormalization,
         manifestPlugins: params.manifestPlugins,
+        config: params.cfg,
       }),
       {
         allowManifestNormalization: params.allowManifestNormalization,
         manifestPlugins: params.manifestPlugins,
+        config: params.cfg,
       },
     ),
   };
@@ -1167,7 +1176,10 @@ export function buildConfiguredModelCatalog(params: {
     for (const model of provider.models) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
       const id = rawId
-        ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, { manifestPlugins })
+        ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, {
+            manifestPlugins,
+            config: params.cfg,
+          })
         : "";
       if (!id) {
         continue;
@@ -1325,6 +1337,7 @@ export function resolveAllowedModelSelection(
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
+    config: params.config,
   });
   if (
     params.allowAny ||
@@ -1340,6 +1353,7 @@ export function resolveAllowedModelSelection(
     allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
+    config: params.config,
   });
 }
 
@@ -1424,6 +1438,7 @@ export function createModelVisibilityPolicyWithFallbacks(
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
         manifestPlugins: params.manifestPlugins,
+        config: params.cfg,
       }),
     visibleCatalog: ({ catalog, defaultVisibleCatalog, view }) => {
       if (view === "all") {

@@ -436,7 +436,9 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
       if (!trimmed) {
         return model;
       }
-      const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed);
+      const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed, {
+        config: coerceConfig(config),
+      });
       if (id === model.id) {
         return model;
       }

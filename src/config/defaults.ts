@@ -179,7 +179,10 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
-        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id, {
+          manifestPlugins: options.manifestRegistry?.plugins,
+          config: cfg,
+        });
         if (id !== raw.id) {
           modelMutated = true;
         }
