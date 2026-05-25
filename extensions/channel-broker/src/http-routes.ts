@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-broker";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
-import { resolveChannelBrokerAccount } from "./accounts.js";
+import { isListedChannelBrokerProviderId, resolveChannelBrokerAccount } from "./accounts.js";
 import { receiveBrokerInboundEvent } from "./runtime.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
@@ -130,6 +130,9 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     });
   }
 
+  if (!isListedChannelBrokerProviderId(params.cfg, event.providerId)) {
+    return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
+  }
   const account = resolveChannelBrokerAccount({ cfg: params.cfg, accountId: event.providerId });
   if (!account.enabled || !account.configured) {
     return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });

@@ -58,6 +58,11 @@ export function resolveDefaultChannelBrokerProviderId(cfg: CoreConfig): string {
   });
 }
 
+export function isListedChannelBrokerProviderId(cfg: CoreConfig, providerId: string): boolean {
+  const normalizedProviderId = normalizeAccountId(providerId);
+  return listChannelBrokerProviderIds(cfg).includes(normalizedProviderId);
+}
+
 function normalizePlatformList(values: readonly string[] | undefined): string[] {
   return Array.from(new Set((values ?? []).map((value) => normalizeBrokerPlatformId(value))));
 }
