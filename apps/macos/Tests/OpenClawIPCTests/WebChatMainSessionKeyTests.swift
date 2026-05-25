@@ -89,7 +89,7 @@ struct WebChatMainSessionKeyTests {
         AppStateStore.shared.connectionMode = .local
         defer { AppStateStore.shared.connectionMode = previous }
 
-        let cachedMain = GatewayConnection.shared.cachedMainSessionKey()
+        let cachedMain = await GatewayConnection.shared.cachedMainSessionKey()
         let preferred = await GatewayConnection.shared.cachedPreferredDefaultSessionKey()
         #expect(preferred == cachedMain)
     }
