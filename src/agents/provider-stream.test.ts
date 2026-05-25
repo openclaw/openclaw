@@ -18,6 +18,12 @@ const googleGenerativeModel = {
   id: "gemini-3.5-flash",
 } as never;
 
+const googleVertexModel = {
+  api: "google-vertex",
+  provider: "google",
+  id: "gemini-3.5-flash",
+} as never;
+
 const googleModelResolvedThroughMismatchedProvider = {
   api: "openai-responses",
   provider: "google",
@@ -117,6 +123,25 @@ describe("registerProviderStreamForModel", () => {
               Google: {
                 api: "google-generative-ai",
                 apiKey: "google-key",
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).not.toThrow(/models\.providers\.google/);
+  });
+
+  it("preserves Google Vertex routing when models.providers.google.api is google-vertex", () => {
+    vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
+
+    expect(() =>
+      registerProviderStreamForModel({
+        model: googleVertexModel,
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                api: "google-vertex",
               },
             },
           },
