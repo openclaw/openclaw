@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import type { BrokerInboundEventV1 } from "openclaw/plugin-sdk/channel-broker";
 import { BROKER_PROTOCOL_VERSION, createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -181,14 +182,15 @@ function createMemoryKeyedStore<T>() {
 
 function createOpenKeyedStoreMock() {
   const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
-  return vi.fn(({ namespace }: { namespace: string }) => {
+  const openKeyedStore: PluginRuntime["state"]["openKeyedStore"] = <T>({ namespace }) => {
     let store = stores.get(namespace);
     if (!store) {
       store = createMemoryKeyedStore();
       stores.set(namespace, store);
     }
-    return store;
-  });
+    return store as ReturnType<typeof createMemoryKeyedStore<T>>;
+  };
+  return vi.fn(openKeyedStore);
 }
 
 function brokerConfig(
