@@ -1,0 +1,76 @@
+{
+  "_comment": "twin/ops 1:1 拆分：复制为两份 claworks.json，分别设置 CLAWORKS_STATE_DIR 与 CLAWORKS_GATEWAY_PORT",
+  "twin": {
+    "gateway": { "port": 18800, "bind": "0.0.0.0" },
+    "plugins": {
+      "allow": ["claworks-robot"],
+      "entries": {
+        "claworks-robot": {
+          "enabled": true,
+          "config": {
+            "robot": {
+              "name": "supply-twin",
+              "role": "twin",
+              "host": "127.0.0.1",
+              "port": 18800
+            },
+            "data": {
+              "database_url": "postgresql://claworks:password@localhost:5432/claworks_supply"
+            },
+            "a2a": {
+              "enabled": true,
+              "endpoint": "http://127.0.0.1:18800",
+              "peers": [
+                {
+                  "name": "supply-ops",
+                  "url": "http://127.0.0.1:18801",
+                  "description": "同域编排面 ops Gateway"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "ops": {
+    "gateway": { "port": 18801, "bind": "0.0.0.0" },
+    "plugins": {
+      "allow": ["claworks-robot", "feishu"],
+      "entries": {
+        "claworks-robot": {
+          "enabled": true,
+          "config": {
+            "robot": {
+              "name": "supply-ops",
+              "role": "ops",
+              "host": "127.0.0.1",
+              "port": 18801
+            },
+            "data": {
+              "database_url": "postgresql://claworks:password@localhost:5432/claworks_supply"
+            },
+            "kernel": {
+              "playbook_concurrency": 50,
+              "scheduler_timezone": "Asia/Shanghai"
+            },
+            "a2a": {
+              "enabled": true,
+              "endpoint": "http://127.0.0.1:18801",
+              "peers": [
+                {
+                  "name": "supply-twin",
+                  "url": "http://127.0.0.1:18800",
+                  "description": "同域数据面 twin Gateway"
+                }
+              ]
+            },
+            "hitl": {
+              "default_channel": "feishu"
+            }
+          }
+        }
+      }
+    }
+  }
+}

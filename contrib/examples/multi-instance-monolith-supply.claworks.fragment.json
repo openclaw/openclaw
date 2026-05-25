@@ -1,0 +1,40 @@
+{
+  "gateway": {
+    "port": 18801,
+    "bind": "0.0.0.0"
+  },
+  "plugins": {
+    "allow": ["claworks-robot", "feishu"],
+    "entries": {
+      "claworks-robot": {
+        "enabled": true,
+        "config": {
+          "robot": {
+            "name": "supply-robot",
+            "role": "monolith",
+            "host": "127.0.0.1",
+            "port": 18801
+          },
+          "data": {
+            "database_url": "postgresql://claworks:password@localhost:5432/claworks_supply"
+          },
+          "a2a": {
+            "enabled": true,
+            "endpoint": "http://127.0.0.1:18801",
+            "peers": [
+              {
+                "name": "mfg-robot",
+                "url": "http://127.0.0.1:18800",
+                "description": "制造域 monolith — 独立 Gateway"
+              }
+            ]
+          },
+          "packs": {
+            "paths": ["../claworks-packs"],
+            "installed": ["base", "process-industry"]
+          }
+        }
+      }
+    }
+  }
+}

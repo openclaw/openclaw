@@ -1,0 +1,37 @@
+{
+  "plugins": {
+    "allow": ["claworks"],
+    "entries": {
+      "claworks": {
+        "enabled": true,
+        "config": {
+          "instances": {
+            "mfg": {
+              "role": "monolith",
+              "url": "http://127.0.0.1:18800",
+              "label": "制造部 monolith"
+            },
+            "supply": {
+              "role": "monolith",
+              "url": "http://127.0.0.1:18801",
+              "label": "供应链 monolith"
+            },
+            "supply-twin": {
+              "role": "twin",
+              "url": "http://127.0.0.1:18800",
+              "ops": "supply-ops",
+              "label": "供应链 · 数据面（可选 twin/ops 拆分）"
+            },
+            "supply-ops": {
+              "role": "ops",
+              "url": "http://127.0.0.1:18801",
+              "twin": "supply-twin",
+              "label": "供应链 · 编排面（可选 twin/ops 拆分）"
+            }
+          },
+          "default": "mfg"
+        }
+      }
+    }
+  }
+}
