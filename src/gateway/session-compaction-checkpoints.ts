@@ -83,10 +83,10 @@ function trimSessionCheckpoints(
       byteRemovedNewestFirst.push(checkpoint);
     }
   }
-  const kept = keptNewestFirst.reverse();
+  const kept = keptNewestFirst.toReversed();
   return {
     kept: kept.length > 0 ? kept : undefined,
-    removed: [...countRemoved, ...byteRemovedNewestFirst.reverse()],
+    removed: [...countRemoved, ...byteRemovedNewestFirst.toReversed()],
   };
 }
 
