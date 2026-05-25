@@ -7,10 +7,10 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
+import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
-import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";

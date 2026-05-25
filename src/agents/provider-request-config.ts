@@ -1,4 +1,4 @@
-import type { Api } from "@earendil-works/pi-ai";
+import type { Api } from "openclaw/plugin-sdk/llm";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
   ConfiguredModelProviderRequest,

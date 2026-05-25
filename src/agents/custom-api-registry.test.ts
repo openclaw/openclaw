@@ -3,8 +3,10 @@ import {
   createAssistantMessageEventStream,
   getApiProvider,
   registerBuiltInApiProviders,
+  registerApiProvider,
+  resetApiProviders,
   unregisterApiProviders,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 
@@ -48,5 +50,27 @@ describe("ensureCustomApiRegistered", () => {
     expect(provider.stream(model as never, context as never, options as never)).toBe(stream);
     expect(provider.streamSimple(model as never, context as never, options as never)).toBe(stream);
     expect(streamFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps plugin api providers when refreshing built-ins", () => {
+    const sourceId = "plugin:test-reset-api";
+    const api = "test-reset-plugin-api";
+    const streamFn = vi.fn(() => createAssistantMessageEventStream());
+    const streamSimpleFn = vi.fn(() => createAssistantMessageEventStream());
+    registerApiProvider(
+      {
+        api,
+        stream: streamFn,
+        streamSimple: streamSimpleFn,
+      },
+      sourceId,
+    );
+
+    resetApiProviders();
+
+    expect(getApiProvider(api)).toBeDefined();
+    expect(getApiProvider("openai-responses")).toBeDefined();
+
+    unregisterApiProviders(sourceId);
   });
 });

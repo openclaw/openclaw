@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import {
   testing as sessionMcpTesting,
   getOrCreateSessionMcpRuntime,
-} from "../../agents/pi-bundle-mcp-tools.js";
+} from "../../agents/agent-bundle-mcp-tools.js";
+import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";

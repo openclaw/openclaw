@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
-import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
-import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
+import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
+import { CURRENT_SESSION_VERSION } from "../agents/sessions/index.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -388,8 +388,8 @@ async function ensureSessionRuntimeCleanup(params: {
     await closeTrackedBrowserTabs();
     return undefined;
   }
-  abortEmbeddedPiRun(params.sessionId);
-  const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+  abortEmbeddedAgentRun(params.sessionId);
+  const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
   clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended) {
     await retireSessionMcpRuntime({

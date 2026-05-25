@@ -57,3 +57,9 @@ export function resolveLegacyAgentAccessToken(
   }
   return undefined;
 }
+
+/**
+ * @deprecated Use `resolveLegacyAgentAccessToken`. Kept only for external
+ * provider plugins that still import the retired Pi-named SDK helper.
+ */
+export const resolveLegacyPiAgentAccessToken = resolveLegacyAgentAccessToken;

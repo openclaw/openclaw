@@ -5,7 +5,7 @@ type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
   [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
 };
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
   getOAuthProvider: () => undefined,
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],

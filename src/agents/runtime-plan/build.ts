@@ -1,4 +1,3 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -18,12 +17,13 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
-import { resolvePreparedExtraParams } from "../pi-embedded-runner/extra-params.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
+import { resolvePreparedExtraParams } from "../embedded-agent-runner/extra-params.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type {
@@ -126,7 +126,7 @@ export function buildAgentRuntimeDeliveryPlan(
 
 export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
-    classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
+    classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };
 }
 

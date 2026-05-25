@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -13,7 +13,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-code
 import {
   classifyCompactionReason,
   DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
-} from "../../agents/pi-embedded-runner/compact-reasons.js";
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -63,32 +63,32 @@ import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 
-const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
-  () => import("../../agents/pi-embedded.js"),
+const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
+  () => import("../../agents/embedded-agent.js"),
 );
 
-function loadPiEmbeddedRuntime(): Promise<PiEmbeddedRuntime> {
-  return piEmbeddedRuntimeLoader.load();
+function loadEmbeddedAgentRuntime(): Promise<EmbeddedAgentRuntime> {
+  return embeddedAgentRuntimeLoader.load();
 }
 
-async function compactEmbeddedPiSessionDefault(
-  ...args: Parameters<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>
+async function compactEmbeddedAgentSessionDefault(
+  ...args: Parameters<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>
 ): Promise<
-  Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession>>
+  Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>>
 > {
-  const { compactEmbeddedPiSession } = await loadPiEmbeddedRuntime();
-  return await compactEmbeddedPiSession(...args);
+  const { compactEmbeddedAgentSession } = await loadEmbeddedAgentRuntime();
+  return await compactEmbeddedAgentSession(...args);
 }
 
-async function runEmbeddedPiAgentDefault(
-  ...args: Parameters<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>
-): Promise<Awaited<ReturnType<typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent>>> {
-  const { runEmbeddedPiAgent } = await loadPiEmbeddedRuntime();
-  return await runEmbeddedPiAgent(...args);
+async function runEmbeddedAgentDefault(
+  ...args: Parameters<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>
+): Promise<Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>>> {
+  const { runEmbeddedAgent } = await loadEmbeddedAgentRuntime();
+  return await runEmbeddedAgent(...args);
 }
 
 async function ensureMemoryFlushTargetFile(params: {
@@ -116,10 +116,10 @@ async function ensureMemoryFlushTargetFile(params: {
 }
 
 const memoryDeps = {
-  compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
   runWithModelFallback,
   ensureSelectedAgentHarnessPlugin,
-  runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+  runEmbeddedAgent: runEmbeddedAgentDefault,
   ensureMemoryFlushTargetFile,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
@@ -141,8 +141,8 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
   Object.assign(memoryDeps, {
     runWithModelFallback,
     ensureSelectedAgentHarnessPlugin,
-    compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
-    runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+    compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
+    runEmbeddedAgent: runEmbeddedAgentDefault,
     ensureMemoryFlushTargetFile,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
@@ -236,9 +236,6 @@ function resolveMemoryFlushRuntimeOverrideForProvider(params: {
   const runtime = normalizeLowercaseStringOrEmpty(params.entry?.agentRuntimeOverride);
   if (!runtime || runtime === "auto" || runtime === "default") {
     return undefined;
-  }
-  if (runtime === "pi") {
-    return "pi";
   }
   if (provider === "openai" && runtime === "codex") {
     return "codex";
@@ -645,7 +642,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
   const deps = {
-    compactEmbeddedPiSession: memoryDeps.compactEmbeddedPiSession,
+    compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
     incrementCompactionCount: memoryDeps.incrementCompactionCount,
     refreshQueuedFollowupSession: memoryDeps.refreshQueuedFollowupSession,
   };
@@ -813,7 +810,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.sessionKey ?? params.followupRun.run.sessionKey,
     { storePath: params.storePath },
   );
-  const result = await deps.compactEmbeddedPiSession({
+  const result = await deps.compactEmbeddedAgentSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey: params.runtimePolicySessionKey,
@@ -1195,7 +1192,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
-        const result = await memoryDeps.runEmbeddedPiAgent({
+        const result = await memoryDeps.runEmbeddedAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,

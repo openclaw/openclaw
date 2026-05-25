@@ -87,7 +87,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/run-state.js", () => ({
+vi.mock("../agents/embedded-agent-runner/run-state.js", () => ({
   getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
   listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,

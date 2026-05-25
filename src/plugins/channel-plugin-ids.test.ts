@@ -184,6 +184,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "amazon-bedrock",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["amazon-bedrock"],
+        cliBackends: [],
+      },
+      {
         id: "brave",
         channels: [],
         origin: "global",
@@ -683,6 +691,25 @@ describe("resolveGatewayStartupPluginIds", () => {
       createStartupConfig({
         providerIds: ["demo-provider"],
       }),
+      ["demo-channel", "browser", "memory-core"],
+    ],
+    [
+      "includes bundled model providers selected by agent defaults at startup",
+      createStartupConfig({
+        modelId: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      }),
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for selected model providers",
+      {
+        agents: {
+          defaults: {
+            model: { primary: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0" },
+          },
+        },
+        plugins: { entries: { "amazon-bedrock": { enabled: false } } },
+      } as OpenClawConfig,
       ["demo-channel", "browser", "memory-core"],
     ],
     [
@@ -1618,14 +1645,14 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("does not include Codex when an OpenAI model is manually pinned to PI", () => {
+  it("does not include Codex when an OpenAI model is manually pinned to OpenClaw", () => {
     expectStartupPluginIdsCase({
       config: {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
             models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
             },
           },
         },

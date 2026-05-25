@@ -16,7 +16,7 @@ sidebarTitle: "Models CLI"
     Quick provider overview and examples.
   </Card>
   <Card title="Agent runtimes" href="/concepts/agent-runtimes">
-    PI, Codex, and other agent loop runtimes.
+    OpenClaw, Codex, and other agent loop runtimes.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults">
     Model config keys.
@@ -361,7 +361,7 @@ Marker persistence is source-authoritative: OpenClaw writes markers from the act
 
 ## Related
 
-- [Agent runtimes](/concepts/agent-runtimes) — PI, Codex, and other agent loop runtimes
+- [Agent runtimes](/concepts/agent-runtimes) — OpenClaw, Codex, and other agent loop runtimes
 - [Configuration reference](/gateway/config-agents#agent-defaults) — model config keys
 - [Image generation](/tools/image-generation) — image model configuration
 - [Model failover](/concepts/model-failover) — fallback chains

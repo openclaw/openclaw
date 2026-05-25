@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import type { AgentMessage } from "./runtime/index.js";
+import {
+  hasUnredactedSessionsSpawnAttachments,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;

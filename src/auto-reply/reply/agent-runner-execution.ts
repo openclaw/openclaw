@@ -30,7 +30,7 @@ import {
   resolveModelRefFromString,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
-import { resolveOpenAIRuntimeProviderForPi } from "../../agents/openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
@@ -41,10 +41,10 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isTransientHttpError,
-} from "../../agents/pi-embedded-helpers.js";
-import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
-import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+} from "../../agents/embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -279,7 +279,7 @@ export type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
-      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       fallbackProvider?: string;
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
@@ -290,7 +290,7 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
-type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FallbackSelectionState = Pick<
   SessionEntry,
@@ -1302,9 +1302,6 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   if (!runtime || runtime === "auto" || runtime === "default") {
     return undefined;
   }
-  if (runtime === "pi") {
-    return "pi";
-  }
   if (provider === "openai" && runtime === "codex") {
     return "codex";
   }
@@ -1592,7 +1589,7 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let attemptedRuntimeProvider = fallbackProvider;
@@ -1986,20 +1983,18 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                 });
                 const resolvedCliExecutionProvider =
-                  resolvedSessionRuntimeOverride === "pi"
-                    ? provider
-                    : ((resolvedSessionRuntimeOverride &&
-                      isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
-                        ? resolvedSessionRuntimeOverride
-                        : undefined) ??
-                      resolveCliRuntimeExecutionProvider({
-                        provider,
-                        cfg: runtimeConfig,
-                        agentId: params.followupRun.run.agentId,
-                        modelId: model,
-                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                      }) ??
-                      provider);
+                  (resolvedSessionRuntimeOverride &&
+                  isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
+                    ? resolvedSessionRuntimeOverride
+                    : undefined) ??
+                  resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: params.followupRun.run.agentId,
+                    modelId: model,
+                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                  }) ??
+                  provider;
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
@@ -2137,7 +2132,7 @@ export async function runAgentTurnWithFallback(params: {
                   agentId: params.followupRun.run.agentId,
                   sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
                 });
-            const embeddedRunProvider = resolveOpenAIRuntimeProviderForPi({
+            const embeddedRunProvider = resolveOpenAIRuntimeProvider({
               provider,
               harnessRuntime: agentHarnessPolicy.runtime,
               authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
@@ -2147,8 +2142,8 @@ export async function runAgentTurnWithFallback(params: {
             });
             const embeddedRunHarnessOverride =
               sessionRuntimeOverride ??
-              (agentHarnessPolicy.runtime === "pi" && embeddedRunProvider !== provider
-                ? "pi"
+              (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== provider
+                ? "openclaw"
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;
@@ -2166,7 +2161,7 @@ export async function runAgentTurnWithFallback(params: {
                   milestone: "before_embedded_run",
                 });
                 const result = await agentTurnTiming.measure("embedded_run", () =>
-                  runEmbeddedPiAgent({
+                  runEmbeddedAgent({
                     ...embeddedContext,
                     allowGatewaySubagentBinding: true,
                     trigger: params.isHeartbeat ? "heartbeat" : "user",

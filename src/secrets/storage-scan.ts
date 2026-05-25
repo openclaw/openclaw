@@ -35,9 +35,9 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
 }
 
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  const override = env.OPENCLAW_AGENT_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env);
   }
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }

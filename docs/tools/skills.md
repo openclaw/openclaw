@@ -387,7 +387,7 @@ under `skills.entries` in `~/.openclaw/openclaw.json`:
   `false` disables the skill even if it is bundled or installed.
   The bundled `coding-agent` skill is opt-in: set
   `skills.entries.coding-agent.enabled: true` before exposing it to agents,
-  then make sure one of `claude`, `codex`, `opencode`, or `pi` is installed and
+  then make sure one of `claude`, `codex`, `opencode`, or another supported CLI is installed and
   authenticated for its own CLI.
 </ParamField>
 <ParamField path="apiKey" type='string | { source, provider, id }'>
@@ -495,7 +495,7 @@ skills that cannot currently run there.
 
 When skills are eligible, OpenClaw injects a compact XML list of available
 skills into the system prompt (via `formatSkillsForPrompt` in
-`pi-coding-agent`). The cost is deterministic:
+`session runtime`). The cost is deterministic:
 
 - **Base overhead** (only when ≥1 skill): 195 characters.
 - **Per skill:** 97 characters + the length of the XML-escaped `<name>`, `<description>`, and `<location>` values.

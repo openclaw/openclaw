@@ -303,7 +303,7 @@ export function resolveCliRuntimeExecutionProvider(params: {
 }): string | undefined {
   const provider = normalizeProviderId(params.provider);
   const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
-  if (runtime === "pi") {
+  if (runtime === "openclaw") {
     return undefined;
   }
   if (!runtime || runtime === "auto") {

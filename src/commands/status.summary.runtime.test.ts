@@ -96,7 +96,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
               },
             },
             list: [

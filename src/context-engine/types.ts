@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -247,7 +247,7 @@ export interface ContextEngine {
    * Run transcript maintenance after bootstrap, successful turns, or compaction.
    *
    * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
-   * branch-and-reappend transcript rewrites without depending on Pi internals.
+   * branch-and-reappend transcript rewrites without depending on runner internals.
    */
   maintain?(params: {
     sessionId: string;

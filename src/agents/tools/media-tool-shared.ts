@@ -1,4 +1,4 @@
-import { type Api, type Model } from "@earendil-works/pi-ai";
+import { type Model } from "openclaw/plugin-sdk/llm";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -611,19 +611,16 @@ export function resolveModelFromRegistry(params: {
   modelRegistry: { find: (provider: string, modelId: string) => unknown };
   provider: string;
   modelId: string;
-}): Model<Api> {
+}): Model {
   const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
     allowPluginNormalization: false,
   });
-  let model = params.modelRegistry.find(
-    resolvedRef.provider,
-    resolvedRef.model,
-  ) as Model<Api> | null;
+  let model = params.modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model | null;
   if (!model && !resolvedRef.model.includes("/")) {
     model = params.modelRegistry.find(
       resolvedRef.provider,
       `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model<Api> | null;
+    ) as Model | null;
   }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
@@ -632,7 +629,7 @@ export function resolveModelFromRegistry(params: {
 }
 
 export async function resolveModelRuntimeApiKey(params: {
-  model: Model<Api>;
+  model: Model;
   cfg: OpenClawConfig | undefined;
   agentDir: string;
   authStorage: {

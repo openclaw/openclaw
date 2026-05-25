@@ -47,7 +47,7 @@ function requireOAuthCredential(store: AuthProfileStore, profileId: string): OAu
   return profile;
 }
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
   getOAuthApiKey: vi.fn(async (provider: string, credentials: Record<string, OAuthCredential>) => {
     const credential = credentials[provider];

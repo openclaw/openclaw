@@ -1,4 +1,4 @@
-import type { Api, Message } from "@earendil-works/pi-ai";
+import type { Api, Message } from "openclaw/plugin-sdk/llm";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";

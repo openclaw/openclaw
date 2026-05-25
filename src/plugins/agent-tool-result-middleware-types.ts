@@ -1,11 +1,14 @@
-import type { AgentToolResult as PiAgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "../agents/runtime/index.js";
 
-export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
+export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareRuntime = "pi" | "codex";
+export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
+/** @deprecated Use "openclaw". */
+export type AgentToolResultMiddlewareLegacyRuntime = "pi";
 /** @deprecated Use AgentToolResultMiddlewareRuntime. */
 export type AgentToolResultMiddlewareHarness =
   | AgentToolResultMiddlewareRuntime
+  | AgentToolResultMiddlewareLegacyRuntime
   | "codex-app-server";
 
 export type AgentToolResultMiddlewareEvent = {
@@ -39,7 +42,7 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
-  runtimes?: AgentToolResultMiddlewareRuntime[];
+  runtimes?: Array<AgentToolResultMiddlewareRuntime | AgentToolResultMiddlewareLegacyRuntime>;
   /** @deprecated Use runtimes. */
   harnesses?: AgentToolResultMiddlewareHarness[];
 };

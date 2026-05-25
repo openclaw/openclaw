@@ -317,5 +317,16 @@
   "webhook-path",
   "web-media",
   "zalouser",
-  "zod"
+  "zod",
+  "agent-core",
+  "agent-sessions",
+  "llm",
+  "llm-anthropic",
+  "llm-bedrock",
+  "llm-google-shared",
+  "llm-provider-runtime",
+  "llm-oauth",
+  "llm-openai-codex-responses",
+  "llm-openai-completions",
+  "llm-openai-responses"
 ]

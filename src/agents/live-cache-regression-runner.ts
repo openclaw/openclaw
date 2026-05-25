@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {

@@ -9,7 +9,6 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
-const resolveModelAsyncMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const ensureAuthProfileStoreMock = vi.fn();
 const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
@@ -26,9 +25,9 @@ const registerProviderStreamForModelMock = vi.fn();
 const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("openclaw/plugin-sdk/llm", async () => {
   const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -42,7 +41,7 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   generateSummary: vi.fn(async () => "summary"),
   migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
@@ -53,13 +52,12 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
 }));
 
-vi.mock("./pi-model-discovery.js", () => ({
+vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
   discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
-  resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
+vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
@@ -71,7 +69,7 @@ vi.mock("./model-auth.js", () => ({
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
 }));
 
-vi.mock("./pi-embedded-runner/runs.js", () => ({
+vi.mock("./embedded-agent-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
 

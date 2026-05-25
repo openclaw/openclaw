@@ -89,7 +89,7 @@ The `models` root also owns global model-catalog behavior.
 ## MCP
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` and are
-consumed by embedded Pi and other runtime adapters. The `openclaw mcp list`,
+consumed by embedded OpenClaw and other runtime adapters. The `openclaw mcp list`,
 `show`, `set`, and `unset` commands manage this block without connecting to the
 target server during config edits.
 
@@ -243,7 +243,7 @@ The bundled `codex` plugin owns native Codex app-server harness settings under
 surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
-It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
+It does not enable Codex plugins for OpenClaw provider runs, ACP
 conversation bindings, or any non-Codex harness.
 
 ```json5
@@ -319,7 +319,7 @@ restart after changing native plugin config.
   - `memory.citations`
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
-- Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
+- Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 

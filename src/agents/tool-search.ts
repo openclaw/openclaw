@@ -1,11 +1,5 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
-import type {
-  AgentMessage,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-} from "@earendil-works/pi-agent-core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -19,7 +13,9 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
   wrapToolWithBeforeToolCallHook,
-} from "./pi-tools.before-tool-call.js";
+} from "./agent-tools.before-tool-call.js";
+import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -50,7 +46,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   parentToolCallId?: string;
   input: unknown;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) => Promise<AgentToolResult<unknown>>;
 
 export type ToolSearchTargetTranscriptProjection = {
@@ -1027,7 +1023,7 @@ export class ToolSearchRuntime {
     options?: {
       parentToolCallId?: string;
       signal?: AbortSignal;
-      onUpdate?: AgentToolUpdateCallback<unknown>;
+      onUpdate?: AgentToolUpdateCallback;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
@@ -1190,7 +1186,7 @@ async function runCodeMode(params: {
   code: string;
   config: ToolSearchConfig;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   const runtime = new ToolSearchRuntime(params.ctx, params.config);
   const logs: string[] = [];
@@ -1229,7 +1225,7 @@ async function runCodeModeBridgeRequest(
   options?: {
     parentToolCallId?: string;
     signal?: AbortSignal;
-    onUpdate?: AgentToolUpdateCallback<unknown>;
+    onUpdate?: AgentToolUpdateCallback;
   },
 ): Promise<unknown> {
   const values = Array.isArray(args) ? args : [];
@@ -1269,7 +1265,7 @@ function runCodeModeChild(params: {
   parentToolCallId: string;
   runtime: ToolSearchRuntime;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, buildCodeModeChildArgs(), {
@@ -1444,7 +1440,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         toolCallId: string,
         args: unknown,
         signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback<unknown>,
+        onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> =>
         jsonResult(
           await runCodeMode({ toolCallId, ctx, code: readCode(args), config, signal, onUpdate }),
@@ -1487,7 +1483,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         _toolCallId: string,
         args: unknown,
         signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback<unknown>,
+        onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
         const call = readCallArgs(args);
         return jsonResult(

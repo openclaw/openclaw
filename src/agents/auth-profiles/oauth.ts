@@ -3,7 +3,7 @@ import {
   getOAuthProviders,
   type OAuthCredentials,
   type OAuthProvider,
-} from "@earendil-works/pi-ai/oauth";
+} from "openclaw/plugin-sdk/llm-oauth";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";

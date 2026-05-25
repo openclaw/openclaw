@@ -94,7 +94,7 @@ PR D is the proof layer. It should not be the reason runtime-correctness PRs are
 
 - GPT-5 runs act or fail closed instead of stopping at commentary
 - `update_plan` no longer looks like progress by itself
-- behavior stays GPT-5-first and embedded-Pi scoped
+- behavior stays GPT-5-first and embedded-OpenClaw scoped
 
 ### PR B
 

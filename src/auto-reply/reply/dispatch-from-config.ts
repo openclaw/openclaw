@@ -9,6 +9,13 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/agent-tools.policy.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   buildModelAliasIndex,
@@ -16,13 +23,6 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import {
-  isToolAllowedByPolicies,
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agents/pi-tools.policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -194,7 +194,9 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
-const runtimePluginsLoader = createLazyImportLoader(() => import("./runtime-plugins.runtime.js"));
+const runtimePluginsLoader = createLazyImportLoader(
+  () => import("../../plugins/runtime-plugins.runtime.js"),
+);
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );

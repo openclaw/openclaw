@@ -67,13 +67,13 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBe("claude-cli");
   });
 
-  it("does not override an explicit PI model-runtime policy with CLI auth", () => {
+  it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
     expect(
       resolveCliRuntimeExecutionProvider({
         cfg: createAnthropicAuthConfig({
           order: ["anthropic:claude-cli"],
           models: {
-            "anthropic/opus-4.7": { agentRuntime: { id: "pi" } },
+            "anthropic/opus-4.7": { agentRuntime: { id: "openclaw" } },
           },
         }),
         provider: "anthropic",

@@ -46,6 +46,8 @@ const hoisted = vi.hoisted(() => {
     allowed: true,
     inCatalog: true,
   }));
+  const resolveEmbeddedAgentRuntime = vi.fn(() => "openclaw");
+  const ensureOpenClawModelsJson = vi.fn(async () => {});
   const clearCurrentProviderAuthState = vi.fn();
   const warmCurrentProviderAuthState = vi.fn(async (_cfg?: unknown, _options?: unknown) => {});
   const setAuthProfileFailureHook = vi.fn();
@@ -78,6 +80,8 @@ const hoisted = vi.hoisted(() => {
     resolveHooksGmailModel,
     loadModelCatalog,
     getModelRefStatus,
+    resolveEmbeddedAgentRuntime,
+    ensureOpenClawModelsJson,
     clearCurrentProviderAuthState,
     warmCurrentProviderAuthState,
     setAuthProfileFailureHook,
@@ -169,6 +173,14 @@ vi.mock("../agents/model-selection.js", () => ({
   isCliProvider: hoisted.isCliProvider,
   resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
+}));
+
+vi.mock("../agents/agent-runtime-id.js", () => ({
+  resolveEmbeddedAgentRuntime: hoisted.resolveEmbeddedAgentRuntime,
+}));
+
+vi.mock("../agents/models-config.js", () => ({
+  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
 }));
 
 vi.mock("../agents/model-provider-auth.js", () => ({
@@ -284,6 +296,10 @@ describe("startGatewayPostAttachRuntime", () => {
       allowed: true,
       inCatalog: true,
     });
+    hoisted.resolveEmbeddedAgentRuntime.mockReset();
+    hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("openclaw");
+    hoisted.ensureOpenClawModelsJson.mockReset();
+    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
     hoisted.clearCurrentProviderAuthState.mockClear();
     hoisted.warmCurrentProviderAuthState.mockReset();
     hoisted.warmCurrentProviderAuthState.mockResolvedValue(undefined);

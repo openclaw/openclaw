@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -12,7 +13,6 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
-import { resolveExtraParams } from "../agents/pi-embedded-runner/extra-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import {
   formatProviderModelRef,

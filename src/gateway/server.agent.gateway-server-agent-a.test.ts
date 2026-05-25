@@ -12,7 +12,7 @@ import {
   agentCommand,
   connectOk,
   installGatewayTestHooks,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   startServerWithClient,
   testState,
@@ -451,8 +451,8 @@ describe("gateway server agent", () => {
         { id: "vision", model: "ollama-cloud/gemma4:31b" },
       ],
     };
-    piSdkMock.enabled = true;
-    piSdkMock.models = [
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
       {
         id: "deepseek-v4-flash",
         name: "DeepSeek V4 Flash",

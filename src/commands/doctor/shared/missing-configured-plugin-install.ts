@@ -121,7 +121,6 @@ function addConfiguredAgentRuntimePluginIds(
 ): void {
   for (const runtime of collectConfiguredRuntimePluginIds(cfg, env ?? process.env, {
     includeEnvRuntime: false,
-    includeLegacyAgentRuntimes: false,
   })) {
     addConfiguredPluginId(ids, runtime);
   }

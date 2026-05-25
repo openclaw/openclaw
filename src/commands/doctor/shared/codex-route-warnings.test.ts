@@ -184,7 +184,7 @@ describe("collectCodexRouteWarnings", () => {
       [
         "- Codex runtime is selected, but the Codex plugin is disabled.",
         "- agents.defaults.model.primary: gpt-5.5 resolves to openai/gpt-5.5 with Codex runtime while the Codex plugin is disabled by config.",
-        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.",
+        "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.",
       ].join("\n"),
     ]);
   });
@@ -786,7 +786,7 @@ describe("collectCodexRouteWarnings", () => {
           providers: {
             openai: {
               baseUrl: "https://proxy.example.test/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
             },
           },
         },
@@ -1360,7 +1360,7 @@ describe("collectCodexRouteWarnings", () => {
               id: "worker",
               model: "anthropic/claude-sonnet-4-6",
               models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "pi" } },
+                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
               },
             },
           ],
@@ -1588,7 +1588,7 @@ describe("collectCodexRouteWarnings", () => {
               agentRuntime: { id: "codex" },
             },
             {
-              id: "pi-worker",
+              id: "native-worker",
               model: "anthropic/claude-sonnet-4-6",
             },
           ],
@@ -1793,7 +1793,7 @@ describe("collectCodexRouteWarnings", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -1834,7 +1834,7 @@ describe("collectCodexRouteWarnings", () => {
         modelId: "gpt-5.4",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
   });
 
   it("repairs configured Codex model refs to canonical OpenAI refs with model-scoped Codex runtime", () => {
@@ -2633,7 +2633,7 @@ describe("collectCodexRouteWarnings", () => {
               model: "gpt-5.5",
               models: {
                 "openai/gpt-5.5": {
-                  agentRuntime: { id: "pi" },
+                  agentRuntime: { id: "openclaw" },
                 },
               },
             },
@@ -2756,7 +2756,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.allow).toEqual(["openai", "codex"]);
   });
 
-  it("keeps the Codex plugin disabled when OpenAI routes explicitly use the PI runtime", () => {
+  it("keeps the Codex plugin disabled when OpenAI routes explicitly use the OpenClaw runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -2767,7 +2767,7 @@ describe("collectCodexRouteWarnings", () => {
         models: {
           providers: {
             openai: {
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -2790,10 +2790,10 @@ describe("collectCodexRouteWarnings", () => {
         modelId: "gpt-5.5",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
   });
 
-  it("keeps the Codex plugin disabled when an auth-profiled OpenAI route explicitly uses the PI runtime", () => {
+  it("keeps the Codex plugin disabled when an auth-profiled OpenAI route explicitly uses the OpenClaw runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         plugins: {
@@ -2806,7 +2806,7 @@ describe("collectCodexRouteWarnings", () => {
             model: "openai/gpt-5.5@work",
             models: {
               "openai/gpt-5.5": {
-                agentRuntime: { id: "pi" },
+                agentRuntime: { id: "openclaw" },
               },
             },
           },
@@ -2909,14 +2909,14 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
-  it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise PI/API-key routed", () => {
+  it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise OpenClaw/API-key routed", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
         models: {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -2950,7 +2950,7 @@ describe("collectCodexRouteWarnings", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -2980,7 +2980,7 @@ describe("collectCodexRouteWarnings", () => {
     });
     expect(result.cfg.agents?.list?.[1]?.model).toBe("openai/gpt-5.5");
     expect(result.cfg.agents?.list?.[1]?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
-      id: "pi",
+      id: "openclaw",
     });
     expect(
       resolveAgentHarnessPolicy({
@@ -2996,7 +2996,7 @@ describe("collectCodexRouteWarnings", () => {
         agentId: "worker",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
   });
 
   it("preserves explicit model-scoped runtime pins when repairing legacy model map keys", () => {
@@ -3007,7 +3007,7 @@ describe("collectCodexRouteWarnings", () => {
             models: {
               "openai-codex/gpt-5.5": {
                 alias: "legacy-codex",
-                agentRuntime: { id: "pi" },
+                agentRuntime: { id: "openclaw" },
               },
             },
           },
@@ -3019,7 +3019,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": {
         alias: "legacy-codex",
-        agentRuntime: { id: "pi" },
+        agentRuntime: { id: "openclaw" },
       },
     });
     expect(result.changes.join("\n")).not.toContain(
@@ -3031,7 +3031,7 @@ describe("collectCodexRouteWarnings", () => {
         modelId: "gpt-5.5",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
   });
 
   it("overwrites non-concrete model-scoped runtime pins when preserving Codex route intent", () => {
@@ -3077,7 +3077,7 @@ describe("collectCodexRouteWarnings", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -3105,7 +3105,7 @@ describe("collectCodexRouteWarnings", () => {
         modelId: "gpt-5.4",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
       [
@@ -3158,7 +3158,7 @@ describe("collectCodexRouteWarnings", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -3186,7 +3186,7 @@ describe("collectCodexRouteWarnings", () => {
         modelId: "gpt-5.4",
         config: result.cfg,
       }).runtime,
-    ).toBe("pi");
+    ).toBe("openclaw");
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toStrictEqual([
       [
@@ -3274,7 +3274,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main.agentRuntimeOverride).toBeUndefined();
   });
 
-  it("preserves canonical OpenAI sessions that are explicitly pinned to PI", () => {
+  it("preserves canonical OpenAI sessions that are explicitly pinned to OpenClaw", () => {
     const store: Record<string, SessionEntry> = {
       main: {
         sessionId: "s1",
@@ -3283,8 +3283,8 @@ describe("collectCodexRouteWarnings", () => {
         model: "gpt-5.5",
         providerOverride: "openai",
         modelOverride: "gpt-5.4",
-        agentHarnessId: "pi",
-        agentRuntimeOverride: "pi",
+        agentHarnessId: "openclaw",
+        agentRuntimeOverride: "openclaw",
         authProfileOverride: "openai:work",
       },
     };
@@ -3296,8 +3296,8 @@ describe("collectCodexRouteWarnings", () => {
 
     expect(result).toEqual({ changed: false, sessionKeys: [] });
     expect(store.main.updatedAt).toBe(1);
-    expect(store.main.agentHarnessId).toBe("pi");
-    expect(store.main.agentRuntimeOverride).toBe("pi");
+    expect(store.main.agentHarnessId).toBe("openclaw");
+    expect(store.main.agentRuntimeOverride).toBe("openclaw");
     expect(store.main.authProfileOverride).toBe("openai:work");
   });
 

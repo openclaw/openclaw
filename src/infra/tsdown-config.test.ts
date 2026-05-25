@@ -102,7 +102,6 @@ describe("tsdown config", () => {
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
-      "agents/pi-model-discovery-runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",

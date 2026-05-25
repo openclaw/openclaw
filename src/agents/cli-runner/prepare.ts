@@ -42,16 +42,16 @@ import { claudeCliSessionTranscriptHasContent } from "../command/attempt-executi
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
-} from "../pi-embedded-helpers.js";
-import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
-import { buildCurrentInboundPrompt } from "../pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../embedded-agent-helpers.js";
+import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { resolveAttemptPrependSystemContext } from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt.thread-helpers.js";
+import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";

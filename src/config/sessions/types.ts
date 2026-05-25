@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Skill } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "../../agents/sessions/index.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -610,7 +610,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Stripped from sessions.json on every read and write
    * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
+   * this is undefined and src/agents/embedded-agent-runner/skills-runtime.ts
    * rebuilds it by reloading skill entries from disk.
    */
   resolvedSkills?: Skill[];

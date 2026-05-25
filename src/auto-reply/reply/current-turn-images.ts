@@ -1,4 +1,4 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -126,7 +126,7 @@ export async function resolveCurrentTurnImages(params: {
     );
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
-        `agent-runner: native PI media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
+        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
       return { images: params.images, imageOrder: params.imageOrder };
     }

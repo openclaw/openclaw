@@ -69,13 +69,13 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     );
   });
 
-  it("respects explicit Pi runtime policy on selectable OpenAI agent models", () => {
+  it("respects explicit OpenClaw runtime policy on selectable OpenAI agent models", () => {
     const config = {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
           models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
           },
         },
       },

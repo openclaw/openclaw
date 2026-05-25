@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, StopReason, Usage } from "openclaw/plugin-sdk/llm";
 
 type StreamModelDescriptor = {
   api: string;

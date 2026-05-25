@@ -2,7 +2,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";

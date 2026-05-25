@@ -6,14 +6,20 @@ import {
   getProviders,
   type KnownProvider,
   type Model,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  normalizeDiscoveredAgentModel,
+} from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
 import { collectAnthropicApiKeys } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
@@ -55,12 +61,6 @@ import {
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
-import {
-  discoverAuthStorage,
-  discoverModels,
-  normalizeDiscoveredPiModel,
-} from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -107,7 +107,7 @@ function resolveKnownProvider(provider: string): KnownProvider | undefined {
   return getProviders().find((knownProvider) => knownProvider === normalized);
 }
 
-function loadPrioritizedHighSignalModels(): Model<Api>[] {
+function loadPrioritizedHighSignalModels(): Model[] {
   const idsByProvider = new Map<string, Set<string>>();
   for (const ref of listPrioritizedHighSignalLiveModelRefs()) {
     const bucket = idsByProvider.get(ref.provider);
@@ -118,7 +118,7 @@ function loadPrioritizedHighSignalModels(): Model<Api>[] {
     }
   }
 
-  const models: Model<Api>[] = [];
+  const models: Model[] = [];
   const seen = new Set<string>();
   for (const [provider, ids] of idsByProvider) {
     const knownProvider = resolveKnownProvider(provider);
@@ -387,7 +387,7 @@ describe("resolveLiveModelsJsonTimeoutMs", () => {
 });
 
 function resolveTestReasoning(
-  model: Model<Api>,
+  model: Model,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
   if (!model.reasoning) {
     return undefined;
@@ -411,7 +411,7 @@ function resolveTestReasoning(
   return "low";
 }
 
-function resolveLiveSystemPrompt(model: Model<Api>): string | undefined {
+function resolveLiveSystemPrompt(model: Model): string | undefined {
   if (model.provider === "openai-codex") {
     return "You are a concise assistant. Follow the user's instruction exactly.";
   }
@@ -423,7 +423,7 @@ describe("resolveLiveSystemPrompt", () => {
     expect(
       resolveLiveSystemPrompt({
         provider: "openai-codex",
-      } as Model<Api>),
+      } as Model),
     ).toContain("Follow the user's instruction exactly.");
   });
 
@@ -431,7 +431,7 @@ describe("resolveLiveSystemPrompt", () => {
     expect(
       resolveLiveSystemPrompt({
         provider: "openai",
-      } as Model<Api>),
+      } as Model),
     ).toBeUndefined();
   });
 
@@ -513,7 +513,7 @@ describe("requireToolChoicePayload", () => {
 });
 
 async function completeOkWithRetry(params: {
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   timeoutMs: number;
   progressLabel: string;
@@ -555,7 +555,7 @@ async function completeOkWithRetry(params: {
   return await runOnce(256);
 }
 
-function isDeepSeekV4Model(model: Pick<Model<Api>, "id" | "provider">): boolean {
+function isDeepSeekV4Model(model: Pick<Model, "id" | "provider">): boolean {
   return (
     model.provider === "deepseek" &&
     (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4-pro")
@@ -563,7 +563,7 @@ function isDeepSeekV4Model(model: Pick<Model<Api>, "id" | "provider">): boolean 
 }
 
 async function runDeepSeekV4ReplayRegression(params: {
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   timeoutMs: number;
   progressLabel: string;
@@ -652,7 +652,7 @@ async function runDeepSeekV4ReplayRegression(params: {
 }
 
 async function runExtraTurnProbes(params: {
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   timeoutMs: number;
   progressLabel: string;
@@ -825,7 +825,7 @@ describeLive("live models (profile keys)", () => {
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
       const candidates: Array<{
-        model: Model<Api>;
+        model: Model;
         apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>>;
       }> = [];
 
@@ -882,7 +882,7 @@ describeLive("live models (profile keys)", () => {
             continue;
           }
           candidates.push({
-            model: normalizeDiscoveredPiModel(model, agentDir),
+            model: normalizeDiscoveredAgentModel(model, agentDir),
             apiKeyInfo,
           });
         } catch (err) {

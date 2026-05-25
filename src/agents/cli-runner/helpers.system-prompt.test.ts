@@ -35,14 +35,14 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
-  it("uses CLI backend tool fallback instead of PI tool assumptions", () => {
+  it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       modelDisplay: "test/model",
     });
 
-    expect(prompt).not.toContain("Pi lists the standard tools above");
+    expect(prompt).not.toContain("OpenClaw lists the standard tools above");
     expect(prompt).not.toContain("This runtime enables:");
     expect(prompt).not.toContain("For long waits, avoid rapid poll loops");
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
@@ -60,8 +60,8 @@ describe("buildCliAgentSystemPrompt", () => {
           surfaces: ["cli_backend"],
         },
         {
-          text: "PI-only command guidance.",
-          surfaces: ["pi_main"],
+          text: "OpenClaw-only command guidance.",
+          surfaces: ["openclaw_main"],
         },
       ],
       handler: async () => ({ text: "ok" }),
@@ -74,6 +74,6 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("CLI-only command guidance.");
-    expect(prompt).not.toContain("PI-only command guidance.");
+    expect(prompt).not.toContain("OpenClaw-only command guidance.");
   });
 });

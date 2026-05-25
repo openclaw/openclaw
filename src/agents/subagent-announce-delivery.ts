@@ -25,8 +25,6 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
-import type { AgentInternalEvent } from "./internal-events.js";
 import {
   collectMessagingToolDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
@@ -34,19 +32,21 @@ import {
   hasDeliveredExpectedMedia,
   hasMessagingToolDeliveryEvidence,
   hasVisibleAgentPayload,
-} from "./pi-embedded-runner/delivery-evidence.js";
-import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
-import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
+} from "./embedded-agent-runner/delivery-evidence.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/run-state.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
+import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
   dispatchGatewayMethodInProcess,
   getGlobalHookRunner,
-  isEmbeddedPiRunActive,
+  isEmbeddedAgentRunActive,
   getRuntimeConfig,
-  formatEmbeddedPiQueueFailureSummary,
+  formatEmbeddedAgentQueueFailureSummary,
   loadSessionStore,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
@@ -73,11 +73,11 @@ type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  queueEmbeddedPiMessageWithOutcome: (
+  queueEmbeddedAgentMessageWithOutcome: (
     sessionId: string,
     text: string,
-    options?: EmbeddedPiQueueMessageOptions,
-  ) => EmbeddedPiQueueMessageOutcome | Promise<EmbeddedPiQueueMessageOutcome>;
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => EmbeddedAgentQueueMessageOutcome | Promise<EmbeddedAgentQueueMessageOutcome>;
   sendMessage: typeof sendMessage;
 };
 
@@ -90,22 +90,22 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
     return {
       sessionId,
-      isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+      isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
     };
   },
-  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeAsync,
+  queueEmbeddedAgentMessageWithOutcome: queueEmbeddedAgentMessageWithOutcomeAsync,
   sendMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
 
-async function resolveQueueEmbeddedPiMessageOutcome(
+async function resolveQueueEmbeddedAgentMessageOutcome(
   sessionId: string,
   text: string,
-  options?: EmbeddedPiQueueMessageOptions,
-): Promise<EmbeddedPiQueueMessageOutcome> {
-  return await subagentAnnounceDeliveryDeps.queueEmbeddedPiMessageWithOutcome(
+  options?: EmbeddedAgentQueueMessageOptions,
+): Promise<EmbeddedAgentQueueMessageOutcome> {
+  return await subagentAnnounceDeliveryDeps.queueEmbeddedAgentMessageWithOutcome(
     sessionId,
     text,
     options,
@@ -132,9 +132,9 @@ async function runAnnounceAgentCall(params: {
 
 function formatQueueWakeFailureError(
   fallback: string,
-  outcome: EmbeddedPiQueueMessageOutcome,
+  outcome: EmbeddedAgentQueueMessageOutcome,
 ): string {
-  const summary = formatEmbeddedPiQueueFailureSummary(outcome);
+  const summary = formatEmbeddedAgentQueueFailureSummary(outcome);
   return summary ? `${fallback}: ${summary}` : fallback;
 }
 
@@ -202,7 +202,7 @@ function resolveRequesterSessionActivity(requesterSessionKey: string) {
   const sessionId = entry?.sessionId;
   return {
     sessionId,
-    isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+    isActive: Boolean(sessionId && isEmbeddedAgentRunActive(sessionId)),
   };
 }
 
@@ -481,13 +481,13 @@ async function maybeSteerSubagentAnnounce(params: {
 
   // Subagent announcements are internal handoffs into an active requester turn.
   // Queue modes such as followup/collect apply to user prompts, not this path.
-  const queueOptions: EmbeddedPiQueueMessageOptions = {
+  const queueOptions: EmbeddedAgentQueueMessageOptions = {
     deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     waitForTranscriptCommit: true,
   };
-  let queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+  let queueOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
     sessionId,
     params.steerMessage,
     queueOptions,
@@ -495,7 +495,7 @@ async function maybeSteerSubagentAnnounce(params: {
   if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
     const bestEffortQueueOptions = { ...queueOptions };
     delete bestEffortQueueOptions.waitForTranscriptCommit;
-    queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+    queueOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
       sessionId,
       params.steerMessage,
       bestEffortQueueOptions,
@@ -1001,7 +1001,7 @@ async function sendSubagentAnnounceDirectly(params: {
       requesterActivity.sessionId &&
       requesterActivity.isActive
     ) {
-      const wakeOptions: EmbeddedPiQueueMessageOptions = {
+      const wakeOptions: EmbeddedAgentQueueMessageOptions = {
         deliveryTimeoutMs: announceTimeoutMs,
         steeringMode: "all",
         ...(completionSourceReplyDeliveryMode
@@ -1012,7 +1012,7 @@ async function sendSubagentAnnounceDirectly(params: {
           : {}),
         waitForTranscriptCommit: true,
       };
-      let wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+      let wakeOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
         wakeOptions,
@@ -1020,7 +1020,7 @@ async function sendSubagentAnnounceDirectly(params: {
       if (!wakeOutcome.queued && wakeOutcome.reason === "transcript_commit_wait_unsupported") {
         const bestEffortWakeOptions = { ...wakeOptions };
         delete bestEffortWakeOptions.waitForTranscriptCommit;
-        wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+        wakeOutcome = await resolveQueueEmbeddedAgentMessageOutcome(
           requesterActivity.sessionId,
           params.triggerMessage,
           bestEffortWakeOptions,

@@ -58,17 +58,15 @@ describe("generate-npm-shrinkwrap", () => {
 
   it("parses nested scoped package paths", () => {
     expect(
-      parseLockPackagePath(
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
-      ),
+      parseLockPackagePath("node_modules/@openclaw/codex/node_modules/@anthropic-ai/sdk"),
     ).toEqual([
       {
-        name: "@earendil-works/pi-coding-agent",
-        path: "node_modules/@earendil-works/pi-coding-agent",
+        name: "@openclaw/codex",
+        path: "node_modules/@openclaw/codex",
       },
       {
         name: "@anthropic-ai/sdk",
-        path: "node_modules/@earendil-works/pi-coding-agent/node_modules/@anthropic-ai/sdk",
+        path: "node_modules/@openclaw/codex/node_modules/@anthropic-ai/sdk",
       },
     ]);
   });
@@ -93,20 +91,19 @@ describe("generate-npm-shrinkwrap", () => {
             "lru-cache": "^11.5.0",
           },
         },
-        "node_modules/@earendil-works/pi-coding-agent": {
+        "node_modules/@openclaw/codex": {
           version: "0.75.4",
           hasShrinkwrap: true,
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs": {
+        "node_modules/@openclaw/codex/node_modules/protobufjs": {
           version: "7.5.9",
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob": {
+        "node_modules/@openclaw/codex/node_modules/fetch-blob": {
           version: "4.0.0",
         },
-        "node_modules/@earendil-works/pi-coding-agent/node_modules/fetch-blob/node_modules/node-domexception":
-          {
-            version: "1.0.0",
-          },
+        "node_modules/@openclaw/codex/node_modules/fetch-blob/node_modules/node-domexception": {
+          version: "1.0.0",
+        },
       },
     };
     const overrideRules = exactOverrideRulesFromOverrides({
@@ -116,13 +113,11 @@ describe("generate-npm-shrinkwrap", () => {
 
     expect(collectOverrideViolations(lockfile, overrideRules)).toHaveLength(2);
     expect(disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules)).toEqual([
-      "node_modules/@earendil-works/pi-coding-agent",
+      "node_modules/@openclaw/codex",
     ]);
-    expect(lockfile.packages["node_modules/@earendil-works/pi-coding-agent"]).not.toHaveProperty(
-      "hasShrinkwrap",
-    );
+    expect(lockfile.packages["node_modules/@openclaw/codex"]).not.toHaveProperty("hasShrinkwrap");
     expect(
-      lockfile.packages["node_modules/@earendil-works/pi-coding-agent/node_modules/protobufjs"],
+      lockfile.packages["node_modules/@openclaw/codex/node_modules/protobufjs"],
     ).toBeUndefined();
   });
 

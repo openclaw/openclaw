@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded-runner/runs.js";
-import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { CURRENT_SESSION_VERSION } from "../../agents/sessions/index.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -697,7 +697,7 @@ async function interruptSessionRunIfActive(params: {
   });
   const hasEmbeddedRun =
     typeof params.sessionId === "string" && params.sessionId
-      ? isEmbeddedPiRunActive(params.sessionId)
+      ? isEmbeddedAgentRunActive(params.sessionId)
       : false;
 
   if (!hasTrackedRun && !hasEmbeddedRun) {
@@ -737,13 +737,13 @@ async function interruptSessionRunIfActive(params: {
   }
 
   if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedPiRun(params.sessionId);
+    abortEmbeddedAgentRun(params.sessionId);
   }
 
   clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
 
   if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedPiRunEnd(params.sessionId, 15_000);
+    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
     if (!ended) {
       return {
         interrupted: true,
@@ -2318,9 +2318,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         phase: "start",
         sessionKey: target.canonicalKey,
       });
-      let result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+      let result: Awaited<ReturnType<typeof compactEmbeddedAgentSession>>;
       try {
-        result = await compactEmbeddedPiSession({
+        result = await compactEmbeddedAgentSession({
           sessionId,
           sessionKey: target.canonicalKey,
           allowGatewaySubagentBinding: true,

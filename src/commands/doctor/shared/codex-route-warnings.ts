@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-codex-routing.js";
-import { normalizeEmbeddedAgentRuntime } from "../../../agents/pi-embedded-runner/runtime.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
@@ -68,13 +68,16 @@ type CodexSessionRouteRepairSummary = {
 };
 
 function normalizeRuntimeString(value: unknown): string | undefined {
-  const normalized = normalizeString(value);
-  return normalized ? normalizeEmbeddedAgentRuntime(normalized) : undefined;
+  return normalizeOptionalAgentRuntimeId(value);
 }
 
 function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
   const record = asMutableRecord(value);
   return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
+}
+
+function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig | undefined {
+  return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
 function isOpenAICodexModelRef(model: string | undefined): model is string {
@@ -582,7 +585,9 @@ function collectLegacyLosslessCompactionConfigs(params: {
   ignoreLegacyAgentRuntimePins?: boolean;
 }): LegacyLosslessCompactionConfig[] {
   const defaults = params.cfg.agents?.defaults;
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   const hits = collectLegacyLosslessCompactionForAgent({
@@ -643,7 +648,9 @@ function collectUnsupportedCodexCompactionOverrides(params: {
   ignoreLegacyAgentRuntimePins?: boolean;
 }): UnsupportedCodexCompactionOverride[] {
   const defaults = params.cfg.agents?.defaults;
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   const hits = collectUnsupportedCodexCompactionOverridesForAgent({
@@ -702,7 +709,7 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   if (!hasDefaultModel && !hasDefaultProvider) {
     return consumers;
   }
-  const defaultsRuntime = defaults?.agentRuntime;
+  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   const inheritedModelRef = readAgentPrimaryModelRef(defaults);
   const defaultUsesCodexCompaction = agentUsesCodexRuntimeForCompaction({
     cfg: params.cfg,
@@ -780,7 +787,9 @@ function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
   if (!hasDefaultLosslessProvider && !hasDefaultModel) {
     return false;
   }
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultUsesCodexCompaction = agentUsesCodexRuntimeForCompaction({
     cfg: params.cfg,
     agent: defaults,
@@ -903,7 +912,7 @@ function collectAgentModelRefs(params: {
 function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
-  const defaultsRuntime = defaults?.agentRuntime;
+  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   collectAgentModelRefs({
     hits,
     agent: defaults,
@@ -1382,8 +1391,8 @@ function collectCodexRuntimeModelPolicyRefs(params: {
     if (!trimmed) {
       continue;
     }
-    const runtime = normalizeEmbeddedAgentRuntime(
-      normalizeString(asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id),
+    const runtime = normalizeRuntimeString(
+      asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
     );
     if (runtime === "codex") {
       params.refs.push({ path: `${params.path}.${trimmed}`, modelRef: trimmed });
@@ -2214,7 +2223,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   );
   const defaultsRuntime = ignoreLegacyAgentRuntimePins
     ? undefined
-    : nextConfig.agents?.defaults?.agentRuntime;
+    : readLegacyDefaultsRuntime(nextConfig.agents?.defaults);
   const rewrittenInheritedCompactionModels = new Map<string, string>();
   rewriteAgentModelRefs({
     cfg: nextConfig,
@@ -2408,8 +2417,8 @@ function formatDisabledCodexPluginWarning(params: {
   blockedOutsideEntry: boolean;
 }): string {
   const fixHint = params.blockedOutsideEntry
-    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to a PI runtime policy."
-    : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.";
+    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to an OpenClaw runtime policy."
+    : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.";
   return [
     "- Codex runtime is selected, but the Codex plugin is disabled.",
     ...params.hits.map(

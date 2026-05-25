@@ -4,17 +4,16 @@ import {
   type Api,
   type AssistantMessage,
   type Model,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
 export const LIVE_CACHE_TEST_ENABLED =
@@ -25,7 +24,7 @@ const DEFAULT_TIMEOUT_MS = 90_000;
 
 export type LiveResolvedModel = {
   apiKey: string;
-  model: Model<Api>;
+  model: Model;
 };
 
 export type LiveResolvedModelPool = {
@@ -129,14 +128,16 @@ export function buildStableCachePrefix(tag: string, sections = 160): string {
 }
 
 export function extractAssistantText(message: AssistantMessage): string {
-  return normalizeStringEntries(
-    message.content.filter((block) => block.type === "text").map((block) => block.text),
-  ).join(" ");
+  return message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function buildAssistantHistoryTurn(
   text: string,
-  model?: Pick<Model<Api>, "api" | "provider" | "id">,
+  model?: Pick<Model, "api" | "provider" | "id">,
 ): AssistantMessage {
   return buildAssistantMessageWithZeroUsage({
     model: {
@@ -210,7 +211,7 @@ export async function resolveLiveDirectModelPool(params: {
     (model) => normalizeProviderId(model.provider) === params.provider && model.api === params.api,
   );
 
-  let resolvedModel: Model<Api> | undefined;
+  let resolvedModel: Model | undefined;
   if (parsed) {
     resolvedModel = candidates.find(
       (model) =>

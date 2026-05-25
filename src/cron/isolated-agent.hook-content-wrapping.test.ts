@@ -1,7 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import {
   DEFAULT_MESSAGE,
   GMAIL_MODEL,
@@ -12,7 +12,7 @@ import {
 import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
 function lastEmbeddedPrompt(): string {
-  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  const calls = vi.mocked(runEmbeddedAgent).mock.calls;
   const call = calls[calls.length - 1];
   const prompt = call?.[0]?.prompt;
   if (typeof prompt !== "string") {
@@ -24,7 +24,7 @@ function lastEmbeddedPrompt(): string {
 describe("runCronIsolatedAgentTurn hook content wrapping", () => {
   beforeEach(() => {
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+    vi.mocked(runEmbeddedAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 

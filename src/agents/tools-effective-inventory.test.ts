@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { createOpenClawCodingTools } from "./pi-tools.js";
+import type { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 function mockTool(params: {
@@ -44,7 +44,7 @@ vi.mock("./agent-scope.js", async () => {
   };
 });
 
-vi.mock("./pi-tools.js", () => ({
+vi.mock("./agent-tools.js", () => ({
   createOpenClawCodingTools: (options?: Parameters<typeof createOpenClawCodingTools>[0]) =>
     effectiveInventoryState.createToolsMock(options),
 }));
@@ -60,7 +60,7 @@ vi.mock("./channel-tools.js", () => ({
     effectiveInventoryState.channelMeta[tool.name],
 }));
 
-vi.mock("./pi-tools.policy.js", () => ({
+vi.mock("./agent-tools.policy.js", () => ({
   resolveEffectiveToolPolicy: () => effectiveInventoryState.effectivePolicy,
 }));
 

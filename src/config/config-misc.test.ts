@@ -1143,7 +1143,7 @@ describe("config paths", () => {
 describe("config strict validation", () => {
   it("rejects unknown fields", () => {
     const res = validateConfigObject({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
@@ -1317,7 +1317,7 @@ describe("config strict validation", () => {
           },
           list: [
             {
-              id: "pi",
+              id: "openclaw",
               sandbox: {
                 perSession: false,
               },

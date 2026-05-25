@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   getApiKeyForModel as resolveModelApiKey,
   resolveApiKeyForProvider as resolveProviderApiKey,
@@ -24,7 +24,7 @@ export async function resolveApiKeyForProvider(
  * `prepareRuntimeAuth` exchange on top of the standard credential lookup.
  */
 export async function getRuntimeAuthForModel(params: {
-  model: Model<Api>;
+  model: Model;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<ResolvedProviderRuntimeAuth> {

@@ -26,7 +26,7 @@ const {
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }],
 }));

@@ -1,4 +1,4 @@
-import { type Context, complete } from "@earendil-works/pi-ai";
+import { type Context, complete } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";

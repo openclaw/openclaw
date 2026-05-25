@@ -21,7 +21,7 @@ This parity program fixes those gaps in four reviewable slices.
 
 ### PR A: strict-agentic execution
 
-This slice adds an opt-in `strict-agentic` execution contract for embedded Pi GPT-5 runs.
+This slice adds an opt-in `strict-agentic` execution contract for embedded OpenClaw GPT-5 runs.
 
 When enabled, OpenClaw stops accepting plan-only turns as "good enough" completion. If the model only says what it intends to do and does not actually use tools or make progress, OpenClaw retries with an act-now steer and then fails closed with an explicit blocked state instead of silently ending the task.
 
@@ -104,7 +104,7 @@ to:
 
 ```mermaid
 flowchart TD
-    A["User request"] --> B["Embedded Pi runtime"]
+    A["User request"] --> B["Embedded OpenClaw runtime"]
     B --> C["Strict-agentic execution contract"]
     B --> D["Provider-owned tool compatibility"]
     B --> E["Runtime truthfulness"]

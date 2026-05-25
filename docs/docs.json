@@ -73,6 +73,14 @@
       "destination": "/cli/mcp"
     },
     {
+      "source": "/pi",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi-dev",
+      "destination": "/openclaw-agent-runtime"
+    },
+    {
       "source": "/providers/modelstudio",
       "destination": "/providers/qwen"
     },
@@ -1050,7 +1058,7 @@
               },
               {
                 "group": "Advanced setup",
-                "pages": ["start/setup", "pi-dev"]
+                "pages": ["start/setup", "openclaw-agent-runtime"]
               }
             ]
           },
@@ -1767,7 +1775,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
-                  "pi",
+                  "agent-runtime-architecture",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",

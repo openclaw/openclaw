@@ -63,7 +63,7 @@ vi.mock("./status.summary.runtime.js", () => ({
       provider: "openai",
       model: "gpt-5.5",
     })),
-    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Pi Default"),
+    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
 }));

@@ -618,7 +618,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "agentToolResultMiddleware": ["pi", "codex"],
+    "agentToolResultMiddleware": ["openclaw", "codex"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
