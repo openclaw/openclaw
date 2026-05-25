@@ -187,7 +187,8 @@ final class GatewayConnectionController {
     }
 
     private func connectDiscoveredGateway(
-        _ gateway: GatewayDiscoveryModel.DiscoveredGateway) async -> String?
+        _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        forceReconnect: Bool = false) async -> String?
     {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -251,7 +252,8 @@ final class GatewayConnectionController {
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            forceReconnect: forceReconnect)
         return nil
     }
 
@@ -263,7 +265,8 @@ final class GatewayConnectionController {
         host: String,
         port: Int,
         useTLS: Bool,
-        authOverride: ManualAuthOverride? = nil) async
+        authOverride: ManualAuthOverride? = nil,
+        forceReconnect: Bool = false) async
     {
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
@@ -325,20 +328,21 @@ final class GatewayConnectionController {
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            forceReconnect: forceReconnect)
     }
 
     func connectLastKnown() async {
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
         case let .manual(host, port, useTLS, _):
-            await self.connectManual(host: host, port: port, useTLS: useTLS)
+            await self.connectManual(host: host, port: port, useTLS: useTLS, forceReconnect: true)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
                 _ = await self.connectSavedManualEndpointFallback()
                 return
             }
-            _ = await self.connectDiscoveredGateway(gateway)
+            _ = await self.connectDiscoveredGateway(gateway, forceReconnect: true)
         }
     }
 
@@ -683,26 +687,21 @@ final class GatewayConnectionController {
         tls: GatewayTLSParams?,
         token: String?,
         bootstrapToken: String?,
-        password: String?)
+        password: String?,
+        forceReconnect: Bool = false)
     {
         guard let appModel else { return }
         let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
-
-        Task { [weak appModel] in
-            guard let appModel else { return }
-            await MainActor.run {
-                appModel.gatewayStatusText = "Connecting…"
-            }
-            let cfg = GatewayConnectConfig(
-                url: url,
-                stableID: gatewayStableID,
-                tls: tls,
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password,
-                nodeOptions: connectOptions)
-            appModel.applyGatewayConnectConfig(cfg)
-        }
+        appModel.gatewayStatusText = "Connecting…"
+        let cfg = GatewayConnectConfig(
+            url: url,
+            stableID: gatewayStableID,
+            tls: tls,
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            nodeOptions: connectOptions)
+        appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
     }
 
     private func resolveDiscoveredTLSParams(

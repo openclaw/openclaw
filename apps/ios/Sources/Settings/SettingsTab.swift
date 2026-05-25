@@ -27,6 +27,8 @@ struct SettingsTab: View {
     @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
+    @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
+        TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
@@ -302,6 +304,10 @@ struct SettingsTab: View {
                             "Background Listening",
                             isOn: self.$talkBackgroundEnabled,
                             help: "Keeps listening while the app is backgrounded. Uses more battery.")
+                        self.featureToggle(
+                            "Speakerphone",
+                            isOn: self.talkSpeakerphoneBinding,
+                            help: "Routes Talk audio to the loudspeaker when headphones or Bluetooth audio are not connected.")
 
                         NavigationLink {
                             VoiceWakeWordsSettingsView()
@@ -689,6 +695,15 @@ struct SettingsTab: View {
                 let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(newValue) ?? ""
                 self.talkRealtimeVoiceSelectionRaw = voice
                 self.appModel.setTalkRealtimeVoiceSelection(voice)
+            })
+    }
+
+    private var talkSpeakerphoneBinding: Binding<Bool> {
+        Binding(
+            get: { self.talkSpeakerphoneEnabled },
+            set: { newValue in
+                self.talkSpeakerphoneEnabled = newValue
+                self.appModel.setTalkSpeakerphoneEnabled(newValue)
             })
     }
 

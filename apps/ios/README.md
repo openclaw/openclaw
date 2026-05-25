@@ -90,6 +90,18 @@ Archive and upload to TestFlight:
 pnpm ios:beta
 ```
 
+## App Store Screenshot Generator
+
+Marketing screenshot composition lives in `apps/ios/app-store-screenshots/`. It is a standalone Next.js editor scaffolded from `ParthJadhav/app-store-screenshots` and seeded with simulator captures from the current iOS UI branch.
+
+```bash
+cd apps/ios/app-store-screenshots
+pnpm install
+pnpm dev
+```
+
+Open `http://localhost:3101`, edit the deck, then use **Export bundle** to generate Apple App Store screenshot PNGs for the supported iPhone sizes.
+
 If you need to force a specific build number:
 
 ```bash

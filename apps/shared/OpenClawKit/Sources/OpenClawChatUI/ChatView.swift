@@ -11,6 +11,7 @@ public struct OpenClawChatView: View {
     }
 
     @State private var viewModel: OpenClawChatViewModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
@@ -162,6 +163,10 @@ public struct OpenClawChatView: View {
         .onChange(of: self.viewModel.sessionKey) { _, _ in
             self.hasPerformedInitialScroll = false
             self.isPinnedToBottom = true
+        }
+        .onChange(of: self.scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            self.viewModel.resumeFromForeground()
         }
         .onChange(of: self.viewModel.isSending) { _, isSending in
             // Scroll to bottom when user sends a message, even if scrolled up.

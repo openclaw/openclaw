@@ -405,8 +405,13 @@ final class NodeAppModel {
             self.beginBackgroundConnectionGracePeriod()
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
-            let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
+            let talkCaptureActive = self.talkMode.hasActiveAudioCapture
+            let shouldKeepTalkActive = keepTalkActive && talkCaptureActive
+            GatewayDiagnostics.log(
+                "node app model: background talk keepActive=\(shouldKeepTalkActive) "
+                    + "setting=\(keepTalkActive) enabled=\(self.talkMode.isEnabled) active=\(talkCaptureActive)")
             self.backgroundTalkKeptActive = shouldKeepTalkActive
+            self.talkMode.setForegroundAudioCaptureAllowed(shouldKeepTalkActive)
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground(keepActive: shouldKeepTalkActive)
         case .active, .inactive:
             self.isBackgrounded = false
@@ -416,6 +421,7 @@ final class NodeAppModel {
                 self.startGatewayHealthMonitor()
             }
             if phase == .active {
+                self.talkMode.setForegroundAudioCaptureAllowed(true)
                 self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.backgroundVoiceWakeSuspended)
                 self.backgroundVoiceWakeSuspended = false
                 Task { [weak self] in
@@ -693,6 +699,11 @@ final class NodeAppModel {
         }
         await self.talkMode.reloadConfig()
         await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll_connected")
+    }
+
+    func setTalkSpeakerphoneEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: TalkDefaults.speakerphoneEnabledKey)
+        self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
@@ -1885,13 +1896,13 @@ extension NodeAppModel {
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        connectOptions: GatewayConnectOptions)
+        connectOptions: GatewayConnectOptions,
+        forceReconnect: Bool = false)
     {
         let stableID = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
         let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
-
-        self.activeGatewayConnectConfig = GatewayConnectConfig(
+        let nextConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
             tls: tls,
@@ -1899,13 +1910,24 @@ extension NodeAppModel {
             bootstrapToken: bootstrapToken,
             password: password,
             nodeOptions: connectOptions)
-        self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
-        if self.shouldStartOperatorGatewayLoop(
+        let operatorLoopRequired = self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
             stableID: effectiveStableID)
+        if let activeConfig = self.activeGatewayConnectConfig,
+           activeConfig.hasSameConnectionInputs(as: nextConfig),
+           self.nodeGatewayTask != nil,
+           self.operatorGatewayTask != nil || !operatorLoopRequired,
+           !forceReconnect
         {
+            self.gatewayAutoReconnectEnabled = true
+            return
+        }
+
+        self.activeGatewayConnectConfig = nextConfig
+        self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
+        if operatorLoopRequired {
             self.startOperatorGatewayLoop(
                 url: url,
                 stableID: effectiveStableID,
@@ -1929,8 +1951,7 @@ extension NodeAppModel {
     }
 
     /// Preferred entry-point: apply a single config object and start both sessions.
-    func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig) {
-        self.activeGatewayConnectConfig = cfg
+    func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig, forceReconnect: Bool = false) {
         self.connectToGateway(
             url: cfg.url,
             // Preserve the caller-provided stableID (may be empty) and let connectToGateway
@@ -1940,7 +1961,8 @@ extension NodeAppModel {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
-            connectOptions: cfg.nodeOptions)
+            connectOptions: cfg.nodeOptions,
+            forceReconnect: forceReconnect)
     }
 
     func disconnectGateway() {

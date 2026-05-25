@@ -134,6 +134,10 @@ public final class OpenClawChatViewModel {
         Task { await self.bootstrap() }
     }
 
+    public func resumeFromForeground() {
+        Task { await self.refreshPendingRunAfterForeground() }
+    }
+
     public func send() {
         self.logDiagnostic(
             "chat.ui send invoked sessionKey=\(self.sessionKey) "
@@ -296,6 +300,20 @@ public final class OpenClawChatViewModel {
         } catch {
             self.errorText = error.localizedDescription
             chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func refreshPendingRunAfterForeground() async {
+        guard self.pendingRunCount > 0 else { return }
+        self.logDiagnostic(
+            "chat.ui foreground refresh sessionKey=\(self.sessionKey) "
+                + "pending=\(self.pendingRunCount)")
+        await self.refreshHistoryAfterRun()
+        await self.pollHealthIfNeeded(force: true)
+        if self.hasAssistantMessageAfterLatestUser() {
+            self.clearPendingRuns(reason: nil)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
         }
     }
 
@@ -1226,6 +1244,11 @@ public final class OpenClawChatViewModel {
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
         let isOurRun = chat.runId.flatMap { self.pendingRuns.contains($0) } ?? false
+        if let runId = chat.runId {
+            self.logDiagnostic(
+                "chat.ui event chat state=\(chat.state ?? "unknown") "
+                    + "runId=\(runId) ours=\(isOurRun) pending=\(self.pendingRunCount)")
+        }
 
         // Gateway may publish canonical session keys (for example "agent:main:main")
         // even when this view currently uses an alias key (for example "main").
@@ -1350,6 +1373,9 @@ public final class OpenClawChatViewModel {
         if !isPendingRun, !isLegacySessionStream {
             return
         }
+        self.logDiagnostic(
+            "chat.ui event agent stream=\(evt.stream) "
+                + "runId=\(evt.runId) pending=\(self.pendingRunCount)")
 
         switch evt.stream {
         case "assistant":
@@ -1383,6 +1409,7 @@ public final class OpenClawChatViewModel {
                 guard await MainActor.run(resultType: Bool.self, body: { [weak self] in
                     guard let self else { return false }
                     return self.sessionKey == sessionKey &&
+                        self.pendingRuns.contains(runId) &&
                         !self.hasAssistantMessage(after: userMessageTimestamp)
                 }) else {
                     return

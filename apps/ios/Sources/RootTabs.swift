@@ -155,6 +155,7 @@ struct RootTabs: View {
             .onAppear { self.maybeAutoOpenSettings() }
             .onAppear { self.maybeShowQuickSetup() }
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
+            .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
                 self.updateIdleTimer()
                 self.updateHomeCanvasState()
@@ -276,7 +277,8 @@ struct RootTabs: View {
     }
 
     private func updateIdleTimer() {
-        UIApplication.shared.isIdleTimerDisabled = (self.scenePhase == .active && self.preventSleep)
+        UIApplication.shared.isIdleTimerDisabled =
+            self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
     }
 
     private func updateCanvasState() {

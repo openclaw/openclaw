@@ -323,7 +323,7 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
-    autoRespondToAudio: false,
+    autoRespondToAudio: !params.forceAgentConsultOnFinalTranscript,
     interruptResponseOnInputAudio: true,
     tools: params.tools,
     markStrategy: "ack-immediately",
@@ -426,8 +426,6 @@ export function createTalkRealtimeRelaySession(
         }
         if (params.forceAgentConsultOnFinalTranscript) {
           scheduleForcedAgentConsult(relay, question);
-        } else {
-          bridge.sendUserMessage(question);
         }
       }
     },

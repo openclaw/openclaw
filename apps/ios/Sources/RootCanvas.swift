@@ -153,6 +153,7 @@ struct RootCanvas: View {
         .onAppear { self.evaluateOnboardingPresentation(force: false) }
         .onAppear { self.maybeAutoOpenSettings() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
+        .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
         .onChange(of: self.scenePhase) { _, newValue in
             self.updateIdleTimer()
             self.updateHomeCanvasState()
@@ -233,7 +234,8 @@ struct RootCanvas: View {
     }
 
     private func updateIdleTimer() {
-        UIApplication.shared.isIdleTimerDisabled = (self.scenePhase == .active && self.preventSleep)
+        UIApplication.shared.isIdleTimerDisabled =
+            self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
     }
 
     private func updateCanvasDebugStatus() {

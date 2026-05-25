@@ -73,6 +73,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 + "len=\(message.count) attachments=\(attachments.count)"
         Self.logger.info(
             "\(startLogMessage, privacy: .public)")
+        GatewayDiagnostics.log(startLogMessage)
         struct Params: Codable {
             var sessionKey: String
             var message: String
@@ -95,9 +96,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
             let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
             Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
+            GatewayDiagnostics.log("chat.send ok runId=\(decoded.runId) status=\(decoded.status)")
             return decoded
         } catch {
             Self.logger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("chat.send failed error=\(error.localizedDescription)")
             throw error
         }
     }

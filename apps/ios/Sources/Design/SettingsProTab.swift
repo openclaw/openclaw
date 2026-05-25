@@ -7,6 +7,9 @@ struct SettingsProTab: View {
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
+    @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
+    @AppStorage(TalkDefaults.speakerphoneEnabledKey) private var talkSpeakerphoneEnabled: Bool =
+        TalkDefaults.speakerphoneEnabledByDefault
     @AppStorage("location.enabledMode") private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @State private var isReconnectingGateway = false
@@ -228,6 +231,42 @@ struct SettingsProTab: View {
                         detail: self.appModel.talkMode.gatewayTalkTransportLabel,
                         value: self.appModel.talkMode.gatewayTalkConfigLoaded ? "loaded" : "not loaded",
                         color: self.appModel.talkMode.gatewayTalkConfigLoaded ? OpenClawBrand.ok : .secondary)
+                    Divider().padding(.leading, 60)
+                    Toggle(isOn: self.talkSpeakerphoneBinding) {
+                        HStack(spacing: 12) {
+                            ProIconBadge(
+                                systemName: self.talkSpeakerphoneEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                                color: self.talkSpeakerphoneEnabled ? OpenClawBrand.accent : .secondary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Speakerphone")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Route Talk audio to the loudspeaker")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(.vertical, 10)
+                    Divider().padding(.leading, 60)
+                    Toggle(isOn: self.$talkBackgroundEnabled) {
+                        HStack(spacing: 12) {
+                            ProIconBadge(
+                                systemName: self.talkBackgroundEnabled ? "lock.open.display" : "lock.display",
+                                color: self.talkBackgroundEnabled ? OpenClawBrand.accent : .secondary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Background Listening")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Keep active Talk sessions running when the app backgrounds")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(.vertical, 10)
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -429,5 +468,14 @@ struct SettingsProTab: View {
             return label
         }
         return self.appModel.talkMode.gatewayTalkConfigLoaded ? "Gateway" : "Not loaded"
+    }
+
+    private var talkSpeakerphoneBinding: Binding<Bool> {
+        Binding(
+            get: { self.talkSpeakerphoneEnabled },
+            set: { newValue in
+                self.talkSpeakerphoneEnabled = newValue
+                self.appModel.setTalkSpeakerphoneEnabled(newValue)
+            })
     }
 }
