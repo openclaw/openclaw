@@ -99,4 +99,12 @@ Fluent in over six million error messages.
     expect(merged).toContain("- Name: New Name");
     expect(merged).toContain("- Emoji: 🦀");
   });
+
+  it("updates code-span-wrapped writable labels instead of inserting duplicates", () => {
+    const merged = mergeIdentityMarkdownContent("- **`Name`**: Old Name\n", {
+      name: "New Name",
+    });
+
+    expect(merged).toBe("- Name: New Name\n");
+  });
 });

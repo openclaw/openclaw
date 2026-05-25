@@ -39,6 +39,10 @@ function normalizeIdentityValue(value: string): string {
   return normalizeLowercaseStringOrEmpty(normalized.replace(/\s+/g, " "));
 }
 
+function normalizeIdentityLabel(label: string): string {
+  return normalizeLowercaseStringOrEmpty(label.replace(/[*_`]/g, ""));
+}
+
 function isIdentityPlaceholder(value: string): boolean {
   const normalized = normalizeIdentityValue(value);
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
@@ -53,9 +57,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (colonIndex === -1) {
       continue;
     }
-    const label = normalizeLowercaseStringOrEmpty(
-      cleaned.slice(0, colonIndex).replace(/[*_`]/g, ""),
-    );
+    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
     const value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_`\s]+|[*_`\s]+$/g, "")
@@ -104,8 +106,16 @@ function buildIdentityLine(label: string, value: string): string {
 }
 
 function matchesIdentityLabel(line: string, label: string): boolean {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^\\s*-\\s*(?:\\*\\*)?${escaped}(?:\\*\\*)?\\s*:`, "i").test(line.trim());
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("-")) {
+    return false;
+  }
+  const cleaned = trimmed.replace(/^\s*-\s*/, "");
+  const colonIndex = cleaned.indexOf(":");
+  if (colonIndex === -1) {
+    return false;
+  }
+  return normalizeIdentityLabel(cleaned.slice(0, colonIndex)) === normalizeIdentityLabel(label);
 }
 
 function normalizeIdentityContent(content: string | undefined): string[] {
@@ -123,9 +133,7 @@ function resolveIdentityInsertIndex(lines: string[]): number {
     if (colonIndex === -1) {
       continue;
     }
-    const label = normalizeLowercaseStringOrEmpty(
-      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
-    );
+    const label = normalizeIdentityLabel(cleaned.slice(0, colonIndex));
     if (RICH_IDENTITY_LABELS.has(label)) {
       lastIdentityIndex = index;
     }
