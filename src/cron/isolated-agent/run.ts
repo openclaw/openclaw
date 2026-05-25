@@ -8,6 +8,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -15,6 +16,11 @@ import {
   type SourceDeliveryPlan,
   type SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
+import {
+  logMessageProcessed,
+  logMessageQueued,
+  logSessionStateChange,
+} from "../../logging/diagnostic.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -1184,6 +1190,24 @@ export async function runCronIsolatedAgentTurn(params: {
   // the correct context even if adoptCronRunSessionMetadata() rotates it.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
 
+  const turnStartedAtMs = Date.now();
+  const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
+  if (diagnosticsEnabled) {
+    logMessageQueued({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      channel: "cron",
+      source: "cron-isolated",
+    });
+    logSessionStateChange({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      state: "processing",
+    });
+  }
+
+  let outcome: "completed" | "error" = "completed";
+  let outcomeError: string | undefined;
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1222,21 +1246,30 @@ export async function runCronIsolatedAgentTurn(params: {
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
     if (isAborted()) {
+      outcome = "error";
+      outcomeError = abortReason();
       return prepared.context.withRunSession({
         status: "error",
         error: abortReason(),
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", abortReason()),
       });
     }
-    return await finalizeCronRun({
+    const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
       abortReason,
       isAborted,
     });
+    if (finalized.status === "error") {
+      outcome = "error";
+      outcomeError = finalized.error;
+    }
+    return finalized;
   } catch (err) {
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
     const error = isCronLaneTimeout ? abortReason() : String(err);
+    outcome = "error";
+    outcomeError = error;
     return prepared.context.withRunSession({
       status: "error",
       error,
@@ -1246,6 +1279,21 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
+    if (diagnosticsEnabled) {
+      logSessionStateChange({
+        sessionId: prepared.context.currentRunSessionId(),
+        sessionKey: prepared.context.runSessionKey,
+        state: "idle",
+      });
+      logMessageProcessed({
+        channel: "cron",
+        sessionId: prepared.context.currentRunSessionId(),
+        sessionKey: prepared.context.runSessionKey,
+        durationMs: Date.now() - turnStartedAtMs,
+        outcome,
+        error: outcomeError,
+      });
+    }
     // Release runtime references after the run completes (success or failure).
     // The session entry has already been persisted to disk by this point,
     // so the in-memory store and run context can be safely dropped.

@@ -503,16 +503,16 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
-| Alias               | Model                                  |
-| ------------------- | -------------------------------------- |
-| `opus`              | `anthropic/claude-opus-4-6`            |
-| `sonnet`            | `anthropic/claude-sonnet-4-6`          |
-| `gpt`               | `openai/gpt-5.5`                       |
-| `gpt-mini`          | `openai/gpt-5.4-mini`                  |
-| `gpt-nano`          | `openai/gpt-5.4-nano`                  |
-| `gemini`            | `google/gemini-3.1-pro-preview`        |
-| `gemini-flash`      | `google/gemini-3-flash-preview`        |
-| `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |
+| Alias               | Model                           |
+| ------------------- | ------------------------------- |
+| `opus`              | `anthropic/claude-opus-4-6`     |
+| `sonnet`            | `anthropic/claude-sonnet-4-6`   |
+| `gpt`               | `openai/gpt-5.5`                |
+| `gpt-mini`          | `openai/gpt-5.4-mini`           |
+| `gpt-nano`          | `openai/gpt-5.4-nano`           |
+| `gemini`            | `google/gemini-3.1-pro-preview` |
+| `gemini-flash`      | `google/gemini-3-flash-preview` |
+| `gemini-flash-lite` | `google/gemini-3.1-flash-lite`  |
 
 Your configured aliases always win over defaults.
 

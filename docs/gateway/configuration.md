@@ -419,7 +419,7 @@ candidate contains redacted secret placeholders such as `***`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
+        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",

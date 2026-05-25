@@ -22,7 +22,7 @@ overrides:
   ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
-  qs: 6.14.2
+  qs: 6.15.2
   node-domexception: npm:@nolyfill/domexception@1.0.28
   typebox: 1.1.38
   tar: 7.5.15
@@ -277,8 +277,8 @@ importers:
         specifier: 0.14.0
         version: 0.14.0
       acpx:
-        specifier: 0.8.0
-        version: 0.8.0
+        specifier: 0.10.0
+        version: 0.10.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1809,11 +1809,6 @@ packages:
   '@agentclientprotocol/claude-agent-acp@0.36.1':
     resolution: {integrity: sha512-836UDBbfKNdwLCjyY2NNzHBaH2iQZrg2XqMSdD07wPY+iA9vocy1uw5MWv4AZB4B4JRZPJJxZ0wZryyacAyv5w==}
     hasBin: true
-
-  '@agentclientprotocol/sdk@0.21.1':
-    resolution: {integrity: sha512-ZTLH+o9QxcZDLX/9ww+W7C2iExnXFM+vD/uGFVSlR61Kzj9FaxUqBC6Rv/kwgA7qVWYUEI9c5ZNqCuO9PM4rKg==}
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
 
   '@agentclientprotocol/sdk@0.22.0':
     resolution: {integrity: sha512-mnkpiuEfGm7/snhWbrRhe3Hk+WDDjv7U2N/Ql0XiThl9zg7T984dPH8Tich4wlBQnaaXTV4Fl5OQSe2pa9hoFA==}
@@ -4220,8 +4215,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.8.0:
-    resolution: {integrity: sha512-mI8ma3sDz8QfI2c40iiOAQ3iklpdv0XB7YFieOIcZZWw8dBTGsbFn4qqgbKQjDBX8S/yIWiKvmqi5j/L8c2kUQ==}
+  acpx@0.10.0:
+    resolution: {integrity: sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -6255,8 +6250,8 @@ packages:
     engines: {node: '>=10.13.0'}
     hasBin: true
 
-  qs@6.14.2:
-    resolution: {integrity: sha512-V/yCWTTF7VJ9hIh18Ugr2zhJMP01MY7c5kh4J870L7imm6/DIzBsNLTXzMwUA3yZ5b/KBqLx8Kp3uRvd7xSe3Q==}
+  qs@6.15.2:
+    resolution: {integrity: sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==}
     engines: {node: '>=0.6'}
 
   quansync@1.0.0:
@@ -7170,10 +7165,6 @@ snapshots:
     transitivePeerDependencies:
       - '@anthropic-ai/sdk'
       - '@modelcontextprotocol/sdk'
-
-  '@agentclientprotocol/sdk@0.21.1(zod@4.4.3)':
-    dependencies:
-      zod: 4.4.3
 
   '@agentclientprotocol/sdk@0.22.0(zod@4.4.3)':
     dependencies:
@@ -8274,7 +8265,7 @@ snapshots:
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
       protobufjs: 8.4.0
-      qs: 6.14.2
+      qs: 6.15.2
       ws: 8.20.1
     transitivePeerDependencies:
       - bufferutil
@@ -8420,7 +8411,7 @@ snapshots:
       '@microsoft/teams.cards': 2.0.11
       '@microsoft/teams.common': 2.0.11
       jwt-decode: 4.0.0
-      qs: 6.14.2
+      qs: 6.15.2
     transitivePeerDependencies:
       - debug
 
@@ -8451,7 +8442,7 @@ snapshots:
   '@microsoft/teams.graph@2.0.11':
     dependencies:
       '@microsoft/teams.common': 2.0.11
-      qs: 6.14.2
+      qs: 6.15.2
     transitivePeerDependencies:
       - debug
 
@@ -9773,9 +9764,9 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.8.0:
+  acpx@0.10.0:
     dependencies:
-      '@agentclientprotocol/sdk': 0.21.1(zod@4.4.3)
+      '@agentclientprotocol/sdk': 0.22.1(zod@4.4.3)
       commander: 14.0.3
       skillflag: 0.1.4
       tsx: 4.22.3
@@ -9979,7 +9970,7 @@ snapshots:
       http-errors: 2.0.1
       iconv-lite: 0.7.2
       on-finished: 2.4.1
-      qs: 6.14.2
+      qs: 6.15.2
       raw-body: 3.0.2
       type-is: 2.1.0
     transitivePeerDependencies:
@@ -10447,7 +10438,7 @@ snapshots:
       once: 1.4.0
       parseurl: 1.3.3
       proxy-addr: 2.0.7
-      qs: 6.14.2
+      qs: 6.15.2
       range-parser: 1.2.1
       router: 2.2.0
       send: 1.2.1
@@ -12126,7 +12117,7 @@ snapshots:
       pngjs: 5.0.0
       yargs: 15.4.1
 
-  qs@6.14.2:
+  qs@6.15.2:
     dependencies:
       side-channel: 1.1.0
 

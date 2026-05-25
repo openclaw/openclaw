@@ -667,8 +667,18 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
-function isSandboxRootEscapeError(error: unknown): boolean {
+function isSandboxRootEscapeError(error: unknown): error is Error {
   return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+function withWorkspaceSafeTempHint(error: unknown): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+  return new Error(message, { cause: error });
 }
 
 async function assertSandboxPathWithinAnyRoot(params: {
@@ -752,10 +762,15 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         }
         const additionalRoots =
           guardedRoot === root && !workspaceMapping.matched ? (options?.additionalRoots ?? []) : [];
-        const sandboxResult = await assertSandboxPathWithinAnyRoot({
-          filePath: sandboxPath,
-          roots: [guardedRoot, ...additionalRoots],
-        });
+        let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
+        try {
+          sandboxResult = await assertSandboxPathWithinAnyRoot({
+            filePath: sandboxPath,
+            roots: [guardedRoot, ...additionalRoots],
+          });
+        } catch (error) {
+          throw withWorkspaceSafeTempHint(error);
+        }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;
