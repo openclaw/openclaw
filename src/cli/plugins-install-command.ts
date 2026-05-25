@@ -31,6 +31,7 @@ import {
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -91,10 +92,6 @@ function findTrustedCatalogPackageInstall(packageName: string):
     ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
     ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isEmptyRecord(value: Record<string, unknown>): boolean {

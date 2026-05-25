@@ -27,8 +27,11 @@ import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-r
 import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -80,8 +83,9 @@ function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
 ): string | null {
-  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(
+    findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey,
+  );
 }
 
 async function hasProviderAuthAvailable(params: {

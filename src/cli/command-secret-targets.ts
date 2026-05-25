@@ -14,6 +14,7 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
@@ -176,10 +177,6 @@ function resolveSearchConfig(config: OpenClawConfig): Record<string, unknown> | 
   return search && typeof search === "object" && !Array.isArray(search)
     ? (search as Record<string, unknown>)
     : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function pathPatternMatchesConcretePath(pathPattern: string, path: string): boolean {

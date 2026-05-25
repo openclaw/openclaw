@@ -25,6 +25,7 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {
@@ -190,10 +191,6 @@ function formatConfigOpenError(error: unknown): string {
     return error.message;
   }
   return String(error);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {

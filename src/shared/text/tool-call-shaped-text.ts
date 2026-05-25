@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "../record-coerce.js";
+import { normalizeOptionalString as readTrimmedString } from "../string-coerce.js";
 
 export type ToolCallShapedTextDetection = {
   kind: "json_tool_call" | "xml_tool_call" | "bracketed_tool_call" | "react_action";
@@ -10,14 +11,6 @@ const TOOL_TEXT_PREFILTER_RE =
 const MAX_SCAN_CHARS = 20_000;
 const MAX_JSON_CANDIDATES = 20;
 const MAX_JSON_CANDIDATE_CHARS = 8_000;
-
-function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function readToolName(record: Record<string, unknown>): string | undefined {
   return (

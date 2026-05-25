@@ -2,6 +2,7 @@ import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { isRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
@@ -22,28 +23,23 @@ function normalizeSelectionRef(value: string): string {
 }
 
 function readMigrationSkillName(item: MigrationItem): string | undefined {
-  const value = item.details?.skillName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.skillName);
 }
 
 function readMigrationSkillSourceLabel(item: MigrationItem): string | undefined {
-  const value = item.details?.sourceLabel;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.sourceLabel);
 }
 
 function readMigrationPluginName(item: MigrationItem): string | undefined {
-  const value = item.details?.pluginName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.pluginName);
 }
 
 function readMigrationPluginConfigKey(item: MigrationItem): string | undefined {
-  const value = item.details?.configKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.configKey);
 }
 
 function readMigrationPluginMarketplaceName(item: MigrationItem): string | undefined {
-  const value = item.details?.marketplaceName;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return normalizeOptionalString(item.details?.marketplaceName);
 }
 
 function migrationSkillRefs(item: MigrationItem): string[] {

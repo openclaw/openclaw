@@ -8,6 +8,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { asOptionalRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -54,10 +55,6 @@ function artifactError(type: string, message: string, details?: Record<string, u
       ...details,
     },
   });
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveRequesterSessionAgentId(

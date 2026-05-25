@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
@@ -31,8 +32,7 @@ function readPath(root: unknown, path: string | undefined): unknown {
 }
 
 function readStringAtPath(root: unknown, path: string): string | undefined {
-  const value = readPath(root, path);
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(readPath(root, path));
 }
 
 function readEffectiveConfig(params: {

@@ -1,4 +1,5 @@
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -229,10 +230,6 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
 
 function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
   return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeStringList(value: unknown): string[] {

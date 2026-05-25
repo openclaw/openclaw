@@ -23,7 +23,10 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -65,8 +68,7 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
-  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(params.cfg.models?.providers?.[params.providerId]?.apiKey);
 }
 
 function sanitizeProviderHeaders(

@@ -5,6 +5,7 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 type VoiceWakeRouteTarget =
@@ -46,14 +47,6 @@ export function normalizeVoiceWakeTriggerWord(value: string): string {
     .map((token) => token.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ""))
     .filter(Boolean)
     .join(" ");
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
