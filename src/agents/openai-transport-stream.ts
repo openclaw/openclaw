@@ -756,6 +756,30 @@ function summarizeOpenAITransportError(error: unknown): string {
   ].join(" ");
 }
 
+function normalizeOpenAICompatibleErrorMessage(error: unknown, model: Model<Api>): string {
+  const message = error instanceof Error ? error.message : JSON.stringify(error);
+  const cause =
+    error && typeof error === "object" && "cause" in error
+      ? (error as { cause?: unknown }).cause
+      : undefined;
+  const causeMessage =
+    cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+  const normalized = `${message}\n${causeMessage}`.toLowerCase();
+  const pointsAtNonApiHtml =
+    normalized.includes("text/html") ||
+    normalized.includes("unexpected token '<'") ||
+    normalized.includes("provider returned html") ||
+    (normalized.includes("html") && normalized.includes("json"));
+  if (!pointsAtNonApiHtml) {
+    return message;
+  }
+  return (
+    `${message}. The OpenAI-compatible provider returned HTML instead of an API response; ` +
+    `check that baseUrl includes the provider API path, such as /v1. ` +
+    `Configured baseUrl: ${formatModelTransportDebugBaseUrl(model.baseUrl)}`
+  );
+}
+
 function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
@@ -2303,7 +2327,7 @@ function createOpenAICompletionsClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
-    fetch: buildGuardedModelFetch(model),
+    fetch: buildGuardedModelFetch(model, undefined, { rejectHtmlAsApiResponse: true }),
     ...buildOpenAISdkClientOptions(model),
   });
 }
@@ -2420,6 +2444,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.end();
       } catch (error) {
         assignTransportErrorDetails(output, error, options?.signal);
+        output.errorMessage = normalizeOpenAICompatibleErrorMessage(error, model);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }

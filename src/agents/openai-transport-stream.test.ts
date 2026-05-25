@@ -1028,7 +1028,7 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("parses JSON chat completions returned to streaming requests", async () => {
+  it("streams OpenAI-compatible non-streaming JSON completions as a fallback", async () => {
     let capturedStreamFlag: unknown;
     const server = createServer((req, res) => {
       let body = "";
@@ -1193,7 +1193,61 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("preserves reasoning tokens without double-counting them", () => {
+  it("adds a base URL hint when OpenAI-compatible streaming returns HTML", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html><body>not an API endpoint</body></html>");
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        api: "openai-completions",
+        provider: "spanagent",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply ok", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let errorMessage = "";
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: { errorMessage?: string };
+      }>) {
+        if (event.type === "error") {
+          errorMessage = event.error?.errorMessage ?? "";
+        }
+      }
+
+      expect(errorMessage).toContain("returned HTML instead of an API response");
+      expect(errorMessage).toContain("baseUrl includes the provider API path, such as /v1");
+      expect(errorMessage).toContain(`http://127.0.0.1:${address.port}`);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
     const model = {
       id: "gpt-5",
       name: "GPT-5",

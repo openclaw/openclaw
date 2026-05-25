@@ -89,6 +89,24 @@ type VerificationResult = {
   error?: unknown;
 };
 
+const NON_JSON_VERIFICATION_HINT =
+  "Verification response was not JSON. Check that the base URL includes the provider API path, for example /v1 for OpenAI-compatible servers.";
+
+async function validateSuccessfulVerificationResponse(res: Response): Promise<VerificationResult> {
+  if (!res.ok) {
+    return { ok: false, status: res.status };
+  }
+  try {
+    const payload: unknown = await res.json();
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { ok: false, error: new Error(NON_JSON_VERIFICATION_HINT) };
+    }
+  } catch {
+    return { ok: false, error: new Error(NON_JSON_VERIFICATION_HINT) };
+  }
+  return { ok: true, status: res.status };
+}
+
 async function requestVerification(params: {
   endpoint: string;
   headers: Record<string, string>;
@@ -107,7 +125,7 @@ async function requestVerification(params: {
       },
       VERIFY_TIMEOUT_MS,
     );
-    return { ok: res.ok, status: res.status };
+    return await validateSuccessfulVerificationResponse(res);
   } catch (error) {
     return { ok: false, error };
   }
