@@ -50,7 +50,27 @@ describe("registerProviderStreamForModel", () => {
           },
         } as OpenClawConfig,
       }),
-    ).toThrow(/Google model "google\/gemini-3\.5-flash" requires models\.providers\.google/);
+    ).toThrow(
+      /Google model "google\/gemini-3\.5-flash" requires models\.providers\.google with api "google-generative-ai"/,
+    );
+  });
+
+  it("fails closed when models.providers.google is configured with a non-Google API", () => {
+    expect(() =>
+      registerProviderStreamForModel({
+        model: googleModel,
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                api: "openai-responses",
+                apiKey: "google-key",
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toThrow(/api "google-generative-ai"/);
   });
 
   it("does not include configured API keys in the missing Google provider error", () => {
