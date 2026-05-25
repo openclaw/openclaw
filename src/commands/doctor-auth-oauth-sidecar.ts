@@ -222,7 +222,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
       [
         ...stores.map(
           (entry) =>
-            `- ${shortenHomePath(entry.authPath)} has legacy sidecar-backed Codex OAuth profiles.`,
+            `- ${shortenHomePath(entry.authPath)} has legacy Codex OAuth profiles to migrate.`,
         ),
         ...(unreferencedSidecars.length > 0
           ? [
@@ -237,7 +237,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   }
 
   const shouldRepair = await params.prompter.confirmAutoFix({
-    message: "Migrate legacy sidecar-backed Codex OAuth credentials now?",
+    message: "Migrate legacy Codex OAuth credentials now?",
     initialValue: true,
   });
   if (!shouldRepair) {
@@ -283,7 +283,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
         migratedSidecarsByRefId.set(refId, sidecarPath);
       }
       result.changes.push(
-        `Migrated ${migratedCount} sidecar-backed Codex OAuth profile${migratedCount === 1 ? "" : "s"} in ${shortenHomePath(store.authPath)} to inline credentials (backup: ${shortenHomePath(backupPath)}).`,
+        `Migrated ${migratedCount} legacy Codex OAuth profile${migratedCount === 1 ? "" : "s"} in ${shortenHomePath(store.authPath)} to inline credentials (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
       for (const refId of storeMigratedSidecarsByRefId.keys()) {
