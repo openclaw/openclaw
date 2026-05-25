@@ -108,17 +108,6 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
   return bareModelId.endsWith(":cloud");
 }
 
-export function shouldAllowDiagnosticModelCallAbort(model?: {
-  baseUrl?: string;
-  id?: string;
-  provider?: string;
-}): boolean {
-  const baseUrl = model?.baseUrl;
-  const isLocalProvider =
-    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
-  return !isLocalProvider || isOllamaCloudModel(model);
-}
-
 /**
  * Resolves the LLM idle timeout from configuration.
  * @returns Idle timeout in milliseconds, or 0 to disable
@@ -155,7 +144,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value > 0 &&
       value < MAX_SAFE_TIMEOUT_MS,
   );
-  const allowDiagnosticModelCallAbort = shouldAllowDiagnosticModelCallAbort(params?.model);
 
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
   if (
@@ -199,7 +187,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // baseUrl pointing at loopback / private-network / `.local`. Ollama cloud
   // models are still hosted remotely even when proxied through local Ollama, so
   // keep the cloud watchdog for `*:cloud` model ids.
-  if (!allowDiagnosticModelCallAbort) {
+  const baseUrl = params?.model?.baseUrl;
+  const isLocalProvider =
+    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
+  if (isLocalProvider && !isOllamaCloudModel(params?.model)) {
     return 0;
   }
 

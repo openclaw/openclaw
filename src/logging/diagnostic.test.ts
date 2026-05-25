@@ -675,7 +675,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("does not actively abort stale model calls when the call disables diagnostic abort", async () => {
+  it("does not actively abort model calls with recent stream progress", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
@@ -702,24 +702,28 @@ describe("stuck session diagnostics threshold", () => {
         runId: "run-1",
         provider: "lmstudio",
         model: "gemma-4-e4b-it",
-        allowActiveAbort: false,
       });
 
-      vi.advanceTimersByTime(stuckSessionAbortMs);
+      vi.advanceTimersByTime(stuckSessionAbortMs - 15_000);
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        reason: "model_call:stream_progress",
+      });
+      vi.advanceTimersByTime(30_000);
     } finally {
       unsubscribe();
     }
 
+    expect(events.findLast((event) => event.type === "session.recovery.requested")).toBeUndefined();
     expectRecordFields(
-      requireRecord(
-        events.findLast((event) => event.type === "session.stalled"),
-        "stalled event",
-      ),
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }),
       {
-        classification: "stalled_agent_run",
-        reason: "active_work_without_progress",
         activeWorkKind: "model_call",
-        lastProgressReason: "model_call:started",
+        hasActiveEmbeddedRun: true,
+        lastProgressAgeMs: 30_000,
+        lastProgressReason: "model_call:stream_progress",
       },
     );
     expect(recoverStuckSession).not.toHaveBeenCalled();

@@ -18,6 +18,7 @@ import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -39,7 +40,6 @@ type ModelCallDiagnosticContext = {
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
-  allowActiveAbort?: boolean;
   trace: DiagnosticTraceContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
@@ -76,8 +76,11 @@ type ModelCallObservationState = {
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   contentCapture?: DiagnosticModelContentCapturePolicy;
+  lastStreamProgressAt?: number;
 };
 
+const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
+const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 const TRACEPARENT_HEADER_NAME = "traceparent";
 type ModelCallStreamOptions = Parameters<StreamFn>[2];
@@ -158,6 +161,36 @@ function observeResponseChunk(
   }
 }
 
+function maybeEmitModelCallStreamProgress(
+  eventBase: ModelCallEventBase,
+  state: ModelCallObservationState,
+): void {
+  const now = Date.now();
+  const progressFields = {
+    runId: eventBase.runId,
+    ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+    ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+    reason: MODEL_CALL_STREAM_PROGRESS_REASON,
+  };
+  markDiagnosticRunProgress(progressFields);
+  if (
+    state.lastStreamProgressAt !== undefined &&
+    now - state.lastStreamProgressAt < MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS
+  ) {
+    return;
+  }
+  state.lastStreamProgressAt = now;
+  // Streaming providers, local or remote, are expected to produce chunks or
+  // heartbeat-style progress. The in-memory freshness clock is refreshed for
+  // each chunk, while diagnostic events are throttled so token streams do not
+  // spam observers; silent/non-streaming calls remain recoverable after the
+  // configured stuck-session timeout.
+  emitTrustedDiagnosticEvent({
+    type: "run.progress",
+    ...progressFields,
+  });
+}
+
 function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
   return {
     ...(state.requestPayloadBytes !== undefined
@@ -215,7 +248,6 @@ function baseModelCallEvent(
     ...(ctx.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
       : {}),
-    ...(ctx.allowActiveAbort === false ? { allowActiveAbort: false } : {}),
     trace,
   };
 }
@@ -483,6 +515,7 @@ async function* observeModelCallIterator<T>(
         break;
       }
       observeResponseChunk(state, startedAt, next.value);
+      maybeEmitModelCallStreamProgress(eventBase, state);
       yield next.value;
     }
     terminalEmitted = true;

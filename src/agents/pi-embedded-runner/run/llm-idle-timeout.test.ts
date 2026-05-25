@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
-  shouldAllowDiagnosticModelCallAbort,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 
@@ -244,28 +243,6 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
       30_000,
     );
-  });
-});
-
-describe("shouldAllowDiagnosticModelCallAbort", () => {
-  it("disables diagnostic active aborts for local providers", () => {
-    expect(shouldAllowDiagnosticModelCallAbort({ baseUrl: "http://127.0.0.1:1234/v1" })).toBe(
-      false,
-    );
-    expect(shouldAllowDiagnosticModelCallAbort({ baseUrl: "http://10.0.0.5:8000/v1" })).toBe(false);
-  });
-
-  it("allows diagnostic active aborts for cloud providers and Ollama cloud models", () => {
-    expect(shouldAllowDiagnosticModelCallAbort({ baseUrl: "https://api.openai.com/v1" })).toBe(
-      true,
-    );
-    expect(
-      shouldAllowDiagnosticModelCallAbort({
-        provider: "ollama",
-        id: "gpt-oss:cloud",
-        baseUrl: "http://127.0.0.1:11434",
-      }),
-    ).toBe(true);
   });
 });
 
