@@ -105,6 +105,7 @@ final class TalkModeManager: NSObject {
     var isEnabled: Bool = false
     var isListening: Bool = false
     var isSpeaking: Bool = false
+    var isUserSpeechDetected: Bool = false
     var isPushToTalkActive: Bool = false
     var statusText: String = "Off"
     /// 0..1-ish (not calibrated). Intended for UI feedback only.
@@ -177,7 +178,6 @@ final class TalkModeManager: NSObject {
     private var pcmFormatUnavailable: Bool = false
     var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
-    private var realtimeRelaySession: RealtimeTalkRelaySession?
 
     private var gateway: GatewayNodeSession?
     private var gatewayConnected = false
@@ -228,6 +228,7 @@ final class TalkModeManager: NSObject {
                 Task { await self.start() }
             }
         } else {
+            self.stopRealtimeSession()
             if self.isEnabled, !self.isSpeaking {
                 self.statusText = "Offline"
             }
@@ -333,61 +334,10 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func shouldUseRealtimeRelay() -> Bool {
-        self.executionMode == .realtimeRelay
-    }
-
-    private func startRealtimeRelay() async {
-        guard let gateway else {
-            self.statusText = "Gateway not connected"
-            return
-        }
-        do {
-            try Self.configureAudioSession()
-            self.stopRealtimeRelay()
-            self.captureMode = .continuous
-            self.isListening = true
-            self.statusText = "Connecting realtime…"
-            let relay = RealtimeTalkRelaySession(
-                gateway: gateway,
-                options: RealtimeTalkRelaySession.Options(
-                    sessionKey: self.mainSessionKey,
-                    provider: self.realtimeProvider,
-                    model: self.realtimeModelId,
-                    voice: self.realtimeVoiceId),
-                pcmPlayer: self.pcmPlayer,
-                onStatus: { [weak self] status in
-                    self?.statusText = status
-                },
-                onSpeakingChanged: { [weak self] speaking in
-                    self?.isSpeaking = speaking
-                })
-            self.realtimeRelaySession = relay
-            try await relay.start()
-            await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
-            self.logger.info("realtime relay listening")
-            let provider = self.realtimeProvider ?? "configured"
-            let model = self.realtimeModelId ?? "default"
-            GatewayDiagnostics.log(
-                "talk realtime: provider=\(provider) model=\(model)")
-        } catch {
-            self.realtimeRelaySession = nil
-            self.isListening = false
-            self.captureMode = .idle
-            self.statusText = "Realtime failed: \(error.localizedDescription)"
-            self.logger.error("realtime relay failed: \(error.localizedDescription, privacy: .public)")
-            GatewayDiagnostics.log("talk realtime: failed error=\(error.localizedDescription)")
-        }
-    }
-
-    private func stopRealtimeRelay() {
-        self.realtimeRelaySession?.stop()
-        self.realtimeRelaySession = nil
-    }
-
     func stop() {
         self.isEnabled = false
         self.isListening = false
+        self.isUserSpeechDetected = false
         self.isPushToTalkActive = false
         self.captureMode = .idle
         self.statusText = "Off"
@@ -395,7 +345,6 @@ final class TalkModeManager: NSObject {
         self.lastHeard = nil
         self.silenceTask?.cancel()
         self.silenceTask = nil
-        self.stopRealtimeRelay()
         self.stopRealtimeSession()
         self.stopRecognition()
         self.stopSpeaking()
@@ -442,7 +391,6 @@ final class TalkModeManager: NSObject {
         self.silenceTask?.cancel()
         self.silenceTask = nil
 
-        self.stopRealtimeRelay()
         self.stopRealtimeSession()
         self.stopRecognition()
         self.stopSpeaking()
@@ -494,6 +442,7 @@ final class TalkModeManager: NSObject {
         self.silenceTask = nil
         self.stopRecognition()
         self.isListening = false
+        self.isUserSpeechDetected = false
 
         let captureId = UUID().uuidString
         self.activePTTCaptureId = captureId
@@ -529,6 +478,7 @@ final class TalkModeManager: NSObject {
             self.statusText = "Listening (PTT)"
         } catch {
             self.isListening = false
+            self.isUserSpeechDetected = false
             self.isPushToTalkActive = false
             self.captureMode = .idle
             self.statusText = "Start failed: \(error.localizedDescription)"
@@ -551,6 +501,7 @@ final class TalkModeManager: NSObject {
 
         self.isPushToTalkActive = false
         self.isListening = false
+        self.isUserSpeechDetected = false
         self.captureMode = .idle
         self.stopRecognition()
         self.pttTimeoutTask?.cancel()
@@ -945,6 +896,7 @@ final class TalkModeManager: NSObject {
 
     private func processTranscript(_ transcript: String, restartAfter: Bool) async {
         self.isListening = false
+        self.isUserSpeechDetected = false
         self.captureMode = .idle
         self.statusText = "Thinking…"
         self.lastTranscript = ""
@@ -1457,9 +1409,6 @@ final class TalkModeManager: NSObject {
     }
 
     private func stopSpeaking(storeInterruption: Bool = true) {
-        if let realtimeRelaySession {
-            realtimeRelaySession.cancelOutput()
-        }
         let hasIncremental = self.incrementalSpeechActive ||
             self.incrementalSpeechTask != nil ||
             !self.incrementalSpeechQueue.isEmpty
@@ -2374,10 +2323,11 @@ extension TalkModeManager {
                 executionMode = .native
             case .openAIRealtime:
                 activeProvider = "openai"
-                executionMode = .realtimeRelay
+                executionMode = .native
                 realtimeProvider = realtimeProvider ?? "openai"
                 realtimeModelId = realtimeModelId ?? Self.defaultRealtimeModelIdFallback
             }
+            let usesRealtimeConfig = activeProvider != Self.defaultTalkProvider
             self.activeTalkProvider = activeProvider
             self.executionMode = executionMode
             self.realtimeProvider = realtimeProvider
@@ -2409,18 +2359,17 @@ extension TalkModeManager {
                 GatewayDiagnostics.log(
                     "talk provider '\(activeProvider)' uses gateway-owned realtime credentials")
             }
-            self.gatewayTalkDefaultVoiceId = executionMode == .realtimeRelay ? realtimeVoiceId : self.defaultVoiceId
-            self.gatewayTalkDefaultModelId = executionMode == .realtimeRelay ? realtimeModelId : self.defaultModelId
+            self.gatewayTalkDefaultVoiceId = usesRealtimeConfig ? realtimeVoiceId : self.defaultVoiceId
+            self.gatewayTalkDefaultModelId = usesRealtimeConfig ? realtimeModelId : self.defaultModelId
             self.gatewayTalkProviderLabel = providerSelection == .gatewayDefault
                 ? Self.displayName(forProvider: activeProvider)
                 : providerSelection.label
-            self.gatewayTalkUsesRealtimeRelay = executionMode == .realtimeRelay
-            self.gatewayTalkTransportLabel = executionMode == .realtimeRelay ? "Gateway relay" : "Native"
+            self.gatewayTalkUsesRealtimeRelay = false
+            self.gatewayTalkTransportLabel = usesRealtimeConfig ? "Native WebRTC" : "Native"
             self.gatewayTalkRealtimeProviderLabel = realtimeProvider.map { Self.displayName(forProvider: $0) }
             self.gatewayTalkRealtimeModelId = realtimeModelId
             self.gatewayTalkRealtimeVoiceId = realtimeVoiceId
-            self.gatewayTalkApiKeyConfigured = executionMode == .realtimeRelay ||
-                (self.apiKey?.isEmpty == false)
+            self.gatewayTalkApiKeyConfigured = gatewayOwnedVoiceProvider || (self.apiKey?.isEmpty == false)
             self.gatewayTalkConfigLoaded = true
             self.talkConfigLoadedAt = Date()
             self.gatewayTalkPermissionState = (self.gatewayTalkApiKeyConfigured || gatewayOwnedVoiceProvider)
@@ -2604,6 +2553,15 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
         if status == "Thinking" {
             self.isListening = false
             self.isSpeaking = false
+            self.isUserSpeechDetected = false
+        }
+    }
+
+    func realtimeSession(_ session: TalkRealtimeWebRTCSession, didDetectInputSpeech active: Bool) {
+        guard session === self.realtimeSession else { return }
+        self.isUserSpeechDetected = active
+        if active {
+            self.isListening = true
         }
     }
 
@@ -2629,6 +2587,7 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
         self.realtimeSession = nil
         self.isListening = false
         self.isSpeaking = false
+        self.isUserSpeechDetected = false
         if self.isEnabled {
             self.statusText = self.gatewayConnected ? "Ready" : "Offline"
         }

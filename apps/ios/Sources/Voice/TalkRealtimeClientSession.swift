@@ -2,7 +2,7 @@ import Foundation
 
 struct TalkRealtimeClientCreateParams: Encodable {
     var mode = "realtime"
-    var provider = "openai"
+    var provider: String?
     var transport = "webrtc"
     var brain = "agent-consult"
     var model: String?

@@ -83,6 +83,7 @@ struct TalkToolbarTray: View {
     var micLevel: Double
     var isListening: Bool
     var isSpeaking: Bool
+    var isUserSpeechDetected: Bool
     var permissionState: TalkGatewayPermissionState
     var onEnableTalk: () -> Void
     var onStopTalk: () -> Void
@@ -94,6 +95,7 @@ struct TalkToolbarTray: View {
             statusText: self.statusText,
             isListening: self.isListening,
             isSpeaking: self.isSpeaking,
+            isUserSpeechDetected: self.isUserSpeechDetected,
             permissionState: self.permissionState)
     }
 
@@ -214,6 +216,7 @@ private enum TalkToolbarTrayAction {
 
 private enum TalkWaveformMode: Equatable {
     case level(Double)
+    case inputSpeech
     case speaking
     case indeterminate
     case still
@@ -223,6 +226,7 @@ private struct TalkToolbarTrayState: Equatable {
     let statusText: String
     let isListening: Bool
     let isSpeaking: Bool
+    let isUserSpeechDetected: Bool
     let permissionState: TalkGatewayPermissionState
 
     private var normalizedStatus: String {
@@ -334,11 +338,14 @@ private struct TalkToolbarTrayState: Equatable {
             break
         }
 
-        if self.isListening {
-            return .level(micLevel)
-        }
         if self.isSpeaking {
             return .speaking
+        }
+        if self.isListening, self.isUserSpeechDetected {
+            return .inputSpeech
+        }
+        if self.isListening {
+            return .level(micLevel)
         }
         if self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking") {
             return .indeterminate
@@ -356,7 +363,7 @@ private struct TalkWaveformView: View {
     private let barCount = 14
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
+        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
             HStack(alignment: .center, spacing: 3) {
                 ForEach(0..<self.barCount, id: \.self) { index in
                     Capsule(style: .continuous)
@@ -389,6 +396,8 @@ private struct TalkWaveformView: View {
             switch self.mode {
             case let .level(level):
                 return min(max(level, 0.10), 1.0)
+            case .inputSpeech:
+                return 0.72
             case .speaking:
                 return 0.62
             case .indeterminate:
@@ -406,6 +415,10 @@ private struct TalkWaveformView: View {
             let shaped = 0.12 + (0.88 * clamped)
             let variation = 0.72 + (0.28 * sin((t * 12.0) + phase))
             return min(max(shaped * variation, 0.10), 1.0)
+        case .inputSpeech:
+            let primary = 0.5 + (0.5 * sin((t * 14.0) + phase))
+            let secondary = 0.5 + (0.5 * sin((t * 5.0) + (phase * 1.35)))
+            return min(max(0.16 + (0.60 * primary) + (0.24 * secondary), 0.14), 1.0)
         case .speaking:
             let wave = 0.5 + (0.5 * sin((t * 7.5) + phase))
             let secondary = 0.5 + (0.5 * sin((t * 3.0) + (phase * 0.7)))

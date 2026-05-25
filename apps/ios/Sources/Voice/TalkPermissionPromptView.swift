@@ -164,7 +164,7 @@ struct TalkPermissionPromptView: View {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             if Task.isCancelled { return }
-            await self.appModel.talkMode.reloadConfig()
+            await self.appModel.pollTalkPermissionUpgrade()
             if !self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction {
                 return
             }

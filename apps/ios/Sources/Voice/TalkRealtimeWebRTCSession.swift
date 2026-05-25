@@ -9,6 +9,7 @@ import OSLog
 @MainActor
 protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didChangeStatus status: String)
+    func realtimeSession(_ session: TalkRealtimeWebRTCSession, didDetectInputSpeech active: Bool)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveUserTranscript text: String)
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String)
     func realtimeSessionDidFinish(_ session: TalkRealtimeWebRTCSession)
@@ -28,6 +29,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let agentWaitRequestGraceSeconds = 15
     private static let historyFallbackTimeoutSeconds = 5
     private static let stillWorkingDelaySeconds = 6
+    private static let assistantPlaybackDrainGraceSeconds = 1.8
 
     private let gateway: GatewayNodeSession
     private let sessionKey: String
@@ -45,6 +47,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var seenRealtimeEventTypes: Set<String> = []
     private var loggedFirstServerSpeech = false
     private var loggedFirstAssistantSignal = false
+    private var assistantAudioActive = false
+    private var assistantAudioFinishTask: Task<Void, Never>?
 
     private struct ToolBuffer {
         var name: String
@@ -75,6 +79,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.seenRealtimeEventTypes.removeAll()
         self.loggedFirstServerSpeech = false
         self.loggedFirstAssistantSignal = false
+        self.assistantAudioActive = false
+        self.assistantAudioFinishTask?.cancel()
+        self.assistantAudioFinishTask = nil
         self.stopped = false
         self.trace("start model=\(model ?? "default") voice=\(voice ?? "default") sessionKey=\(self.sessionKey)")
         self.delegate?.realtimeSession(self, didChangeStatus: "Connecting")
@@ -158,6 +165,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.peerConnection = nil
         self.factory = nil
         self.session = nil
+        self.assistantAudioActive = false
+        self.assistantAudioFinishTask?.cancel()
+        self.assistantAudioFinishTask = nil
         if shouldNotify {
             self.delegate?.realtimeSessionDidFinish(self)
         }
@@ -311,6 +321,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
             self.seenRealtimeEventTypes.insert(event.type)
             self.trace("event first type=\(event.type)")
         }
+        if self.handleRealtimeAudioStateEvent(event) {
+            return
+        }
         switch event.type {
         case "conversation.input_transcript.delta",
              "conversation.item.input_audio_transcription.delta":
@@ -344,16 +357,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
             if let text = event.transcript ?? event.text {
                 self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
             }
-            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
-        case "response.created":
-            self.trace("response created")
-            self.delegate?.realtimeSession(self, didChangeStatus: "Speaking")
-        case "input_audio_buffer.speech_started":
-            if !self.loggedFirstServerSpeech {
-                self.loggedFirstServerSpeech = true
-                self.trace("server detected speech")
-            }
-            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
         case "response.function_call_arguments.delta":
             self.bufferToolDelta(event)
         case "response.output_item.added":
@@ -366,6 +369,58 @@ final class TalkRealtimeWebRTCSession: NSObject {
             self.delegate?.realtimeSession(self, didChangeStatus: "Realtime error")
         default:
             break
+        }
+    }
+
+    private func handleRealtimeAudioStateEvent(_ event: TalkRealtimeServerEvent) -> Bool {
+        switch event.type {
+        case "response.audio.delta", "response.output_audio.delta":
+            self.markAssistantAudioActive()
+            return true
+        case "response.created":
+            self.trace("response created")
+            self.markAssistantAudioActive()
+            return true
+        case "response.audio.done", "response.output_audio.done", "response.done":
+            self.scheduleAssistantAudioFinished()
+            return true
+        case "input_audio_buffer.speech_started":
+            if self.assistantAudioActive {
+                self.trace("input speech ignored while assistant audio active")
+                return true
+            }
+            if !self.loggedFirstServerSpeech {
+                self.loggedFirstServerSpeech = true
+                self.trace("server detected speech")
+            }
+            self.delegate?.realtimeSession(self, didDetectInputSpeech: true)
+            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+            return true
+        case "input_audio_buffer.speech_stopped", "input_audio_buffer.committed":
+            self.delegate?.realtimeSession(self, didDetectInputSpeech: false)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func markAssistantAudioActive() {
+        self.assistantAudioActive = true
+        self.assistantAudioFinishTask?.cancel()
+        self.assistantAudioFinishTask = nil
+        self.delegate?.realtimeSession(self, didDetectInputSpeech: false)
+        self.delegate?.realtimeSession(self, didChangeStatus: "Speaking")
+    }
+
+    private func scheduleAssistantAudioFinished() {
+        self.assistantAudioFinishTask?.cancel()
+        self.assistantAudioFinishTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(
+                nanoseconds: UInt64(Self.assistantPlaybackDrainGraceSeconds * 1_000_000_000))
+            guard let self, !Task.isCancelled, !self.stopped else { return }
+            self.assistantAudioActive = false
+            self.assistantAudioFinishTask = nil
+            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
         }
     }
 
@@ -410,6 +465,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         guard self.activeToolTasks[callId] == nil else { return }
         self.toolBuffers.removeValue(forKey: key)
         self.trace("tool call ready callId=\(callId) argsBytes=\((args ?? "").utf8.count)")
+        self.assistantAudioActive = false
+        self.assistantAudioFinishTask?.cancel()
+        self.assistantAudioFinishTask = nil
         self.delegate?.realtimeSession(self, didChangeStatus: "Asking OpenClaw")
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -493,7 +551,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
             ])
         }
         guard !Task.isCancelled, !self.stopped else { return }
-        self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+        if !self.assistantAudioActive {
+            self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+        }
     }
 
     private func abortChatRun(runId: String) async {
@@ -789,7 +849,9 @@ extension TalkRealtimeWebRTCSession: RTCPeerConnectionDelegate {
             guard !self.stopped else { return }
             switch newState {
             case .connected, .completed:
-                self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+                if !self.assistantAudioActive {
+                    self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+                }
             case .disconnected:
                 self.delegate?.realtimeSession(self, didChangeStatus: "Reconnecting")
             case .failed, .closed:
@@ -817,7 +879,9 @@ extension TalkRealtimeWebRTCSession: RTCDataChannelDelegate {
         Task { @MainActor in
             guard !self.stopped else { return }
             if dataChannel.readyState == .open {
-                self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+                if !self.assistantAudioActive {
+                    self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
+                }
             }
         }
     }

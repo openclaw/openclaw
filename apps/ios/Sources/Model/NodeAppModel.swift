@@ -149,6 +149,7 @@ final class NodeAppModel {
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     private var forceOperatorTalkPermissionUpgradeRequest = false
+    private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
@@ -641,6 +642,52 @@ final class NodeAppModel {
                     sessionBox: sessionBox)
             }
         }
+    }
+
+    func pollTalkPermissionUpgrade() async {
+        guard self.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress else {
+            await self.talkMode.reloadConfig()
+            await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll")
+            return
+        }
+
+        guard let cfg = self.activeGatewayConnectConfig else {
+            self.talkMode.gatewayTalkPermissionState = .requestFailed("Gateway is not connected")
+            self.talkMode.statusText = "Gateway not connected"
+            return
+        }
+
+        let now = Date()
+        if let lastTalkPermissionReconnectAttemptAt,
+           now.timeIntervalSince(lastTalkPermissionReconnectAttemptAt) < 6
+        {
+            return
+        }
+        self.lastTalkPermissionReconnectAttemptAt = now
+
+        GatewayDiagnostics.log("talk permission approval poll reconnect")
+        self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.ensureOperatorReconnectLoopIfNeeded()
+
+        if self.operatorGatewayTask == nil {
+            let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+            self.startOperatorGatewayLoop(
+                url: cfg.url,
+                stableID: cfg.effectiveStableID,
+                token: cfg.token,
+                bootstrapToken: cfg.bootstrapToken,
+                password: cfg.password,
+                nodeOptions: cfg.nodeOptions,
+                sessionBox: sessionBox)
+        }
+
+        guard await self.waitForOperatorConnection(timeoutMs: 2500, pollMs: 250) else {
+            return
+        }
+        await self.talkMode.reloadConfig()
+        await self.talkMode.prefetchRealtimeSessionIfReady(reason: "talk_permission_poll_connected")
     }
 
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
