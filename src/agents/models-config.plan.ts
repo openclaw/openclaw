@@ -1,6 +1,8 @@
+import { getProviders } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { NON_ENV_SECRETREF_MARKER, isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -16,6 +18,8 @@ import {
 } from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+const PI_BUILT_IN_PROVIDER_IDS = new Set<string>(getProviders());
+
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -105,6 +109,70 @@ function resolveProvidersForMode(params: {
   });
 }
 
+function stripPlaintextProviderApiKeys(
+  providers: Record<string, ProviderConfig>,
+  options: { secretRefManagedProviders?: ReadonlySet<string> } = {},
+): Record<string, ProviderConfig> {
+  let mutated = false;
+  const nextProviders: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    if (!isRecord(provider) || provider.apiKey === undefined) {
+      nextProviders[providerKey] = provider;
+      continue;
+    }
+    const isSecretRefManagedProvider = options.secretRefManagedProviders?.has(providerKey.trim());
+    if (
+      typeof provider.apiKey === "string" &&
+      provider.apiKey.trim() &&
+      (isNonSecretApiKeyMarker(provider.apiKey) || isSecretRefManagedProvider)
+    ) {
+      nextProviders[providerKey] = provider;
+      continue;
+    }
+    mutated = true;
+    if (
+      !PI_BUILT_IN_PROVIDER_IDS.has(providerKey) &&
+      Array.isArray(provider.models) &&
+      provider.models.length > 0
+    ) {
+      nextProviders[providerKey] = {
+        ...provider,
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      } as ProviderConfig;
+      continue;
+    }
+    const { apiKey: _apiKey, ...providerWithoutApiKey } = provider as Record<string, unknown>;
+    nextProviders[providerKey] = providerWithoutApiKey as ProviderConfig;
+  }
+  return mutated ? nextProviders : providers;
+}
+
+function planExistingCatalogOnlyCredentialCleanup(params: {
+  existingRaw: string;
+  existingParsed: unknown;
+}): ModelsJsonPlan | undefined {
+  const existing = params.existingParsed;
+  if (!isRecord(existing) || !isRecord(existing.providers)) {
+    return undefined;
+  }
+
+  const promptSafeProviders = stripPlaintextProviderApiKeys(
+    existing.providers as Record<string, ProviderConfig>,
+  );
+  if (promptSafeProviders === existing.providers) {
+    return undefined;
+  }
+
+  const nextContents = `${JSON.stringify({ providers: promptSafeProviders }, null, 2)}\n`;
+  if (params.existingRaw === nextContents) {
+    return { action: "noop" };
+  }
+  return {
+    action: "write",
+    contents: nextContents,
+  };
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -147,7 +215,12 @@ export async function planOpenClawModelsJsonWithDeps(
   );
 
   if (Object.keys(providers).length === 0) {
-    return { action: "skip" };
+    return (
+      planExistingCatalogOnlyCredentialCleanup({
+        existingRaw: params.existingRaw,
+        existingParsed: params.existingParsed,
+      }) ?? { action: "skip" }
+    );
   }
 
   const mode = cfg.models?.mode ?? "merge";
@@ -164,10 +237,13 @@ export async function planOpenClawModelsJsonWithDeps(
       secretRefManagedProviders,
       manifestPlugins,
     }) ?? providers;
+  const promptSafeProviders = stripPlaintextProviderApiKeys(normalizedProviders, {
+    secretRefManagedProviders,
+  });
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
-    providers: normalizedProviders,
+    providers: promptSafeProviders,
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
@@ -181,7 +257,10 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const compatProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  const finalProviders = stripPlaintextProviderApiKeys(compatProviders, {
+    secretRefManagedProviders,
+  });
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {

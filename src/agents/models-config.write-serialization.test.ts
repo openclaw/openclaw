@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -13,15 +14,20 @@ import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();
+const upsertAuthProfileWithLockMock = vi.fn();
+type UpsertAuthProfileWithLock = typeof import("./auth-profiles.js").upsertAuthProfileWithLock;
 let actualPrivateFileStore:
   | typeof import("../infra/private-file-store.js").privateFileStore
   | undefined;
+let actualUpsertAuthProfileWithLock: UpsertAuthProfileWithLock | undefined;
 
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let ensureAuthProfileStore: typeof import("./auth-profiles.js").ensureAuthProfileStore;
 let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash({});
@@ -119,7 +125,18 @@ beforeAll(async () => {
       },
     };
   });
+  vi.doMock("./auth-profiles.js", async () => {
+    const actual = await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js");
+    actualUpsertAuthProfileWithLock = actual.upsertAuthProfileWithLock;
+    return {
+      ...actual,
+      upsertAuthProfileWithLock: (...args: Parameters<typeof actual.upsertAuthProfileWithLock>) =>
+        upsertAuthProfileWithLockMock(...args),
+    };
+  });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ ensureAuthProfileStore } = await import("./auth-profiles.js"));
+  ({ createProviderAuthResolver } = await import("./models-config.providers.secrets.js"));
   ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
     await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
@@ -145,6 +162,14 @@ beforeEach(() => {
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
     }));
+  upsertAuthProfileWithLockMock
+    .mockReset()
+    .mockImplementation(async (...args: Parameters<UpsertAuthProfileWithLock>) => {
+      if (!actualUpsertAuthProfileWithLock) {
+        throw new Error("auth profile upsert mock not initialized");
+      }
+      return await actualUpsertAuthProfileWithLock(...args);
+    });
 });
 
 describe("models-config write serialization", () => {
@@ -191,6 +216,476 @@ describe("models-config write serialization", () => {
       await expectMissingPath(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
       );
+    });
+  });
+
+  it("migrates existing models.json-only provider api keys to auth profiles", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(
+        {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-existing-models-json-only",
+        copyToAgents: false,
+      });
+    });
+  });
+
+  it("migrates local models.json keys when a non-main agent inherits the same profile", async () => {
+    await withModelsTempHome(async (home) => {
+      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
+      const agentDir = path.join(home, ".openclaw", "agents", "worker", "agent");
+      process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
+      process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "custom:models-json": {
+                type: "api_key",
+                provider: "custom",
+                key: "sk-main-inherited-profile", // pragma: allowlist secret
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-worker-local-models-json", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(
+        {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const localAuthProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(localAuthProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-worker-local-models-json",
+        copyToAgents: false,
+      });
+
+      const auth = createProviderAuthResolver(
+        {},
+        ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false }),
+      )("custom");
+      expect(auth).toMatchObject({
+        discoveryApiKey: "sk-worker-local-models-json",
+        mode: "api_key",
+        source: "profile",
+        profileId: "custom:models-json",
+      });
+    });
+  });
+
+  it("migrates catalog-only provider api keys when cleaning an existing models.json", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-catalog-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson(
+        {
+          env: {
+            vars: {
+              LITELLM_KEY: "sk-resolved-from-env",
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-existing-catalog-only",
+        copyToAgents: false,
+      });
+    });
+  });
+
+  it("migrates env-present catalog-only provider api keys to env-backed auth profiles", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "LITELLM_KEY",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson(
+        {
+          env: {
+            vars: {
+              LITELLM_KEY: "sk-resolved-from-env",
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        keyRef: { source: "env", provider: "default", id: "LITELLM_KEY" },
+        copyToAgents: false,
+      });
+      expect(authProfiles.profiles["custom:models-json"]).not.toHaveProperty("key");
+
+      const auth = createProviderAuthResolver(
+        { LITELLM_KEY: "sk-resolved-from-env" } as NodeJS.ProcessEnv,
+        authProfiles,
+      )("custom");
+      expect(auth).toMatchObject({
+        apiKey: "LITELLM_KEY",
+        discoveryApiKey: "sk-resolved-from-env",
+        mode: "api_key",
+        source: "profile",
+        profileId: "custom:models-json",
+      });
+    });
+  });
+
+  it("preserves env-shaped catalog-only provider api keys without an env signal", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "ALLCAPS_EXAMPLE",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      }));
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as AuthProfileStore;
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "ALLCAPS_EXAMPLE",
+        copyToAgents: false,
+      });
+      expect(authProfiles.profiles["custom:models-json"]).not.toHaveProperty("keyRef");
+    });
+  });
+
+  it("treats blank configured provider api keys as missing during models.json key migration", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(
+        {
+          models: {
+            mode: "merge",
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "  ",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir,
+      );
+
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBeUndefined();
+
+      const authProfiles = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(authProfiles.profiles["custom:models-json"]).toMatchObject({
+        type: "api_key",
+        provider: "custom",
+        key: "sk-existing-models-json-only",
+        copyToAgents: false,
+      });
+    });
+  });
+
+  it("keeps existing models.json unchanged when api key migration cannot persist", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              custom: {
+                baseUrl: "https://custom.example/v1",
+                api: "openai-completions",
+                apiKey: "sk-existing-models-json-only", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      upsertAuthProfileWithLockMock.mockResolvedValueOnce(null);
+
+      await expect(
+        ensureOpenClawModelsJson(
+          {
+            models: {
+              mode: "merge",
+              providers: {
+                custom: {
+                  baseUrl: "https://custom.example/v1",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          },
+          agentDir,
+        ),
+      ).rejects.toThrow(/Failed to migrate existing models\.json provider apiKey for custom/);
+
+      expect(writePrivateStoreTextWriteMock).not.toHaveBeenCalled();
+      const modelsJson = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as {
+        providers: Record<string, { apiKey?: string }>;
+      };
+      expect(modelsJson.providers.custom?.apiKey).toBe("sk-existing-models-json-only");
     });
   });
 

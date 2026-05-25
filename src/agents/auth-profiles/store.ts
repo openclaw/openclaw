@@ -624,6 +624,21 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   return mergeAuthProfileStores(mainStore, store);
 }
 
+export function loadAuthProfileStoreForLocalAgent(
+  agentDir?: string,
+  loadOptions?: Pick<
+    LoadAuthProfileStoreOptions,
+    "allowKeychainPrompt" | "resolveLegacyOAuthSidecars"
+  >,
+): AuthProfileStore {
+  return loadAuthProfileStoreForAgent(agentDir, {
+    readOnly: true,
+    syncExternalCli: false,
+    allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
+    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? false,
+  });
+}
+
 export function ensureAuthProfileStore(
   agentDir?: string,
   options?: {
