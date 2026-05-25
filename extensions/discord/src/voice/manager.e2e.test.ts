@@ -205,6 +205,13 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
+    getTtsProvider: vi.fn(() => "openai"),
+    resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+    resolveTtsConfig: vi.fn(() => ({
+      modelOverrides: {},
+      providerConfigs: {},
+    })),
+    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-tts.json"),
   };
 });
 
@@ -261,6 +268,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 let managerModule: typeof import("./manager.js");
+let segmentModule: typeof import("./segment.js");
 
 function createVoiceChannelInfo(
   channelId: string,
@@ -316,7 +324,10 @@ function createRuntime() {
 
 describe("DiscordVoiceManager", () => {
   beforeAll(async () => {
-    managerModule = await import("./manager.js");
+    [managerModule, segmentModule] = await Promise.all([
+      import("./manager.js"),
+      import("./segment.js"),
+    ]);
   });
 
   beforeEach(() => {
@@ -5048,9 +5059,46 @@ describe("DiscordVoiceManager", () => {
         discriminator: "1234",
       },
     });
-    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client);
+    const discordConfig: ConstructorParameters<
+      typeof managerModule.DiscordVoiceManager
+    >[0]["discordConfig"] = { groupPolicy: "open", allowFrom: ["discord:u-owner"] };
+    const manager = createManager(discordConfig, client);
+    const enqueuePlayback = vi.fn();
+    const speakerContext = (
+      manager as unknown as {
+        speakerContext: Parameters<
+          typeof segmentModule.processDiscordVoiceSegment
+        >[0]["speakerContext"];
+      }
+    ).speakerContext;
 
-    await processVoiceSegment(manager, "u-owner");
+    await segmentModule.processDiscordVoiceSegment({
+      entry: {
+        guildId: "g1",
+        channelId: "1001",
+        sessionChannelId: "1001",
+        voiceSessionKey: "discord:g1:1001",
+        route: { sessionKey: "discord:g1:1001", agentId: "agent-1" },
+        connection: createConnectionMock(),
+        player: createAudioPlayerMock(),
+        playbackQueue: Promise.resolve(),
+        processingQueue: Promise.resolve(),
+        capture: createVoiceCaptureState(),
+        receiveRecovery: createVoiceReceiveRecoveryState(),
+        isStopped: () => false,
+        stop: vi.fn(),
+      } as unknown as Parameters<typeof segmentModule.processDiscordVoiceSegment>[0]["entry"],
+      wavPath: "/tmp/test.wav",
+      userId: "u-owner",
+      durationSeconds: 1.2,
+      cfg: {},
+      discordConfig,
+      ownerAllowFrom: ["discord:u-owner"],
+      runtime: createRuntime(),
+      fetchGuildName: async () => "Guild One",
+      speakerContext,
+      enqueuePlayback,
+    });
 
     expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
       sessionKey: "discord:g1:1001",
@@ -5058,6 +5106,7 @@ describe("DiscordVoiceManager", () => {
     });
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(lastTtsArgs().text).toBe("Got it. I steered the active run.");
+    expect(enqueuePlayback).toHaveBeenCalledTimes(1);
   });
 
   it("passes configured model override to agent command in voice flow", async () => {
