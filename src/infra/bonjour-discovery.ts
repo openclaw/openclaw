@@ -1,5 +1,6 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
@@ -191,7 +192,7 @@ function parseTailscaleStatusIPv4s(stdout: string): string[] {
     }
   }
 
-  return [...new Set(out)];
+  return uniqueStrings(out);
 }
 
 function parseIntOrNull(value: string | undefined): number | undefined {

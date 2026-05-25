@@ -1,5 +1,6 @@
 import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString as readString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -74,7 +75,7 @@ function collectToolCallIds(block: Record<string, unknown>): string[] {
     readString(block.toolUseId),
     readString(block.id),
   ].filter((id): id is string => Boolean(id));
-  return [...new Set(ids)];
+  return uniqueStrings(ids);
 }
 
 function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
@@ -234,7 +235,7 @@ function collectSuccessfulToolResultCallIds(message: {
       ids.push(...collectToolCallIds(block));
     }
   }
-  return [...new Set(ids)];
+  return uniqueStrings(ids);
 }
 
 function isRealNonHeartbeatUserMessage(

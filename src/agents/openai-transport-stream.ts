@@ -30,6 +30,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -3397,7 +3398,7 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
-  return [...new Set(candidates.filter(Boolean))];
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 function shouldPreserveReasoningContentReplay(
