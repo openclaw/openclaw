@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord, PluginSlotsConfig } from "../config/types.plugins.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
@@ -49,17 +49,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
-
-const PLUGIN_SLOT_KEYS = [
-  "memory",
-  "memory.recall",
-  "memory.compaction",
-  "memory.capture",
-  "memory.dreaming",
-  "memory.userModel",
-  "contextEngine",
-] as const satisfies readonly (keyof PluginSlotsConfig)[];
+import { MEMORY_PLUGIN_SLOT_KEYS, PLUGIN_SLOT_KEYS, resetPluginSlotReferences } from "./slots.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -819,8 +809,44 @@ function migratePluginConfigId(cfg: OpenClawConfig, fromId: string, toId: string
     }
   }
 
+  const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : undefined;
+  let nextAgentList: typeof agentList | undefined;
+  if (agentList) {
+    for (const [agentIndex, agent] of agentList.entries()) {
+      const agentSlots = agent?.plugins?.slots;
+      if (!agentSlots) {
+        continue;
+      }
+      let nextAgentSlots: typeof agentSlots | undefined;
+      for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+        if (agentSlots[slotKey] !== fromId) {
+          continue;
+        }
+        nextAgentSlots ??= { ...agentSlots };
+        nextAgentSlots[slotKey] = toId;
+      }
+      if (!nextAgentSlots) {
+        continue;
+      }
+      nextAgentList ??= [...agentList];
+      nextAgentList[agentIndex] = {
+        ...agent,
+        plugins: {
+          ...agent.plugins,
+          slots: nextAgentSlots,
+        },
+      };
+    }
+  }
+
   return {
     ...cfg,
+    agents: nextAgentList
+      ? {
+          ...cfg.agents,
+          list: nextAgentList,
+        }
+      : cfg.agents,
     plugins: {
       ...cfg.plugins,
       allow,
@@ -888,17 +914,43 @@ function resetDisabledPluginSlots(
   slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
   pluginId: string,
 ): NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined {
-  if (!slots) {
-    return slots;
+  return resetPluginSlotReferences(slots, pluginId).slots;
+}
+
+function resetDisabledAgentPluginSlots(
+  agents: OpenClawConfig["agents"],
+  pluginId: string,
+): OpenClawConfig["agents"] {
+  const agentList = Array.isArray(agents?.list) ? agents.list : undefined;
+  if (!agentList) {
+    return agents;
   }
-  let next = { ...slots };
-  for (const slotKey of PLUGIN_SLOT_KEYS) {
-    if (next[slotKey] !== pluginId) {
+  let nextAgentList: typeof agentList | undefined;
+  for (const [agentIndex, agent] of agentList.entries()) {
+    const reset = resetPluginSlotReferences(
+      agent?.plugins?.slots,
+      pluginId,
+      MEMORY_PLUGIN_SLOT_KEYS,
+    );
+    if (!reset.changed) {
       continue;
     }
-    Object.assign(next, { [slotKey]: defaultSlotIdForKey(slotKey) });
+    nextAgentList ??= [...agentList];
+    nextAgentList[agentIndex] = {
+      ...agent,
+      plugins: {
+        ...agent.plugins,
+        slots: reset.slots,
+      },
+    };
   }
-  return next;
+  if (!nextAgentList) {
+    return agents;
+  }
+  return {
+    ...agents,
+    list: nextAgentList,
+  };
 }
 
 function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -906,6 +958,7 @@ function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): Ope
   const existingEntry = pluginsConfig.entries?.[pluginId];
   return {
     ...config,
+    agents: resetDisabledAgentPluginSlots(config.agents, pluginId),
     plugins: {
       ...pluginsConfig,
       allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),

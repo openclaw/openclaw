@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord, PluginSlotsConfig } from "../config/types.plugins.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readOpenClawManagedNpmRootOverrides,
@@ -17,16 +17,11 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
-
-const MEMORY_SLOT_KEYS = [
-  "memory",
-  "memory.recall",
-  "memory.compaction",
-  "memory.capture",
-  "memory.dreaming",
-  "memory.userModel",
-] as const satisfies readonly (keyof PluginSlotsConfig)[];
+import {
+  MEMORY_PLUGIN_SLOT_KEYS,
+  defaultSlotIdForKey,
+  resetPluginSlotReferences,
+} from "./slots.js";
 
 export type UninstallActions = {
   entry: boolean;
@@ -453,16 +448,12 @@ export function removePluginFromConfig(
     }
   }
 
-  // Reset slots if this plugin was selected.
+  // Reset root slots if this plugin was selected.
   let slots = pluginsConfig.slots ? { ...pluginsConfig.slots } : undefined;
-  if (slots) {
-    for (const slotKey of MEMORY_SLOT_KEYS) {
-      if (slots[slotKey] !== pluginId) {
-        continue;
-      }
-      Object.assign(slots, { [slotKey]: defaultSlotIdForKey(slotKey) });
-      actions.memorySlot = true;
-    }
+  const rootMemorySlotReset = resetPluginSlotReferences(slots, pluginId, MEMORY_PLUGIN_SLOT_KEYS);
+  slots = rootMemorySlotReset.slots;
+  if (rootMemorySlotReset.changed) {
+    actions.memorySlot = true;
   }
   if (slots?.contextEngine === pluginId) {
     slots = {
@@ -473,6 +464,29 @@ export function removePluginFromConfig(
   }
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
+  }
+
+  // Reset agent-scoped memory role slots too. Agent slots intentionally omit
+  // contextEngine, which remains global-only.
+  const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : undefined;
+  let nextAgentList: typeof agentList | undefined;
+  if (agentList) {
+    for (const [agentIndex, agent] of agentList.entries()) {
+      const agentSlots = agent?.plugins?.slots;
+      const reset = resetPluginSlotReferences(agentSlots, pluginId, MEMORY_PLUGIN_SLOT_KEYS);
+      if (!reset.changed) {
+        continue;
+      }
+      nextAgentList ??= [...agentList];
+      nextAgentList[agentIndex] = {
+        ...agent,
+        plugins: {
+          ...agent.plugins,
+          slots: reset.slots,
+        },
+      };
+      actions.memorySlot = true;
+    }
   }
 
   const newPlugins = {
@@ -527,6 +541,12 @@ export function removePluginFromConfig(
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    agents: nextAgentList
+      ? {
+          ...cfg.agents,
+          list: nextAgentList,
+        }
+      : cfg.agents,
     channels: channels as OpenClawConfig["channels"],
   };
 

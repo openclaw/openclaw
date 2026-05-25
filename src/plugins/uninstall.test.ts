@@ -152,6 +152,7 @@ function createPluginConfig(params: {
   enabled?: boolean;
   slots?: PluginConfig["slots"];
   loadPaths?: string[];
+  agents?: OpenClawConfig["agents"];
   channels?: OpenClawConfig["channels"];
 }): OpenClawConfig {
   const plugins: PluginConfig = {};
@@ -178,6 +179,7 @@ function createPluginConfig(params: {
   }
   return {
     ...(Object.keys(plugins).length > 0 ? { plugins } : {}),
+    ...(params.agents ? { agents: params.agents } : {}),
     ...(params.channels ? { channels: params.channels } : {}),
   };
 }
@@ -488,6 +490,41 @@ describe("removePluginFromConfig", () => {
 
     expect(result.plugins?.slots?.contextEngine).toBe("legacy");
     expect(actions.contextEngineSlot).toBe(true);
+  });
+
+  it("clears per-agent memory role slots when uninstalling selected plugin", () => {
+    const config = createPluginConfig({
+      entries: {
+        "agent-memory": { enabled: true },
+      },
+      slots: {
+        "memory.recall": "memory-core",
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                "memory.recall": "agent-memory",
+                "memory.compaction": "agent-memory",
+                "memory.capture": "other-memory",
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const { config: result, actions } = removePluginFromConfig(config, "agent-memory");
+
+    expect(result.plugins?.slots).toEqual({ "memory.recall": "memory-core" });
+    expect(result.agents?.list?.[0]?.plugins?.slots).toEqual({
+      "memory.recall": "memory-core",
+      "memory.compaction": "none",
+      "memory.capture": "other-memory",
+    });
+    expect(actions.memorySlot).toBe(true);
   });
 
   it("removes plugins object when uninstall leaves only empty slots", () => {
