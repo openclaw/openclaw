@@ -6371,6 +6371,53 @@ td.data-table-key-col {
   letter-spacing: 0;
 }
 
+.ov-usage-windows {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ov-usage-window {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.ov-usage-window__label,
+.ov-usage-window__remaining {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.ov-usage-window__label {
+  color: var(--text);
+}
+
+.ov-usage-window__reset {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.ov-usage-window__remaining {
+  flex: 0 0 auto;
+}
+
+.ov-usage-window__remaining.warn {
+  color: var(--warn);
+}
+
+.ov-usage-window__remaining.ok {
+  color: var(--ok);
+}
+
 .ov-usage-note {
   margin-top: 10px;
   padding: 9px 11px;

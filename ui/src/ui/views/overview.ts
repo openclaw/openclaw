@@ -394,10 +394,24 @@ export function renderOverview(props: OverviewProps) {
   const expiringProviders = monitoredProviders.filter((provider) => provider.status === "expiring");
   const quotaWindows = collectQuotaWindows(monitoredProviders);
   const primaryQuota = quotaWindows[0];
-  const secondaryQuota = quotaWindows.find(
+  const sameProviderSecondaryQuota = quotaWindows.find(
     (entry) =>
-      entry.displayName !== primaryQuota?.displayName || entry.label !== primaryQuota?.label,
+      entry.displayName === primaryQuota?.displayName && entry.label !== primaryQuota?.label,
   );
+  const secondaryQuota =
+    sameProviderSecondaryQuota ??
+    quotaWindows.find(
+      (entry) =>
+        entry.displayName !== primaryQuota?.displayName || entry.label !== primaryQuota?.label,
+    );
+  const quotaCardWindows = primaryQuota
+    ? quotaWindows
+        .filter(
+          (entry) => entry.displayName === primaryQuota.displayName || !sameProviderSecondaryQuota,
+        )
+        .slice(0, 3)
+    : [];
+  const hasMultipleQuotaWindows = quotaCardWindows.length > 1;
   const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
   const secondaryQuotaHint = secondaryQuota
     ? `${[secondaryQuota.displayName, secondaryQuota.label].filter(Boolean).join(" · ")} ${t(
@@ -870,8 +884,8 @@ export function renderOverview(props: OverviewProps) {
             </div>
 
             <div class="card ov-usage-card">
-              <div class="card-title">${t("overview.operator.codexUsageTitle")}</div>
-              <div class="card-sub">${t("overview.operator.codexUsageSubtitle")}</div>
+              <div class="card-title">${t("overview.operator.providerUsageTitle")}</div>
+              <div class="card-sub">${t("overview.operator.providerUsageSubtitle")}</div>
               <div class="ov-usage-metrics">
                 <div class="stat">
                   <div class="stat-label">${t("overview.operator.quota")}</div>
@@ -897,6 +911,34 @@ export function renderOverview(props: OverviewProps) {
                   <div class="stat-value">${totalTokens}</div>
                 </div>
               </div>
+              ${hasMultipleQuotaWindows
+                ? html`<div class="ov-usage-windows">
+                    ${quotaCardWindows.map((entry) => {
+                      const reset = formatQuotaReset(entry.resetAt);
+                      return html`<div class="ov-usage-window">
+                        <div>
+                          <div class="ov-usage-window__label">
+                            ${[entry.displayName, entry.label].filter(Boolean).join(" · ")}
+                          </div>
+                          ${reset
+                            ? html`<div class="ov-usage-window__reset">
+                                ${t("overview.operator.quotaResetShort", { time: reset })}
+                              </div>`
+                            : nothing}
+                        </div>
+                        <strong
+                          class=${entry.remaining <= 25
+                            ? "ov-usage-window__remaining warn"
+                            : "ov-usage-window__remaining ok"}
+                        >
+                          ${t("overview.cards.modelAuthUsageLeft", {
+                            pct: String(entry.remaining),
+                          })}
+                        </strong>
+                      </div>`;
+                    })}
+                  </div>`
+                : nothing}
               <div class="ov-usage-note">${quotaStatusNote}</div>
             </div>
           </section>

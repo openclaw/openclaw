@@ -279,7 +279,13 @@ describe("overview view rendering", () => {
     await Promise.resolve();
 
     const quota = container.querySelector('[data-kind="quota"]');
-    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Claude · 5h 40% left");
+    expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Codex · 3h 82% left");
+    expect(compactText(container.querySelector(".ov-usage-card"))).toContain(
+      "Provider Usage Compact view of model usage, costs, and quota signals.",
+    );
+    expect(compactText(container.querySelector(".ov-usage-windows"))).toBe(
+      "Codex · Week 28% left Codex · 3h 82% left",
+    );
   });
 
   it("does not call provider quota unavailable while auth status is still loading", async () => {
