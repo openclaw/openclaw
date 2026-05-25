@@ -1345,6 +1345,7 @@ export async function runWhatsAppQaLive(params: {
           credentialAttempt === 1
             ? undefined
             : `${process.env.OPENCLAW_QA_CREDENTIAL_OWNER_ID || "qa-live-whatsapp"}-retry-${credentialAttempt}`,
+        excludeCredentialIds: [...rejectedCredentialIds],
         resolveEnvPayload: () => resolveWhatsAppQaRuntimeEnv(),
         parsePayload: parseWhatsAppQaCredentialPayload,
       });

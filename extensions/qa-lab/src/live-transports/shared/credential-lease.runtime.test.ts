@@ -37,6 +37,14 @@ function fetchInit(fetchImpl: FetchMock, index = 0): RequestInit {
   return init;
 }
 
+function fetchJsonBody(fetchImpl: FetchMock, index = 0): Record<string, unknown> {
+  const body = fetchInit(fetchImpl, index).body;
+  if (typeof body !== "string") {
+    throw new Error(`expected fetch call ${index} JSON string body`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 describe("credential lease runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -103,6 +111,34 @@ describe("credential lease runtime", () => {
     const firstInit = fetchInit(fetchImpl);
     const headers = firstInit?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maintainer-secret");
+  });
+
+  it("forwards excluded credential ids when acquiring convex credentials", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        status: "ok",
+        credentialId: "cred-2",
+        leaseToken: "lease-2",
+        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
+      }),
+    );
+
+    await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "ci",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+      },
+      excludeCredentialIds: [" cred-1 ", "", "cred-1"],
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(fetchJsonBody(fetchImpl).excludeCredentialIds).toEqual(["cred-1"]);
   });
 
   it("hydrates chunked convex credential payloads after acquire", async () => {

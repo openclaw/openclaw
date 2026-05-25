@@ -84,6 +84,7 @@ type QaCredentialLease<TPayload> = {
 
 type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
+  excludeCredentialIds?: readonly string[];
   fetchImpl?: typeof fetch;
   kind: string;
   ownerId?: string;
@@ -361,6 +362,23 @@ function assertConvexOk(payload: unknown, actionLabel: string) {
   throw new Error(`Convex credential ${actionLabel} failed with an invalid response payload.`);
 }
 
+function normalizeExcludedCredentialIds(value: readonly string[] | undefined): string[] {
+  if (!value?.length) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of value) {
+    const credentialId = item.trim();
+    if (!credentialId || seen.has(credentialId)) {
+      continue;
+    }
+    seen.add(credentialId);
+    normalized.push(credentialId);
+  }
+  return normalized;
+}
+
 export async function acquireQaCredentialLease<TPayload>(
   opts: AcquireQaCredentialLeaseOptions<TPayload>,
 ): Promise<QaCredentialLease<TPayload>> {
@@ -389,6 +407,7 @@ export async function acquireQaCredentialLease<TPayload>(
     opts.sleepImpl ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   const timeImpl = opts.timeImpl ?? (() => Date.now());
   const randomImpl = opts.randomImpl ?? (() => Math.random());
+  const excludeCredentialIds = normalizeExcludedCredentialIds(opts.excludeCredentialIds);
   const startedAt = timeImpl();
   let attempt = 0;
 
@@ -406,6 +425,7 @@ export async function acquireQaCredentialLease<TPayload>(
           actorRole: config.role,
           leaseTtlMs: config.leaseTtlMs,
           heartbeatIntervalMs: config.heartbeatIntervalMs,
+          ...(excludeCredentialIds.length > 0 ? { excludeCredentialIds } : {}),
         },
       });
       const acquired = convexAcquireSuccessSchema.parse(payload);
