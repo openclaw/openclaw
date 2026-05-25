@@ -707,6 +707,29 @@ describe("applyConfig", () => {
 });
 
 describe("saveConfig", () => {
+  it("submits generated raw text when raw mode has no snapshot raw text", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "raw";
+    state.configRaw = '{\n  "gateway": {\n    "mode": "local"\n  }\n}\n';
+    state.configSnapshot = {
+      hash: "hash-generated-raw",
+      sourceConfig: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: null,
+    };
+
+    await saveConfig(state);
+
+    expect(request).toHaveBeenCalledWith("config.set", {
+      raw: '{\n  "gateway": {\n    "mode": "local"\n  }\n}\n',
+      baseHash: "hash-generated-raw",
+    });
+  });
+
   it("submits the original draft base hash after a dirty config refresh", async () => {
     const request = createRequestWithConfigGet();
     const state = createState();

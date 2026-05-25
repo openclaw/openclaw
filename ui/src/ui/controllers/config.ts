@@ -161,9 +161,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
-  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
-    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
-  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
