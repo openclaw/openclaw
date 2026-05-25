@@ -20,6 +20,7 @@ import {
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -51,6 +52,8 @@ let pluginMetadataSnapshotMemos: PluginMetadataSnapshotMemo[] = [];
 export function clearLoadPluginMetadataSnapshotMemo(): void {
   pluginMetadataSnapshotMemos = [];
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginMetadataSnapshotMemo);
 
 const MEMO_RELEVANT_ENV_KEYS = [
   "APPDATA",
@@ -565,7 +568,17 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
   snapshot: PluginMetadataSnapshot;
 }): boolean {
-  return result.registrySource !== "derived" && result.snapshot.index.plugins.length > 0;
+  const snapshot = result.snapshot;
+  const hasCompleteSnapshotShape =
+    Array.isArray(snapshot.plugins) &&
+    Array.isArray(snapshot.diagnostics) &&
+    Array.isArray(snapshot.registryDiagnostics) &&
+    Array.isArray(snapshot.manifestRegistry.plugins) &&
+    Array.isArray(snapshot.manifestRegistry.diagnostics) &&
+    Array.isArray(snapshot.index.plugins) &&
+    Array.isArray(snapshot.index.diagnostics);
+  const hasPluginMetadata = snapshot.plugins.length > 0 || snapshot.index.plugins.length > 0;
+  return hasCompleteSnapshotShape && hasPluginMetadata;
 }
 
 export function resolvePluginMetadataSnapshot(
@@ -681,6 +694,7 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
         indexPluginCount: index.plugins.length,
         manifestPluginCount: manifestRegistry.plugins.length,
       },
+      discovery: registryResult.discovery,
     },
   };
 }

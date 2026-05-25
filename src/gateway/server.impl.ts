@@ -40,10 +40,11 @@ import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
-  clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
@@ -836,11 +837,19 @@ export async function startGatewayServer(
   });
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
-    getRuntimeConfig: () =>
-      applyPluginAutoEnable({
-        config: getRuntimeConfig(),
+    getRuntimeConfig: () => {
+      const runtimeConfig = getRuntimeConfig();
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        config: runtimeConfig,
         env: process.env,
-      }).config,
+      });
+      return applyPluginAutoEnable({
+        config: runtimeConfig,
+        env: process.env,
+        manifestRegistry: currentSnapshot?.manifestRegistry,
+        discovery: currentSnapshot?.discovery,
+      }).config;
+    },
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
@@ -960,7 +969,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),

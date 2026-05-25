@@ -1963,8 +1963,6 @@ describe("image tool data URL support", () => {
 });
 
 describe("image tool MiniMax VLM routing", () => {
-  const pngB64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
   const priorFetch = global.fetch;
   registerImageToolEnvReset(priorFetch, [
     "MINIMAX_API_KEY",
@@ -1997,7 +1995,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -2021,7 +2019,10 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/png;base64,${secondPngB64}`],
+      images: [
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+      ],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -2039,9 +2040,9 @@ describe("image tool MiniMax VLM routing", () => {
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [
-        `data:image/png;base64,${pngB64}`,
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         `data:image/png;base64,${secondPngB64}`,
         `data:image/png;base64,${secondPngB64}`,
       ],
@@ -2057,7 +2058,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
       maxImages: 1,
     });
@@ -2081,7 +2082,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t1", {
         prompt: "Describe the image.",
-        image: `data:image/png;base64,${pngB64}`,
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       }),
     ).rejects.toThrow(/MiniMax VLM API error/i);
   });
@@ -2442,6 +2443,82 @@ describe("image compression policy", () => {
         { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
         { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
         {},
+      ],
+    });
+  });
+
+  it("uses bundled Anthropic media limits without runtime provider hooks", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: {},
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4-7",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+      ],
+    });
+  });
+
+  it("keeps runtime Anthropic media limits for dated model variants", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: {},
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4.7-20260219",
+          fallbacks: ["anthropic/claude-sonnet-4.6-20260219"],
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+      ],
+    });
+  });
+
+  it("merges partial configured Anthropic media policy with runtime side limits", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com",
+                api: "anthropic-messages",
+                models: [
+                  {
+                    id: "claude-opus-4.7-20260219",
+                    name: "Claude Opus 4.7 dated",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    contextWindow: 200_000,
+                    maxTokens: 64_000,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    mediaInput: { image: { maxBytes: 1_000_000 } },
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4.7-20260219",
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxBytes: 1_000_000, maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
       ],
     });
   });

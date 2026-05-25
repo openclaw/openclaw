@@ -51,9 +51,9 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/registry");
-const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
 const tasks = taskRegistryProcessState.tasks;
@@ -986,8 +986,10 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
-    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
-    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+    next.cleanupAfter = resolveTaskCleanupAfter({
+      ...next,
+      createdAt: next.createdAt ?? Date.now(),
+    });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -1598,8 +1600,7 @@ export function createTaskRecord(params: {
     }),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    record.cleanupAfter =
-      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
   upsertTaskDeliveryState({
