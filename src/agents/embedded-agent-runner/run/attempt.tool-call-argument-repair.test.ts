@@ -51,10 +51,19 @@ describe("shouldRepairMalformedToolCallArguments", () => {
   it("keeps the repair enabled for kimi providers on anthropic-messages", () => {
     expect(
       shouldRepairMalformedToolCallArguments({
-        provider: "kimi-coding",
+        provider: "kimi",
         modelApi: "anthropic-messages",
       }),
     ).toBe(true);
+  });
+
+  it("does not apply kimi repair across provider id variants", () => {
+    expect(
+      shouldRepairMalformedToolCallArguments({
+        provider: "kimi-coding",
+        modelApi: "anthropic-messages",
+      }),
+    ).toBe(false);
   });
 
   it("enables the repair for openai-completions even when the provider is not kimi", () => {

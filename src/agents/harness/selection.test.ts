@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { testing as cliBackendsTesting } from "../cli-backends.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -35,10 +36,27 @@ const originalRuntime = process.env.OPENCLAW_AGENT_RUNTIME;
 
 beforeEach(() => {
   clearAgentHarnesses();
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+      {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        pluginId: "google",
+        config: { command: "gemini" },
+      },
+    ],
+  });
 });
 
 afterEach(() => {
   clearAgentHarnesses();
+  cliBackendsTesting.resetDepsForTest();
   agentRunAttempt.mockClear();
   if (originalRuntime == null) {
     delete process.env.OPENCLAW_AGENT_RUNTIME;

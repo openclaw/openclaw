@@ -533,7 +533,7 @@ describe("shouldRunLlmOutputHooksForAttempt", () => {
 });
 
 describe("resolvePromptBuildHookResult", () => {
-  function createLegacyOnlyHookRunner() {
+  function createBeforeAgentStartOnlyHookRunner() {
     return {
       hasHooks: vi.fn(
         (
@@ -549,29 +549,29 @@ describe("resolvePromptBuildHookResult", () => {
     };
   }
 
-  it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
-    const hookRunner = createLegacyOnlyHookRunner();
+  it("reuses precomputed before_agent_start result without invoking hook again", async () => {
+    const hookRunner = createBeforeAgentStartOnlyHookRunner();
     const result = await resolvePromptBuildHookResult({
       config: {},
       prompt: "hello",
       messages: [],
       hookCtx: {},
       hookRunner,
-      legacyBeforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "legacy-system" },
+      beforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "agent-start-system" },
     });
 
     expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     expect(result).toEqual({
       prependContext: "from-cache",
       appendContext: undefined,
-      systemPrompt: "legacy-system",
+      systemPrompt: "agent-start-system",
       prependSystemContext: undefined,
       appendSystemContext: undefined,
     });
   });
 
-  it("calls legacy hook when precomputed result is absent", async () => {
-    const hookRunner = createLegacyOnlyHookRunner();
+  it("calls before_agent_start hook when precomputed result is absent", async () => {
+    const hookRunner = createBeforeAgentStartOnlyHookRunner();
     const messages = [{ role: "user", content: "ctx" }];
     const result = await resolvePromptBuildHookResult({
       config: {},
@@ -586,7 +586,7 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.prependContext).toBe("from-hook");
   });
 
-  it("merges prompt-build and legacy context fields in deterministic order", async () => {
+  it("merges prompt-build and before_agent_start context fields in deterministic order", async () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
@@ -596,10 +596,10 @@ describe("resolvePromptBuildHookResult", () => {
         appendSystemContext: "prompt append",
       })),
       runBeforeAgentStart: vi.fn(async () => ({
-        prependContext: "legacy context",
-        appendContext: "legacy append context",
-        prependSystemContext: "legacy prepend",
-        appendSystemContext: "legacy append",
+        prependContext: "agent start context",
+        appendContext: "agent start append context",
+        prependSystemContext: "agent start prepend",
+        appendSystemContext: "agent start append",
       })),
     };
 
@@ -611,10 +611,10 @@ describe("resolvePromptBuildHookResult", () => {
       hookRunner,
     });
 
-    expect(result.prependContext).toBe("prompt context\n\nlegacy context");
-    expect(result.appendContext).toBe("prompt append context\n\nlegacy append context");
-    expect(result.prependSystemContext).toBe("prompt prepend\n\nlegacy prepend");
-    expect(result.appendSystemContext).toBe("prompt append\n\nlegacy append");
+    expect(result.prependContext).toBe("prompt context\n\nagent start context");
+    expect(result.appendContext).toBe("prompt append context\n\nagent start append context");
+    expect(result.prependSystemContext).toBe("prompt prepend\n\nagent start prepend");
+    expect(result.appendSystemContext).toBe("prompt append\n\nagent start append");
   });
 
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {

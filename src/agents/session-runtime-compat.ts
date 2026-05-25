@@ -2,7 +2,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { listLegacyRuntimeModelProviderAliases } from "./model-runtime-aliases.js";
+import { resolveCliRuntimeModelBackendBinding } from "./cli-backends.js";
 import { resolveContextConfigProviderForRuntime } from "./openai-codex-routing.js";
 
 export type SessionRuntimeCompatEntry = Pick<
@@ -35,11 +35,7 @@ export function resolveSessionRuntimeOverrideForProvider(params: {
   if (provider === "openai" && runtime === "codex") {
     return "codex";
   }
-  return listLegacyRuntimeModelProviderAliases().find(
-    (alias) =>
-      normalizeLowercaseStringOrEmpty(alias.provider) === provider &&
-      normalizeLowercaseStringOrEmpty(alias.runtime) === runtime,
-  )?.runtime;
+  return resolveCliRuntimeModelBackendBinding({ provider, runtime })?.runtime;
 }
 
 export function resolveContextConfigProviderForSessionRuntime(params: {

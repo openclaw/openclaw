@@ -42,7 +42,7 @@ let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
     pluginRegistrationContractRegistry.flatMap((entry) =>
-      entry.speechProviderIds.flatMap((providerId) => entry.providerAuthEnvVars[providerId] ?? []),
+      entry.speechProviderIds.flatMap((providerId) => entry.providerEnvVars[providerId] ?? []),
     ),
   ),
 ].toSorted((left, right) => left.localeCompare(right));

@@ -123,21 +123,40 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
-  setActivePluginRegistry(
-    createTestRegistry([
-      ...textSurfaceModelsTestPlugins,
-      {
-        pluginId: "telegram",
-        plugin: telegramModelsTestPlugin,
-        source: "test",
+  const registry = createTestRegistry([
+    ...textSurfaceModelsTestPlugins,
+    {
+      pluginId: "telegram",
+      plugin: telegramModelsTestPlugin,
+      source: "test",
+    },
+    {
+      pluginId: "menuonly",
+      plugin: menuOnlyModelsTestPlugin,
+      source: "test",
+    },
+  ]);
+  registry.cliBackends = [
+    {
+      pluginId: "anthropic",
+      backend: {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
       },
-      {
-        pluginId: "menuonly",
-        plugin: menuOnlyModelsTestPlugin,
-        source: "test",
+      source: "test",
+    },
+    {
+      pluginId: "google",
+      backend: {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        config: { command: "gemini" },
       },
-    ]),
-  );
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
 });
 
 function buildParams(

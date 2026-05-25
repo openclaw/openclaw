@@ -331,8 +331,8 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     out.add(id);
     if (mode === "oauth") {
       // Store normalized id so lookups against `AuthProviderHealth.provider`
-      // (which is already normalized by buildAuthHealthSummary) match even
-      // when the config uses an alias like `z.ai` that normalizes to `zai`.
+      // (which is already normalized by buildAuthHealthSummary) match despite
+      // case-only differences in config provider keys.
       expectsOAuth.add(normalizeProviderId(id));
     }
   }

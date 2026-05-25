@@ -750,7 +750,7 @@ Interactive custom-provider onboarding infers image input for common vision mode
     }
     ```
 
-    Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
+    Set `ZAI_API_KEY`. Model refs use the canonical `zai/*` provider ID. Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
     - General endpoint: `https://api.z.ai/api/paas/v4`
     - Coding endpoint (default): `https://api.z.ai/api/coding/paas/v4`

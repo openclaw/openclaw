@@ -112,7 +112,6 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
     config: cfg,
     env,
     origin: "bundled",
-    bundledAllowlistCompat: true,
   });
 }
 

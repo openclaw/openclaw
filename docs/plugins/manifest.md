@@ -100,8 +100,13 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
   },
   "cliBackends": ["openrouter-cli"],
   "syntheticAuthRefs": ["openrouter-cli"],
-  "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "openrouter-coding": "openrouter"
@@ -292,8 +297,13 @@ avoid importing a plugin runtime just to have its tool factory return `null`.
 
 ```json
 {
-  "providerAuthEnvVars": {
-    "example": ["EXAMPLE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "example",
+        "envVars": ["EXAMPLE_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "tools": ["example_search"]
@@ -670,9 +680,7 @@ Tool discovery uses this list to load only the plugin runtimes that can own the
 requested tools.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
-`contracts.externalAuthProviders`. Plugins without the declaration still run
-through a deprecated compatibility fallback, but that fallback is slower and
-will be removed after the migration window.
+`contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
 
 Bundled memory embedding providers should declare
 `contracts.memoryEmbeddingProviders` for every adapter id they expose, including
@@ -1352,7 +1360,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution. `providerDiscoveryEntry` is the legacy spelling and still works for existing plugins.
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

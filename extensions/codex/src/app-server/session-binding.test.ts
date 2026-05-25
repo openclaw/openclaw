@@ -51,7 +51,7 @@ describe("codex app-server session binding", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("round-trips the thread binding beside the PI session file", async () => {
+  it("round-trips the thread binding beside the session file", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",

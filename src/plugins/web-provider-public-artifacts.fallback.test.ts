@@ -111,7 +111,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-search"],
-          bundledDiscovery: "allowlist",
         },
       },
       onlyPluginIds: ["blocked-search", "fallback-search"],
@@ -146,7 +145,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["fallback-fetch"],
-          bundledDiscovery: "allowlist",
         },
       },
     });
@@ -180,7 +178,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["google-gemini-cli"],
-          bundledDiscovery: "allowlist",
         },
       },
     });

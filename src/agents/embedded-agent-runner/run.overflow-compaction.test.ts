@@ -214,15 +214,15 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
   });
 
-  it("passes precomputed legacy before_agent_start result into the attempt", async () => {
-    const legacyResult = {
-      modelOverride: "legacy-model",
-      prependContext: "legacy context",
+  it("passes precomputed before_agent_start result into the attempt", async () => {
+    const beforeAgentStartResult = {
+      modelOverride: "agent-start-model",
+      prependContext: "agent start context",
     };
     mockedGlobalHookRunner.hasHooks.mockImplementation(
       (hookName) => hookName === "before_agent_start",
     );
-    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(legacyResult);
+    mockedGlobalHookRunner.runBeforeAgentStart.mockResolvedValueOnce(beforeAgentStartResult);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedAgent({
@@ -232,12 +232,12 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
-      runId: "run-legacy-pass-through",
+      runId: "run-before-agent-start-pass-through",
     });
 
     expect(mockedGlobalHookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
     expectMockCallFields(mockedRunEmbeddedAttempt, {
-      legacyBeforeAgentStartResult: legacyResult,
+      beforeAgentStartResult,
     });
   });
 

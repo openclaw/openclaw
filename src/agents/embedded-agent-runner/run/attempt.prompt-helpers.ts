@@ -98,7 +98,7 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-  legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
@@ -162,8 +162,8 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
-  const legacyResult =
-    params.legacyBeforeAgentStartResult ??
+  const beforeAgentStartResult =
+    params.beforeAgentStartResult ??
     (params.hookRunner?.hasHooks("before_agent_start")
       ? await params.hookRunner
           .runBeforeAgentStart(
@@ -175,34 +175,34 @@ export async function resolvePromptBuildHookResult(params: {
           )
           .catch((hookErr: unknown) => {
             log.warn(
-              `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
+              `deprecated before_agent_start hook failed during prompt build: ${String(hookErr)}`,
             );
             return undefined;
           })
       : undefined);
   return {
-    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+    systemPrompt: promptBuildResult?.systemPrompt ?? beforeAgentStartResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
       heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
-      legacyResult?.prependContext,
+      beforeAgentStartResult?.prependContext,
     ]),
     appendContext: joinPresentTextSegments([
       queuedContext.appendContext,
       turnPrepareResult?.appendContext,
       heartbeatContribution?.appendContext,
       promptBuildResult?.appendContext,
-      legacyResult?.appendContext,
+      beforeAgentStartResult?.appendContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
       promptBuildResult?.prependSystemContext,
-      legacyResult?.prependSystemContext,
+      beforeAgentStartResult?.prependSystemContext,
     ]),
     appendSystemContext: joinPresentTextSegments([
       promptBuildResult?.appendSystemContext,
-      legacyResult?.appendSystemContext,
+      beforeAgentStartResult?.appendSystemContext,
     ]),
   };
 }

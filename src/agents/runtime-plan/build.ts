@@ -86,7 +86,6 @@ function resolveProviderRuntimeHandleForPlugins(params: {
     workspaceDir: params.runtimeHandle?.workspaceDir ?? params.workspaceDir,
     env: params.runtimeHandle?.env ?? process.env,
     applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.runtimeHandle?.bundledProviderAllowlistCompat,
     bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
   });
 }

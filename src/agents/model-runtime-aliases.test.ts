@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { testing as cliBackendsTesting } from "./cli-backends.js";
 import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
 
 function createAnthropicAuthConfig(params: {
@@ -23,6 +24,23 @@ function createAnthropicAuthConfig(params: {
 }
 
 describe("resolveCliRuntimeExecutionProvider", () => {
+  beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+  });
+
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
   it("routes Anthropic execution to Claude CLI when the selected auth profile is Claude CLI", () => {
     expect(
       resolveCliRuntimeExecutionProvider({

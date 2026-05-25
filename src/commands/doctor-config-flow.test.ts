@@ -865,6 +865,13 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: vi.fn(() => undefined),
+  resolvePluginSetupRegistry: vi.fn(() => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  })),
   resolvePluginSetupAutoEnableReasons: vi.fn(() => []),
   runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
     config,

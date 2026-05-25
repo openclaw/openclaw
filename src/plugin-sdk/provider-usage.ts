@@ -19,21 +19,3 @@ export {
   buildUsageHttpErrorSnapshot,
   fetchJson,
 } from "../infra/provider-usage.fetch.shared.js";
-
-/**
- * @deprecated Compatibility stub for external provider plugins that imported
- * the retired Pi auth bridge. OpenClaw no longer reads Pi auth state; provider
- * plugins should use auth profiles, config, or provider-owned auth.
- */
-export function resolveLegacyAgentAccessToken(
-  _env: NodeJS.ProcessEnv,
-  _providerIds: string[],
-): undefined {
-  return undefined;
-}
-
-/**
- * @deprecated Use provider-owned auth. Kept only so old provider plugins still
- * link while the Pi auth bridge stays retired.
- */
-export const resolveLegacyPiAgentAccessToken = resolveLegacyAgentAccessToken;

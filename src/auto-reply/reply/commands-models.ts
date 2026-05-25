@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
@@ -10,10 +11,7 @@ import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibilit
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
-import {
-  isCliRuntimeProvider,
-  listLegacyRuntimeModelProviderAliases,
-} from "../../agents/model-runtime-aliases.js";
+import { isCliRuntimeProvider } from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -76,11 +74,14 @@ type ParsedModelsCommand =
 
 function isModelsBrowseVisibleProvider(provider: string): boolean {
   const normalized = normalizeProviderId(provider);
-  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+  return (
+    isCliRuntimeProvider(normalized, { includeSetupRegistry: true }) ||
+    isModelPickerVisibleProvider(normalized)
+  );
 }
 
 function usesUnfilteredCatalogModels(provider: string): boolean {
-  return isCliRuntimeProvider(provider);
+  return isCliRuntimeProvider(provider, { includeSetupRegistry: true });
 }
 
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
@@ -286,8 +287,16 @@ export async function buildModelsProviderData(
   }
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
-  for (const alias of listLegacyRuntimeModelProviderAliases()) {
-    const provider = normalizeProviderId(alias.provider);
+  const runtimeBindings = [
+    { provider: "openai", runtime: "codex", cli: false },
+    ...listCliRuntimeModelBackendBindings().map((binding) => ({
+      provider: binding.provider,
+      runtime: binding.runtime,
+      cli: true,
+    })),
+  ];
+  for (const binding of runtimeBindings) {
+    const provider = normalizeProviderId(binding.provider);
     const defaultModelId =
       provider === normalizeProviderId(resolvedDefault.provider)
         ? resolvedDefault.model
@@ -306,8 +315,8 @@ export async function buildModelsProviderData(
       buildRuntimeChoice({
         cfg,
         provider,
-        runtime: alias.runtime,
-        cli: alias.cli,
+        runtime: binding.runtime,
+        cli: binding.cli,
       }),
     );
     runtimeChoicesByProvider.set(provider, choices);

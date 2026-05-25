@@ -7,7 +7,6 @@ import { resolveModelWithRegistry } from "./model.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,

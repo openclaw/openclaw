@@ -456,12 +456,10 @@ async function prewarmConfiguredPrimaryModel(params: {
     { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
-    { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/defaults.js"),
     import("../agents/model-selection.js"),
-    import("../agents/agent-runtime-id.js"),
   ]);
   const { provider, model } = resolveConfiguredModelRef({
     cfg: params.cfg,
@@ -469,10 +467,6 @@ async function prewarmConfiguredPrimaryModel(params: {
     defaultModel: DEFAULT_MODEL,
   });
   if (isCliProvider(provider, params.cfg)) {
-    return;
-  }
-  const runtime = resolveEmbeddedAgentRuntime();
-  if (runtime !== "auto" && runtime !== "openclaw") {
     return;
   }
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.

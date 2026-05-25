@@ -1,4 +1,3 @@
-import { listLegacyRuntimeModelProviderAliases } from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import {
   defineLegacyConfigMigration,
@@ -9,6 +8,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",

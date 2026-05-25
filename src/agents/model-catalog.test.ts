@@ -1130,7 +1130,7 @@ describe("loadModelCatalog", () => {
     expect(entry.contextWindow).toBe(128_000);
   });
 
-  it("dedupes configured models against discovered provider aliases", async () => {
+  it("dedupes configured models without rewriting provider ids", async () => {
     mockAgentDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
 
     const result = await loadModelCatalog({
@@ -1159,9 +1159,9 @@ describe("loadModelCatalog", () => {
     const matches = result.filter((entry) => findModelInCatalog([entry], "z-ai", "glm-5"));
     expect(matches).toHaveLength(1);
     const match = matches[0];
-    expect(match?.provider).toBe("z.ai");
+    expect(match?.provider).toBe("z-ai");
     expect(match?.id).toBe("glm-5");
-    expect(match?.name).toBe("GLM-5");
+    expect(match?.name).toBe("Configured GLM-5");
   });
 
   it("does not add unrelated models when provider plugins return nothing", async () => {
@@ -1202,14 +1202,10 @@ describe("loadModelCatalog", () => {
     expect(matches[0]?.name).toBe("Kilo Auto");
   });
 
-  it("matches models across canonical provider aliases", () => {
+  it("does not match models across provider id variants", () => {
     expect(
       findModelInCatalog([{ provider: "z.ai", id: "glm-5", name: "GLM-5" }], "z-ai", "glm-5"),
-    ).toEqual({
-      provider: "z.ai",
-      id: "glm-5",
-      name: "GLM-5",
-    });
+    ).toBeUndefined();
   });
 
   it("resolves catalog entries with explicit providers and unique providerless matches", () => {

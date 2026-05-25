@@ -120,8 +120,13 @@
       "moonshot": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "moonshot": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "moonshot",
+        "envVars": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

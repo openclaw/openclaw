@@ -309,8 +309,13 @@
       }
     ]
   },
-  "providerAuthEnvVars": {
-    "openai": ["OPENAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openai",
+        "envVars": ["OPENAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

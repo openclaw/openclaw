@@ -11,9 +11,6 @@ export function normalizeEmbeddedAgentRuntime(raw: string | undefined): Embedded
   if (value === "openclaw") {
     return OPENCLAW_AGENT_RUNTIME_ID;
   }
-  if (value === "pi") {
-    return OPENCLAW_AGENT_RUNTIME_ID;
-  }
   if (value === "auto") {
     return AUTO_AGENT_RUNTIME_ID;
   }
@@ -31,10 +28,14 @@ export function normalizeOptionalAgentRuntimeId(raw: unknown): EmbeddedAgentRunt
   return value ? normalizeEmbeddedAgentRuntime(value) : undefined;
 }
 
+/**
+ * @deprecated Whole-agent runtime environment selection is retired. Use
+ * provider/model runtime policy or a registered agent harness instead.
+ */
 export function resolveEmbeddedAgentRuntime(
-  env: NodeJS.ProcessEnv = process.env,
+  _env: NodeJS.ProcessEnv = process.env,
 ): EmbeddedAgentRuntime {
-  return normalizeOptionalAgentRuntimeId(env.OPENCLAW_AGENT_RUNTIME) ?? OPENCLAW_AGENT_RUNTIME_ID;
+  return OPENCLAW_AGENT_RUNTIME_ID;
 }
 
 export function isDefaultAgentRuntimeId(runtime: string | undefined): boolean {

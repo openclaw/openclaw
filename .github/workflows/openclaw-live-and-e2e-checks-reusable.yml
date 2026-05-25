@@ -1857,7 +1857,6 @@ jobs:
           normalize_provider() {
             local value="${1,,}"
             case "$value" in
-              z.ai|z-ai) echo "zai" ;;
               opencode|opencode-go) echo "opencode-go" ;;
               open-router|openrouter) echo "openrouter" ;;
               *) echo "$value" ;;

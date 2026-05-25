@@ -306,7 +306,7 @@ function resolveConfiguredProviderContextTokens(
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
+  // 2. Normalized fallback: covers case-only provider key differences.
   const normalizedProvider = normalizeProviderId(provider);
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }

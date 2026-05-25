@@ -2376,7 +2376,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(instructions).toContain("Codex app-server command guidance.");
     expect(instructions).not.toContain("Legacy global command guidance.");
     expect(instructions).not.toContain("Unscoped structured command guidance.");
-    expect(instructions).not.toContain("PI main command guidance.");
+    expect(instructions).not.toContain("OpenClaw main command guidance.");
   });
 
   it("keeps OpenClaw skills out of Codex developer instructions", async () => {

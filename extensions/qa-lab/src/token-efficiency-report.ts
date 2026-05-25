@@ -1,9 +1,4 @@
-import {
-  openclawRuntimeParityCell,
-  type RuntimeId,
-  type RuntimeParityCell,
-  type RuntimeParityResult,
-} from "./runtime-parity.js";
+import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 
 export type TokenEfficiencyRuntimeUsage = {
   inputTokens: number;
@@ -128,7 +123,7 @@ function buildRow(params: {
   thresholdPercent: number;
   usageSource: TokenEfficiencyRow["usageSource"];
 }): TokenEfficiencyRow {
-  const openclaw = runtimeUsage(openclawRuntimeParityCell(params.result.cells));
+  const openclaw = runtimeUsage(params.result.cells.openclaw);
   const codex = runtimeUsage(params.result.cells.codex);
   const delta = deltaPercent(openclaw.totalTokens, codex.totalTokens);
   const flagged = params.usageSource === "live-usage" && delta > params.thresholdPercent;
@@ -146,10 +141,7 @@ function buildRow(params: {
     deltaPercent: delta,
     classification,
     flagged,
-    toolsUsed: toolNamesForCells(
-      openclawRuntimeParityCell(params.result.cells),
-      params.result.cells.codex,
-    ),
+    toolsUsed: toolNamesForCells(params.result.cells.openclaw, params.result.cells.codex),
   };
 }
 

@@ -5,10 +5,11 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   DEFAULT_MESSAGE,
   GMAIL_MODEL,
-  expectEmbeddedProviderModel,
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
+import { makeCfg } from "./isolated-agent.test-harness.js";
+import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
 function lastEmbeddedPrompt(): string {
@@ -23,6 +24,7 @@ function lastEmbeddedPrompt(): string {
 
 describe("runCronIsolatedAgentTurn hook content wrapping", () => {
   beforeEach(() => {
+    process.env.OPENCLAW_TEST_FAST = "1";
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
@@ -65,28 +67,33 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
 
   it("uses hooks.gmail.model for normalized Gmail hook provenance", async () => {
     await withTempHome(async (home) => {
-      const { res } = await runCronTurn(home, {
-        cfgOverrides: {
-          hooks: {
-            gmail: {
-              model: GMAIL_MODEL,
-            },
+      const cfg = makeCfg(home, "unused-session-store.json", {
+        hooks: {
+          gmail: {
+            model: GMAIL_MODEL,
           },
         },
-        jobPayload: {
+      });
+
+      const resolved = await resolveCronModelSelection({
+        cfg,
+        cfgWithAgentDefaults: cfg,
+        sessionEntry: {},
+        payload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
           externalContentSource: "gmail",
         },
-        sessionKey: "main",
+        isGmailHook: true,
+        agentId: "main",
       });
 
-      expect(res.status).toBe("ok");
-      const gmailHookModel = expectEmbeddedProviderModel({
+      expect(resolved).toEqual({
+        ok: true,
         provider: "openrouter",
         model: GMAIL_MODEL.replace("openrouter/", ""),
+        modelSource: "hook",
       });
-      gmailHookModel.assert();
     });
   });
 

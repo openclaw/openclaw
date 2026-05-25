@@ -104,7 +104,7 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;

@@ -259,6 +259,10 @@
       "types": "./dist/plugin-sdk/json-schema-runtime.d.ts",
       "default": "./dist/plugin-sdk/json-schema-runtime.js"
     },
+    "./plugin-sdk/json-unsafe-integers": {
+      "types": "./dist/plugin-sdk/json-unsafe-integers.d.ts",
+      "default": "./dist/plugin-sdk/json-unsafe-integers.js"
+    },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"

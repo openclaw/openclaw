@@ -45,8 +45,7 @@ type BootstrapContext = {
 };
 
 function normalizeMockProviderId(providerId?: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  return normalized === "z.ai" || normalized === "z-ai" ? "zai" : normalized;
+  return normalizeLowercaseStringOrEmpty(providerId);
 }
 
 type SessionManagerMocks = {

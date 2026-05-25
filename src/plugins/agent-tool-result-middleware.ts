@@ -16,7 +16,6 @@ const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
 
 const LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = {
   "codex-app-server": "codex",
-  pi: "openclaw",
 } as const satisfies Record<string, AgentToolResultMiddlewareRuntime>;
 
 function normalizeAgentToolResultMiddlewareRuntime(

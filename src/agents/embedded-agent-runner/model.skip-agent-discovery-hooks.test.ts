@@ -3,9 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
-  applyProviderResolvedModelCompatWithPlugins: vi.fn(() => {
-    throw new Error("compat hook should not run during skipAgentDiscovery");
-  }),
   applyProviderResolvedTransportWithPlugin: vi.fn(() => {
     throw new Error("transport hook should not run during skipAgentDiscovery");
   }),
@@ -38,7 +35,6 @@ vi.mock("../agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  applyProviderResolvedModelCompatWithPlugins: mocks.applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin: mocks.applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin: mocks.buildProviderUnknownModelHintWithPlugin,
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
@@ -89,7 +85,6 @@ describe("resolveModelAsync skipAgentDiscovery runtime hooks", () => {
     expectWorkspaceHookCall(mocks.prepareProviderDynamicModel);
     expectWorkspaceHookCall(mocks.runProviderDynamicModel);
     expectWorkspaceHookCall(mocks.normalizeProviderResolvedModelWithPlugin);
-    expect(mocks.applyProviderResolvedModelCompatWithPlugins).not.toHaveBeenCalled();
     expect(mocks.applyProviderResolvedTransportWithPlugin).not.toHaveBeenCalled();
     expect(mocks.normalizeProviderTransportWithPlugin).not.toHaveBeenCalled();
   });

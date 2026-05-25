@@ -6,6 +6,7 @@ import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { modelsAreEqual } from "../../llm/model-utils.js";
 import type { Model } from "../../llm/types.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -15,42 +16,6 @@ const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
   return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
-
-/** Default model IDs for each known provider */
-export const defaultModelPerProvider: Record<string, string> = {
-  "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
-  anthropic: "claude-opus-4-7",
-  openai: "gpt-5.4",
-  "azure-openai-responses": "gpt-5.4",
-  "openai-codex": "gpt-5.5",
-  deepseek: "deepseek-v4-pro",
-  google: "gemini-3.1-pro-preview",
-  "google-vertex": "gemini-3.1-pro-preview",
-  "github-copilot": "gpt-5.4",
-  openrouter: "moonshotai/kimi-k2.6",
-  "vercel-ai-gateway": "zai/glm-5.1",
-  xai: "grok-4.20-0309-reasoning",
-  groq: "openai/gpt-oss-120b",
-  cerebras: "zai-glm-4.7",
-  zai: "glm-5.1",
-  mistral: "devstral-medium-latest",
-  minimax: "MiniMax-M2.7",
-  "minimax-cn": "MiniMax-M2.7",
-  moonshotai: "kimi-k2.6",
-  "moonshotai-cn": "kimi-k2.6",
-  huggingface: "moonshotai/Kimi-K2.6",
-  fireworks: "accounts/fireworks/models/kimi-k2p6",
-  together: "moonshotai/Kimi-K2.6",
-  opencode: "kimi-k2.6",
-  "opencode-go": "kimi-k2.6",
-  "kimi-coding": "kimi-for-coding",
-  "cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
-  "cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
-  xiaomi: "mimo-v2.5-pro",
-  "xiaomi-token-plan-cn": "mimo-v2.5-pro",
-  "xiaomi-token-plan-ams": "mimo-v2.5-pro",
-  "xiaomi-token-plan-sgp": "mimo-v2.5-pro",
-};
 
 export interface ScopedModel {
   model: Model;
@@ -176,16 +141,21 @@ function buildFallbackModel(
     return undefined;
   }
 
-  const defaultId = defaultModelPerProvider[provider];
-  const baseModel = defaultId
-    ? (providerModels.find((m) => m.id === defaultId) ?? providerModels[0])
-    : providerModels[0];
+  const baseModel = providerModels[0];
 
   return {
     ...baseModel,
     id: modelId,
     name: modelId,
   };
+}
+
+function selectAvailableFallbackModel(availableModels: readonly Model[]): Model | undefined {
+  return (
+    availableModels.find(
+      (model) => model.provider === DEFAULT_PROVIDER && model.id === DEFAULT_MODEL,
+    ) ?? availableModels[0]
+  );
 }
 
 /**
@@ -577,18 +547,8 @@ export async function findInitialModel(options: {
   const availableModels = modelRegistry.getAvailable();
 
   if (availableModels.length > 0) {
-    // Try to find a default model from known providers
-    for (const provider of Object.keys(defaultModelPerProvider)) {
-      const defaultId = defaultModelPerProvider[provider];
-      const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
-      if (match) {
-        return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
-      }
-    }
-
-    // If no default found, use first available
     return {
-      model: availableModels[0],
+      model: selectAvailableFallbackModel(availableModels),
       thinkingLevel: DEFAULT_THINKING_LEVEL,
       fallbackMessage: undefined,
     };
@@ -646,20 +606,12 @@ export async function restoreModelFromSession(
   const availableModels = modelRegistry.getAvailable();
 
   if (availableModels.length > 0) {
-    // Try to find a default model from known providers
-    let fallbackModel: Model | undefined;
-    for (const provider of Object.keys(defaultModelPerProvider)) {
-      const defaultId = defaultModelPerProvider[provider];
-      const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
-      if (match) {
-        fallbackModel = match;
-        break;
-      }
-    }
-
-    // If no default found, use first available
+    const fallbackModel = selectAvailableFallbackModel(availableModels);
     if (!fallbackModel) {
-      fallbackModel = availableModels[0];
+      return {
+        model: undefined,
+        fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). No models available.`,
+      };
     }
 
     if (shouldPrintMessages) {

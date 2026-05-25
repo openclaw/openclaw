@@ -40,7 +40,6 @@ export type ProviderRuntimePluginLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 };
 
@@ -86,7 +85,6 @@ function resolveProviderRuntimePluginCacheKey(
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
     pluginRegistryKey: registryState?.key ?? null,
     pluginRegistryVersion: registryState?.activeVersion ?? null,
@@ -193,7 +191,6 @@ export function resolveProviderPluginsForHooks(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -205,7 +202,6 @@ export function resolveProviderPluginsForHooks(params: {
       env,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
@@ -217,7 +213,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
   });
   return resolved;
@@ -249,7 +244,6 @@ export function resolveProviderRuntimePlugin(
       providerRefs,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
@@ -268,7 +262,6 @@ export function resolveProviderRuntimePlugin(
         providerRefs: lookupScope.providerRefs,
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
-        bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
         bundledProviderVitestCompat: params.bundledProviderVitestCompat,
       }).find((plugin) => {
         if (apiOwnerHint) {
@@ -365,7 +358,6 @@ export function ensureProviderRuntimePluginHandle(
       workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-      bundledProviderAllowlistCompat: params.runtimeHandle?.bundledProviderAllowlistCompat,
       bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
     });
   }

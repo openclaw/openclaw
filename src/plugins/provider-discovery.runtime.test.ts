@@ -83,12 +83,10 @@ function createProvider(params: { id: string; mode: "static" | "catalog" }): Pro
 }
 
 function requireResolvePluginProvidersParams(index = 0): {
-  bundledProviderAllowlistCompat?: boolean;
   onlyPluginIds?: string[];
 } {
   const params = (mocks.resolvePluginProviders.mock.calls[index] as [unknown] | undefined)?.[0] as
     | {
-        bundledProviderAllowlistCompat?: boolean;
         onlyPluginIds?: string[];
       }
     | undefined;
@@ -141,7 +139,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([fullProvider]);
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
-    expect(params.bundledProviderAllowlistCompat).toBe(true);
     expect(params.onlyPluginIds).toEqual(["deepseek"]);
   });
 

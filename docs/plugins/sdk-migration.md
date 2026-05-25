@@ -820,13 +820,12 @@ canonical replacement.
 
   </Accordion>
 
-  <Accordion title="External OAuth provider fallback → contracts.externalAuthProviders">
-    **Old**: implementing `resolveExternalOAuthProfiles(...)` without
-    declaring the provider in the plugin manifest.
+  <Accordion title="External auth providers → contracts.externalAuthProviders">
+    **Old**: implementing external auth hooks without declaring the provider
+    in the plugin manifest.
 
     **New**: declare `contracts.externalAuthProviders` in the plugin manifest
-    **and** implement `resolveExternalAuthProfiles(...)`. The old "auth
-    fallback" path emits a warning at runtime and will be removed.
+    **and** implement `resolveExternalAuthProfiles(...)`.
 
     ```json
     {

@@ -510,21 +510,6 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
 describe("runWithModelFallback", () => {
-  it("normalizes anthropic-cli refs to the Claude CLI provider before execution", async () => {
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runWithModelFallback({
-      cfg: {} as OpenClawConfig,
-      provider: "anthropic-cli",
-      model: "claude-opus-4-7",
-      run,
-    });
-
-    expect(run).toHaveBeenCalledWith("claude-cli", "claude-opus-4-7");
-    expect(result.provider).toBe("claude-cli");
-    expect(result.model).toBe("claude-opus-4-7");
-  });
-
   it("skips auth store bootstrap when no auth profile sources exist", async () => {
     authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReturnValue(false);
     const run = vi.fn().mockResolvedValueOnce("ok");
@@ -651,20 +636,20 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0].reason).toBe("unknown");
   });
 
-  it("does not prepare agent harness plugins for forced PI candidates", async () => {
+  it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {
     const cfg = makeCfg({
       models: {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
             models: [],
           },
         },
       },
     });
     const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("PI candidates should not prepare plugin harnesses");
+      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
     });
     const run = vi.fn().mockResolvedValueOnce("ok");
 
@@ -684,7 +669,7 @@ describe("runWithModelFallback", () => {
   it("does not prepare agent harness plugins for implicit Codex candidates", async () => {
     const cfg = makeCfg();
     const prepareAgentHarnessRuntime = vi.fn(() => {
-      throw new Error("implicit Codex candidates should stay PI-compatible");
+      throw new Error("implicit Codex candidates should stay embedded-compatible");
     });
     const run = vi.fn().mockResolvedValueOnce("ok");
 

@@ -24,9 +24,6 @@ function dedupePluginIds(values: readonly string[]): string[] {
 }
 
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  if (config?.plugins?.bundledDiscovery === "compat") {
-    return false;
-  }
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
 }

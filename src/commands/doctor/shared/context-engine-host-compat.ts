@@ -194,12 +194,11 @@ function runtimeHostCandidate(params: {
   };
 }
 
-/** Collect effective agent-run host candidates from config and environment runtime policy. */
+/** Collect effective agent-run host candidates from provider/model runtime policy. */
 export function collectConfiguredContextEngineAgentRunHosts(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): HostCandidate[] {
-  const envRuntime = normalizeRuntimeId(params.env?.OPENCLAW_AGENT_RUNTIME);
   const runtimePaths = new Map<string, string[]>();
   const push = (runtimeId: string | undefined, path: string) => {
     if (!runtimeId) {
@@ -210,13 +209,6 @@ export function collectConfiguredContextEngineAgentRunHosts(params: {
     paths.push(path);
     runtimePaths.set(normalized, paths);
   };
-
-  if (envRuntime) {
-    push(envRuntime, "OPENCLAW_AGENT_RUNTIME");
-    return [...runtimePaths.entries()].map(([runtimeId, paths]) =>
-      runtimeHostCandidate({ cfg: params.cfg, runtimeId, paths }),
-    );
-  }
 
   for (const ref of collectExplicitRuntimeRefs(params.cfg)) {
     push(ref.runtimeId, ref.path);

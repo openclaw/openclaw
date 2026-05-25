@@ -93,7 +93,8 @@ It can set up model + auth for common providers, including **OpenAI Code (Codex)
 - `models.providers` (custom providers written into `models.json`)
 
 <Note>
-Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize to `zai/*`.
+Model refs are normalized to lowercase. Provider IDs are otherwise exact; use the
+provider ID advertised by the plugin.
 
 Provider configuration examples (including OpenCode) live in [OpenCode](/providers/opencode).
 </Note>

@@ -728,7 +728,6 @@ function resolveFallbackCandidateCacheKey(
       workspaceDir,
       env,
       activate: false,
-      bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
     })
   ) {

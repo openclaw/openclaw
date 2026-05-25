@@ -9,7 +9,6 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    applyProviderResolvedModelCompatWithPlugins: () => undefined,
     applyProviderResolvedTransportWithPlugin: () => undefined,
     buildProviderUnknownModelHintWithPlugin: () => undefined,
     normalizeProviderTransportWithPlugin: () => undefined,
@@ -64,7 +63,7 @@ beforeEach(() => {
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["anthropic", "google-antigravity", "zai", "openai-codex"],
+    handledDynamicProviders: ["google-antigravity", "zai", "openai-codex"],
   });
 }
 

@@ -6,6 +6,7 @@ const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
+const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
@@ -18,6 +19,7 @@ vi.mock("./custom-api-registry.js", () => ({
 
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
+  createTransportAwareStreamFnForModel,
   prepareTransportAwareSimpleModel,
 }));
 
@@ -43,10 +45,12 @@ describe("prepareModelForSimpleCompletion", () => {
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
+    createTransportAwareStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
   });
 

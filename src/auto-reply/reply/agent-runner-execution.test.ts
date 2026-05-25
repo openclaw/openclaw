@@ -3130,7 +3130,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("fires tool-start progress before slow typing signals resolve for best-effort Pi events", async () => {
+  it("fires tool-start progress before slow typing signals resolve for best-effort agent events", async () => {
     const onToolStart = vi.fn(async () => {});
     let releaseTyping: (() => void) | undefined;
     const typingSignals = createMockTypingSignaler();

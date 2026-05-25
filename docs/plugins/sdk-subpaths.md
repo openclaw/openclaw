@@ -271,6 +271,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
+    | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |

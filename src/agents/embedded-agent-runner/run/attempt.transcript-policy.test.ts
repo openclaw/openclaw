@@ -84,6 +84,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
     expect(policy.allowSyntheticToolResults).toBe(true);
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
       provider: "custom-openai-compatible",
+      modelId: "gpt-5.4",
       config: undefined,
       workspaceDir: "/tmp/openclaw-transcript-policy",
       env,

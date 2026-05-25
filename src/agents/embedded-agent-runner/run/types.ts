@@ -73,7 +73,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
-  legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 };
 
 export type EmbeddedRunAttemptResult = {

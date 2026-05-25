@@ -8,7 +8,8 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
-    { value: "z-ai", expected: "zai" },
+    { value: "zai", expected: "zai" },
+    { value: "z-ai", expected: undefined },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },

@@ -606,7 +606,7 @@ export async function runEmbeddedAgent(
       });
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
-      const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
+      const beforeAgentStartResult = hookSelection.beforeAgentStartResult;
       startupStages.mark("hooks");
       await ensureSelectedAgentHarnessPlugin({
         provider,
@@ -1478,7 +1478,7 @@ export async function runEmbeddedAgent(
             toolAuthProfileStore: agentHarness.id === "codex" ? attemptAuthProfileStore : undefined,
             modelRegistry,
             agentId: workspaceResolution.agentId,
-            legacyBeforeAgentStartResult,
+            beforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observePostCompactionToolOutcome,
             onRunProgress: notifyRunProgress,

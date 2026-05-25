@@ -135,8 +135,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
       .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
       .map((plugin) => plugin.id),
   );
-  return collectConfiguredRuntimePluginIds(params.cfg, params.env, {
-    includeEnvRuntime: false,
+  return collectConfiguredRuntimePluginIds(params.cfg, {
     includeImplicitRuntimePreferences: false,
   }).flatMap((runtimeId) => {
     const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);

@@ -640,7 +640,7 @@ describe("createModelSelectionState respects session model override", () => {
       }),
     );
 
-    expect(state.provider).toBe("kimi");
+    expect(state.provider).toBe("kimi-coding");
     expect(state.model).toBe("kimi-code");
   });
 
