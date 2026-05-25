@@ -59,6 +59,25 @@ function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): b
   return api === "openai-responses" || api === "azure-openai-responses";
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function extractStandaloneMessageToolText(text: string): string | undefined {
+  try {
+    const record = asRecord(JSON.parse(text.trim()) as unknown);
+    const args = asRecord(record?.arguments);
+    return normalizeOptionalString(record?.name) === "message" &&
+      normalizeOptionalString(args?.action) === "send"
+      ? normalizeOptionalString(args?.message)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveAssistantStreamItemId(params: {
   contentIndex?: unknown;
   message: AgentMessage | undefined;
@@ -683,9 +702,14 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
   warnIfAssistantEmittedToolText(ctx, assistantMessage);
+  const visibleText =
+    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+    ctx.builtinToolNames?.has("message") === true
+      ? (extractStandaloneMessageToolText(rawVisibleText) ?? rawVisibleText)
+      : rawVisibleText;
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }, { final: true }),
+    text: ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =

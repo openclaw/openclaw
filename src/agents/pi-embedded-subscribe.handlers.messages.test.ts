@@ -83,6 +83,7 @@ function createMessageEndContext(
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -90,6 +91,9 @@ function createMessageEndContext(
     params: {
       runId: "run-1",
       session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
@@ -147,6 +151,16 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   return firstMockCall(mock, label)[0];
+}
+
+function createMessageToolEnvelope(message: string): string {
+  return JSON.stringify({
+    name: "message",
+    arguments: {
+      action: "send",
+      message,
+    },
+  });
 }
 
 describe("resolveSilentReplyFallbackText", () => {
@@ -663,6 +677,36 @@ describe("handleMessageEnd", () => {
     expect(metadata?.pattern).toBe("json_tool_call");
     expect(metadata?.toolName).toBe("read");
     expect(metadata?.registeredTool).toBe(true);
+  });
+
+  it("unwraps standalone message-tool JSON only for message-tool-only delivery", () => {
+    const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
+    const messageToolEnvelope = createMessageToolEnvelope(visibleReply);
+
+    for (const [sourceReplyDeliveryMode, expected] of [
+      ["message_tool_only", visibleReply],
+      [undefined, messageToolEnvelope],
+    ] as const) {
+      const emitBlockReply = vi.fn();
+      const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+      const ctx = createMessageEndContext({
+        emitBlockReply,
+        consumeReplyDirectives,
+        builtinToolNames: new Set(["message"]),
+        sourceReplyDeliveryMode,
+      });
+
+      void handleMessageEnd(ctx, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: messageToolEnvelope }],
+        },
+      } as never);
+
+      expect(consumeReplyDirectives).toHaveBeenCalledWith(expected, { final: true });
+      expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({ text: expected });
+    }
   });
 
   it("does not warn when the assistant emitted a structured tool call", () => {
