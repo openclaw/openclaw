@@ -20,6 +20,10 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asOptionalRecord as asRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -313,11 +317,6 @@ function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Prom
   return withLock(task);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -569,10 +568,6 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   } catch {
     return undefined;
   }
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
