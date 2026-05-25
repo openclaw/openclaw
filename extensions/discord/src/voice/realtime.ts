@@ -7,6 +7,7 @@ import {
   controlRealtimeVoiceAgentRun,
   createRealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceBridgeSession,
+  createRealtimeVoiceTurnContextTracker,
   matchRealtimeVoiceActivationName,
   matchRealtimeVoiceConsultQuestions,
   normalizeSupportedRealtimeVoiceActivationName,
@@ -26,6 +27,8 @@ import {
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceToolCallEvent,
+  type RealtimeVoiceTurnContextHandle,
+  type RealtimeVoiceTurnContextTracker,
   sortRealtimeVoiceActivationNames,
   type RealtimeVoiceActivationNameTranscriptResult,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -94,17 +97,17 @@ type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: str
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
-type PendingSpeakerTurn = {
-  context: DiscordRealtimeSpeakerContext;
-  hasAudio: boolean;
+type PendingSpeakerTurnStats = {
   inputDiscordBytes: number;
   inputRealtimeBytes: number;
   inputChunks: number;
   interruptedPlayback: boolean;
-  closed: boolean;
-  startedAt: number;
-  lastAudioAt?: number;
 };
+
+type PendingSpeakerTurn = RealtimeVoiceTurnContextHandle<
+  DiscordRealtimeSpeakerContext,
+  PendingSpeakerTurnStats
+>;
 
 type PendingAgentProxyConsultContext = {
   context: DiscordRealtimeSpeakerContext;
@@ -124,11 +127,6 @@ type RecentAgentProxyConsultContext = {
   promise?: Promise<string>;
   questions: string[];
   result?: RecentAgentProxyConsultResult;
-};
-
-type RecentIgnoredWakeNameSpeakerContext = {
-  context: DiscordRealtimeSpeakerContext;
-  createdAt: number;
 };
 
 function formatRealtimeLogPreview(text: string): string {
@@ -366,8 +364,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   private wakeNames: string[] = [];
   private pendingAgentProxyConsultContexts: PendingAgentProxyConsultContext[] = [];
   private recentAgentProxyConsultContexts: RecentAgentProxyConsultContext[] = [];
-  private recentIgnoredWakeNameSpeakerContext: RecentIgnoredWakeNameSpeakerContext | undefined;
-  private readonly pendingSpeakerTurns: PendingSpeakerTurn[] = [];
+  private readonly speakerTurns: RealtimeVoiceTurnContextTracker<
+    DiscordRealtimeSpeakerContext,
+    PendingSpeakerTurnStats
+  > = createRealtimeVoiceTurnContextTracker<DiscordRealtimeSpeakerContext, PendingSpeakerTurnStats>(
+    {
+      limit: DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT,
+      ignoredContextTtlMs: DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS,
+    },
+  );
   private outputAudioTimestampMs = 0;
   private outputAudioDiscordBytes = 0;
   private outputAudioRealtimeBytes = 0;
@@ -573,8 +578,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.clearForcedConsultTimers();
     this.pendingAgentProxyConsultContexts = [];
     this.recentAgentProxyConsultContexts = [];
-    this.recentIgnoredWakeNameSpeakerContext = undefined;
-    this.pendingSpeakerTurns.length = 0;
+    this.speakerTurns.clear();
     this.queuedExactSpeechMessages = [];
     this.exactSpeechResponseActive = false;
     this.exactSpeechAudioStarted = false;
@@ -613,29 +617,25 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
     this.resetPartialWakeNameTracking();
-    const turn: PendingSpeakerTurn = {
-      context: { ...context, userId },
-      hasAudio: false,
-      inputDiscordBytes: 0,
-      inputRealtimeBytes: 0,
-      inputChunks: 0,
-      interruptedPlayback: false,
-      closed: false,
-      startedAt: Date.now(),
-    };
-    this.pendingSpeakerTurns.push(turn);
-    logger.info(
-      `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} pendingTurns=${this.pendingSpeakerTurns.length}`,
+    const turn = this.speakerTurns.open(
+      { ...context, userId },
+      {
+        inputDiscordBytes: 0,
+        inputRealtimeBytes: 0,
+        inputChunks: 0,
+        interruptedPlayback: false,
+      },
     );
-    this.prunePendingSpeakerTurns();
+    logger.info(
+      `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} pendingTurns=${this.speakerTurns.size()}`,
+    );
     return {
       sendInputAudio: (discordPcm48kStereo) =>
         this.sendInputAudioForTurn(turn, discordPcm48kStereo),
       close: () => {
         this.sendRealtimeTrailingSilenceForTurn(turn);
         this.logSpeakerTurnClosed(turn);
-        turn.closed = true;
-        this.prunePendingSpeakerTurns();
+        this.speakerTurns.close(turn);
       },
     };
   }
@@ -644,13 +644,12 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!this.bridge || this.stopped) {
       return;
     }
-    turn.hasAudio = true;
+    this.speakerTurns.markAudio(turn);
     const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
       turn.inputDiscordBytes += discordPcm48kStereo.length;
       turn.inputRealtimeBytes += realtimePcm.length;
       turn.inputChunks += 1;
-      turn.lastAudioAt = Date.now();
       if (turn.inputChunks === 1) {
         logger.info(
           `discord voice: realtime input audio started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} discordBytes=${discordPcm48kStereo.length} realtimeBytes=${realtimePcm.length} outputAudioMs=${Math.floor(this.outputAudioTimestampMs)} outputActive=${this.isOutputAudioActive()}`,
@@ -1456,79 +1455,25 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   private consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
-    this.prunePendingSpeakerTurns();
-    this.expireClosedSpeakerTurnsBeforeLaterAudio();
-    const index = this.pendingSpeakerTurns.findIndex((turn) => turn.hasAudio);
-    if (index < 0) {
-      return undefined;
-    }
-    const [turn] = this.pendingSpeakerTurns.splice(index, 1);
-    this.prunePendingSpeakerTurns();
-    return turn?.context;
+    return this.speakerTurns.consumeAudioContext();
   }
 
   private rememberIgnoredWakeNameSpeakerContext(
     context: DiscordRealtimeSpeakerContext | undefined,
   ): void {
-    if (!context) {
-      return;
-    }
-    this.recentIgnoredWakeNameSpeakerContext = {
-      context,
-      createdAt: Date.now(),
-    };
+    this.speakerTurns.rememberIgnoredContext(context);
   }
 
   private consumeRecentIgnoredWakeNameSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
-    const recent = this.recentIgnoredWakeNameSpeakerContext;
-    this.recentIgnoredWakeNameSpeakerContext = undefined;
-    if (
-      !recent ||
-      Date.now() - recent.createdAt > DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS
-    ) {
-      return undefined;
-    }
-    return recent.context;
+    return this.speakerTurns.consumeIgnoredContext();
   }
 
   private peekPendingSpeakerTurn(): PendingSpeakerTurn | undefined {
-    this.prunePendingSpeakerTurns();
-    this.expireClosedSpeakerTurnsBeforeLaterAudio();
-    return this.pendingSpeakerTurns.find((turn) => turn.hasAudio);
+    return this.speakerTurns.peekAudioTurn();
   }
 
   private hasPendingSpeakerAudioContext(): boolean {
-    this.prunePendingSpeakerTurns();
-    this.expireClosedSpeakerTurnsBeforeLaterAudio();
-    return this.pendingSpeakerTurns.some((turn) => turn.hasAudio);
-  }
-
-  private prunePendingSpeakerTurns(): void {
-    for (let index = this.pendingSpeakerTurns.length - 1; index >= 0; index -= 1) {
-      const turn = this.pendingSpeakerTurns[index];
-      if (turn?.closed && !turn.hasAudio) {
-        this.pendingSpeakerTurns.splice(index, 1);
-      }
-    }
-    while (this.pendingSpeakerTurns.length > DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT) {
-      const completedIndex = this.pendingSpeakerTurns.findIndex((turn) => turn.closed);
-      this.pendingSpeakerTurns.splice(Math.max(completedIndex, 0), 1);
-    }
-  }
-
-  private expireClosedSpeakerTurnsBeforeLaterAudio(): void {
-    let hasLaterAudio = false;
-    for (let index = this.pendingSpeakerTurns.length - 1; index >= 0; index -= 1) {
-      const turn = this.pendingSpeakerTurns[index];
-      if (!turn?.hasAudio) {
-        continue;
-      }
-      if (turn.closed && hasLaterAudio) {
-        this.pendingSpeakerTurns.splice(index, 1);
-        continue;
-      }
-      hasLaterAudio = true;
-    }
+    return this.speakerTurns.hasAudioContext();
   }
 
   private rememberRecentAgentProxyConsultContext(
