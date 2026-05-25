@@ -917,6 +917,12 @@ export const MemorySearchSchema = z
         watchDebounceMs: z.number().int().nonnegative().optional(),
         intervalMinutes: z.number().int().nonnegative().optional(),
         embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),
+        // Idle-TTL for cached MemoryIndexManager instances in long-running
+        // gateways. After this many idle ms a manager is closed and its
+        // chokidar FSWatcher released. 0 disables eviction.
+        idleEvictMs: z.number().int().nonnegative().optional(),
+        // How often the idle-eviction sweep runs. 0 disables the sweep.
+        idleEvictScanMs: z.number().int().nonnegative().optional(),
         sessions: z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),

@@ -804,7 +804,9 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
       expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(0);
-      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(1);
+      // Two gateway-lifetime sidecars: provider auth prewarm + memory
+      // index idle-evict (enabled by default via memorySearch.sync defaults).
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
@@ -859,7 +861,9 @@ describe("startGatewayPostAttachRuntime", () => {
         | { stop: () => void }[]
         | undefined;
       expect(gmailSidecars).toHaveLength(1);
-      expect(lifetimeSidecars).toHaveLength(1);
+      // Two gateway-lifetime sidecars: provider auth prewarm + memory
+      // index idle-evict.
+      expect(lifetimeSidecars).toHaveLength(2);
 
       for (const sidecar of gmailSidecars ?? []) {
         sidecar.stop();
@@ -1264,7 +1268,9 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 0],
+        // Provider auth prewarm is disabled in this test, but memory
+        // index idle-evict is enabled by default (15min idle TTL).
+        ["postReadySidecarCount", 1],
       ],
     });
   });

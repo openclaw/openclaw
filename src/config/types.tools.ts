@@ -510,6 +510,18 @@ export type MemorySearchConfig = {
      * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
      */
     embeddingBatchTimeoutSeconds?: number;
+    /**
+     * Idle TTL (ms) for cached MemoryIndexManager instances in long-running
+     * gateways. After this many idle milliseconds the manager is closed and
+     * its chokidar FSWatcher is released. Defaults to 15 minutes when the
+     * gateway is the host; 0 disables eviction.
+     */
+    idleEvictMs?: number;
+    /**
+     * How often the idle-eviction sweep runs (ms). Defaults to 5 minutes;
+     * 0 disables the periodic sweep.
+     */
+    idleEvictScanMs?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;
