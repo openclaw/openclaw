@@ -58,7 +58,14 @@ jobs:
         env:
           CLAWORKS_PRODUCT: "1"
 
+      - name: OT connector dry-run (simulate, no live devices)
+        run: pnpm claworks:ot-dry-run
+        env:
+          CLAWORKS_PRODUCT: "1"
+
       - name: ClaWorks smoke (no live gateway)
         run: pnpm claworks:smoke
         env:
           CLAWORKS_PRODUCT: "1"
+
+      # gateway:e2e (~90s startup) — release/local only; see docs/claworks/install.md
