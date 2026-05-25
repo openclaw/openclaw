@@ -1,5 +1,3 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,6 +7,7 @@ const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 
 type ThinkLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
+type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 function resolveKilocodeAppHeaders(): Record<string, string> {
@@ -75,10 +74,13 @@ function resolveKilocodeThinkingLevel(ctx: ProviderWrapStreamFnContext): ThinkLe
 }
 
 export function createKilocodeStreamWrapper(
-  baseStreamFn: StreamFn | undefined,
+  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel?: ThinkLevel,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+): ProviderWrapStreamFnContext["streamFn"] {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  const underlying = baseStreamFn;
   return (model, context, options) =>
     streamWithPayloadPatch(
       underlying,
@@ -98,7 +100,9 @@ export function createKilocodeStreamWrapper(
     );
 }
 
-export function wrapKilocodeProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapKilocodeProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): ProviderStreamFn | undefined {
   if (normalizeOptionalLowercaseString(ctx.provider) !== "kilocode") {
     return undefined;
   }
