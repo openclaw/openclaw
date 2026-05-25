@@ -47,10 +47,10 @@
   pnpm claworks:repair && claworks gateway restart
   curl -s http://127.0.0.1:18800/v1/health | jq '.status,.checks.packs_source'
   ```
-- **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。本地 `~/.claworks/claworks.json` 仍为 dev（`production_mode` 未设）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
+- **#8 生产模式（2026-05-25）**：契约单测通过 — `step-executor.production.test.ts`（llm/skill/subagent fail-closed）、`product-config-repair.test.ts`（simulate preset 剥离、echo 禁用）。**P2 修复**：`CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 默认禁用 echo（与 production fragment 对齐）。生产：`CLAWORKS_INIT_SECURE=1 pnpm claworks:init` 或 fragment 中 `production_mode: true`。
 - **#9 令牌（2026-05-25）**：临时目录 `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 生成 api_key + `gateway.auth.token`；in-process REST：`/v1/health` 无 Bearer → `200`；`/v1/identity` 无/错 Bearer → `401`；正确 Bearer → `200`。修复 `matchesKey` 对 32 字符 plaintext key 的误判。本地长期 Gateway 仍无 api_key（dev 开放）— 签收前需 secure init。MCP RBAC 单测：`mcp-auth.test.ts` 5/5。
 - **#10 Release（2026-05-25）**：`package.json` 版本 `2026.5.19`；P0 验收全绿（runtime test 420+/420+、smoke 27/27、lint 0 error、doctor 无阻塞 Invalid config）；工作区已分组 conventional commit；本地 tag `v2026.5.19`（未 push）。打 tag 步骤见 [`RELEASE-NOTES-2026-05-24.md`](RELEASE-NOTES-2026-05-24.md)。
-- **#7–#9 运行态补验（2026-05-25）**：临时目录 `CLAWORKS_PACKS_DIR=/Users/power/Projects/claworks-packs` + `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` → `production_mode=true`、`require_api_key=true`、api_key 32 字符。禁用 echo 后 Gateway 冷启动 ~100s：`GET /v1/health` → `200`，`status=degraded`（仅 warn：LLM/Notify/PG/A2A/connectors），`planes.kernel/data/orch=ok`，无 error check。若保留 echo → `connectors_echo_demo:error` → `status=unavailable`（fail-closed 符合预期）。REST：`/v1/identity` 无/错 Bearer → `401`，正确 Bearer → `200`；`/v1/health` 无 token → `200`。生产单测（step-executor.production、product-config-repair、auth）440/440。详见 [`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)。
+- **#7–#9 运行态补验（2026-05-25）**：临时目录 `CLAWORKS_PACKS_DIR=/Users/power/Projects/claworks-packs` + `CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` → `production_mode=true`、`require_api_key=true`、api_key 32 字符、`connectors.echo.enabled=false`（P2 修复）。禁用 echo 后 Gateway 冷启动 ~100s：`GET /v1/health` → `200`，`status=degraded`（仅 warn：LLM/Notify/PG/A2A/connectors），`planes.kernel/data/orch=ok`，无 error check。若保留 echo → `connectors_echo_demo:error` → `status=unavailable`（fail-closed 符合预期）。REST：`/v1/identity` 无/错 Bearer → `401`，正确 Bearer → `200`；`/v1/health` 无 token → `200`。生产单测 446/446。**P2**：`pnpm claworks:repair` 恢复（`defaultClaworksStateDir` 导出）。详见 [`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)。
 
 ---
 
@@ -71,7 +71,7 @@
 ### P1 备注（2026-05-25 签收验证）
 
 - **#2 OT**：`pnpm claworks:ot-dry-run` → ALL OT DRY-RUN CHECKS PASSED（mqtt/opcua simulate）。实机关 `simulate` 仍待现场报告 → ⚠️。
-- **#3 audit**：`pnpm audit --registry=https://registry.npmjs.org` → **2 moderate**（`protobufjs`、`qs` 传递依赖）→ ⚠️。
+- **#3 audit**：`pnpm audit --registry=https://registry.npmjs.org` → **2 moderate**（`protobufjs`、`qs` 传递依赖）→ ⚠️ accepted risk，待上游 bump；不阻塞 P0/P1 签收。
 - **#9 evolution**：`CLAWORKS_PACKS_DIR=…/claworks-packs pnpm claworks:evolution:smoke` → ALL EVOLUTION CHAIN CHECKS PASSED。
 - **#6 compose**：`docker compose -f docker-compose.prod.yml config` → 语法有效（P0 #6 已覆盖）。
 - **签收文档**：[`CUSTOMER-DELIVERY.md`](CUSTOMER-DELIVERY.md)。

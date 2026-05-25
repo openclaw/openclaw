@@ -160,30 +160,31 @@ pnpm audit --registry=https://registry.npmjs.org
 
 ## 4. 已知限制
 
-| 项                         | 说明                                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Secure init 默认 echo**  | `CLAWORKS_INIT_SECURE=1` init 仍启用 echo；生产须手动禁用或使用 production fragment，否则 health `unavailable`               |
-| **`pnpm claworks:repair`** | 当前 `@claworks/runtime` 导出 `defaultClaworksStateDir` 缺失会导致 repair 脚本失败；签收可用 init + fragment 或手动改 config |
-| **Health `status=ok`**     | 任一 doctor `warn` 即为 `degraded`；完整 `ok` 需 LLM bridge、notify、PG、OT 等 P1 项齐备                                     |
-| **npm audit**              | 2 个 moderate 为传递依赖；升级路径待 P2 跟踪                                                                                 |
-| **npm 公开发布**           | `@claworks/runtime` 暂缓 npm publish                                                                                         |
-| **Studio React 编辑器**    | 静态 `/studio` 已有；全功能编辑器未交付                                                                                      |
-| **Extension 物理裁剪**     | `claworks:prune-extensions` 可选，非阻塞                                                                                     |
+| 项                      | 说明                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------- |
+| **Health `status=ok`**  | 任一 doctor `warn` 即为 `degraded`；完整 `ok` 需 LLM bridge、notify、PG、OT 等 P1 项齐备          |
+| **npm audit**           | 2 个 moderate（`protobufjs`、`qs` 传递依赖）；已评估为 accepted risk，待上游 bump（见 P2 路线图） |
+| **npm 公开发布**        | `@claworks/runtime` 暂缓 npm publish                                                              |
+| **Studio React 编辑器** | 静态 `/studio` 已有；全功能编辑器未交付                                                           |
+| **Extension 物理裁剪**  | `claworks:prune-extensions` 可选，非阻塞                                                          |
+
+**2026-05-25 P2 修复（已落地）**
+
+- **`pnpm claworks:repair`**：`@claworks/runtime` 已导出 `defaultClaworksStateDir`；repair / doctor --fix 一键路径恢复。
+- **Secure init echo**：`CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs` 默认 `connectors.echo.enabled=false`，与 `contrib/examples/claworks-production.openclaw.fragment.json` 对齐；就地 secure upgrade 同样禁用 echo。
 
 ---
 
 ## 5. P2 路线图（签收后）
 
-| 优先级 | 项                                  | 说明                                     |
-| ------ | ----------------------------------- | ---------------------------------------- |
-| P2     | Secure init 默认禁用 echo           | 与 production fragment 对齐              |
-| P2     | 修复 `claworks:repair` runtime 导出 | 恢复 doctor --fix 一键路径               |
-| P2     | PostgreSQL 默认迁移路径             | `DATABASE_URL` + `pnpm claworks:migrate` |
-| P2     | OT 实机验收报告模板                 | mqtt/opcua/modbus 关闭 simulate          |
-| P2     | Extension 白名单裁剪                | `pnpm claworks:prune-extensions:apply`   |
-| P2     | 依赖 audit 清零                     | protobufjs / qs 升级或 override          |
-| P2     | CI 默认 PR 路径                     | evolution / weak-model 保持 optional job |
-| P2     | Studio 全功能编辑器                 | 产品路线图                               |
+| 优先级 | 项                      | 说明                                                      |
+| ------ | ----------------------- | --------------------------------------------------------- |
+| P2     | PostgreSQL 默认迁移路径 | `DATABASE_URL` + `pnpm claworks:migrate`                  |
+| P2     | OT 实机验收报告模板     | mqtt/opcua/modbus 关闭 simulate                           |
+| P2     | Extension 白名单裁剪    | `pnpm claworks:prune-extensions:apply`                    |
+| P2     | 依赖 audit 清零         | protobufjs / qs 升级或 override（accepted risk 已文档化） |
+| P2     | CI 默认 PR 路径         | evolution / weak-model 保持 optional job                  |
+| P2     | Studio 全功能编辑器     | 产品路线图                                                |
 
 ---
 
