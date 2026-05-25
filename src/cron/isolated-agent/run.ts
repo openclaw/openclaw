@@ -3,6 +3,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import {
@@ -311,16 +312,16 @@ function resolveCronSourceDeliveryPlan(params: {
       reason: "cron_none",
       target,
       messageToolEnabled: true,
-      messageToolForced: true,
+      messageToolForced: false,
       directFallback: false,
     });
   }
   return createSourceDeliveryPlan({
-    owner: params.resolvedDelivery.ok ? "message_tool_then_direct_fallback" : "direct_fallback",
+    owner: "direct_fallback",
     reason: "cron_announce",
     target,
     messageToolEnabled: true,
-    messageToolForced: true,
+    messageToolForced: false,
     directFallback: true,
     skipFallbackWhenMessageToolSentToTarget: params.resolvedDelivery.ok,
   });
@@ -333,7 +334,14 @@ function canPromptForMessageTool(params: {
   if (!params.sourceDelivery.messageTool.enabled) {
     return false;
   }
-  return !params.toolsAllow?.length || params.toolsAllow.includes("message");
+  const normalizedToolsAllow = params.toolsAllow
+    ? expandToolGroups(params.toolsAllow).map((toolName) => normalizeToolName(toolName))
+    : undefined;
+  return (
+    params.toolsAllow === undefined ||
+    normalizedToolsAllow?.includes("*") === true ||
+    normalizedToolsAllow?.includes("message") === true
+  );
 }
 
 function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
