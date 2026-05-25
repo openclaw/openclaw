@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/local embeddings: run local GGUF embeddings in an isolated worker sidecar and degrade to configured fallback or keyword search on worker failure so native embedding crashes do not take down the Gateway. (#85348) Thanks @osolmaz.
 - Agents/heartbeat: stop heartbeat turns after the first valid `heartbeat_respond` so repeated response loops do not burn tokens. (#86357) Thanks @udaymanish6.
 - Memory-core: keep REM dreaming focused on live light-staged memories and mark staged entries as considered so old recall history no longer dominates fresh candidates. (#86302) Thanks @SebTardif.
 - Telegram: propagate forum topic names through the account-scoped topic cache for native command context and topic create/edit actions. (#86299) Thanks @SebTardif.
