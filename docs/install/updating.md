@@ -158,7 +158,7 @@ pnpm add -g github:StefRush2099/Zorg_MemoryDB
 ```
 
 ```bash
-bun add -g openclaw@latest
+bun add -g github:StefRush2099/Zorg_MemoryDB
 ```
 
 ### Advanced npm install topics
