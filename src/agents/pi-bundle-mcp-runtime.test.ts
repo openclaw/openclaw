@@ -204,22 +204,78 @@ afterEach(async () => {
 
 describe("session MCP runtime", () => {
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
-    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{
+      format: string;
+      metadata: { format: string };
+      nullable: { x?: string } | null;
+      url: string;
+    }>({
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
-        url: { type: "string" },
+        format: { type: "string", enum: ["png"] },
+        metadata: { const: { format: "png" } },
+        nullable: {
+          type: ["object", "null"],
+          properties: { x: { type: "string" } },
+          additionalProperties: false,
+        },
+        url: { type: "string", format: "uri" },
       },
-      required: ["url"],
+      required: ["format", "metadata", "nullable", "url"],
       additionalProperties: false,
     });
 
-    expect(validator({ url: "https://example.com" })).toEqual({
+    expect(
+      validator({
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      }),
+    ).toEqual({
       valid: true,
-      data: { url: "https://example.com" },
+      data: {
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      },
       errorMessage: undefined,
     });
     expect(validator({ url: 42 }).valid).toBe(false);
+  });
+
+  it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    for (const schema of [
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "sting",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        required: "url",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        minLength: "1",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $ref: "#/$defs/Missing",
+      },
+    ] as const) {
+      expect(() => createBundleMcpJsonSchemaValidator().getValidator(schema as never)).toThrow(
+        "Invalid MCP draft-2020-12 JSON Schema",
+      );
+    }
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {

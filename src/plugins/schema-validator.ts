@@ -1,61 +1,24 @@
-import { createRequire } from "node:module";
-import type { ErrorObject, ValidateFunction } from "ajv";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import {
+  applyJsonSchemaDefaults,
+  findJsonSchemaShapeError,
+  normalizeJsonSchemaForTypeBox,
+} from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
-const require = createRequire(import.meta.url);
-type AjvLike = {
-  addFormat: (
-    name: string,
-    format:
-      | RegExp
-      | {
-          type?: string;
-          validate: (value: string) => boolean;
-        },
-  ) => AjvLike;
-  compile: (schema: JsonSchemaValue) => ValidateFunction;
+type TypeBoxValidationError = {
+  keyword?: string;
+  instancePath?: string;
+  params?: Record<string, unknown>;
+  message?: string;
 };
-const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
-
-function createAjv(mode: "default" | "defaults"): AjvLike {
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
-  const AjvCtor =
-    typeof ajvModule.default === "function"
-      ? ajvModule.default
-      : (ajvModule as unknown as new (opts?: object) => AjvLike);
-  const instance = new AjvCtor({
-    allErrors: true,
-    strict: false,
-    removeAdditional: false,
-    ...(mode === "defaults" ? { useDefaults: true } : {}),
-  });
-  instance.addFormat("uri", {
-    type: "string",
-    validate: (value: string) => {
-      // Accept absolute URIs so generated config schemas can keep JSON Schema
-      // `format: "uri"` without noisy AJV warnings during validation/build.
-      return URL.canParse(value);
-    },
-  });
-  return instance;
-}
-
-function getAjv(mode: "default" | "defaults"): AjvLike {
-  const cached = ajvSingletons.get(mode);
-  if (cached) {
-    return cached;
-  }
-  const instance = createAjv(mode);
-  ajvSingletons.set(mode, instance);
-  return instance;
-}
 
 type CachedValidator = {
   hasDefaults: boolean;
-  validate: ValidateFunction;
+  validate: TypeBoxValidator;
   schema: JsonSchemaValue;
   schemaFingerprint: string;
 };
@@ -89,6 +52,17 @@ function cloneValidationValue<T>(value: T): T {
   return structuredClone(value);
 }
 
+function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
+  return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
+}
+
+function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
+  if (validate.Check(value)) {
+    return null;
+  }
+  return [...validate.Errors(value)] as TypeBoxValidationError[];
+}
+
 export type JsonSchemaValidationError = {
   path: string;
   message: string;
@@ -98,7 +72,7 @@ export type JsonSchemaValidationError = {
   allowedValuesHiddenCount?: number;
 };
 
-function normalizeAjvPath(instancePath: string | undefined): string {
+function normalizeErrorPath(instancePath: string | undefined): string {
   const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
 }
@@ -114,7 +88,20 @@ function appendPathSegment(path: string, segment: string): string {
   return `${path}.${trimmed}`;
 }
 
-function resolveMissingProperty(error: ErrorObject): string | null {
+function firstStringParam(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const first = value.find(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    );
+    return first ?? null;
+  }
+  return null;
+}
+
+function resolveMissingProperty(error: TypeBoxValidationError): string | null {
   if (
     error.keyword !== "required" &&
     error.keyword !== "dependentRequired" &&
@@ -122,12 +109,15 @@ function resolveMissingProperty(error: ErrorObject): string | null {
   ) {
     return null;
   }
-  const missingProperty = (error.params as { missingProperty?: unknown }).missingProperty;
-  return typeof missingProperty === "string" && missingProperty.trim() ? missingProperty : null;
+  return (
+    firstStringParam(error.params?.missingProperty) ??
+    firstStringParam(error.params?.requiredProperties) ??
+    firstStringParam(error.params?.dependencies)
+  );
 }
 
-function resolveAjvErrorPath(error: ErrorObject): string {
-  const basePath = normalizeAjvPath(error.instancePath);
+function resolveValidationErrorPath(error: TypeBoxValidationError): string {
+  const basePath = normalizeErrorPath(error.instancePath);
   const missingProperty = resolveMissingProperty(error);
   if (!missingProperty) {
     return basePath;
@@ -135,15 +125,15 @@ function resolveAjvErrorPath(error: ErrorObject): string {
   return appendPathSegment(basePath, missingProperty);
 }
 
-function extractAllowedValues(error: ErrorObject): unknown[] | null {
+function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
   if (error.keyword === "enum") {
-    const allowedValues = (error.params as { allowedValues?: unknown }).allowedValues;
+    const allowedValues = error.params?.allowedValues;
     return Array.isArray(allowedValues) ? allowedValues : null;
   }
 
   if (error.keyword === "const") {
-    const params = error.params as { allowedValue?: unknown };
-    if (!Object.prototype.hasOwnProperty.call(params, "allowedValue")) {
+    const params = error.params;
+    if (!params || !Object.prototype.hasOwnProperty.call(params, "allowedValue")) {
       return null;
     }
     return [params.allowedValue];
@@ -152,7 +142,9 @@ function extractAllowedValues(error: ErrorObject): unknown[] | null {
   return null;
 }
 
-function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summarizeAllowedValues> {
+function getAllowedValuesSummary(
+  error: TypeBoxValidationError,
+): ReturnType<typeof summarizeAllowedValues> {
   const allowedValues = extractAllowedValues(error);
   if (!allowedValues) {
     return null;
@@ -160,24 +152,27 @@ function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summa
   return summarizeAllowedValues(allowedValues);
 }
 
-function resolveAdditionalProperty(error: ErrorObject): string | undefined {
+function resolveAdditionalProperty(error: TypeBoxValidationError): string | undefined {
   if (error.keyword !== "additionalProperties") {
     return undefined;
   }
-  const additionalProperty = (error.params as { additionalProperty?: unknown }).additionalProperty;
-  return typeof additionalProperty === "string" && additionalProperty.trim()
-    ? additionalProperty
-    : undefined;
+  return (
+    firstStringParam(error.params?.additionalProperty) ??
+    firstStringParam(error.params?.additionalProperties) ??
+    undefined
+  );
 }
 
-function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaValidationError[] {
+function formatValidationErrors(
+  errors: TypeBoxValidationError[] | null | undefined,
+): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
     return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
   }
   return errors.map((error) => {
-    const path = resolveAjvErrorPath(error);
+    const path = resolveValidationErrorPath(error);
     const baseMessage = error.message ?? "invalid";
-    const allowedValuesSummary = getAjvAllowedValuesSummary(error);
+    const allowedValuesSummary = getAllowedValuesSummary(error);
     const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary
       ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
@@ -206,20 +201,23 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
+  const schemaError = findJsonSchemaShapeError(params.schema);
+  if (schemaError) {
+    throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+  }
+
   const useCache = params.cache !== false;
   if (!useCache) {
-    const validate = createAjv(params.applyDefaults ? "defaults" : "default").compile(
-      params.schema,
-    );
+    const validate = compileSchema(params.schema);
     const value =
       params.applyDefaults && schemaHasDefaults(params.schema)
-        ? cloneValidationValue(params.value)
+        ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
         : params.value;
-    const ok = validate(value);
-    if (ok) {
+    const errors = checkSchema(validate, value);
+    if (!errors) {
       return { ok: true, value };
     }
-    return { ok: false, errors: formatAjvErrors(validate.errors) };
+    return { ok: false, errors: formatValidationErrors(errors) };
   }
 
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
@@ -230,7 +228,7 @@ export function validateJsonSchemaValue(params: {
     !cached ||
     (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
   ) {
-    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
+    const validate = compileSchema(params.schema);
     cached = {
       hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
       validate,
@@ -243,10 +241,12 @@ export function validateJsonSchemaValue(params: {
   }
 
   const value =
-    params.applyDefaults && cached.hasDefaults ? cloneValidationValue(params.value) : params.value;
-  const ok = cached.validate(value);
-  if (ok) {
+    params.applyDefaults && cached.hasDefaults
+      ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
+      : params.value;
+  const errors = checkSchema(cached.validate, value);
+  if (!errors) {
     return { ok: true, value };
   }
-  return { ok: false, errors: formatAjvErrors(cached.validate.errors) };
+  return { ok: false, errors: formatValidationErrors(errors) };
 }

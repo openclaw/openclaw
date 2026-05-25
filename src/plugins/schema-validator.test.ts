@@ -111,6 +111,236 @@ describe("schema validator", () => {
     });
   });
 
+  it("applies JSON Schema defaults through local refs and map entries", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.refs",
+        schema: {
+          type: "object",
+          properties: {
+            settings: {
+              $ref: "#/definitions/Settings",
+            },
+          },
+          additionalProperties: {
+            $ref: "#/definitions/Settings",
+          },
+          definitions: {
+            Settings: {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        value: {
+          settings: {},
+          accountA: {},
+        },
+        applyDefaults: true,
+      },
+      expectedValue: {
+        settings: { mode: "auto" },
+        accountA: { mode: "auto" },
+      },
+    });
+  });
+
+  it("does not apply defaults from non-matching union branches", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.union",
+        schema: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                type: { const: "a" },
+                aDefault: { type: "string", default: "a" },
+              },
+              required: ["type"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                type: { const: "b" },
+                bDefault: { type: "string", default: "b" },
+              },
+              required: ["type"],
+              additionalProperties: false,
+            },
+          ],
+        },
+        value: { type: "a" },
+        applyDefaults: true,
+      },
+      expectedValue: { type: "a" },
+    });
+  });
+
+  it("accepts nullable JSON Schema type arrays", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.nullable-array",
+        schema: {
+          type: ["array", "null"],
+          items: { type: "string" },
+        },
+        value: null,
+      },
+      expectedValue: null,
+    });
+  });
+
+  it("keeps non-type constraints on nullable JSON Schema type arrays", () => {
+    const result = expectValidationFailure({
+      cacheKey: "schema-validator.test.nullable-enum",
+      schema: {
+        type: ["string", "null"],
+        enum: ["on"],
+      },
+      value: null,
+    });
+
+    expectValidationIssue(result, "<root>");
+  });
+
+  it("rejects invalid JSON Schema type declarations", () => {
+    expect(() =>
+      validateJsonSchemaValue({
+        cacheKey: "schema-validator.test.invalid-schema-type",
+        schema: {
+          type: "not-a-json-schema-type",
+        },
+        value: "anything",
+      }),
+    ).toThrow("invalid schema");
+  });
+
+  it("rejects invalid JSON Schema constraint keyword values", () => {
+    for (const [cacheKey, schema] of [
+      [
+        "schema-validator.test.invalid-required",
+        {
+          type: "object",
+          properties: { url: { type: "string" } },
+          required: "url",
+        },
+      ],
+      [
+        "schema-validator.test.invalid-min-length",
+        {
+          type: "string",
+          minLength: "1",
+        },
+      ],
+      [
+        "schema-validator.test.invalid-additional-properties",
+        {
+          type: "object",
+          additionalProperties: [],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-ref",
+        {
+          $ref: "#/$defs/Missing",
+        },
+      ],
+    ] as const) {
+      expect(() =>
+        validateJsonSchemaValue({
+          cacheKey,
+          schema,
+          value: "anything",
+        }),
+      ).toThrow("invalid schema");
+    }
+  });
+
+  it("accepts draft-07 tuple item schemas", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.tuple-items",
+        schema: {
+          type: "array",
+          items: [{ type: "string" }, { type: "number" }],
+          additionalItems: false,
+        },
+        value: ["mode", 1],
+      },
+      expectedValue: ["mode", 1],
+    });
+  });
+
+  it("applies defaults for untyped object schemas", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.untyped-object",
+        schema: {
+          properties: {
+            mode: {
+              type: "string",
+              default: "auto",
+            },
+          },
+          additionalProperties: false,
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
+  });
+
+  it("applies defaults through patternProperties before additionalProperties", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.pattern-properties",
+        schema: {
+          type: "object",
+          patternProperties: {
+            "^x": {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string",
+                default: "manual",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        value: {
+          other: {},
+          x1: {},
+        },
+        applyDefaults: true,
+      },
+      expectedValue: {
+        other: { mode: "manual" },
+        x1: { mode: "auto" },
+      },
+    });
+  });
+
   it("does not clone values when default application has no defaults to inject", () => {
     const value = { mode: "manual" };
     const result = validateJsonSchemaValue({
