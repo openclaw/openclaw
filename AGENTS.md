@@ -72,7 +72,7 @@ Skills own workflows; root owns hard policy and routing.
 - Gateway/plugin metadata is process-stable: installs, manifests, catalogs, generated paths, bundled metadata. Changes require restart or explicit owner reload/install/doctor flow.
 - Runtime hot paths: no freshness polling (`stat`/`realpath`/JSON reread/hash). Reuse current snapshots, install records, discovery, lookup tables, root scopes, resolved paths.
 - Process-local metadata caches ok when lifecycle-owned and bounded/single-slot. Freshness exceptions need named owner + tests.
-- Inline code comments: brief notes for tricky, bug-prone, or previously buggy logic.
+- Inline comments: add them where they preserve reviewer context: cross-path invariants, lifecycle ordering, ownership boundaries, session/id adoption, queue-depth symmetry, or intentional caller differences. No obvious-mechanics comments.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Protocol version bumps: explicit owner confirmation only; never automatic/generated.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
@@ -157,7 +157,6 @@ Skills own workflows; root owns hard policy and routing.
 - Dynamic import: no static+dynamic import for same prod module. Use `*.runtime.ts` lazy boundary. After edits: `pnpm build`; check `[INEFFECTIVE_DYNAMIC_IMPORT]`.
 - Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
 - Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.
-- Comments: brief, only non-obvious logic.
 - Split files around ~700 LOC when clarity/testability improves.
 - Naming: **OpenClaw** product/docs; `openclaw` CLI/package/path/config.
 - English: American spelling.
