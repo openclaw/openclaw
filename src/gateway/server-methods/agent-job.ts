@@ -147,6 +147,57 @@ function getPendingAgentRunTimeout(runId: string) {
   };
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function extractAgentMetaFromLifecyclePayload(
+  value: unknown,
+): AgentRunSnapshot["agentMeta"] | undefined {
+  const raw = asRecord(value);
+  if (!raw) {
+    return undefined;
+  }
+  const rawUsage = asRecord(raw.usage);
+  const usage = rawUsage
+    ? (() => {
+        const inputTokens = asFiniteNumber(rawUsage.inputTokens);
+        const outputTokens = asFiniteNumber(rawUsage.outputTokens);
+        const cachedInputTokens = asFiniteNumber(rawUsage.cachedInputTokens);
+        if (
+          inputTokens === undefined &&
+          outputTokens === undefined &&
+          cachedInputTokens === undefined
+        ) {
+          return undefined;
+        }
+        return { inputTokens, outputTokens, cachedInputTokens };
+      })()
+    : undefined;
+  const costUsd = asFiniteNumber(raw.costUsd);
+  const provider = asNonEmptyString(raw.provider);
+  const model = asNonEmptyString(raw.model);
+  if (
+    usage === undefined &&
+    costUsd === undefined &&
+    provider === undefined &&
+    model === undefined
+  ) {
+    return undefined;
+  }
+  return { usage, costUsd, provider, model };
+}
+
 function createSnapshotFromLifecycleEvent(params: {
   runId: string;
   phase: "end" | "error";
@@ -167,6 +218,13 @@ function createSnapshotFromLifecycleEvent(params: {
   const timeoutPhase =
     status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
   const providerStarted = normalizeProviderStarted(data?.providerStarted);
+  // P2 fix: carry `agentMeta` from the lifecycle event payload through to the
+  // snapshot. Previously this was always undefined here, so lifecycle-first
+  // waits returned `agent.wait` responses without the `meta.agentMeta` field
+  // even when the run had real telemetry. The emit side (in
+  // `src/agents/agent-command.ts:emitLifecycleEnd`) computes cost using the
+  // agent runtime's `cfg`, so we just parse + forward the validated shape.
+  const agentMeta = extractAgentMetaFromLifecyclePayload(data?.agentMeta);
   return {
     runId,
     status,
@@ -178,6 +236,7 @@ function createSnapshotFromLifecycleEvent(params: {
     ...(data?.yielded === true ? { yielded: true } : {}),
     ...(timeoutPhase ? { timeoutPhase } : {}),
     ...(providerStarted !== undefined ? { providerStarted } : {}),
+    ...(agentMeta ? { agentMeta } : {}),
     ts: Date.now(),
   };
 }

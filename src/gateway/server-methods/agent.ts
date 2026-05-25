@@ -2136,12 +2136,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       ignoreAgentTerminalSnapshot: hasActiveChatRun,
     });
     if (cachedGatewaySnapshot) {
-      const dedupeEntry = context.dedupe.get(`agent:${runId}`);
-      const dedupeMeta =
-        dedupeEntry?.ok && dedupeEntry?.payload
-          ? (dedupeEntry.payload as Record<string, unknown>).agentMeta
-          : undefined;
-      const resolvedMeta = cachedGatewaySnapshot.agentMeta ?? dedupeMeta;
+      // Telemetry follows the SELECTED snapshot source. When
+      // `ignoreAgentTerminalSnapshot=true` the dedupe helper deliberately
+      // ignored the `agent:${runId}` entry (chat collision boundary); do NOT
+      // re-read it here as a fallback — that would re-introduce the leak the
+      // ignore was designed to prevent. If the chosen snapshot has no
+      // agentMeta, omit `meta.agentMeta` rather than synthesising one from a
+      // stale ignored source.
       respond(true, {
         runId,
         status: cachedGatewaySnapshot.status,
@@ -2153,7 +2154,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         yielded: cachedGatewaySnapshot.yielded,
         timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
         providerStarted: cachedGatewaySnapshot.providerStarted,
-        ...(resolvedMeta ? { meta: { agentMeta: resolvedMeta } } : {}),
+        ...(cachedGatewaySnapshot.agentMeta
+          ? { meta: { agentMeta: cachedGatewaySnapshot.agentMeta } }
+          : {}),
       });
       return;
     }
@@ -2205,12 +2208,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const dedupeEntry = context.dedupe.get(`agent:${runId}`);
-    const dedupeMeta =
-      dedupeEntry?.ok && dedupeEntry?.payload
-        ? (dedupeEntry.payload as Record<string, unknown>).agentMeta
-        : undefined;
-    const resolvedMeta = snapshot.agentMeta ?? dedupeMeta;
+    // Telemetry follows the winning snapshot. `snapshot.agentMeta` is
+    // populated by either:
+    //   - `readTerminalSnapshotFromGatewayDedupe` (which already respects
+    //     `ignoreAgentTerminalSnapshot`), or
+    //   - `createSnapshotFromLifecycleEvent` (which now carries `agentMeta`
+    //     through the lifecycle `end` event so this path is deterministic).
+    // Never fall through to a direct `agent:${runId}` dedupe read — that
+    // would re-introduce the chat/agent isolation leak fixed in P1.
     respond(true, {
       runId,
       status: snapshot.status,
@@ -2222,7 +2227,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       yielded: snapshot.yielded,
       timeoutPhase: snapshot.timeoutPhase,
       providerStarted: snapshot.providerStarted,
-      ...(resolvedMeta ? { meta: { agentMeta: resolvedMeta } } : {}),
+      ...(snapshot.agentMeta ? { meta: { agentMeta: snapshot.agentMeta } } : {}),
     });
   },
 };
