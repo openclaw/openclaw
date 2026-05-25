@@ -310,7 +310,7 @@ restart after changing native plugin config.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
 - `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
   - `enabled`: master dreaming switch (default `false`).
-  - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - `frequency`: cron cadence for scheduled dreaming sweeps (`"0 3 * * *"` by default). A scheduled sweep includes all configured dreaming workspaces. If gateway RSS or heap usage is above the warning threshold between workspaces, the sweep backs off from 30 seconds up to a 5 minute maximum delay before continuing; it keeps retrying at the capped delay until pressure clears or the enclosing cron run stops.
   - `model`: optional Dream Diary subagent model override. Requires `plugins.entries.memory-core.subagent.allowModelOverride: true`; pair with `allowedModels` to restrict targets. Model-unavailable errors retry once with the session default model; trust or allowlist failures do not fall back silently.
   - phase policy and thresholds are implementation details (not user-facing config keys).
 - Full memory config lives in [Memory configuration reference](/reference/memory-config):

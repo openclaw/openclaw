@@ -121,9 +121,11 @@ deep-phase promotion engine.
 
 ## Scheduling
 
-When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
+When enabled, `memory-core` auto-manages one cron job for scheduled dreaming. Each cron tick runs phases in order: light → REM → deep.
 
-The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+Scheduled dreaming includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+For cron-triggered runs, `memory-core` preserves the full scheduled sweep. If gateway RSS or heap usage is above the warning threshold before a workspace starts, scheduled dreaming backs off before continuing. The backoff starts at 30 seconds and doubles up to a 5 minute maximum delay between workspace attempts. It keeps retrying at the capped delay until pressure clears or the enclosing cron run stops. Direct non-cron dreaming requests are not delayed by this scheduler guard.
 
 Default cadence behavior:
 

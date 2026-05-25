@@ -47,9 +47,13 @@ const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 const BYTES_PER_MIB = 1024 * 1024;
 const DREAMING_PRESSURE_RSS_WARNING_BYTES = 1536 * BYTES_PER_MIB;
 const DREAMING_PRESSURE_HEAP_WARNING_BYTES = 1024 * BYTES_PER_MIB;
-const MANAGED_DREAMING_WORKSPACE_BATCH_LIMIT = 2;
+const DREAMING_PRESSURE_BACKOFF_INITIAL_MS = 30_000;
+const DREAMING_PRESSURE_BACKOFF_MAX_MS = 5 * 60_000;
 
-let managedDreamingWorkspaceCursor = 0;
+let dreamingPressureBackoffSleep: (delayMs: number) => Promise<void> = (delayMs) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -175,40 +179,40 @@ function formatDreamingResourcePressure(pressure: DreamingResourcePressure): str
   return `reason=${pressure.reason} rssBytes=${pressure.rssBytes} heapUsedBytes=${pressure.heapUsedBytes} thresholdBytes=${pressure.thresholdBytes}`;
 }
 
-function selectManagedDreamingWorkspaces(
-  workspaces: string[],
-  trigger: string | undefined,
-): {
-  selected: string[];
-  deferred: number;
-  start: number;
-} {
-  if (trigger !== "cron" || workspaces.length <= MANAGED_DREAMING_WORKSPACE_BATCH_LIMIT) {
-    return { selected: workspaces, deferred: 0, start: 0 };
+async function waitForDreamingPressureToEase(params: {
+  logger: Logger;
+  workspaceDir: string;
+}): Promise<void> {
+  let pressure = detectDreamingResourcePressure();
+  let delayMs = DREAMING_PRESSURE_BACKOFF_INITIAL_MS;
+  while (pressure) {
+    params.logger.warn(
+      `memory-core: dreaming promotion waiting ${delayMs}ms because gateway memory pressure is high (${formatDreamingResourcePressure(pressure)}) [workspace=${params.workspaceDir}].`,
+    );
+    await dreamingPressureBackoffSleep(delayMs);
+    pressure = detectDreamingResourcePressure();
+    delayMs = Math.min(delayMs * 2, DREAMING_PRESSURE_BACKOFF_MAX_MS);
   }
-
-  const start = managedDreamingWorkspaceCursor % workspaces.length;
-  const selected: string[] = [];
-  for (let index = 0; index < MANAGED_DREAMING_WORKSPACE_BATCH_LIMIT; index += 1) {
-    selected.push(workspaces[(start + index) % workspaces.length] as string);
-  }
-  return { selected, deferred: workspaces.length - selected.length, start };
 }
 
-function advanceManagedDreamingWorkspaceCursor(params: {
-  batch: ReturnType<typeof selectManagedDreamingWorkspaces>;
-  attemptedWorkspaces: number;
-  totalWorkspaces: number;
-}): void {
-  if (params.batch.deferred <= 0 || params.attemptedWorkspaces <= 0) {
+export function setDreamingPressureBackoffSleepForTest(
+  sleep?: (delayMs: number) => Promise<void>,
+): void {
+  if (sleep) {
+    let calls = 0;
+    dreamingPressureBackoffSleep = async (delayMs) => {
+      calls += 1;
+      if (calls > 100) {
+        throw new Error("dreaming pressure backoff test sleep exceeded 100 calls");
+      }
+      await sleep(delayMs);
+    };
     return;
   }
-  managedDreamingWorkspaceCursor =
-    (params.batch.start + params.attemptedWorkspaces) % params.totalWorkspaces;
-}
-
-export function resetManagedDreamingWorkspaceCursorForTest(): void {
-  managedDreamingWorkspaceCursor = 0;
+  dreamingPressureBackoffSleep = (delayMs) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
 }
 
 function formatRepairSummary(repair: {
@@ -614,42 +618,24 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     return { handled: true, reason: "memory-core: short-term dreaming disabled by limit" };
   }
 
-  const initialPressure = params.trigger === "cron" ? detectDreamingResourcePressure() : null;
-  if (initialPressure) {
-    params.logger.warn(
-      `memory-core: dreaming promotion deferred because gateway memory pressure is high (${formatDreamingResourcePressure(initialPressure)}).`,
-    );
-    return { handled: true, reason: "memory-core: short-term dreaming deferred by pressure" };
-  }
-
-  const workspaceBatch = selectManagedDreamingWorkspaces(workspaces, params.trigger);
-  if (workspaceBatch.deferred > 0) {
-    params.logger.info(
-      `memory-core: dreaming promotion limited to ${workspaceBatch.selected.length}/${workspaces.length} workspace(s); deferred ${workspaceBatch.deferred} workspace(s) to a later cron tick.`,
-    );
-  }
-
   if (params.config.verboseLogging) {
     params.logger.info(
-      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaceBatch.selected.length}/${workspaces.length}).`,
+      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
     );
   }
 
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
-  let attemptedWorkspaces = 0;
   const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
-  for (const workspaceDir of workspaceBatch.selected) {
-    const loopPressure = params.trigger === "cron" ? detectDreamingResourcePressure() : null;
-    if (loopPressure) {
-      params.logger.warn(
-        `memory-core: dreaming promotion stopped before workspace because gateway memory pressure is high (${formatDreamingResourcePressure(loopPressure)}).`,
-      );
-      break;
+  for (const workspaceDir of workspaces) {
+    if (params.trigger === "cron") {
+      await waitForDreamingPressureToEase({
+        logger: params.logger,
+        workspaceDir,
+      });
     }
-    attemptedWorkspaces += 1;
     try {
       const sweepNowMs = Date.now();
       await runDreamingSweepPhases({
@@ -774,19 +760,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       );
     }
   }
-  advanceManagedDreamingWorkspaceCursor({
-    batch: workspaceBatch,
-    attemptedWorkspaces,
-    totalWorkspaces: workspaces.length,
-  });
-  const workspaceSummary =
-    workspaceBatch.deferred > 0
-      ? `${workspaceBatch.selected.length}/${workspaces.length}`
-      : workspaces.length;
-  const deferredSummary =
-    workspaceBatch.deferred > 0 ? `, deferred=${workspaceBatch.deferred}` : "";
   params.logger.info(
-    `memory-core: dreaming promotion complete (workspaces=${workspaceSummary}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}${deferredSummary}).`,
+    `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,
   );
 
   return { handled: true, reason: "memory-core: short-term dreaming processed" };

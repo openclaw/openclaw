@@ -10,9 +10,9 @@ import {
   testing,
   reconcileShortTermDreamingCronJob,
   registerShortTermPromotionDreaming,
-  resetManagedDreamingWorkspaceCursorForTest,
   resolveShortTermPromotionDreamingConfig,
   runShortTermDreamingPromotionIfTriggered,
+  setDreamingPressureBackoffSleepForTest,
 } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -22,7 +22,7 @@ const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 afterEach(() => {
   resetSystemEventsForTest();
-  resetManagedDreamingWorkspaceCursorForTest();
+  setDreamingPressureBackoffSleepForTest();
   vi.restoreAllMocks();
 });
 
@@ -1301,11 +1301,12 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("treats queued managed dreaming heartbeat events as cron work for pressure deferral", async () => {
+  it("treats queued managed dreaming heartbeat events as cron work for pressure backoff", async () => {
     clearInternalHooks();
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-heartbeat-pressure-");
     const api: DreamingPluginApiTestDouble = {
       config: {
         plugins: {
@@ -1325,12 +1326,27 @@ describe("gateway startup reconciliation", () => {
       runtime: {},
       on: onMock,
     };
-    vi.spyOn(process, "memoryUsage").mockReturnValue({
-      rss: 2 * 1024 * 1024 * 1024,
+    const lowPressure = {
+      rss: 64 * 1024 * 1024,
       heapTotal: 64 * 1024 * 1024,
       heapUsed: 32 * 1024 * 1024,
       external: 0,
       arrayBuffers: 0,
+    };
+    const highPressure = {
+      ...lowPressure,
+      rss: 2 * 1024 * 1024 * 1024,
+    };
+    const pressureSequence = [highPressure, lowPressure];
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => {
+      return pressureSequence.shift() ?? lowPressure;
+    });
+    const backoffDelays: number[] = [];
+    setDreamingPressureBackoffSleepForTest(async (delayMs) => {
+      backoffDelays.push(delayMs);
+      if (backoffDelays.length > 6) {
+        throw new Error("pressure backoff test did not clear memory pressure");
+      }
     });
 
     try {
@@ -1349,13 +1365,14 @@ describe("gateway startup reconciliation", () => {
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       const result = await beforeAgentReply(
         { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+        { trigger: "heartbeat", workspaceDir, sessionKey },
       );
 
       expect(result).toEqual({
         handled: true,
-        reason: "memory-core: short-term dreaming deferred by pressure",
+        reason: "memory-core: short-term dreaming processed",
       });
+      expect(backoffDelays).toEqual([30_000]);
     } finally {
       clearInternalHooks();
     }
@@ -2635,9 +2652,9 @@ describe("short-term dreaming trigger", () => {
     );
   });
 
-  it("limits managed cron dreaming to a rotating workspace batch", async () => {
+  it("keeps managed cron dreaming as a full workspace sweep when pressure is low", async () => {
     const logger = createLogger();
-    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-batch-");
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-full-sweep-");
     const mainWorkspace = path.join(workspaceRoot, "main");
     const alphaWorkspace = path.join(workspaceRoot, "alpha");
     const betaWorkspace = path.join(workspaceRoot, "beta");
@@ -2705,54 +2722,29 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
+    expect(await fs.readFile(path.join(mainWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Main cron note.",
+    );
     expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
       "Alpha cron note.",
     );
     expect(await fs.readFile(path.join(betaWorkspace, "MEMORY.md"), "utf-8")).toContain(
       "Beta cron note.",
     );
-    await expect(fs.access(path.join(mainWorkspace, "MEMORY.md"))).rejects.toThrow();
     expect(logger.info).toHaveBeenCalledWith(
-      "memory-core: dreaming promotion limited to 2/3 workspace(s); deferred 1 workspace(s) to a later cron tick.",
-    );
-    expect(logger.info).toHaveBeenCalledWith(
-      "memory-core: dreaming promotion complete (workspaces=2/3, candidates=2, applied=2, failed=0, deferred=1).",
-    );
-
-    await runShortTermDreamingPromotionIfTriggered({
-      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
-      trigger: "cron",
-      workspaceDir: mainWorkspace,
-      cfg,
-      config: {
-        enabled: true,
-        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
-        limit: 10,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        verboseLogging: false,
-      },
-      logger,
-    });
-
-    expect(await fs.readFile(path.join(mainWorkspace, "MEMORY.md"), "utf-8")).toContain(
-      "Main cron note.",
+      "memory-core: dreaming promotion complete (workspaces=3, candidates=3, applied=3, failed=0).",
     );
   });
 
-  it("does not advance the managed cron workspace cursor past pressure-deferred work", async () => {
+  it("backs off between managed cron workspaces and continues when pressure clears", async () => {
     const logger = createLogger();
-    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-pressure-cursor-");
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-pressure-backoff-");
     const alphaWorkspace = path.join(workspaceRoot, "alpha");
     const betaWorkspace = path.join(workspaceRoot, "beta");
-    const mainWorkspace = path.join(workspaceRoot, "main");
 
     for (const [workspaceDir, query, snippet] of [
-      [alphaWorkspace, "alpha cursor", "Alpha cursor note."],
-      [betaWorkspace, "beta cursor", "Beta cursor note."],
-      [mainWorkspace, "main cursor", "Main cursor note."],
+      [alphaWorkspace, "alpha backoff", "Alpha backoff note."],
+      [betaWorkspace, "beta backoff", "Beta backoff note."],
     ] as const) {
       await writeDailyMemoryNote(workspaceDir, "2026-04-02", [snippet]);
       await recordShortTermRecalls({
@@ -2778,10 +2770,6 @@ describe("short-term dreaming trigger", () => {
             id: "alpha",
             workspace: alphaWorkspace,
           },
-          {
-            id: "beta",
-            workspace: betaWorkspace,
-          },
         ],
       },
     } as OpenClawConfig;
@@ -2796,10 +2784,16 @@ describe("short-term dreaming trigger", () => {
       ...lowPressure,
       rss: 2 * 1024 * 1024 * 1024,
     };
-    let memoryChecks = 0;
-    const memorySpy = vi.spyOn(process, "memoryUsage").mockImplementation(() => {
-      memoryChecks += 1;
-      return memoryChecks >= 3 ? highPressure : lowPressure;
+    const pressureSequence = [lowPressure, highPressure, highPressure, lowPressure];
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => {
+      return pressureSequence.shift() ?? lowPressure;
+    });
+    const backoffDelays: number[] = [];
+    setDreamingPressureBackoffSleepForTest(async (delayMs) => {
+      backoffDelays.push(delayMs);
+      if (backoffDelays.length > 6) {
+        throw new Error("pressure backoff test did not clear memory pressure");
+      }
     });
 
     const config = {
@@ -2816,60 +2810,102 @@ describe("short-term dreaming trigger", () => {
     await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
       trigger: "cron",
-      workspaceDir: mainWorkspace,
+      workspaceDir: betaWorkspace,
       cfg,
       config,
       logger,
     });
     expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
-      "Alpha cursor note.",
+      "Alpha backoff note.",
     );
-    await expect(fs.access(path.join(betaWorkspace, "MEMORY.md"))).rejects.toThrow();
-
-    memorySpy.mockReturnValue(lowPressure);
-    await runShortTermDreamingPromotionIfTriggered({
-      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
-      trigger: "cron",
-      workspaceDir: mainWorkspace,
-      cfg,
-      config,
-      logger,
-    });
     expect(await fs.readFile(path.join(betaWorkspace, "MEMORY.md"), "utf-8")).toContain(
-      "Beta cursor note.",
+      "Beta backoff note.",
+    );
+    expect(backoffDelays).toEqual([30_000, 60_000]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "memory-core: dreaming promotion waiting 30000ms because gateway memory pressure is high",
+      ),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "memory-core: dreaming promotion waiting 60000ms because gateway memory pressure is high",
+      ),
     );
   });
 
-  it("defers managed cron dreaming while memory pressure is above warning threshold", async () => {
+  it("keeps retrying capped pressure backoff until the next workspace can run", async () => {
     const logger = createLogger();
-    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-pressure-");
-    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Pressure note."]);
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "pressure",
-      results: [
-        {
-          path: "memory/2026-04-02.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "Pressure note.",
-          source: "memory",
-        },
-      ],
-    });
-    vi.spyOn(process, "memoryUsage").mockReturnValue({
-      rss: 2 * 1024 * 1024 * 1024,
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-pressure-defer-");
+    const alphaWorkspace = path.join(workspaceRoot, "alpha");
+    const betaWorkspace = path.join(workspaceRoot, "beta");
+    for (const [workspaceDir, query, snippet] of [
+      [alphaWorkspace, "alpha defer", "Alpha defer note."],
+      [betaWorkspace, "beta defer", "Beta defer note."],
+    ] as const) {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-02", [snippet]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query,
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+        ],
+      });
+    }
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            workspace: alphaWorkspace,
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const lowPressure = {
+      rss: 64 * 1024 * 1024,
       heapTotal: 64 * 1024 * 1024,
       heapUsed: 32 * 1024 * 1024,
       external: 0,
       arrayBuffers: 0,
+    };
+    const highPressure = {
+      ...lowPressure,
+      rss: 2 * 1024 * 1024 * 1024,
+    };
+    const pressureSequence = [
+      lowPressure,
+      highPressure,
+      highPressure,
+      highPressure,
+      highPressure,
+      highPressure,
+      highPressure,
+      lowPressure,
+    ];
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => {
+      return pressureSequence.shift() ?? lowPressure;
+    });
+    const backoffDelays: number[] = [];
+    setDreamingPressureBackoffSleepForTest(async (delayMs) => {
+      backoffDelays.push(delayMs);
+      if (backoffDelays.length > 6) {
+        throw new Error("pressure backoff test did not clear memory pressure");
+      }
     });
 
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
       trigger: "cron",
-      workspaceDir,
+      workspaceDir: betaWorkspace,
+      cfg,
       config: {
         enabled: true,
         cron: constants.DEFAULT_DREAMING_CRON_EXPR,
@@ -2885,12 +2921,18 @@ describe("short-term dreaming trigger", () => {
 
     expect(result).toEqual({
       handled: true,
-      reason: "memory-core: short-term dreaming deferred by pressure",
+      reason: "memory-core: short-term dreaming processed",
     });
-    await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toThrow();
+    expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Alpha defer note.",
+    );
+    expect(await fs.readFile(path.join(betaWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Beta defer note.",
+    );
+    expect(backoffDelays).toEqual([30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining(
-        "memory-core: dreaming promotion deferred because gateway memory pressure is high",
+        "memory-core: dreaming promotion waiting 300000ms because gateway memory pressure is high",
       ),
     );
   });
