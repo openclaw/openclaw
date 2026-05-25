@@ -1136,7 +1136,6 @@ describe("runMemoryFlushIfNeeded", () => {
             models: {
               "openai/gpt-5.5": {
                 params: {
-                  responsesServerCompaction: true,
                   responsesCompactThreshold: 200_000,
                 },
               },
@@ -1216,6 +1215,59 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBe(201_000);
+  });
+
+  it("uses the local preflight threshold when OpenAI server compaction is explicitly disabled", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 60_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 161_077,
+      totalTokensFresh: true,
+      agentRuntimeOverride: "pi",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                params: {
+                  responsesServerCompaction: false,
+                  responsesCompactThreshold: 200_000,
+                },
+              },
+            },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 220_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.currentTokenCount).toBe(161_077);
   });
 
   it("uses the active run sessionFile when the session entry has no transcript path", async () => {

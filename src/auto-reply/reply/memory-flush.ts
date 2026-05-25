@@ -88,7 +88,10 @@ export function resolveResponsesServerCompactionThreshold(params: {
     asRecord(params.cfg?.agents?.defaults?.params),
     asRecord(modelConfig?.params),
   ];
-  if (resolveBooleanParam(sources, "responsesServerCompaction") !== true) {
+  const serverCompaction = resolveBooleanParam(sources, "responsesServerCompaction");
+  const serverCompactionEnabled =
+    provider === "openai" ? serverCompaction !== false : serverCompaction === true;
+  if (!serverCompactionEnabled) {
     return undefined;
   }
   return resolvePositiveIntegerParam(sources, "responsesCompactThreshold");
