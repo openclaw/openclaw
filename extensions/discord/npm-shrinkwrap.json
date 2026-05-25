@@ -9,12 +9,12 @@
       "version": "2026.5.24",
       "dependencies": {
         "@discordjs/voice": "0.19.2",
-        "discord-api-types": "0.38.47",
+        "discord-api-types": "0.38.48",
         "https-proxy-agent": "9.0.0",
         "opusscript": "0.1.1",
         "typebox": "1.1.38",
         "undici": "8.3.0",
-        "ws": "8.20.1"
+        "ws": "8.21.0"
       },
       "peerDependencies": {
         "openclaw": ">=2026.5.24"
@@ -401,9 +401,9 @@
       }
     },
     "node_modules/discord-api-types": {
-      "version": "0.38.47",
-      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.47.tgz",
-      "integrity": "sha512-XgXQodHQBAE6kfD7kMvVo30863iHX1LHSqNq6MGUTDwIFCCvHva13+rwxyxVXDqudyApMNAd32PGjgVETi5rjA==",
+      "version": "0.38.48",
+      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.48.tgz",
+      "integrity": "sha512-WFUE/2o0lBlLeCQonQ+Pu2RqHAqbytBJ2RlXR91gzk05InSS6k9ShzzLYoymrA4c2oRgRKGE7/VqQJNNdGWSxQ==",
       "license": "MIT",
       "workspaces": [
         "scripts/actions/documentation"
@@ -488,9 +488,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.20.1",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.20.1.tgz",
-      "integrity": "sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==",
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"
