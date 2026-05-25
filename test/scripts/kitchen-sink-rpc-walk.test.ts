@@ -1,11 +1,51 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertResourceCeiling,
   fetchJson,
+  findDistCallGatewayModuleFiles,
   sampleProcess,
   sampleWindowsProcessByPort,
   summarizeProcessSamples,
+  usesBuiltOpenClawEntry,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+
+describe("kitchen-sink RPC caller loading", () => {
+  it("uses built callGateway chunks for dist and packaged entries", () => {
+    expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["dist/index.js"] })).toBe(true);
+    expect(
+      usesBuiltOpenClawEntry(
+        { command: "node", baseArgs: ["/app/openclaw.mjs"] },
+        "/repo",
+        { OPENCLAW_ENTRY: "/app/openclaw.mjs" },
+      ),
+    ).toBe(true);
+  });
+
+  it("does not deep-import gateway TypeScript for source pnpm runners", () => {
+    expect(usesBuiltOpenClawEntry({ pnpm: true, baseArgs: ["openclaw"] })).toBe(false);
+    expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["scripts/dev.mjs"] })).toBe(false);
+  });
+
+  it("finds only built callGateway chunks", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-call-chunks-"));
+    try {
+      mkdirSync(path.join(root, "dist"));
+      writeFileSync(path.join(root, "dist", "call-Abc123.js"), "");
+      writeFileSync(path.join(root, "dist", "call.runtime-Def456.js"), "");
+      writeFileSync(path.join(root, "dist", "index.js"), "");
+
+      expect(findDistCallGatewayModuleFiles(root)).toEqual([
+        "call-Abc123.js",
+        "call.runtime-Def456.js",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("kitchen-sink RPC process sampling", () => {
   it("samples RSS on Windows instead of silently disabling the resource guard", async () => {

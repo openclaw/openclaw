@@ -227,36 +227,33 @@ function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
-  const { callGateway } = await loadCallGatewayModule(options.runner);
-  const payload = await callGateway({
-    config: readJson(options.env.OPENCLAW_CONFIG_PATH),
-    configPath: options.env.OPENCLAW_CONFIG_PATH,
-    url: `ws://127.0.0.1:${options.port}`,
-    token: TOKEN,
-    method,
-    params: params ?? {},
-    timeoutMs: RPC_TIMEOUT_MS,
-    requiredMethods: [method],
-  });
+  const module = await loadCallGatewayModule(options.runner);
+  const payload = module
+    ? await module.callGateway({
+        config: readJson(options.env.OPENCLAW_CONFIG_PATH),
+        configPath: options.env.OPENCLAW_CONFIG_PATH,
+        url: `ws://127.0.0.1:${options.port}`,
+        token: TOKEN,
+        method,
+        params: params ?? {},
+        timeoutMs: RPC_TIMEOUT_MS,
+        requiredMethods: [method],
+      })
+    : await rpcCallViaCli(method, params, options);
   return unwrapRpcPayload(payload);
 }
 
 async function loadCallGatewayModule(runner) {
-  callGatewayModulePromise ??= importCallGatewayModule(runner);
+  if (!usesBuiltOpenClawEntry(runner)) {
+    return null;
+  }
+  callGatewayModulePromise ??= importCallGatewayModule();
   return callGatewayModulePromise;
 }
 
-async function importCallGatewayModule(runner) {
-  if (!usesPackagedOpenClawEntry(runner)) {
-    return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
-  }
+async function importCallGatewayModule() {
   const distDir = path.join(process.cwd(), "dist");
-  const candidates = fs.existsSync(distDir)
-    ? fs
-        .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
-        .toSorted((left, right) => left.localeCompare(right))
-    : [];
+  const candidates = findDistCallGatewayModuleFiles();
   for (const name of candidates) {
     const module = await import(pathToFileURL(path.join(distDir, name)).href);
     if (typeof module.callGateway === "function") {
@@ -266,10 +263,49 @@ async function importCallGatewayModule(runner) {
   throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
 }
 
-function usesPackagedOpenClawEntry(runner) {
-  return Boolean(
-    process.env.OPENCLAW_ENTRY && runner?.baseArgs?.[0] === process.env.OPENCLAW_ENTRY,
+async function rpcCallViaCli(method, params, options) {
+  const { stdout } = await runOpenClaw(
+    options.runner,
+    [
+      "gateway",
+      "call",
+      method,
+      "--url",
+      `ws://127.0.0.1:${options.port}`,
+      "--token",
+      TOKEN,
+      "--timeout",
+      String(RPC_TIMEOUT_MS),
+      "--json",
+      "--params",
+      JSON.stringify(params ?? {}),
+    ],
+    options.env,
+    { timeoutMs: RPC_TIMEOUT_MS + 30000 },
   );
+  return parseJsonOutput(stdout);
+}
+
+export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
+  const distDir = path.join(cwd, "dist");
+  return fs.existsSync(distDir)
+    ? fs
+        .readdirSync(distDir)
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .toSorted((left, right) => left.localeCompare(right))
+    : [];
+}
+
+export function usesBuiltOpenClawEntry(runner, cwd = process.cwd(), env = process.env) {
+  if (runner?.pnpm || !runner?.baseArgs?.[0]) {
+    return false;
+  }
+  const entry = runner.baseArgs[0];
+  if (env.OPENCLAW_ENTRY && entry === env.OPENCLAW_ENTRY) {
+    return true;
+  }
+  const relative = path.relative(path.resolve(cwd, "dist"), path.resolve(cwd, entry));
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 async function retryRpcCall(method, params, options) {
