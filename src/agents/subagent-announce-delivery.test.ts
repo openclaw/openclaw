@@ -5569,7 +5569,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("fails configured channel subagent completions when parent skips required message tool", async () => {
+  it("records visible delivery failure when configured channel subagent completion skips required message tool", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
@@ -5602,9 +5602,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
       reason: "message_tool_delivery_missing",
+      terminal: true,
+      requesterWakeStatus: "delivered",
+      visibleDeliveryRequired: true,
+      visibleDeliveryStatus: "failed",
+      visibleDeliveryError:
+        "completion agent did not use the message tool for message-tool-only delivery",
       error: "completion agent did not use the message tool for message-tool-only delivery",
     });
   });
