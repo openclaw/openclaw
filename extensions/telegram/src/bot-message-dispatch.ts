@@ -1078,6 +1078,10 @@ export const dispatchTelegramMessage = async ({
     reasoningLane.lastPartialText = display;
     reasoningLane.stream.update(display);
   };
+  // How often the rolling "Ns — HH:MM" elapsed-time line on the interleaved
+  // reasoning message refreshes. Kept coarse (20s) to minimise Telegram edit
+  // churn; must stay ≥ the draft-stream throttleMs so the tick reliably sends.
+  const TOOL_TIMER_TICK_MS = 20_000;
   const startToolTimer = (): void => {
     clearActiveTimer();
     activeToolStartTime = Date.now();
@@ -1090,11 +1094,11 @@ export const dispatchTelegramMessage = async ({
       activeTimerSuffix = `\n_${elapsed}s — ${formatTimerClock(new Date())}_`;
       updateInterleavedDisplay();
       // No explicit flush() — the draft-stream loop already self-pumps on
-      // update() once throttleMs has elapsed since the last send. The 3s tick
+      // update() once throttleMs has elapsed since the last send. The 20s tick
       // interval is always ≥ throttleMs, so the timer reliably delivers, and
       // 429 retry-after handling in the send path naturally gates us during
       // Telegram backpressure instead of us racing the throttle.
-    }, 3000);
+    }, TOOL_TIMER_TICK_MS);
   };
   const injectToolLineIntoInterleave = async (
     line: string | { text?: string } | null | undefined,
@@ -1996,7 +2000,15 @@ export const dispatchTelegramMessage = async ({
                             reasoningLane.stream?.forceNewMessage();
                             resetDraftLaneState(reasoningLane);
                             splitReasoningOnNextStream = false;
-                            interleavedOutput = "";
+                            // Reset the checkpoint so the next source's
+                            // accumulated text appends correctly, but
+                            // preserve interleavedOutput so already-injected
+                            // tool-progress lines and prior reasoning text
+                            // remain visible in the rolling Thinking message.
+                            // (Previous behaviour cleared interleavedOutput
+                            // which erased tool lines when the model switched
+                            // between thinking_delta and assistant text
+                            // content blocks within a single turn.)
                             rawReasoningCheckpoint = 0;
                           }
                           // Italicize the new portion of the reasoning text
