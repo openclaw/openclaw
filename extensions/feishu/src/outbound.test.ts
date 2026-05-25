@@ -490,6 +490,45 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "native_card_msg");
   });
 
+  it("renders webApp presentation buttons into Feishu channelData link buttons", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Open app", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    if (!rendered) {
+      throw new Error("expected Feishu presentation renderer to return a payload");
+    }
+    expect(rendered.text).toBe("- Open app: https://example.com/app");
+    const renderedChannelData = rendered.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Open app" },
+        type: "default",
+        behaviors: [{ type: "open_url", default_url: "https://example.com/app" }],
+      },
+    ]);
+  });
+
   it("does not duplicate title-only presentation cards in outbound fallbacks", async () => {
     const presentation: MessagePresentation = {
       title: "Status",

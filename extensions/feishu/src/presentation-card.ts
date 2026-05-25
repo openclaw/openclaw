@@ -36,6 +36,10 @@ function resolveSafeFeishuButtonUrl(url: string | undefined): string | undefined
   }
 }
 
+function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {
+  return button.url ?? button.webApp?.url ?? button.web_app?.url;
+}
+
 function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   if (style === "primary" || style === "success") {
     return "primary";
@@ -58,8 +62,9 @@ function buildFeishuPayloadButton(
     },
     type: mapFeishuButtonType(button.style),
   };
-  if (button.url) {
-    const safeUrl = resolveSafeFeishuButtonUrl(button.url);
+  const url = resolveFeishuButtonUrl(button);
+  if (url) {
+    const safeUrl = resolveSafeFeishuButtonUrl(url);
     if (safeUrl) {
       behaviors.push({ type: "open_url", default_url: safeUrl });
     }
