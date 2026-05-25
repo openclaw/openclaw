@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
+  asBoolean as readBoolean,
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -1094,10 +1095,6 @@ function readStringOrNumberArray(value: unknown): readonly string[] {
     }
   }
   return entries;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizePolicyToolName(value: string): string {

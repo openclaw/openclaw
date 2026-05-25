@@ -10,6 +10,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { asBoolean } from "../utils/boolean.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -42,10 +43,6 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function asTextChunkMode(value: unknown): TextChunkMode | undefined {
   return value === "length" || value === "newline" ? value : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function asStringNumberArray(value: unknown): Array<string | number> | undefined {

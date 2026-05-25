@@ -30,6 +30,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
@@ -197,8 +198,7 @@ function readProviderConfigBoolean(
   config: RealtimeVoiceProviderConfig | undefined,
   key: string,
 ): boolean | undefined {
-  const value = config?.[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config?.[key]);
 }
 
 export function resolveDiscordVoiceMode(voice: DiscordAccountConfig["voice"]): DiscordVoiceMode {

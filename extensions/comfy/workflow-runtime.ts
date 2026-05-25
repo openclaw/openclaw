@@ -25,6 +25,7 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asBoolean,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -112,8 +113,7 @@ export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | n
 }
 
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  const value = config[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config[key]);
 }
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {

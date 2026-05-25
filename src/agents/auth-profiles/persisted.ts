@@ -3,6 +3,7 @@ import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { isRecord } from "../../shared/record-coerce.js";
+import { asBoolean } from "../../utils/boolean.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -79,10 +80,6 @@ function buildLegacyOAuthSecretMaterialFingerprint(
     .digest("hex");
 }
 
-function normalizeOptionalCredentialBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
 function normalizeExpiryField(value: unknown): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -123,7 +120,7 @@ function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record
   const normalized: Record<string, unknown> = {
     provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
   };
-  const copyToAgents = normalizeOptionalCredentialBoolean(entry.copyToAgents);
+  const copyToAgents = asBoolean(entry.copyToAgents);
   if (copyToAgents !== undefined) {
     normalized.copyToAgents = copyToAgents;
   }

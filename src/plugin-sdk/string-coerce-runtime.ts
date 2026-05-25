@@ -18,6 +18,7 @@ export {
   asPositiveSafeInteger,
   parseFiniteNumber,
 } from "../shared/number-coercion.js";
+export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
   asNullableRecord,

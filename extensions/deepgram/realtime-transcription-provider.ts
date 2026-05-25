@@ -9,6 +9,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  parseBooleanValue as readBoolean,
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from "./audio.js";
@@ -63,23 +64,6 @@ function readNestedDeepgramConfig(rawConfig: RealtimeTranscriptionProviderConfig
   const raw = readRecord(rawConfig);
   const providers = readRecord(raw?.providers);
   return readRecord(providers?.deepgram ?? raw?.deepgram ?? raw) ?? {};
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-  return undefined;
 }
 
 function normalizeDeepgramEncoding(
