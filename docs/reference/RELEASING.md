@@ -49,9 +49,10 @@ the maintainer-only release runbook.
 
 1. Start from current `main`: pull latest, confirm the target commit is pushed,
    and confirm current `main` CI is green enough to branch from it.
-2. Rewrite the top `CHANGELOG.md` section from real commit history with
-   `/changelog`, keep entries user-facing, commit it, push it, and rebase/pull
-   once more before branching.
+2. Generate the top `CHANGELOG.md` section from merged PRs and all direct
+   commits since the last reachable release tag. Keep entries user-facing,
+   dedupe overlapping PR/direct-commit entries, commit the rewrite, push it,
+   and rebase/pull once more before branching.
 3. Review release compatibility records in
    `src/plugins/compat/registry.ts` and
    `src/commands/doctor/shared/deprecation-compat.ts`. Remove expired
