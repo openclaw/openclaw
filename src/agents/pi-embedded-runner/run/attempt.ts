@@ -1487,6 +1487,15 @@ export async function runEmbeddedAttempt(
         : {}),
       trace: runTrace,
     };
+    const markDiagnosticAttemptProgress = (reason: string) => {
+      emitTrustedDiagnosticEvent({
+        type: "run.progress",
+        runId: params.runId,
+        ...(params.sessionKey && { sessionKey: params.sessionKey }),
+        ...(params.sessionId && { sessionId: params.sessionId }),
+        reason,
+      });
+    };
     emitTrustedDiagnosticEvent({
       type: "run.started",
       ...diagnosticRunBase,
@@ -4476,6 +4485,7 @@ export async function runEmbeddedAttempt(
                 abortable,
                 aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
                 isCompactionStillInFlight: isCompactionInFlight,
+                onHeartbeat: () => markDiagnosticAttemptProgress("compaction_retry:active"),
               });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;

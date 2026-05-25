@@ -37,6 +37,7 @@ function buildAggregateTimeoutParams(
     abortable: overrides.abortable ?? (async (promise) => await promise),
     aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
     isCompactionStillInFlight: overrides.isCompactionStillInFlight,
+    onHeartbeat: overrides.onHeartbeat,
     onTimeout,
   };
 }
@@ -60,6 +61,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
   it("keeps waiting while compaction remains in flight", async () => {
     await withFakeTimers(async () => {
       let compactionInFlight = true;
+      const onHeartbeat = vi.fn();
       const waitForCompactionRetry = vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
@@ -72,11 +74,16 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const params = buildAggregateTimeoutParams({
         waitForCompactionRetry,
         isCompactionStillInFlight: () => compactionInFlight,
+        onHeartbeat,
       });
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
 
-      await vi.advanceTimersByTimeAsync(170_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onHeartbeat).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onHeartbeat).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(50_000);
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
