@@ -580,6 +580,48 @@ describe("schema validator", () => {
       },
       expectedValue: { mode: "auto" },
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.untyped-pattern-properties",
+        schema: {
+          patternProperties: {
+            "^x": {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+            },
+          },
+        },
+        value: { x1: {} },
+        applyDefaults: true,
+      },
+      expectedValue: { x1: { mode: "auto" } },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.untyped-additional-properties",
+        schema: {
+          additionalProperties: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string",
+                default: "manual",
+              },
+            },
+          },
+        },
+        value: { other: {} },
+        applyDefaults: true,
+      },
+      expectedValue: { other: { mode: "manual" } },
+    });
   });
 
   it("applies defaults through patternProperties before additionalProperties", () => {

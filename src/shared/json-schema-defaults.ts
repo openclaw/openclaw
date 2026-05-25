@@ -529,10 +529,11 @@ function applySchemaDefaults(
     );
   }
 
-  if (
-    (schemaTypeIncludes(schema, "object") || isRecord(schema.properties)) &&
-    isRecord(nextValue)
-  ) {
+  const hasObjectApplicators =
+    isRecord(schema.properties) ||
+    isRecord(schema.patternProperties) ||
+    isRecord(schema.additionalProperties);
+  if ((schemaTypeIncludes(schema, "object") || hasObjectApplicators) && isRecord(nextValue)) {
     const properties = isRecord(schema.properties) ? schema.properties : {};
     for (const [key, propertySchema] of Object.entries(properties)) {
       const currentValue = nextValue[key];
