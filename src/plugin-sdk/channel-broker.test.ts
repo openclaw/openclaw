@@ -397,6 +397,31 @@ describe("channel-broker SDK", () => {
     ).toBe(false);
   });
 
+  it("rejects unknown platform constraint keys in normalized provider capabilities", () => {
+    const capabilities: BrokerProviderCapabilities = {
+      providerId: "acme",
+      platforms: [
+        {
+          platform: "signal",
+          constraints: { selfHosted: true, unsupportedConstraint: true } as never,
+        },
+      ],
+    };
+
+    expect(() =>
+      normalizeBrokerInboundEvent({
+        version: BROKER_PROTOCOL_VERSION,
+        eventId: "event-1",
+        providerId: "acme",
+        platform: "signal",
+        conversation: { id: "chat-1", type: "direct" },
+        sender: { id: "user-1" },
+        message: { id: "msg-1" },
+        capabilities,
+      }),
+    ).toThrow("unsupported broker platform constraint: unsupportedConstraint");
+  });
+
   it("creates versioned receipts with normalized platform ids", () => {
     expect(
       createBrokerReceipt({

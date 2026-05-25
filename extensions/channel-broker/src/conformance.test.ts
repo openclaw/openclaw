@@ -547,16 +547,6 @@ describe("channel-broker conformance baseline", () => {
           badges: ["mac-host", "device-bound"],
           native: { imsg: true },
         },
-        {
-          platform: "imessage-bluebubbles",
-          delivery: { media: true },
-          constraints: {
-            externalBridge: true,
-            deviceBound: true,
-          },
-          badges: ["external-bridge"],
-          native: { blueBubbles: true },
-        },
       ],
     };
 
@@ -597,10 +587,32 @@ describe("channel-broker conformance baseline", () => {
       messagesSignedIn: true,
       privateApiOptional: true,
     });
+
+    const blueBubblesBackedProvider: BrokerProviderCapabilities = {
+      providerId: "bluebubbles-relay",
+      platforms: [
+        {
+          platform: "imessage",
+          delivery: { media: true },
+          constraints: {
+            externalBridge: true,
+            deviceBound: true,
+          },
+          badges: ["external-bridge"],
+          native: { blueBubbles: true },
+        },
+      ],
+    };
+    expect(
+      resolveBrokerPlatformCapabilities({
+        capabilities: blueBubblesBackedProvider,
+        platform: "imessage",
+      })?.badges,
+    ).toEqual(["external-bridge"]);
     expect(
       brokerPlatformSupports({
-        capabilities,
-        platform: "imessage-bluebubbles",
+        capabilities: blueBubblesBackedProvider,
+        platform: "imessage",
         requirements: { constraints: { externalBridge: true, deviceBound: true } },
       }),
     ).toBe(true);
