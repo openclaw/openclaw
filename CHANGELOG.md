@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI: add an ephemeral Activity tab for sanitized live tool activity summaries without persisting raw telemetry. Fixes #12831. Thanks @BunsDev.
+
 ### Fixes
 
 - Agents/commitments: serialize commitment store load-modify-save writes so concurrent heartbeat and CLI updates no longer lose dismissal, sent, or attempt state. (#81153) Thanks @ai-hpc.
