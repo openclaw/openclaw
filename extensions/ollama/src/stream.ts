@@ -364,6 +364,15 @@ function isOllamaCloudKimiModelRef(modelId: string): boolean {
 const KIMI_INLINE_REASONING_BOUNDARY = "️";
 const KIMI_INLINE_REASONING_MIN_PREFIX_CHARS = 80;
 const KIMI_INLINE_REASONING_MIN_ANSWER_CHARS = 8;
+const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F(?=\S)/u;
+
+function findKimiInlineReasoningBoundaryIndex(text: string): number {
+  const match = KIMI_INLINE_REASONING_BOUNDARY_RE.exec(text);
+  if (!match) {
+    return -1;
+  }
+  return match.index + match[1].length;
+}
 
 function stripKimiInlineReasoningFromVisibleText(params: {
   modelId: string;
@@ -372,7 +381,7 @@ function stripKimiInlineReasoningFromVisibleText(params: {
   if (!isOllamaCloudKimiModelRef(params.modelId)) {
     return params.text;
   }
-  const boundaryIndex = params.text.indexOf(KIMI_INLINE_REASONING_BOUNDARY);
+  const boundaryIndex = findKimiInlineReasoningBoundaryIndex(params.text);
   if (boundaryIndex < 0) {
     return params.text;
   }
@@ -388,6 +397,21 @@ function stripKimiInlineReasoningFromVisibleText(params: {
     return params.text;
   }
   return answer;
+}
+
+function resolveStreamingTextDelta(previousText: string, nextText: string): string {
+  if (!nextText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  if (nextText.startsWith(previousText)) {
+    return nextText.slice(previousText.length);
+  }
+  // Sanitizers may rewrite previously accumulated content. Fall back to
+  // re-emitting the latest complete text so downstream partial state converges.
+  return nextText;
 }
 
 export function createConfiguredOllamaCompatStreamWrapper(
@@ -1153,7 +1177,8 @@ export function createOllamaStreamFn(
           }
 
           const reader = response.body.getReader();
-          let accumulatedContent = "";
+          let accumulatedRawContent = "";
+          let accumulatedVisibleContent = "";
           let accumulatedThinking = "";
           const accumulatedToolCalls: OllamaToolCall[] = [];
           let finalResponse: OllamaChatResponse | undefined;
@@ -1173,8 +1198,8 @@ export function createOllamaStreamFn(
                 thinking: accumulatedThinking,
               });
             }
-            if (accumulatedContent) {
-              parts.push({ type: "text", text: accumulatedContent });
+            if (accumulatedVisibleContent) {
+              parts.push({ type: "text", text: accumulatedVisibleContent });
             }
             return parts;
           };
@@ -1212,7 +1237,7 @@ export function createOllamaStreamFn(
             stream.push({
               type: "text_end",
               contentIndex: textContentIndex(),
-              content: accumulatedContent,
+              content: accumulatedVisibleContent,
               partial,
             });
           };
@@ -1256,7 +1281,22 @@ export function createOllamaStreamFn(
             }
 
             if (chunk.message?.content) {
-              const delta = chunk.message.content;
+              const rawDelta = chunk.message.content;
+              const previousVisibleContent = accumulatedVisibleContent;
+              accumulatedRawContent += rawDelta;
+              const nextVisibleContent = stripKimiInlineReasoningFromVisibleText({
+                modelId: model.id,
+                text: accumulatedRawContent,
+              });
+              const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
+              if (!delta) {
+                accumulatedVisibleContent = nextVisibleContent;
+                if (chunk.done) {
+                  finalResponse = chunk;
+                  break;
+                }
+                continue;
+              }
               if (thinkingStarted && !thinkingEnded) {
                 closeThinkingBlock();
               }
@@ -1282,7 +1322,7 @@ export function createOllamaStreamFn(
                 stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
               }
 
-              accumulatedContent += delta;
+              accumulatedVisibleContent = nextVisibleContent;
               const partial = buildStreamAssistantMessage({
                 model: modelInfo,
                 content: buildCurrentContent(),
@@ -1311,13 +1351,13 @@ export function createOllamaStreamFn(
             throw new Error("Ollama API stream ended without a final response");
           }
 
-          if (isLikelyGarbledVisibleText({ text: accumulatedContent, modelId: model.id })) {
+          if (isLikelyGarbledVisibleText({ text: accumulatedVisibleContent, modelId: model.id })) {
             throw new Error(
               `Ollama returned non-linguistic garbled visible text for ${model.id}; retry or switch models`,
             );
           }
 
-          finalResponse.message.content = accumulatedContent;
+          finalResponse.message.content = accumulatedVisibleContent;
           if (accumulatedThinking) {
             finalResponse.message.thinking = accumulatedThinking;
           }

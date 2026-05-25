@@ -979,6 +979,30 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "text", text: "intro ️keep this intact" }]);
   });
 
+  it("does not treat emoji variation selectors as Kimi inline-reasoning boundaries", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.",
+      },
+    ]);
+  });
+
   it("estimates usage when Ollama omits eval counters", () => {
     const response = {
       model: "qwen3:32b",
@@ -1785,6 +1809,63 @@ describe("createOllamaStreamFn streaming events", () => {
 
         const delta = events.find((e) => e.type === "text_delta");
         expect(delta?.delta).toBe("one shot");
+      },
+    );
+  });
+
+  it("sanitizes Kimi inline reasoning in text_delta, text_end, partial, and done output", async () => {
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content:
+              "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️Final answer",
+          },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: " only." },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":3,"eval_count":4}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const types = events.map((e) => e.type);
+        expect(types).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
+
+        const deltas = events.filter((e) => e.type === "text_delta");
+        expect(deltas).toHaveLength(2);
+        expect(deltas[0]?.delta).toBe("Final answer");
+        expect(deltas[1]?.delta).toBe(" only.");
+        expect(deltas[0]?.partial.content).toEqual([{ type: "text", text: "Final answer" }]);
+        expect(deltas[1]?.partial.content).toEqual([{ type: "text", text: "Final answer only." }]);
+
+        const textEnd = events.find((e) => e.type === "text_end");
+        expect(textEnd?.content).toBe("Final answer only.");
+        expect(textEnd?.partial.content).toEqual([{ type: "text", text: "Final answer only." }]);
+
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([{ type: "text", text: "Final answer only." }]);
+        }
       },
     );
   });
