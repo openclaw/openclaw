@@ -2579,6 +2579,7 @@ export async function runCodexAppServerAttempt(
         projector?.recordDynamicToolResult({
           callId: call.callId,
           tool: call.tool,
+          asyncStarted: response.asyncStarted === true,
           success: protocolResponse.success,
           terminalType:
             response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
@@ -2586,6 +2587,7 @@ export async function runCodexAppServerAttempt(
           contentItems: protocolResponse.contentItems,
         });
         if (shouldEmitDynamicToolProgress) {
+          const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
           emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
@@ -2594,7 +2596,7 @@ export async function runCodexAppServerAttempt(
               toolCallId: call.callId,
               ...(toolMeta ? { meta: toolMeta } : {}),
               isError: !protocolResponse.success,
-              result: sanitizeCodexToolResponse(protocolResponse),
+              result: sanitizeCodexToolResponse(progressResponse),
             },
           });
         }
@@ -3379,6 +3381,19 @@ function toCodexDynamicToolProtocolResponse(
   return {
     contentItems: response.contentItems,
     success: response.success,
+  };
+}
+
+function toCodexDynamicToolProgressResponse(
+  response: CodexDynamicToolCallResponse,
+  protocolResponse: CodexDynamicToolCallResponse,
+): CodexDynamicToolCallResponse & { details?: { async: true; status: "started" } } {
+  if (response.asyncStarted !== true) {
+    return protocolResponse;
+  }
+  return {
+    ...protocolResponse,
+    details: { async: true, status: "started" },
   };
 }
 
@@ -5667,6 +5682,8 @@ export const testing = {
   shouldForceMessageTool,
   shouldReleaseTurnAfterTerminalDynamicTool,
   resolveTerminalDynamicToolBatchAction,
+  toCodexDynamicToolProgressResponse,
+  toCodexDynamicToolProtocolResponse,
   hasPendingDynamicToolTerminalDiagnostic,
   buildCodexPluginThreadConfigEligibilityLogData,
   withCodexStartupTimeout,
