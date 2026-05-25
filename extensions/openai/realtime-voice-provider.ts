@@ -349,6 +349,7 @@ async function resolveOpenAIRealtimeDefaultAuth(params: {
     const codexToken = await resolveProviderAuthProfileApiKey({
       provider: "openai-codex",
       cfg: params.cfg,
+      includeExternalCliAuth: true,
     });
     if (codexToken) {
       return { status: "available", kind: "codex-oauth", value: codexToken };
@@ -387,6 +388,7 @@ function hasOpenAIRealtimeBrowserAuthInput(params: {
       isProviderAuthProfileConfigured({
         provider: "openai-codex",
         cfg: params.cfg,
+        includeExternalCliAuth: true,
       }) || hasOpenAIRealtimeApiKeyInput(undefined)
     );
   }
@@ -725,6 +727,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       !isProviderAuthProfileConfigured({
         provider: "openai-codex",
         cfg: cfg.cfg,
+        includeExternalCliAuth: true,
       })
     ) {
       const directApiKey = resolveOpenAIRealtimeEnvApiKey();

@@ -289,6 +289,7 @@ export function listUsableProviderAuthProfileIds(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
     const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
@@ -303,6 +304,7 @@ export function isProviderAuthProfileConfigured(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -312,6 +314,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
@@ -336,14 +339,19 @@ function resolveUsableProviderAuthProfiles(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-  const externalCli = externalCliDiscoveryForProviderAuth({
-    cfg: params.cfg,
-    provider: params.provider,
-    allowKeychainPrompt: params.allowKeychainPrompt,
-  });
-  const store = loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli });
+  const externalCli = params.includeExternalCliAuth
+    ? externalCliDiscoveryForProviderAuth({
+        cfg: params.cfg,
+        provider: params.provider,
+        allowKeychainPrompt: params.allowKeychainPrompt,
+      })
+    : undefined;
+  const store = externalCli
+    ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
+    : loadAuthProfileStoreForSecretsRuntime(agentDir);
   const profileIds = resolveAuthProfileOrder({
     cfg: params.cfg,
     store,

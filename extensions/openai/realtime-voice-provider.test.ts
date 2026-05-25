@@ -302,6 +302,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
       provider: "openai-codex",
       cfg: {},
+      includeExternalCliAuth: true,
     });
     const request = requireFetchRequest();
     expectRecordFields(request, "fetch request", {
@@ -589,6 +590,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith({
       provider: "openai-codex",
       cfg,
+      includeExternalCliAuth: true,
     });
   });
 
@@ -632,6 +634,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
       provider: "openai-codex",
       cfg,
+      includeExternalCliAuth: true,
     });
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
       Authorization: "Bearer oauth-realtime-token", // pragma: allowlist secret
@@ -663,6 +666,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
       provider: "openai-codex",
       cfg,
+      includeExternalCliAuth: true,
     });
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
       Authorization: "Bearer oauth-realtime-token", // pragma: allowlist secret

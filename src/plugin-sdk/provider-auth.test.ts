@@ -86,10 +86,14 @@ describe("provider auth profile helpers", () => {
     );
   });
 
-  it("scopes external CLI auth discovery to provider profile resolution", async () => {
+  it("only discovers external CLI auth when provider resolution opts in", async () => {
     vi.resetModules();
 
-    const store: AuthProfileStore = {
+    const primaryStore: AuthProfileStore = {
+      version: 1,
+      profiles: {},
+    };
+    const externalStore: AuthProfileStore = {
       version: 1,
       profiles: {
         "openai-codex:default": {
@@ -102,7 +106,10 @@ describe("provider auth profile helpers", () => {
       },
     };
     const externalCli = { mode: "scoped", providerIds: ["openai-codex"] };
-    const loadAuthProfileStoreForSecretsRuntime = vi.fn(() => store);
+    const loadAuthProfileStoreForSecretsRuntime = vi.fn(
+      (_agentDir?: string, options?: { externalCli?: unknown }) =>
+        options?.externalCli ? externalStore : primaryStore,
+    );
 
     vi.doMock("../agents/agent-scope-config.js", () => ({
       resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
@@ -126,8 +133,8 @@ describe("provider auth profile helpers", () => {
           .map(([profileId]) => profileId),
     }));
     vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => store),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
+      ensureAuthProfileStore: vi.fn(() => primaryStore),
+      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
       loadAuthProfileStoreForSecretsRuntime,
       loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
       updateAuthProfileStoreWithLock: vi.fn(),
@@ -135,9 +142,18 @@ describe("provider auth profile helpers", () => {
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 
-    expect(isProviderAuthProfileConfigured({ provider: "openai-codex" })).toBe(true);
-    expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenCalledWith("/tmp/openclaw-agent", {
-      externalCli,
-    });
+    expect(isProviderAuthProfileConfigured({ provider: "openai-codex" })).toBe(false);
+    expect(
+      isProviderAuthProfileConfigured({
+        provider: "openai-codex",
+        includeExternalCliAuth: true,
+      }),
+    ).toBe(true);
+    expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenNthCalledWith(1, "/tmp/openclaw-agent");
+    expect(loadAuthProfileStoreForSecretsRuntime).toHaveBeenNthCalledWith(
+      2,
+      "/tmp/openclaw-agent",
+      { externalCli },
+    );
   });
 });
