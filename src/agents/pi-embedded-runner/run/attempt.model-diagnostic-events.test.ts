@@ -182,6 +182,29 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
   });
 
+  it("emits the diagnostic active-abort override on started events", async () => {
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "lmstudio",
+        model: "gemma-4-e4b-it",
+        allowActiveAbort: false,
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-1",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain((await wrapped({} as never, {} as never, {} as never)) as AsyncIterable<unknown>);
+    });
+
+    expect(getEvent(events, 0).allowActiveAbort).toBe(false);
+  });
+
   it("counts async onPayload replacements instead of raw payload content", async () => {
     async function* stream() {
       yield { type: "text_delta", delta: "safe" };

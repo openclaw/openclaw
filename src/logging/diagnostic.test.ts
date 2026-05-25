@@ -675,6 +675,56 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("does not actively abort stale model calls when the call disables diagnostic abort", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "lmstudio",
+        model: "gemma-4-e4b-it",
+        allowActiveAbort: false,
+      });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs);
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+        activeWorkKind: "model_call",
+        lastProgressReason: "model_call:started",
+      },
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("does not recover stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

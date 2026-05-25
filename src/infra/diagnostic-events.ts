@@ -522,6 +522,7 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
+  allowActiveAbort?: boolean;
 };
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
