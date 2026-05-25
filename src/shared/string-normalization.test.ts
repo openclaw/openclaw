@@ -8,6 +8,7 @@ import {
   normalizeStringEntriesLower,
   normalizeUniqueSingleOrTrimmedStringList,
   normalizeUniqueStringEntries,
+  normalizeUniqueStringEntriesLower,
   normalizeUniqueTrimmedStringList,
   sortUniqueStrings,
   uniqueStrings,
@@ -38,6 +39,14 @@ describe("shared/string-normalization", () => {
 
   it("normalizes unique string entries", () => {
     expect(normalizeUniqueStringEntries([" b ", "a", "b", "", 4, "a"])).toEqual(["b", "a", "4"]);
+  });
+
+  it("normalizes unique lowercase string entries", () => {
+    expect(normalizeUniqueStringEntriesLower([" A ", "a", "MiXeD", "", 7])).toEqual([
+      "a",
+      "mixed",
+      "7",
+    ]);
   });
 
   it("normalizes sorted unique string entries", () => {

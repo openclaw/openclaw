@@ -24,6 +24,12 @@ export function normalizeUniqueStringEntries(values?: Iterable<unknown>): string
   return uniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
 }
 
+export function normalizeUniqueStringEntriesLower(values?: Iterable<unknown>): string[] {
+  return uniqueStrings(
+    normalizeStringEntriesLower(values ? [...values] : undefined).filter(Boolean),
+  );
+}
+
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
   return sortUniqueStrings(normalizeUniqueStringEntries(values));
 }

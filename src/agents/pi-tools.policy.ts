@@ -14,7 +14,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import {
+  normalizeUniqueSingleOrTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -229,17 +232,7 @@ function buildProviderToolPolicyLookup(
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    resolved.push(trimmed);
-  }
-  return resolved;
+  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
