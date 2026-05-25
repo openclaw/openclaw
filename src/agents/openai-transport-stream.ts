@@ -124,6 +124,9 @@ type BaseStreamOptions = {
   headers?: Record<string, string>;
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 
 type ModelStreamCooperativeScheduler = {
@@ -3502,6 +3505,15 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.responseFormat !== undefined) {
     params.response_format = options.responseFormat;
+  }
+  if (options?.frequencyPenalty !== undefined) {
+    params.frequency_penalty = options.frequencyPenalty;
+  }
+  if (options?.presencePenalty !== undefined) {
+    params.presence_penalty = options.presencePenalty;
+  }
+  if (options?.seed !== undefined) {
+    params.seed = options.seed;
   }
   if (supportsModelTools(model)) {
     if (context.tools) {
