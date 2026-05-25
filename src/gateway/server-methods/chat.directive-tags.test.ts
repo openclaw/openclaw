@@ -3005,9 +3005,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
+    expect(mockState.lastDispatchUserTurnInput).toEqual({
+      text: "bench update",
+      timestamp: expect.any(Number),
+      idempotencyKey: "idem-system-provenance-acp:user",
+    });
   });
 
-  it("leaves text-only agent-run user persistence to Pi", async () => {
+  it("prepares clean text-only chat.send user turns for Pi persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-agent-run-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3023,7 +3028,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(findUserUpdate()).toBeUndefined();
-    expect(mockState.lastDispatchUserTurnInput).toBeUndefined();
+    expect(mockState.lastDispatchUserTurnInput).toEqual({
+      text: "hello from dashboard",
+      timestamp: expect.any(Number),
+      idempotencyKey: "idem-user-transcript-agent-run:user",
+    });
     const finalBroadcast = (
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
@@ -3385,7 +3394,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toBeUndefined();
+      expect(mockState.lastDispatchUserTurnInput).toEqual({
+        text: "bridge image",
+        timestamp: expect.any(Number),
+        idempotencyKey: "idem-user-transcript-acp-images:user",
+      });
     });
   });
 

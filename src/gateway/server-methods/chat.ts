@@ -2594,18 +2594,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       const preparedUserTurnMediaPromise =
         normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
       const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      const userTurnInputPromise: Promise<UserTurnInput | undefined> = userTurnMediaPromise.then(
-        (media) =>
-          media.length > 0
-            ? {
-                text: rawMessage,
-                media,
-                timestamp: now,
-                idempotencyKey: `${clientRunId}:user`,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : undefined,
-      );
+      const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
+        text: rawMessage,
+        ...(media.length > 0
+          ? {
+              media,
+              mediaOnlyText: "[User sent media without caption]",
+            }
+          : {}),
+        timestamp: now,
+        idempotencyKey: `${clientRunId}:user`,
+      }));
       const pluginBoundMediaFieldsPromise =
         explicitOriginTargetsPlugin && parsedImages.length > 0
           ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
@@ -2718,7 +2717,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (!resolvedSessionId) {
                 return;
               }
-              const persistedImages = await getPersistedMediaForTranscript();
               const userTurnInput = await userTurnInputPromise;
               await persistInlineUserTurnTranscript({
                 sessionId: resolvedSessionId,
@@ -2727,12 +2725,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 storePath: latestStorePath,
                 agentId,
                 config: cfg,
-                input: userTurnInput ?? {
-                  text: rawMessage,
-                  media: persistedImages,
-                  timestamp: now,
-                  idempotencyKey: `${clientRunId}:user`,
-                },
+                input: userTurnInput,
               });
             },
             {
@@ -2874,7 +2867,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             ctx,
             cfg,
             dispatcher,
-            ...(userTurnInput ? { userTurnInput } : {}),
+            userTurnInput,
             replyOptions: {
               runId: clientRunId,
               abortSignal: activeRunAbort.controller.signal,
