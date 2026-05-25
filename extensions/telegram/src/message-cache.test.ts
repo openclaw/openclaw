@@ -7,6 +7,7 @@ import {
   createTelegramMessageCache,
   resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePath,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
 
@@ -402,6 +403,29 @@ describe("telegram message cache", () => {
     });
 
     expect(recent.map((entry) => entry.messageId)).toEqual(["9122", "9123", "9124"]);
+  });
+
+  it("leaves plugin-state headroom for sibling Telegram caches", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore(
+      TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+    );
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    for (let index = 0; index < TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES + 25; index++) {
+      await cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Nora" },
+          message_id: 9300 + index,
+          date: 1736380700 + index,
+          text: `Budget message ${index}`,
+          from: { id: 1, is_bot: false, first_name: "Nora" },
+        } as Message,
+      });
+    }
+
+    expect(entries.size).toBe(TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES);
+    expect(TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES).toBeLessThan(1000);
   });
 
   it("reads legacy sidecar records as a persistent-store fallback", async () => {

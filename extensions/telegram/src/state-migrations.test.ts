@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveTelegramBotInfoCachePath } from "./bot-info-cache.js";
-import { resolveTelegramMessageCachePath } from "./message-cache.js";
+import {
+  resolveTelegramMessageCachePath,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+} from "./message-cache.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import {
   resolveTopicNameCacheNamespace,
@@ -143,6 +146,53 @@ describe("telegram state migrations", () => {
       const entries = await messageCachePlan.readEntries();
       expect(entries).toHaveLength(1);
       expect(entries[0]?.key).toBe("default:7:9201");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps legacy message-cache imports below the Telegram plugin-state row budget", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-state-migration-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    const storePath = resolveStorePath(undefined, { env });
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    try {
+      await mkdir(path.dirname(persistedPath), { recursive: true });
+      await writeFile(
+        persistedPath,
+        JSON.stringify(
+          Array.from({ length: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES + 25 }, (_, index) =>
+            persistedCacheEntry(9400 + index, `legacy import ${index}`),
+          ),
+        ),
+      );
+
+      const cfg = {
+        agents: {
+          list: [{ id: "ops", default: true }],
+        },
+      } as OpenClawConfig;
+      const plans = await detectTelegramLegacyStateMigrations({ cfg, env });
+      const messageCachePlan = plans.find(
+        (plan) =>
+          plan.kind === "plugin-state-import" &&
+          plan.label === "Telegram prompt-context message cache",
+      );
+
+      expect(messageCachePlan).toMatchObject({
+        kind: "plugin-state-import",
+        maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+      });
+      if (!messageCachePlan || messageCachePlan.kind !== "plugin-state-import") {
+        throw new Error("expected Telegram message-cache plugin-state import plan");
+      }
+
+      const entries = await messageCachePlan.readEntries();
+      expect(entries).toHaveLength(TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES);
+      expect(entries.at(0)?.key).toBe("default:7:9425");
+      expect(entries.at(-1)?.key).toBe(
+        `default:7:${9400 + TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES + 24}`,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
