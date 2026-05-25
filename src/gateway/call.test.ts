@@ -688,7 +688,7 @@ describe("callGateway url resolution", () => {
     });
   });
 
-  it("passes approval runtime tokens to backend gateway clients", async () => {
+  it("keeps loopback approval-runtime backend calls device-less", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -698,6 +698,53 @@ describe("callGateway url resolution", () => {
     });
 
     expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps loopback approval-runtime backend calls device-less even with shared token auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      token: "explicit-token",
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps ordinary scoped shared-token backend calls device-bound", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayScoped({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.approvalRuntimeToken).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("keeps remote approval-runtime backend calls device-bound", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+
+    await callGatewayScoped({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      token: "explicit-token",
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("wss://remote.example:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
   it("does not synthesize display names for CLI calls", async () => {

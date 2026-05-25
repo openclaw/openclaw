@@ -325,26 +325,28 @@ function isLoopbackGatewayUrl(rawUrl: string): boolean {
 
 function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
-  scopes: readonly string[];
   url: string;
   token?: string;
   password?: string;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasSharedAuth = Boolean(params.token || params.password);
+  // Internal approval-runtime token calls intentionally stay device-less on
+  // loopback to avoid stale scope-upgrade reconnect churn in the approval
+  // control plane. Ordinary scoped shared-auth backend calls remain device-bound.
+  const hasApprovalRuntimeToken = Boolean(
+    normalizeOptionalString(params.opts.approvalRuntimeToken),
+  );
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    hasSharedAuth &&
-    params.scopes.length === 0 &&
+    hasApprovalRuntimeToken &&
     isLoopbackGatewayUrl(params.url)
   );
 }
 
 function resolveDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
-  scopes: readonly string[];
   url: string;
   token?: string;
   password?: string;
@@ -776,7 +778,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, scopes, url, token, password })
+          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
