@@ -10,7 +10,11 @@ on:
       - "scripts/claworks-*.mjs"
       - "scripts/claworks-*.ts"
       - "scripts/lib/claworks-feishu-live-e2e-gate.mjs"
+      - "scripts/lib/claworks-ot-connectivity-env.mjs"
+      - "scripts/lib/claworks-apply-branch-protection.mjs"
       - "test/scripts/claworks-feishu-live-e2e-gate.test.ts"
+      - "test/scripts/claworks-ot-connectivity-env.test.ts"
+      - "test/scripts/claworks-apply-branch-protection.test.ts"
       - "claworks.mjs"
       - "src/cli/product-surface.ts"
       - "src/daemon/constants.ts"
@@ -55,6 +59,16 @@ jobs:
 
       - name: Feishu live E2E gate (mock, no credentials)
         run: pnpm test test/scripts/claworks-feishu-live-e2e-gate.test.ts
+        env:
+          CLAWORKS_PRODUCT: "1"
+
+      - name: OT connectivity env audit (unit)
+        run: pnpm test test/scripts/claworks-ot-connectivity-env.test.ts
+        env:
+          CLAWORKS_PRODUCT: "1"
+
+      - name: Branch protection config (unit)
+        run: pnpm test test/scripts/claworks-apply-branch-protection.test.ts
         env:
           CLAWORKS_PRODUCT: "1"
 

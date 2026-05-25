@@ -40,6 +40,30 @@ CLAWORKS_PREFLIGHT_EVOLUTION=1 CLAWORKS_PREFLIGHT_GATEWAY=1 pnpm claworks:releas
 
 ---
 
+## 维护者一键应用（gh api）
+
+配置模板：`.github/branch-protection/claworks-main.json`
+
+```bash
+# 1. 先跑至少一次 ClaWorks workflow，确认 check 名称
+pnpm claworks:branch-protection --list-checks
+
+# 2. 必要时编辑 JSON 中 required_status_checks.contexts
+
+# 3.  dry-run（默认）
+pnpm claworks:branch-protection
+
+# 4. 应用（需 repo admin + gh 已登录）
+pnpm claworks:branch-protection --apply
+
+# Fork / 其他仓库
+pnpm claworks:branch-protection --repo your-org/claworks --branch main --apply
+```
+
+**阻塞项**：无 admin 权限、组织 rulesets 覆盖 classic protection、或 check 名称与 workflow job 不一致时需人工在 Settings UI 勾选。
+
+---
+
 ## 说明
 
 - **弱模型回归** 使用 stub LLM，无需 API key；依赖 `claworks-packs` checkout。
