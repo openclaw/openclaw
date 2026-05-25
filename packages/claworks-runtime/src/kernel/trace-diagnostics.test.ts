@@ -46,4 +46,21 @@ describe("trace-diagnostics", () => {
     expect(traces[0]?.payload.event_type).toBe("playbook.run.completed");
     expect(traces[0]?.payload.trace_id).toBe(root.traceId);
   });
+
+  it("buildTraceDiagnostic is suitable for OTEL bridge callback", () => {
+    const root = createRootTraceContext();
+    const traceparent = formatTraceparent(root)!;
+    const diag = buildTraceDiagnostic({
+      id: "evt-otel",
+      type: "im.message.received",
+      source: "feishu",
+      timestamp: new Date(),
+      payload: { text: "hi" },
+      traceparent,
+      traceId: root.traceId,
+    });
+    expect(diag.trace_id).toMatch(/^[0-9a-f]{32}$/);
+    expect(diag.span_id).toMatch(/^[0-9a-f]{16}$/);
+    expect(diag.event_type).toBe("im.message.received");
+  });
 });

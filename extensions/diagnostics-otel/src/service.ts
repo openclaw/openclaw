@@ -2303,8 +2303,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs[`openclaw.phase.detail.${key}`] =
             typeof value === "boolean" ? String(value) : value;
         }
-        const span = spanWithDuration("openclaw.diagnostic.phase", spanAttrs, evt.durationMs, {
+        addTraceAttributes(spanAttrs, evt.trace);
+        const spanName = evt.name.startsWith("claworks.event.")
+          ? "claworks.event.published"
+          : "openclaw.diagnostic.phase";
+        const span = spanWithDuration(spanName, spanAttrs, evt.durationMs, {
           endTimeMs: evt.ts,
+          parentContext: contextForTraceContext(evt.trace),
         });
         span.end(evt.ts);
       };

@@ -66,6 +66,13 @@ export type { IntentRegistry, IntentMapping } from "./kernel/intent-registry.js"
 export { CW_EVENTS, type CwEventType } from "./kernel/event-names.js";
 
 export {
+  buildTraceDiagnostic,
+  recordEventTraceDiagnostic,
+  CLAWORKS_TRACE_OBSERVATION_TYPE,
+  type ClaworksTraceDiagnostic,
+} from "./kernel/trace-diagnostics.js";
+
+export {
   discoverPackSourceDir,
   hasPackSourcesAvailable,
   isClaworksRobotConfigPresent,

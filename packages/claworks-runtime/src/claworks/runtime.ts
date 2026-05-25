@@ -29,6 +29,11 @@ import { createScaffoldEngine } from "../kernel/scaffold-engine.js";
 import { createPlaybookScheduler } from "../kernel/scheduler.js";
 import { createScriptLibrary, registerBuiltinScripts } from "../kernel/script-library.js";
 import { createStructuredOutputEngine } from "../kernel/structured-output.js";
+import {
+  buildTraceDiagnostic,
+  recordEventTraceDiagnostic,
+  type ClaworksTraceDiagnostic,
+} from "../kernel/trace-diagnostics.js";
 import type { KnowledgeBase, RobotInfo } from "../kernel/types.js";
 import { createUserProfileStore } from "../kernel/user-profile-store.js";
 import { createPackLoader } from "../pack-loader/index.js";
@@ -86,6 +91,8 @@ export async function createClaworksRuntime(
     hitl?: HitlGate;
     subagentRun?: SubagentRunFn;
     skillRun?: SkillRunFn;
+    /** Gateway OTEL bridge — claworks-robot emits diagnostics-otel spans from EventKernel traceparent. */
+    onTraceDiagnostic?: (diagnostic: ClaworksTraceDiagnostic) => void;
   },
 ): Promise<ClaworksRuntime> {
   const log = createRuntimeLogger(opts?.logger);
@@ -265,7 +272,9 @@ export async function createClaworksRuntime(
     },
     // 每个事件发布后触发 HookEngine（事件推送 / IM 通知 / Webhook）
     // runtime 用懒引用（createEventKernel 早于 runtime 赋值，但 onEventPublished 在运行时调用）
-    onEventPublished: (event) => {
+    onEventPublished: (event, matches) => {
+      recordEventTraceDiagnostic(event, matches);
+      opts?.onTraceDiagnostic?.(buildTraceDiagnostic(event, matches));
       runtime.hookEngine
         ?.process(event.type, event.payload as Record<string, unknown>, async (t, s, p) => {
           await kernel.publish(t, s, p);

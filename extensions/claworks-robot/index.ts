@@ -23,6 +23,7 @@ import {
   setClaworksRobotRuntime,
 } from "./runtime-store.js";
 import { createClaworksRobotSecurityAuditCollector } from "./security-audit.js";
+import { emitClaworksTraceToOtel } from "./trace-otel-bridge.js";
 
 function resolveRobotConfig(api: OpenClawPluginApi): ClaworksRobotConfig {
   const raw = api.pluginConfig as ClaworksRobotConfig | undefined;
@@ -124,6 +125,7 @@ export default definePluginEntry({
           subagentRun: bridge.runSubagent,
           skillRun: bridge.runSkill,
           notify: bridge.notify,
+          onTraceDiagnostic: emitClaworksTraceToOtel,
         });
         setClaworksRobotRuntime(runtime);
         await startClaworksRuntime(runtime);
