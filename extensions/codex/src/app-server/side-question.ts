@@ -69,6 +69,7 @@ import { readCodexAppServerBinding } from "./session-binding.js";
 import { getSharedCodexAppServerClient } from "./shared-client.js";
 import {
   buildCodexRuntimeThreadConfig,
+  CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerModelProvider,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
@@ -323,6 +324,7 @@ export async function runCodexAppServerSideQuestion(
           threadId: binding.threadId,
           model: params.model,
           ...(modelProvider ? { modelProvider } : {}),
+          personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
           approvalsReviewer: appServer.approvalsReviewer,
@@ -356,6 +358,7 @@ export async function runCodexAppServerSideQuestion(
           input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
           cwd,
           model: params.model,
+          personality: CODEX_NATIVE_PERSONALITY_NONE,
           ...(serviceTier ? { serviceTier } : {}),
           effort,
           collaborationMode: {

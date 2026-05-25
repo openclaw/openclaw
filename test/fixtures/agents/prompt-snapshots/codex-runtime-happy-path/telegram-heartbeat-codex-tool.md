@@ -104,6 +104,7 @@
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
 }
@@ -122,6 +123,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-heartbeat-codex-tool"
 }
@@ -151,6 +153,7 @@
     }
   ],
   "model": "gpt-5.5",
+  "personality": "none",
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
