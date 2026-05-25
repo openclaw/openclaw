@@ -980,7 +980,7 @@ describe("block reply coalescer", () => {
     }
   });
 
-  it("merges compatible buffered text into following media payloads", () => {
+  it("merges compatible buffered text into following media payloads", async () => {
     const { flushes, coalescer } = createPayloadCoalescerHarness<{
       text?: string;
       mediaUrls?: string[];
@@ -994,7 +994,7 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ text: "Hello", replyToId: "thread-1" });
     coalescer.enqueue({ text: "world" });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
       {
@@ -1006,7 +1006,7 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("keeps reasoning text separate from media payloads", () => {
+  it("keeps reasoning text separate from media payloads", async () => {
     const { flushes, coalescer } = createPayloadCoalescerHarness<{
       text?: string;
       mediaUrls?: string[];
@@ -1019,7 +1019,7 @@ describe("block reply coalescer", () => {
 
     coalescer.enqueue({ text: "hidden", isReasoning: true });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
       { text: "hidden", mediaUrls: undefined, isReasoning: true },
@@ -1032,7 +1032,7 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("keeps buffered text separate when media changes reply target", () => {
+  it("keeps buffered text separate when media changes reply target", async () => {
     const { flushes, coalescer } = createPayloadCoalescerHarness<{
       text?: string;
       mediaUrls?: string[];
@@ -1045,7 +1045,7 @@ describe("block reply coalescer", () => {
 
     coalescer.enqueue({ text: "Unthreaded caption" });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"], replyToId: "thread-2" });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
       { text: "Unthreaded caption", mediaUrls: undefined, replyToId: undefined },
@@ -1058,7 +1058,7 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
-  it("keeps text separate from voice media payloads", () => {
+  it("keeps text separate from voice media payloads", async () => {
     const { flushes, coalescer } = createPayloadCoalescerHarness<{
       text?: string;
       mediaUrls?: string[];
@@ -1071,7 +1071,7 @@ describe("block reply coalescer", () => {
 
     coalescer.enqueue({ text: "Listen to this" });
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.ogg"], audioAsVoice: true });
-    void coalescer.flush({ force: true });
+    await coalescer.flush({ force: true });
 
     expect(flushes).toEqual([
       { text: "Listen to this", mediaUrls: undefined, audioAsVoice: undefined },
