@@ -1054,7 +1054,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
-      if (!cfg?.enabled || !otel?.enabled) {
+      if (!cfg || cfg.enabled === false || !otel?.enabled) {
         return;
       }
 

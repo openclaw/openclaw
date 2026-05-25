@@ -1052,6 +1052,36 @@ describe("diagnostics-otel service", () => {
     expect(sdkShutdown).not.toHaveBeenCalled();
   });
 
+  test("treats omitted diagnostics enabled flag as enabled", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: true,
+    });
+    delete (ctx.config.diagnostics as { enabled?: boolean }).enabled;
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: ["user prompt"],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(attrs?.["openclaw.content.input_messages"]).toBe("user prompt");
+
+    await service.stop?.(ctx);
+  });
+
   test("tears down active handles when restarted with diagnostics disabled", async () => {
     const service = createDiagnosticsOtelService();
     const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {

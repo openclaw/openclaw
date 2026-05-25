@@ -6,6 +6,11 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     expect(resolveDiagnosticModelContentCapturePolicy({}).anyModelContent).toBe(false);
     expect(
       resolveDiagnosticModelContentCapturePolicy({
+        diagnostics: { enabled: false, otel: { enabled: true, captureContent: true } },
+      }).anyModelContent,
+    ).toBe(false);
+    expect(
+      resolveDiagnosticModelContentCapturePolicy({
         diagnostics: {
           enabled: true,
           otel: { enabled: true, traces: false, captureContent: true },
@@ -15,6 +20,17 @@ describe("resolveDiagnosticModelContentCapturePolicy", () => {
     expect(
       resolveDiagnosticModelContentCapturePolicy({
         diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
+      }),
+    ).toMatchObject({
+      inputMessages: true,
+      outputMessages: true,
+      systemPrompt: false,
+      toolDefinitions: true,
+      anyModelContent: true,
+    });
+    expect(
+      resolveDiagnosticModelContentCapturePolicy({
+        diagnostics: { otel: { enabled: true, captureContent: true } },
       }),
     ).toMatchObject({
       inputMessages: true,

@@ -42,7 +42,7 @@ export function resolveDiagnosticModelContentCapturePolicy(
     return NO_MODEL_CONTENT_CAPTURE;
   }
   const diagnostics = config.diagnostics;
-  if (!isRecord(diagnostics) || diagnostics.enabled !== true) {
+  if (!isRecord(diagnostics) || diagnostics.enabled === false) {
     return NO_MODEL_CONTENT_CAPTURE;
   }
   const otel = diagnostics.otel;
