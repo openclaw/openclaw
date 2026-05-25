@@ -9,7 +9,7 @@ minimumReleaseAge: 2880
 minimumReleaseAgeExclude:
   - "@openclaw/fs-safe@0.2.4"
   - "@openclaw/proxyline@0.3.3"
-  - "@zeroaltitude/openclaw-claude-bridge@0.2.2"
+  - "@zeroaltitude/openclaw-claude-bridge@0.2.3"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
