@@ -638,6 +638,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "array"
         },
         "bestEffort": {
+          "description": "Optional delivery mode. Omit or set true for ordinary replies, generated media, and other best-effort sends. Set false only when required durable delivery is necessary and the current channel supports reconcileUnknownSend.",
           "type": "boolean"
         },
         "buffer": {
