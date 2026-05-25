@@ -189,6 +189,10 @@ Docs: https://docs.openclaw.ai
 - iOS: improve Talk mode with direct realtime voice sessions, compact toolbar status, and responsive voice waveform feedback. (#86355) Thanks @ngutman.
 - Media: replace the Sharp image backend with Photon for metadata, resizing, EXIF orientation, and PNG alpha-preserving optimization so OpenClaw no longer installs Sharp or the WhatsApp Jimp fallback for image processing. (#86437)
 
+### Tests
+
+- Tests: add focused coverage for openclaw node CLI daemon (install port validation, runtime gate, force reinstall, TLS inheritance, status JSON/error paths) and the node CLI command registry (install/status/stop/restart/uninstall option forwarding). (#83924)
+
 ### Fixes
 
 - Memory/security: reject prompt-like text submitted through the explicit `memory_store` tool before embedding or storage, matching the existing auto-capture prompt-injection filter. (#87142)
