@@ -718,6 +718,32 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("heartbeat model bleed");
   });
 
+  it("caps the session contextTokens fallback by agent contextTokens", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        agents: {
+          defaults: {
+            contextTokens: 200_000,
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "unknown-model",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).toContain("20000");
+    expect(text).not.toContain("50000");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
   it("uses runtime model over primary model when both are available", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {

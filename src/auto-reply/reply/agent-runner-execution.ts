@@ -3,7 +3,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -767,38 +766,16 @@ function resolveContextWindowForCompactionHint(params: {
       modelWindow = resolved;
     }
   }
-  const agentCap = resolveAgentContextTokensCap(params.cfg, params.agentId);
-  if (typeof agentCap === "number" && agentCap > 0) {
-    return modelWindow !== undefined ? Math.min(agentCap, modelWindow) : agentCap;
+  const sessionWindow = normalizePositiveContextTokens(params.activeSessionEntry?.contextTokens);
+  const contextWindow = modelWindow ?? sessionWindow;
+  const agentCap = resolveAgentContextTokensForHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (agentCap !== undefined && contextWindow !== undefined) {
+    return Math.min(agentCap, contextWindow);
   }
-  if (modelWindow !== undefined) {
-    return modelWindow;
-  }
-  const sessionTokens = params.activeSessionEntry?.contextTokens;
-  if (typeof sessionTokens === "number" && Number.isFinite(sessionTokens) && sessionTokens > 0) {
-    return Math.floor(sessionTokens);
-  }
-  return undefined;
-}
-
-function resolveAgentContextTokensCap(
-  cfg: FollowupRun["run"]["config"],
-  agentId?: string,
-): number | undefined {
-  if (agentId) {
-    const entry = listAgentEntries(cfg).find(
-      (e) => e.id?.trim().toLowerCase() === agentId.trim().toLowerCase(),
-    );
-    const entryTokens = entry?.contextTokens;
-    if (typeof entryTokens === "number" && entryTokens > 0) {
-      return Math.floor(entryTokens);
-    }
-  }
-  const defaults = cfg?.agents?.defaults?.contextTokens;
-  if (typeof defaults === "number" && defaults > 0) {
-    return Math.floor(defaults);
-  }
-  return undefined;
+  return agentCap ?? contextWindow;
 }
 
 function buildContextOverflowResetHint(contextWindowTokens: number | undefined): string {
