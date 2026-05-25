@@ -213,6 +213,7 @@ describe("applyPluginNodeInvokePolicy", () => {
               const approval = await ctx.approvals?.request({
                 title: "Sensitive action",
                 description: "Needs approval",
+                allowedDecisions: ["allow-once", "deny"],
               });
               return { ok: true, payload: approval ?? null };
             },
@@ -241,10 +242,82 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(record?.requestedByConnId).toBe("conn-requester");
     expect(record?.requestedByDeviceId).toBe("device-owner");
     expect(record?.requestedByClientId).toBe("client-owner");
+    expect(record?.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "plugin.approval.requested",
-      expect.objectContaining({ id: record?.id }),
+      expect.objectContaining({
+        id: record?.id,
+        request: expect.objectContaining({ allowedDecisions: ["allow-once", "deny"] }),
+      }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await expect(resultPromise).resolves.toStrictEqual({
+      ok: true,
+      payload: { id: record?.id, decision: "allow-once" },
+    });
+  });
+
+  it("normalizes plugin approval decision choices before broadcasting", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const visibleConnIds = new Set(["conn-owner-approval"]);
+    registryState.current = {
+      nodeHostCommands: [
+        {
+          pluginId: "demo",
+          command: {
+            command: "demo.read",
+            dangerous: true,
+            handle: async () => "{}",
+          },
+          source: "test",
+        },
+      ],
+      nodeInvokePolicies: [
+        {
+          pluginId: "demo",
+          policy: {
+            commands: ["demo.read"],
+            handle: async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
+              const approval = await ctx.approvals?.request({
+                title: "Sensitive action",
+                description: "Needs approval",
+                allowedDecisions: ["allow-once", "allow-once", "deny"],
+              });
+              return { ok: true, payload: approval ?? null };
+            },
+          },
+          pluginConfig: { enabled: true },
+          source: "test",
+        },
+      ],
+    } as unknown as PluginRegistry;
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: () => visibleConnIds,
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: "demo.read",
+      params: { path: "/tmp/x" },
+    });
+
+    await vi.waitFor(() => {
+      expect(manager.listPendingRecords()).toHaveLength(1);
+    });
+    const [record] = manager.listPendingRecords();
+    expect(record?.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "plugin.approval.requested",
+      expect.objectContaining({
+        id: record?.id,
+        request: expect.objectContaining({ allowedDecisions: ["allow-once", "deny"] }),
+      }),
       visibleConnIds,
       { dropIfSlow: true },
     );

@@ -1,5 +1,7 @@
 import { normalizeOptionalString } from "../string-coerce.ts";
 
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
@@ -9,6 +11,7 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   commandSpans?: readonly {
     startIndex: number;
     endIndex: number;
@@ -75,6 +78,22 @@ function parseCommandSpans(
   return spans.length > 0 ? spans : undefined;
 }
 
+function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const allowed: ExecApprovalDecision[] = [];
+  for (const decision of value) {
+    if (
+      (decision === "allow-once" || decision === "allow-always" || decision === "deny") &&
+      !allowed.includes(decision)
+    ) {
+      allowed.push(decision);
+    }
+  }
+  return allowed.length > 0 ? allowed : undefined;
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -105,6 +124,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
     },
     createdAtMs,
@@ -158,6 +178,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
       command: title,
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
     },
     pluginTitle: title,
     pluginDescription: description,

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
+import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  resolvePluginApprovalRequestAllowedDecisions,
+} from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -58,6 +61,9 @@ function createApprovalRuntime(params: {
         typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
           ? input.timeoutMs
           : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const allowedDecisions = Array.isArray(input.allowedDecisions)
+        ? resolvePluginApprovalRequestAllowedDecisions({ allowedDecisions: input.allowedDecisions })
+        : undefined;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: input.title.slice(0, 80),
@@ -65,6 +71,7 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
+        ...(allowedDecisions ? { allowedDecisions } : {}),
         agentId: normalizeOptionalString(input.agentId) ?? null,
         sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
       };

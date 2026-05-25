@@ -91,7 +91,33 @@ export function createCodexCliSessionNodeInvokePolicies(): OpenClawPluginNodeInv
     {
       commands: [CODEX_CLI_SESSION_RESUME_COMMAND],
       dangerous: true,
-      handle: (ctx) => ctx.invokeNode(),
+      handle: async (ctx) => {
+        const params = isRecord(ctx.params) ? ctx.params : {};
+        const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+        const approval = await ctx.approvals?.request({
+          title: "Resume Codex CLI session",
+          description: sessionId
+            ? `Run a new prompt in local Codex CLI session ${sessionId}.`
+            : "Run a new prompt in a local Codex CLI session.",
+          severity: "critical",
+          toolName: CODEX_CLI_SESSION_RESUME_COMMAND,
+          allowedDecisions: ["allow-once", "deny"],
+          agentId: typeof params.agentId === "string" ? params.agentId : undefined,
+          sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
+        });
+        if (approval?.decision !== "allow-once") {
+          return {
+            ok: false,
+            code: "PLUGIN_APPROVAL_REQUIRED",
+            message: "Codex CLI session resume requires plugin approval.",
+            details: {
+              approvalId: approval?.id ?? null,
+              decision: approval?.decision ?? null,
+            },
+          };
+        }
+        return await ctx.invokeNode();
+      },
     },
   ];
 }

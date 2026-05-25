@@ -6,7 +6,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_SESSIONS_LIST_COMMAND,
+  CODEX_CLI_SESSION_RESUME_COMMAND,
   createCodexCliSessionNodeHostCommands,
+  createCodexCliSessionNodeInvokePolicies,
   listCodexCliSessionsOnNode,
   resolveCodexCliResumeSpawnInvocation,
 } from "./node-cli-sessions.js";
@@ -176,5 +178,142 @@ describe("codex cli node sessions", () => {
         requestedNode: "node-1",
       }),
     ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
+  });
+
+  it("requires plugin approval before resuming a local Codex CLI session", async () => {
+    const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
+      entry.commands.includes(CODEX_CLI_SESSION_RESUME_COMMAND),
+    );
+    if (!policy) {
+      throw new Error("expected Codex CLI resume node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
+    const approvals = {
+      request: vi.fn(async (_request: Record<string, unknown>) => ({
+        id: "approval-1",
+        decision: "deny" as const,
+      })),
+    };
+
+    const result = await policy.handle({
+      nodeId: "node-1",
+      command: CODEX_CLI_SESSION_RESUME_COMMAND,
+      params: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        prompt: "continue",
+      },
+      config: {},
+      approvals,
+      invokeNode,
+      timeoutMs: 1_200_000,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "PLUGIN_APPROVAL_REQUIRED",
+      message: "Codex CLI session resume requires plugin approval.",
+      details: { approvalId: "approval-1", decision: "deny" },
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+    expect(approvals.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Resume Codex CLI session",
+        severity: "critical",
+        toolName: CODEX_CLI_SESSION_RESUME_COMMAND,
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+    const approvalRequest = approvals.request.mock.calls[0]?.[0];
+    expect(approvalRequest?.timeoutMs).toBeUndefined();
+  });
+
+  it("does not treat allow-always as a valid Codex CLI resume approval", async () => {
+    const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
+      entry.commands.includes(CODEX_CLI_SESSION_RESUME_COMMAND),
+    );
+    if (!policy) {
+      throw new Error("expected Codex CLI resume node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+    };
+
+    const result = await policy.handle({
+      nodeId: "node-1",
+      command: CODEX_CLI_SESSION_RESUME_COMMAND,
+      params: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        prompt: "continue",
+      },
+      config: {},
+      approvals,
+      invokeNode,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "PLUGIN_APPROVAL_REQUIRED",
+      message: "Codex CLI session resume requires plugin approval.",
+      details: { approvalId: "approval-1", decision: "allow-always" },
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when Codex CLI resume approval delivery is unavailable", async () => {
+    const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
+      entry.commands.includes(CODEX_CLI_SESSION_RESUME_COMMAND),
+    );
+    if (!policy) {
+      throw new Error("expected Codex CLI resume node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
+
+    const result = await policy.handle({
+      nodeId: "node-1",
+      command: CODEX_CLI_SESSION_RESUME_COMMAND,
+      params: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        prompt: "continue",
+      },
+      config: {},
+      invokeNode,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      code: "PLUGIN_APPROVAL_REQUIRED",
+      message: "Codex CLI session resume requires plugin approval.",
+      details: { approvalId: null, decision: null },
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("forwards Codex CLI resume only after plugin approval", async () => {
+    const policy = createCodexCliSessionNodeInvokePolicies().find((entry) =>
+      entry.commands.includes(CODEX_CLI_SESSION_RESUME_COMMAND),
+    );
+    if (!policy) {
+      throw new Error("expected Codex CLI resume node invoke policy");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const, payload: { ok: true } }));
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-once" as const })),
+    };
+
+    const result = await policy.handle({
+      nodeId: "node-1",
+      command: CODEX_CLI_SESSION_RESUME_COMMAND,
+      params: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        prompt: "continue",
+      },
+      config: {},
+      approvals,
+      invokeNode,
+    });
+
+    expect(result).toEqual({ ok: true, payload: { ok: true } });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 });
