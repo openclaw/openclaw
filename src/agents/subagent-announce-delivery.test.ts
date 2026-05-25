@@ -2575,7 +2575,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         ],
       },
     });
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
       "transcript_commit_wait_unsupported",
       "no_active_run",
     ]);
@@ -2583,7 +2583,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
-      queueEmbeddedPiMessageWithOutcome,
+      queueEmbeddedAgentMessageWithOutcome,
       sessionId: "requester-session-channel",
       isActive: true,
       expectsCompletionMessage: true,
@@ -2612,7 +2612,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2629,11 +2629,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
-      queueEmbeddedPiMessageWithOutcome,
+      queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
@@ -2661,7 +2661,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2678,11 +2678,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   it("no-ops stale isolated cron run text completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
-      queueEmbeddedPiMessageWithOutcome,
+      queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-text:run:run-123",
@@ -2696,7 +2696,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "none",
       phases: [{ phase: "direct-primary", delivered: true, path: "none", error: undefined }],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -2708,11 +2708,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     });
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
-      queueEmbeddedPiMessageWithOutcome,
+      queueEmbeddedAgentMessageWithOutcome,
       sessionId: "stale-cron-run-session",
       isActive: false,
       requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
@@ -2739,7 +2739,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
     expectGatewayAgentParams(callGateway, {
       deliver: true,
       channel: "slack",

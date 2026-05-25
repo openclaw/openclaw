@@ -43,7 +43,7 @@ function createMockContext(overrides?: {
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     builtinToolNames: overrides?.builtinToolNames,
-    trustedLocalMediaToolNames: overrides?.trustedLocalMediaToolNames,
+    trustedLocalMediaToolNames: overrides?.trustedLocalMediaToolNames ?? overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
