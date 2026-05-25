@@ -26,14 +26,21 @@ export type UiProtocolFreshnessIssue =
       readonly canBuild: boolean;
     };
 
-export async function detectUiProtocolFreshnessIssues(): Promise<
-  readonly UiProtocolFreshnessIssue[]
-> {
-  const root = await resolveOpenClawPackageRoot({
-    moduleUrl: import.meta.url,
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-  });
+export async function detectUiProtocolFreshnessIssues(
+  opts: {
+    readonly root?: string;
+    readonly argv1?: string;
+    readonly cwd?: string;
+    readonly collectChangesSinceBuild?: (root: string, uiMtime: Date) => Promise<readonly string[]>;
+  } = {},
+): Promise<readonly UiProtocolFreshnessIssue[]> {
+  const root =
+    opts.root ??
+    (await resolveOpenClawPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: opts.argv1 ?? process.argv[1],
+      cwd: opts.cwd ?? process.cwd(),
+    }));
   if (!root) {
     return [];
   }
@@ -41,7 +48,7 @@ export async function detectUiProtocolFreshnessIssues(): Promise<
   const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
   const uiHealth = await resolveControlUiDistIndexHealth({
     root,
-    argv1: process.argv[1],
+    argv1: opts.argv1 ?? process.argv[1],
   });
   const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
   const uiSourcesPath = path.join(root, "ui/package.json");
@@ -62,33 +69,44 @@ export async function detectUiProtocolFreshnessIssues(): Promise<
     if (schemaStats.mtime <= uiStats.mtime) {
       return [];
     }
-    const gitLog = await runCommandWithTimeout(
-      [
-        "git",
-        "-C",
-        root,
-        "log",
-        `--since=${uiStats.mtime.toISOString()}`,
-        "--format=%h %s",
-        "packages/gateway-protocol/src/schema.ts",
-      ],
-      { timeoutMs: 5000 },
-    ).catch(() => null);
-    if (!gitLog || gitLog.code !== 0 || !gitLog.stdout.trim()) {
-      return [];
-    }
+    const changesSinceBuild = await (
+      opts.collectChangesSinceBuild ?? collectProtocolSchemaChangesSince
+    )(root, uiStats.mtime);
+
     return [
       {
         kind: "stale-assets",
         root,
         uiIndexPath,
-        changesSinceBuild: gitLog.stdout.trim().split("\n"),
+        changesSinceBuild,
         canBuild,
       },
     ];
   } catch {
     return [];
   }
+}
+
+async function collectProtocolSchemaChangesSince(
+  root: string,
+  uiMtime: Date,
+): Promise<readonly string[]> {
+  const gitLog = await runCommandWithTimeout(
+    [
+      "git",
+      "-C",
+      root,
+      "log",
+      `--since=${uiMtime.toISOString()}`,
+      "--format=%h %s",
+      "packages/gateway-protocol/src/schema.ts",
+    ],
+    { timeoutMs: 5000 },
+  ).catch(() => null);
+  if (!gitLog || gitLog.code !== 0 || !gitLog.stdout.trim()) {
+    return [];
+  }
+  return gitLog.stdout.trim().split("\n");
 }
 
 export function uiProtocolFreshnessIssueToHealthFinding(
@@ -125,6 +143,9 @@ export function uiProtocolFreshnessIssueToRepairEffects(
 function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string {
   if (issue.kind === "missing-assets") {
     return ["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n");
+  }
+  if (issue.changesSinceBuild.length === 0) {
+    return "UI assets are older than the protocol schema.";
   }
   return `UI assets are older than the protocol schema.\nFunctional changes since last build:\n${issue.changesSinceBuild
     .map((line) => `- ${line}`)
