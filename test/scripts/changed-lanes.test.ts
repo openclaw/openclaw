@@ -12,8 +12,12 @@ import {
   buildChangedCheckCrabboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  createPnpmManagedCommand,
   shouldDelegateChangedCheckToCrabbox,
+  shouldRunShrinkwrapGuard,
+  createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
+import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -69,6 +73,23 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
+  it("detects direct script execution from Windows argv paths", () => {
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "c:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\changed-lanes.mjs",
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(false);
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -102,6 +123,43 @@ describe("scripts/changed-lanes", () => {
 
     expect(result.paths).toEqual(["scripts/new-check.mjs"]);
     expectLanes(result.lanes, { tooling: true });
+  });
+
+  it("ignores local Crabbox metadata in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-crabbox-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeFileSync(path.join(dir, ".gitignore"), ".crabbox/\n", "utf8");
+    writeFileSync(path.join(dir, "README.md"), "initial\n", "utf8");
+    git(dir, ["add", ".gitignore", "README.md"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    mkdirSync(path.join(dir, ".crabbox"), { recursive: true });
+    writeFileSync(path.join(dir, ".crabbox", "capture-files.txt"), "stdout.log\n", "utf8");
+    writeFileSync(path.join(dir, ".crabbox", "capture-manifest.txt"), "stdout.log\t12\n", "utf8");
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    const result = parseChangedLaneOutput(output);
+
+    expect(result.paths).toEqual([]);
+    expectLanes(result.lanes, {});
   });
 
   it("includes deleted worktree files in the default local diff", () => {
@@ -241,6 +299,38 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs remote Testbox changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.PATH).not.toBe("/usr/bin");
+    expect(command.env?.PATH).toContain("/usr/bin");
+  });
+
+  it("runs CI changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("keeps local changed-check children on the repo pnpm shim", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("pnpm");
+    expect(command.args).toEqual(["check:no-conflict-markers"]);
+  });
+
   it("delegates local Testbox-mode changed gates before running locally", () => {
     expect(
       shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
@@ -275,6 +365,7 @@ describe("scripts/changed-lanes", () => {
       "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
       "OPENCLAW_TESTBOX=1",
       "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "corepack",
       "pnpm",
       "check:changed",
       "--base",
@@ -756,6 +847,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
+      "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
@@ -774,6 +866,27 @@ describe("scripts/changed-lanes", () => {
       docs: true,
     });
     expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
+  });
+
+  it("runs the npm shrinkwrap guard for dependency package surfaces", () => {
+    expect(
+      shouldRunShrinkwrapGuard([
+        "npm-shrinkwrap.json",
+        "extensions/slack/npm-shrinkwrap.json",
+        "extensions/slack/package.json",
+        "scripts/generate-npm-shrinkwrap.mjs",
+      ]),
+    ).toBe(true);
+
+    const result = detectChangedLanes(["extensions/slack/package.json"]);
+    const plan = createChangedCheckPlan(result);
+    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
+
+    expect(
+      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+    ).toBe(true);
+    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

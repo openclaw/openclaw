@@ -10,6 +10,15 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const nodeBin = process.execPath;
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 const BUILD_CACHE_VERSION = 2;
+const PNPM_STEP_NODE_FALLBACKS = new Map([
+  ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
+  [
+    "build:plugin-sdk:dts",
+    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+  ],
+  ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+  ["ui:build", ["scripts/ui.js", "build"]],
+]);
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
@@ -77,6 +86,16 @@ export const BUILD_ALL_STEPS = [
     },
   },
   {
+    label: "ui:build",
+    kind: "pnpm",
+    pnpmArgs: ["ui:build"],
+    // No build-all cache: ui/vite.config.ts derives the Control UI build ID
+    // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
+    // file-input signature cannot exactly invalidate generated assets and a
+    // warm hit could restore stale service-worker/app cache metadata.
+    cache: undefined,
+  },
+  {
     label: "write-build-info",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/write-build-info.ts"],
@@ -108,6 +127,7 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
@@ -163,6 +183,18 @@ export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
   if (step.kind === "pnpm") {
+    const nodeFallbackArgs =
+      env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" ? PNPM_STEP_NODE_FALLBACKS.get(step.label) : undefined;
+    if (nodeFallbackArgs) {
+      return {
+        command: params.nodeExecPath ?? nodeBin,
+        args: nodeFallbackArgs,
+        options: {
+          stdio: "inherit",
+          env,
+        },
+      };
+    }
     const runner = resolvePnpmRunner({
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
@@ -226,6 +258,14 @@ function listCacheFiles(rootDir, entries, fsImpl) {
     .toSorted();
 }
 
+function portableRelativePath(rootDir, filePath) {
+  return path.relative(rootDir, filePath).split(path.sep).join("/");
+}
+
+function normalizePortablePath(filePath) {
+  return filePath.replaceAll("\\", "/");
+}
+
 function resolveCachePaths(rootDir, step) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
@@ -240,7 +280,7 @@ function hashInputFiles(rootDir, files, fsImpl) {
   const hash = createHash("sha256");
   hash.update(`v${BUILD_CACHE_VERSION}\0`);
   for (const file of files) {
-    hash.update(path.relative(rootDir, file));
+    hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
     hash.update(fsImpl.readFileSync(file));
     hash.update("\0");
@@ -285,8 +325,10 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  const relativeOutputFiles = outputFiles.map((file) => path.relative(rootDir, file));
-  const stampedOutputs = Array.isArray(stamp?.outputs) ? stamp.outputs : [];
+  const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
+  const stampedOutputs = Array.isArray(stamp?.outputs)
+    ? stamp.outputs.map((entry) => normalizePortablePath(entry))
+    : [];
   const stampMatches = stamp?.version === BUILD_CACHE_VERSION && stamp.signature === signature;
   const actualOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);

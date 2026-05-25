@@ -13,11 +13,7 @@ import path from "node:path";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  listMemoryWorkspaceAgentIds,
-  listMemoryWorkspacePublicArtifacts,
-  type MemoryPluginPublicArtifact,
-} from "openclaw/plugin-sdk/memory-host-core";
+import { type MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -788,6 +784,8 @@ export default definePluginEntry({
       api.registerMemoryCapability({
         publicArtifacts: {
           async listArtifacts(params) {
+            const { listMemoryHostPublicArtifacts, listMemoryWorkspaceAgentIds } =
+              await loadMemoryHostCoreModule();
             const artifacts: MemoryPluginPublicArtifact[] = [];
             const agentIds = listMemoryWorkspaceAgentIds(params);
             if (isFilesystemDbPath(resolvedDbPath)) {
@@ -798,7 +796,7 @@ export default definePluginEntry({
                 "memory-lancedb: skipping LanceDB table wiki bridge artifact for URI dbPath; workspace memory artifacts remain available",
               );
             }
-            artifacts.push(...(await listMemoryWorkspacePublicArtifacts(params)));
+            artifacts.push(...(await listMemoryHostPublicArtifacts(params)));
             return artifacts;
           },
         },

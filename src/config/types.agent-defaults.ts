@@ -18,6 +18,7 @@ export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
+export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -365,6 +366,11 @@ export type AgentDefaultsConfig = {
    * Default: 1200.
    */
   imageMaxDimensionPx?: number;
+  /**
+   * Image compression/detail preference for image-tool media loading.
+   * Default: auto, which adapts to provider/model limits and image count.
+   */
+  imageQuality?: AgentImageQualityPreference;
   typingIntervalSeconds?: number;
   /** Typing indicator start mode (never|instant|thinking|message). */
   typingMode?: TypingMode;
@@ -506,8 +512,8 @@ export type AgentCompactionConfig = {
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /**
    * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Defaults to ["Session Startup", "Red Lines"] when unset.
-   * Set to [] to disable post-compaction context injection entirely.
+   * Disabled when unset or [].
+   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").

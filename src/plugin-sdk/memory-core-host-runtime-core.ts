@@ -21,10 +21,6 @@ export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export {
-  listMemoryWorkspaceAgentIds,
-  listMemoryWorkspacePublicArtifacts,
-} from "../plugins/memory-public-artifacts.js";
 export type {
   MemoryCorpusGetResult,
   MemoryCorpusSearchResult,

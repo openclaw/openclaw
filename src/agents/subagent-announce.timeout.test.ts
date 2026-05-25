@@ -191,6 +191,8 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   },
   getRuntimeConfig: () => configOverride,
   loadSessionStore: vi.fn(() => sessionStore),
+  readSessionMessagesAsync: vi.fn(async () => []),
+  readSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",

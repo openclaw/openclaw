@@ -19,7 +19,10 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  clearLoadPluginMetadataSnapshotMemo,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
@@ -459,10 +462,12 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: emptyRegistry,
     };
   }
-  const snapshot = loadPluginMetadataSnapshot({
+  const env = params.env ?? process.env;
+  const snapshot = resolvePluginMetadataSnapshot({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
   return {
     allRegistry: snapshot.manifestRegistry,
@@ -1394,6 +1399,7 @@ export function startGatewayModelPricingRefresh(
 
 export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
+  clearLoadPluginMetadataSnapshotMemo();
   clearRefreshTimer();
   inFlightRefresh = null;
 }

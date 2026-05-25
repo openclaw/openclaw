@@ -3,8 +3,12 @@ import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
+const { emitAgentEventMock } = vi.hoisted(() => ({
+  emitAgentEventMock: vi.fn(),
+}));
+
 vi.mock("../infra/agent-events.js", () => ({
-  emitAgentEvent: vi.fn(),
+  emitAgentEvent: emitAgentEventMock,
 }));
 
 function createContext(
@@ -114,6 +118,31 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("emits aborted terminal stop reasons on lifecycle end events", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "aborted";
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "aborted",
+      },
+    });
+  });
+
   it("attaches raw provider error metadata and includes model/provider in console output", async () => {
     const ctx = createContext({
       role: "assistant",
@@ -206,28 +235,44 @@ describe("handleAgentEnd", () => {
     expect(meta.httpCode).toBe("401");
   });
 
-  it("omits raw HTML auth bodies from consoleMessage for HTML 403 auth failures", async () => {
-    const ctx = createContext({
-      role: "assistant",
-      stopReason: "error",
-      provider: "openai-codex",
-      model: "gpt-5.4",
+  it.each([
+    {
       errorMessage: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      content: [{ type: "text", text: "" }],
-    });
+      expectedError:
+        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+      expectedKind: "auth_html",
+      expectedPreview: "403 <!DOCTYPE html><html><body>Access denied</body></html>",
+    },
+    {
+      errorMessage: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      expectedError:
+        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+      expectedKind: "auth_html",
+      expectedPreview: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+    },
+  ])(
+    "omits raw HTML auth bodies from consoleMessage for $expectedKind failures",
+    async ({ errorMessage, expectedError, expectedKind, expectedPreview }) => {
+      const ctx = createContext({
+        role: "assistant",
+        stopReason: "error",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        errorMessage,
+        content: [{ type: "text", text: "" }],
+      });
 
-    await handleAgentEnd(ctx);
+      await handleAgentEnd(ctx);
 
-    const meta = firstWarnMeta(ctx);
-    expect(meta.providerRuntimeFailureKind).toBe("auth_html_403");
-    expect(meta.rawErrorPreview).toBe("403 <!DOCTYPE html><html><body>Access denied</body></html>");
-    expect(meta.error).toBe(
-      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
-    );
-    const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
-    expect(consoleMsg).not.toContain("rawError=");
-    expect(consoleMsg).not.toContain("<html>");
-  });
+      const meta = firstWarnMeta(ctx);
+      expect(meta.providerRuntimeFailureKind).toBe(expectedKind);
+      expect(meta.rawErrorPreview).toBe(expectedPreview);
+      expect(meta.error).toBe(expectedError);
+      const consoleMsg = typeof meta.consoleMessage === "string" ? meta.consoleMessage : "";
+      expect(consoleMsg).not.toContain("rawError=");
+      expect(consoleMsg).not.toContain("<html>");
+    },
+  );
 
   it("keeps non-error run-end logging on debug only", async () => {
     const ctx = createContext(undefined);
@@ -338,6 +383,31 @@ describe("handleAgentEnd", () => {
     ctx.state.livenessState = "working";
     ctx.state.assistantTexts = [];
     ctx.state.hadDeterministicSideEffect = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("keeps accepted session spawns from being marked abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.acceptedSessionSpawns = [
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ];
 
     await handleAgentEnd(ctx);
 

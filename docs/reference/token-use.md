@@ -19,12 +19,16 @@ OpenClaw assembles its own system prompt on every run. It includes:
   with optional per-agent override at
   `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`. Post-compaction AGENTS.md excerpts are separate and require explicit `agents.defaults.compaction.postCompactionSections` opt-in.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
 
 See the full breakdown in [System Prompt](/concepts/system-prompt).
+
+When documenting credentials or auth snippets, use the
+[Secret Placeholder Conventions](/reference/secret-placeholder-conventions) to
+avoid secret-scanner false positives in docs-only changes.
 
 ## What counts in the context window
 
@@ -62,10 +66,12 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 Use these in chat:
 
 - `/status` → **emoji-rich status card** with the session model, context usage,
-  last response input/output tokens, and **estimated cost** (API key only).
+  last response input/output tokens, and **estimated cost** when local pricing is
+  configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
-  - OAuth auth **hides cost** (tokens only).
+  - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
+    local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
@@ -115,8 +121,10 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
-never show dollar cost.
+`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. Cost display is
+not limited to API-key auth: non-API-key providers such as `aws-sdk` can show
+estimated cost when their configured model entry includes local pricing and the
+provider returns usage metadata.
 
 After sidecars and channels reach the Gateway ready path, OpenClaw starts an
 optional background pricing bootstrap for configured model refs that do not
@@ -190,31 +198,30 @@ agents:
 `agents.list[].params` merges on top of the selected model's `params`, so you can
 override only `cacheRetention` and inherit other model defaults unchanged.
 
-### Example: enable Anthropic 1M context beta header
+### Anthropic 1M context
 
-Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
-required `anthropic-beta` value when you enable `context1m` on supported Opus
-or Sonnet models.
+OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and
+Sonnet 4.6 with Anthropic's 1M context window. You do not need
+`params.context1m: true` for those models.
 
 ```yaml
 agents:
   defaults:
     models:
       "anthropic/claude-opus-4-6":
-        params:
-          context1m: true
+        alias: opus
 ```
 
-This maps to Anthropic's `context-1m-2025-08-07` beta header.
-
-This only applies when `context1m: true` is set on that model entry.
+Older configs can keep `context1m: true`, but OpenClaw no longer sends
+Anthropic's retired `context-1m-2025-08-07` beta header for this setting and
+does not expand unsupported older Claude models to 1M.
 
 Requirement: the credential must be eligible for long-context usage. If not,
 Anthropic responds with a provider-side rate limit error for that request.
 
 If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
-OpenClaw skips the `context-1m-*` beta header because Anthropic currently
-rejects that combination with HTTP 401.
+OpenClaw preserves the OAuth-required Anthropic beta headers while stripping the
+retired `context-1m-*` beta if it remains in older config.
 
 ## Tips for reducing token pressure
 

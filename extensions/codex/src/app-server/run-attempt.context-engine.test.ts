@@ -8,6 +8,7 @@ import {
   embeddedAgentLog,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -87,6 +88,23 @@ function userMessage(text: string, timestamp: number): AgentMessage {
     content: [{ type: "text", text }],
     timestamp,
   } as AgentMessage;
+}
+
+function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: `call-${timestamp}`,
+    toolName: "bulk_context_probe",
+    content: [
+      {
+        type: "toolResult",
+        toolUseId: `call-${timestamp}`,
+        output: payload,
+      },
+    ],
+    isError: false,
+    timestamp,
+  } as unknown as AgentMessage;
 }
 
 function threadStartResult(threadId = "thread-1") {
@@ -346,6 +364,39 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("canonical main context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:main";
+    params.sandboxSessionKey = "agent:main:telegram:default:direct:12345";
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    if (!contextEngine.bootstrap) {
+      throw new Error("expected bootstrap hook");
+    }
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
+    expect(bootstrapParams.sessionKey).toBe("agent:main:main");
+
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    expect(assembleParams.sessionKey).toBe("agent:main:main");
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("uses the runtime token budget for large Codex context-engine projections", async () => {
@@ -644,6 +695,121 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
+  it("reprojects thread-bootstrap context for native-disabled transient Codex threads", async () => {
+    const restoreSandboxBackend = registerSandboxBackend(
+      "codex-context-test-sandbox",
+      async () => ({
+        id: "codex-context-test-sandbox",
+        runtimeId: "codex-context-test-runtime",
+        runtimeLabel: "Codex Context Test Sandbox",
+        workdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["true"],
+          env: {},
+          stdinMode: "pipe-closed" as const,
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      }),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    try {
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-old",
+        cwd: workspaceDir,
+        dynamicToolsFingerprint: "[]",
+        contextEngine: {
+          schemaVersion: 1,
+          engineId: "lossless-claw",
+          policyFingerprint:
+            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+          projection: {
+            schemaVersion: 1,
+            mode: "thread_bootstrap",
+            epoch: "epoch-1",
+          },
+        },
+      });
+      const contextEngine = createContextEngine({
+        assemble: vi.fn(async ({ prompt }) => ({
+          messages: [
+            assistantMessage("native-disabled context", 10),
+            userMessage(prompt ?? "", 11),
+          ],
+          estimatedTokens: 42,
+          systemPromptAddition: "context-engine system",
+          contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+        })),
+      });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-transient");
+        }
+        if (method === "thread/resume") {
+          throw new Error("native-disabled turns should not resume the previous Codex thread");
+        }
+        return undefined;
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.contextEngine = contextEngine;
+      params.config = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "codex-context-test-sandbox",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams["config"];
+
+      let runError: unknown;
+      const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
+        runError = error;
+        throw error;
+      });
+      await vi.waitFor(
+        () => {
+          if (runError) {
+            throw runError;
+          }
+          expect(harness.requests.map((request) => request.method)).toContain("turn/start");
+        },
+        { interval: 1 },
+      );
+
+      expect(harness.requests.map((request) => request.method)).toEqual([
+        "thread/start",
+        "turn/start",
+      ]);
+      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+      expectRequestInputTextContains(harness, "native-disabled context");
+
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-transient",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "transient answer" }],
+          },
+        },
+      });
+      await run;
+    } finally {
+      restoreSandboxBackend();
+    }
+  });
+
   it("starts a fresh Codex thread when thread-bootstrap projection falls back to per-turn projection", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -711,9 +877,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection).toBeUndefined();
   });
 
-  it("retries a resumed context-engine thread on a fresh Codex thread after early context overflow", async () => {
+  it("retries a resumed context-engine thread on a fresh Codex thread without plugin compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
-    const successorFile = path.join(tempDir, "session.compacted.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     SessionManager.open(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
@@ -734,12 +899,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
       },
     });
-    let epoch = "epoch-before";
     const compact = vi.fn(async () => {
-      epoch = "epoch-after";
-      SessionManager.open(successorFile).appendMessage(
-        assistantMessage("successor compacted context", Date.now()) as never,
-      );
       return {
         ok: true,
         compacted: true,
@@ -748,7 +908,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           firstKeptEntryId: "entry-1",
           tokensBefore: 10,
           sessionId: "session-1-compacted",
-          sessionFile: successorFile,
         },
       };
     });
@@ -756,12 +915,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
         messages: [
           ...messages,
-          assistantMessage(`context ${epoch}`, 10),
+          assistantMessage("context epoch-before", 10),
           userMessage(prompt ?? "", 11),
         ],
         estimatedTokens: 42,
         systemPromptAddition: "context-engine system",
-        contextProjection: { mode: "thread_bootstrap" as const, epoch },
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
       }),
     );
     const contextEngine = createContextEngine({ assemble, compact });
@@ -809,40 +968,100 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const result = await run;
 
     expect(result.assistantTexts).toContain("fresh answer");
-    expect(compact).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        tokenBudget: 400_000,
-        currentTokenCount: 400_000,
-        compactionTarget: "threshold",
-        force: true,
-      }),
-    );
-    expect(assemble).toHaveBeenCalledTimes(2);
-    const retryAssembleParams = assemble.mock.calls[1]?.[0];
-    expect(retryAssembleParams?.messages.map((message) => message.role)).toEqual(["assistant"]);
-    const retryAssembleMessageTexts = retryAssembleParams?.messages.map((message) => {
-      if (!("content" in message) || !Array.isArray(message.content)) {
-        return "";
-      }
-      const firstContent = message.content[0];
-      return typeof firstContent === "object" && firstContent !== null && "text" in firstContent
-        ? firstContent.text
-        : "";
-    });
-    expect(retryAssembleMessageTexts).toEqual(["successor compacted context"]);
+    expect(compact).not.toHaveBeenCalled();
+    expect(assemble).toHaveBeenCalledTimes(1);
     const retryInputText = getRequestInputTextAt(harness, -1);
-    expect(retryInputText).toContain("successor compacted context");
-    expect(retryInputText).not.toContain("pre-compaction context");
-    const savedBinding = await readCodexAppServerBinding(successorFile);
+    expect(retryInputText).toBe("hello");
+    expect(retryInputText).not.toContain("successor compacted context");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-fresh");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
-    expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");
+    expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-before");
   });
 
-  it("bounds a hung owning context-engine compaction during Codex overflow recovery", async () => {
+  it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    const hugePayload = {
+      rows: Array.from({ length: 10 }, (_, index) => ({
+        id: index,
+        body: "0123456789abcdef".repeat(4000),
+      })),
+    };
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+      ok: true,
+      compacted: true,
+      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
+    }));
+    const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
+      messages: Array.from({ length: 8 }, (_, index) => toolResultMessage(hugePayload, index + 1)),
+      estimatedTokens: 100_000,
+      contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+    });
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 16_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(compact).not.toHaveBeenCalled();
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("0123456789abcdef");
+
+    await harness.completeTurn();
+    const result = await run;
+    expect(result.assistantTexts).toContain("final answer");
+  });
+
+  it("fails first-turn Codex context overflow instead of falling back to OpenClaw compaction", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+      ok: true,
+      compacted: true,
+      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
+    }));
+    const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
+      messages: [assistantMessage("large projected context", 10)],
+      estimatedTokens: 100_000,
+      contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+    });
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 16_000;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex ran out of room in the model's context window",
+    );
+
+    expect(compact).not.toHaveBeenCalled();
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+      "thread/unsubscribe",
+    ]);
+  });
+
+  it("does not call hung owning context-engine compaction during Codex overflow recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     SessionManager.open(sessionFile).appendMessage(
@@ -864,10 +1083,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
       },
     });
-    // Owning-engine compaction that never settles. Without the safety timeout
-    // the awaited compact() would hang the whole Codex overflow-recovery turn;
-    // with it the call is bounded and forced compaction reports failure so the
-    // run still proceeds on a fresh thread.
     const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
     const assemble = vi.fn(
       async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
@@ -897,11 +1112,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
-    // 1 s host-resolved compaction timeout so the hung compact() is bounded
-    // well within the 5 s run timeout used by this harness.
-    params.config = {
-      agents: { defaults: { compaction: { timeoutSeconds: 1 } } },
-    } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(
@@ -929,10 +1139,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const result = await run;
 
     expect(result.assistantTexts).toContain("fresh answer");
-    expect(compact).toHaveBeenCalledTimes(1);
-    // The run-level abort signal is threaded into the owning-engine compact()
-    // so a cooperating engine can cancel its own in-flight work.
-    expect(compact.mock.calls[0]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(compact).not.toHaveBeenCalled();
   });
 
   it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {

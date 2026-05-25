@@ -168,16 +168,21 @@ export function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
 
-  const runner = resolveRunner();
-  if (!runner) {
-    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
-    process.exit(1);
-  }
-
   const script = resolveScriptAction(action);
   if (action !== "install" && !script) {
     usage();
     process.exit(2);
+  }
+
+  if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
+    run(process.execPath, [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest]);
+    return;
+  }
+
+  const runner = resolveRunner();
+  if (!runner) {
+    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
+    process.exit(1);
   }
 
   if (action === "install") {
@@ -194,10 +199,29 @@ export function main(argv = process.argv.slice(2)) {
   run(runner.cmd, ["run", script, ...rest]);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
-})();
+export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+  const resolved = path.resolve(entry);
+  try {
+    return realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function isDirectScriptExecution(
+  entry = process.argv[1],
+  scriptPath = fileURLToPath(import.meta.url),
+  realpath = fs.realpathSync.native,
+) {
+  if (!entry) {
+    return false;
+  }
+  return (
+    resolveDirectExecutionPath(entry, realpath) === resolveDirectExecutionPath(scriptPath, realpath)
+  );
+}
+
+const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
   main();

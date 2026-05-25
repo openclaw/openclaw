@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { sanitizeReplayToolCallIdsForStream } from "./attempt.tool-call-normalization.js";
+import {
+  sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
+} from "./attempt.tool-call-normalization.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
@@ -47,6 +50,29 @@ function toolResultSummary(message: AgentMessage | undefined) {
 }
 
 describe("sanitizeReplayToolCallIdsForStream", () => {
+  it("skips strict stream id sanitization when provider policy opts out", () => {
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: false,
+        isOpenAIResponsesApi: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        isOpenAIResponsesApi: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        isOpenAIResponsesApi: true,
+      }),
+    ).toBe(false);
+  });
+
   it("drops orphaned tool results after strict id sanitization", () => {
     const messages: AgentMessage[] = [
       {
@@ -99,6 +125,46 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
       role: "toolResult",
       toolCallId: "callfunctionav7cbkigmk7x1",
       toolUseId: "callfunctionav7cbkigmk7x1",
+      toolName: "read",
+      isError: false,
+    });
+  });
+
+  it("preserves signed-thinking replay ids when requested by provider policy", () => {
+    const rawId = "call_1";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
+          ],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      preserveReplaySafeThinkingToolCallIds: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(requireAssistantMessage(out[0]).content[1]).toMatchObject({
+      type: "toolUse",
+      id: "call_1",
+      name: "read",
+    });
+    expect(toolResultSummary(out[1])).toEqual({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolUseId: "call_1",
       toolName: "read",
       isError: false,
     });
