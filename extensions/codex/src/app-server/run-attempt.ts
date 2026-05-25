@@ -5095,6 +5095,7 @@ function buildCodexSystemPromptReport(params: {
       chars: params.developerInstructions.length,
       projectContextChars: 0,
       nonProjectContextChars: params.developerInstructions.length,
+      hash: sha256Text(params.developerInstructions),
     },
     injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
@@ -5106,6 +5107,7 @@ function buildCodexSystemPromptReport(params: {
     }),
     skills: {
       promptChars: skillsPrompt.length,
+      hash: sha256Text(skillsPrompt),
       entries: buildCodexSkillReportEntries(skillsPrompt),
     },
     tools: {
@@ -5137,20 +5139,23 @@ function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportE
     return {
       name: tool.name,
       summaryChars: summary.length,
+      summaryHash: sha256Text(summary),
       schemaChars: 0,
+      schemaHash: stableJsonHash(null),
       propertiesCount: null,
     };
   }
   return {
     name: tool.name,
     summaryChars: summary.length,
+    summaryHash: sha256Text(summary),
     ...buildCodexToolSchemaStats(tool.inputSchema),
   };
 }
 
 function buildCodexToolSchemaStats(
   schema: JsonValue,
-): Pick<CodexToolReportEntry, "schemaChars" | "propertiesCount"> {
+): Pick<CodexToolReportEntry, "schemaChars" | "schemaHash" | "propertiesCount"> {
   const schemaChars = (() => {
     try {
       return JSON.stringify(schema).length;
@@ -5162,8 +5167,32 @@ function buildCodexToolSchemaStats(
     isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
   return {
     schemaChars,
+    schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeForStableHash(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeForStableHash(entry));
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .toSorted((left, right) => left.localeCompare(right))
+        .map((key) => [key, normalizeForStableHash(record[key])]),
+    );
+  }
+  return value;
+}
+
+function stableJsonHash(value: JsonValue): string {
+  return sha256Text(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function buildCodexBootstrapInjectionStats(params: {

@@ -2844,11 +2844,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(report?.provider).toBe("codex");
     expect(report?.model).toBe("gpt-5.4-codex");
     expect(report?.systemPrompt.chars).toBeGreaterThan(0);
+    expect(report?.systemPrompt.hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
 
     const message = report?.tools.entries.find((tool) => tool.name === "message");
     const webSearch = report?.tools.entries.find((tool) => tool.name === "web_search");
     expect(message?.schemaChars).toBeGreaterThan(0);
+    expect(message?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(message?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(webSearch?.schemaChars).toBe(0);
+    expect(webSearch?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(webSearch?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(report?.tools.schemaChars).toBe(message?.schemaChars);
   });
 
@@ -6574,7 +6580,8 @@ describe("runCodexAppServerAttempt", () => {
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
-    expect(result.systemPromptReport?.skills).toEqual({ promptChars: 0, entries: [] });
+    expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
+    expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
