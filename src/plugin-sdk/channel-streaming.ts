@@ -10,6 +10,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { asBoolean } from "../utils/boolean.js";
 
 export type {
@@ -720,13 +721,11 @@ export function resolveChannelProgressDraftConfig(
 }
 
 function normalizeProgressLabels(labels: unknown): string[] {
-  if (!Array.isArray(labels)) {
+  const normalized = normalizeTrimmedStringList(labels);
+  if (normalized.length === 0) {
     return [...DEFAULT_PROGRESS_DRAFT_LABELS];
   }
-  const normalized = labels
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter((entry) => entry.length > 0);
-  return normalized.length > 0 ? normalized : [...DEFAULT_PROGRESS_DRAFT_LABELS];
+  return normalized;
 }
 
 function hashProgressSeed(seed: string): number {
