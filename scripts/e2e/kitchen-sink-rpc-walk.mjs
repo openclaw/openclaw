@@ -562,6 +562,25 @@ export async function sampleProcess(pid, options = {}) {
   return samplePosixProcess(pid, run);
 }
 
+export function summarizeProcessSamples(samples) {
+  const validSamples = samples.filter((sample) => sample && Number.isFinite(sample.rssMiB));
+  if (validSamples.length === 0) {
+    return null;
+  }
+  const peakRssSample = validSamples.reduce((peak, sample) =>
+    sample.rssMiB > peak.rssMiB ? sample : peak,
+  );
+  const numericCpuSamples = validSamples
+    .map((sample) => sample.cpuPercent)
+    .filter((value) => Number.isFinite(value));
+  return {
+    ...peakRssSample,
+    sampleCount: validSamples.length,
+    peakCpuPercent:
+      numericCpuSamples.length > 0 ? Math.max(...numericCpuSamples) : peakRssSample.cpuPercent,
+  };
+}
+
 async function samplePosixProcess(pid, run) {
   try {
     const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
@@ -696,9 +715,22 @@ export async function main() {
   assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
   const child = await startGateway(runner, port, env, logPath);
+  const processSamples = [];
+  const sampleGateway = async () => {
+    const sample = await sampleProcess(child.pid);
+    if (sample) {
+      processSamples.push(sample);
+    }
+    return sample;
+  };
+  let sampleTimer;
   try {
     await waitForGatewayReady(child, port, logPath);
-    const initialSample = await sampleProcess(child.pid);
+    const initialSample = await sampleGateway();
+    sampleTimer = setInterval(() => {
+      void sampleGateway().catch(() => {});
+    }, 1000);
+    sampleTimer.unref?.();
     const healthz = await fetchJson(`http://127.0.0.1:${port}/healthz`);
     const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
     if (!healthz.ok || healthz.body?.status !== "live") {
@@ -776,8 +808,10 @@ export async function main() {
       );
     }
     await retryRpcCall("diagnostics.stability", {}, { runner, port, env });
-    const finalSample = await sampleProcess(child.pid);
+    const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
+    const peakSample = summarizeProcessSamples(processSamples);
+    assertResourceCeiling(peakSample);
     assertNoErrorLogs(logPath);
 
     console.log(
@@ -790,6 +824,7 @@ export async function main() {
           channelAccount,
           initialSample,
           finalSample,
+          peakSample,
         },
         null,
         2,
@@ -800,6 +835,9 @@ export async function main() {
     console.error(tailFile(logPath));
     throw error;
   } finally {
+    if (sampleTimer) {
+      clearInterval(sampleTimer);
+    }
     await stopGateway(child);
   }
 }

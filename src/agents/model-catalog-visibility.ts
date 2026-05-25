@@ -7,6 +7,18 @@ import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 type ProviderAuthChecker = (provider: string) => boolean | Promise<boolean>;
 
+function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<boolean> {
+  return typeof value === "object" && value !== null && typeof value.then === "function";
+}
+
+async function providerHasAuth(
+  providerAuthChecker: ProviderAuthChecker,
+  provider: string,
+): Promise<boolean> {
+  const result = providerAuthChecker(provider);
+  return isPromiseLike(result) ? await result : result;
+}
+
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
@@ -56,10 +68,10 @@ export async function resolveVisibleModelCatalog(params: {
         env: params.env,
         allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
         discoverExternalCliAuth: params.runtimeAuthDiscovery,
-      });
+    });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
-      if (await hasAuth(entry.provider)) {
+      if (await providerHasAuth(hasAuth, entry.provider)) {
         authBackedCatalog.push(entry);
       }
     }

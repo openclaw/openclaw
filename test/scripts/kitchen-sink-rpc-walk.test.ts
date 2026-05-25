@@ -3,6 +3,7 @@ import {
   assertResourceCeiling,
   fetchJson,
   sampleProcess,
+  summarizeProcessSamples,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
 describe("kitchen-sink RPC process sampling", () => {
@@ -74,6 +75,21 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(() => assertResourceCeiling({ rssMiB: 2049 })).toThrow(
       "gateway RSS exceeded 2048 MiB: 2049 MiB",
     );
+  });
+
+  it("summarizes peak RSS across repeated process samples", () => {
+    expect(
+      summarizeProcessSamples([
+        { rssMiB: 128, cpuPercent: 2 },
+        { rssMiB: 512, cpuPercent: 25 },
+        { rssMiB: 256, cpuPercent: 8 },
+      ]),
+    ).toEqual({
+      rssMiB: 512,
+      cpuPercent: 25,
+      sampleCount: 3,
+      peakCpuPercent: 25,
+    });
   });
 
   it("fails when process sampling does not capture RSS", () => {
