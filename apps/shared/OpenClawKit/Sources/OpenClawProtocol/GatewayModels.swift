@@ -6348,21 +6348,29 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
     public let maxchars: Int?
+    public let mode: AnyCodable?
+    public let unsaferawtoolpayloads: Bool?
 
     public init(
         sessionkey: String,
         limit: Int?,
-        maxchars: Int?)
+        maxchars: Int?,
+        mode: AnyCodable? = nil,
+        unsaferawtoolpayloads: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.limit = limit
         self.maxchars = maxchars
+        self.mode = mode
+        self.unsaferawtoolpayloads = unsaferawtoolpayloads
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case limit
         case maxchars = "maxChars"
+        case mode
+        case unsaferawtoolpayloads = "unsafeRawToolPayloads"
     }
 }
 

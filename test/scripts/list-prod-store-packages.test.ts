@@ -69,13 +69,13 @@ describe("list-prod-store-packages", () => {
         "lockfileVersion: '10.0'",
         "",
         "packages:",
-        "  source-map-support@0.5.21:",
+        "  source-map-support@0.5.21(acorn@8.16.0):",
         "    resolution: {integrity: sha512-test}",
         "  source-map@0.6.1:",
         "    resolution: {integrity: sha512-test}",
         "",
         "snapshots:",
-        "  source-map-support@0.5.21:",
+        "  source-map-support@0.5.21(acorn@8.16.0):",
         "    dependencies:",
         "      source-map: 0.6.1",
         "  source-map@0.6.1: {}",
@@ -100,7 +100,45 @@ describe("list-prod-store-packages", () => {
     expect(result.stdout).toBe("source-map-support@0.5.21\nsource-map@0.6.1");
   });
 
-  it("adds lockfile packages missing from pnpm list output", () => {
+  it("adds lockfile snapshot optional dependencies missing from pnpm list output", () => {
+    const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
+    writeFileSync(
+      join(cwd, "pnpm-lock.yaml"),
+      [
+        "lockfileVersion: '10.0'",
+        "",
+        "packages:",
+        "  native-wrapper@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "  native-wrapper-linux-x64@1.0.0:",
+        "    resolution: {integrity: sha512-test}",
+        "",
+        "snapshots:",
+        "  native-wrapper@1.0.0:",
+        "    optionalDependencies:",
+        "      native-wrapper-linux-x64: 1.0.0",
+        "  native-wrapper-linux-x64@1.0.0: {}",
+        "",
+      ].join("\n"),
+    );
+    const result = runListProdStorePackages(
+      {
+        dependencies: {
+          nativeWrapper: {
+            from: "native-wrapper",
+            resolved: "https://registry.npmjs.org/native-wrapper/-/native-wrapper-1.0.0.tgz",
+            version: "1.0.0",
+          },
+        },
+      },
+      cwd,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("native-wrapper-linux-x64@1.0.0\nnative-wrapper@1.0.0");
+  });
+
+  it("does not add lockfile packages outside the prod dependency closure", () => {
     const cwd = makeTempRepoRoot(tempDirs, "openclaw-prod-store-packages-");
     writeFileSync(
       join(cwd, "pnpm-lock.yaml"),
@@ -118,6 +156,6 @@ describe("list-prod-store-packages", () => {
     const result = runListProdStorePackages({ dependencies: {} }, cwd);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("recma-jsx@1.0.1");
+    expect(result.stdout).toBe("");
   });
 });

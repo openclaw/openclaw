@@ -159,6 +159,25 @@ export type ReadRecentSessionMessagesOptions = {
   maxLines?: number;
 };
 
+export type ReadRecentSessionMessagesTiming = {
+  statMs?: number;
+  openMs?: number;
+  readIoMs?: number;
+  decodeSplitMs?: number;
+  parseSelectMs?: number;
+  closeMs?: number;
+  fileBytes?: number;
+  bytesRead?: number;
+  linesRead?: number;
+  maxLines?: number;
+  readMode?: "reverse-tail" | "full-tail";
+};
+
+export type ReadRecentSessionMessagesDetailedResult = {
+  messages: unknown[];
+  timings: ReadRecentSessionMessagesTiming;
+};
+
 export type ReadSessionMessagesAsyncOptions =
   | {
       mode: "full";
@@ -234,34 +253,91 @@ export function readRecentSessionMessages(
   );
 }
 
+type ReadRecentTranscriptTailLinesAsyncResult = {
+  lines: string[];
+  timings: ReadRecentSessionMessagesTiming;
+};
+
+function countLineFeeds(buffer: Buffer): number {
+  let count = 0;
+  for (const byte of buffer) {
+    if (byte === 10) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 async function readRecentTranscriptTailLinesAsync(
   filePath: string,
   stat: fs.Stats,
   opts: ReadRecentSessionMessagesOptions,
-): Promise<string[]> {
+): Promise<ReadRecentTranscriptTailLinesAsyncResult> {
   const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
   const maxBytes = Math.max(
     1024,
     Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
   );
-  const readLen = Math.min(stat.size, maxBytes);
-  const readStart = Math.max(0, stat.size - readLen);
   const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
+  const readLimit = Math.min(stat.size, maxBytes);
+  const timings: ReadRecentSessionMessagesTiming = {
+    fileBytes: stat.size,
+    maxLines,
+  };
+  if (readLimit <= 0) {
+    return { lines: [], timings: { ...timings, bytesRead: 0, linesRead: 0 } };
+  }
+  const chunks: Buffer[] = [];
+  let totalBytesRead = 0;
+  let remainingBytes = readLimit;
+  let readPosition = stat.size;
+  let lineFeeds = 0;
+  const openStartedAt = Date.now();
   const handle = await fs.promises.open(filePath, "r");
+  timings.openMs = Date.now() - openStartedAt;
   try {
-    const buffer = Buffer.alloc(readLen);
-    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
-    if (bytesRead <= 0) {
-      return [];
+    while (remainingBytes > 0) {
+      const readLen = Math.min(remainingBytes, TRANSCRIPT_ASYNC_READ_CHUNK_BYTES);
+      readPosition -= readLen;
+      const buffer = Buffer.allocUnsafe(readLen);
+      const readStartedAt = Date.now();
+      const { bytesRead } = await handle.read(buffer, 0, readLen, readPosition);
+      timings.readIoMs = (timings.readIoMs ?? 0) + (Date.now() - readStartedAt);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const chunk = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
+      chunks.push(chunk);
+      totalBytesRead += bytesRead;
+      remainingBytes -= bytesRead;
+      lineFeeds += countLineFeeds(chunk);
+      if (lineFeeds > maxLines) {
+        break;
+      }
+      if (bytesRead < readLen) {
+        break;
+      }
     }
-    return buffer
-      .toString("utf-8", 0, bytesRead)
+    if (totalBytesRead <= 0) {
+      return { lines: [], timings: { ...timings, bytesRead: 0, linesRead: 0 } };
+    }
+    const decodeStartedAt = Date.now();
+    const readStart = Math.max(0, stat.size - totalBytesRead);
+    const lines = Buffer.concat(chunks.toReversed(), totalBytesRead)
+      .toString("utf8")
       .split(/\r?\n/)
       .slice(readStart > 0 ? 1 : 0)
       .filter((line) => line.trim().length > 0)
       .slice(-maxLines);
+    timings.decodeSplitMs = Date.now() - decodeStartedAt;
+    timings.bytesRead = totalBytesRead;
+    timings.linesRead = lines.length;
+    timings.readMode = totalBytesRead < stat.size ? "reverse-tail" : "full-tail";
+    return { lines, timings };
   } finally {
+    const closeStartedAt = Date.now();
     await handle.close();
+    timings.closeMs = Date.now() - closeStartedAt;
   }
 }
 
@@ -655,30 +731,53 @@ export async function readRecentSessionMessagesAsync(
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): Promise<unknown[]> {
+  const result = await readRecentSessionMessagesDetailedAsync(
+    sessionId,
+    storePath,
+    sessionFile,
+    opts,
+  );
+  return result.messages;
+}
+
+export async function readRecentSessionMessagesDetailedAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  opts?: ReadRecentSessionMessagesOptions,
+): Promise<ReadRecentSessionMessagesDetailedResult> {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  const timings: ReadRecentSessionMessagesTiming = {};
   if (maxMessages === 0) {
-    return [];
+    return { messages: [], timings };
   }
 
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
-    return [];
+    return { messages: [], timings };
   }
 
   let stat: fs.Stats;
   try {
+    const statStartedAt = Date.now();
     stat = await fs.promises.stat(filePath);
+    timings.statMs = Date.now() - statStartedAt;
+    timings.fileBytes = stat.size;
   } catch {
-    return [];
+    return { messages: [], timings };
   }
   if (stat.size === 0) {
-    return [];
+    return { messages: [], timings };
   }
-  const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+  const tailResult = await readRecentTranscriptTailLinesAsync(filePath, stat, {
     ...opts,
     maxMessages,
   });
-  return parseRecentTranscriptTailMessages(lines, maxMessages);
+  Object.assign(timings, tailResult.timings);
+  const parseStartedAt = Date.now();
+  const messages = parseRecentTranscriptTailMessages(tailResult.lines, maxMessages);
+  timings.parseSelectMs = Date.now() - parseStartedAt;
+  return { messages, timings };
 }
 
 export async function readRecentSessionMessagesWithStatsAsync(
@@ -1511,12 +1610,12 @@ export async function readRecentSessionUsageFromTranscriptAsync(
     if (stat.size === 0) {
       return null;
     }
-    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+    const tailResult = await readRecentTranscriptTailLinesAsync(filePath, stat, {
       maxMessages: 1,
       maxLines: 1000,
       maxBytes,
     });
-    return extractAggregateUsageFromTranscriptLines(lines);
+    return extractAggregateUsageFromTranscriptLines(tailResult.lines);
   } catch {
     return null;
   }
@@ -1539,12 +1638,12 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
     if (stat.size === 0) {
       return null;
     }
-    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
+    const tailResult = await readRecentTranscriptTailLinesAsync(filePath, stat, {
       maxMessages: 1,
       maxLines: 1000,
       maxBytes,
     });
-    return extractLatestUsageFromTranscriptLines(lines);
+    return extractLatestUsageFromTranscriptLines(tailResult.lines);
   } catch {
     return null;
   }
