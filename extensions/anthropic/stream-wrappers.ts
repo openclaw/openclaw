@@ -14,6 +14,7 @@ import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   readStringValue,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
@@ -63,7 +64,7 @@ function mergeAnthropicBetaHeader(
     (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
   );
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
+  const values = uniqueStrings([...existing, ...betas]);
   const key = existingKey ?? "anthropic-beta";
   merged[key] = values.join(",");
   return merged;
@@ -138,7 +139,7 @@ export function createAnthropicBetaHeadersWrapper(
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
+    const allBetas = uniqueStrings([...piAiBetas, ...effectiveBetas]);
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

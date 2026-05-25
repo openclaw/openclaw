@@ -1,4 +1,7 @@
-import { normalizeOptionalString as trimString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString as trimString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,14 +59,14 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
         }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = extractUrlCitations(block.annotations);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
+          return { text: block.text, annotationCitations: uniqueStrings(urls) };
         }
       }
     }
 
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
       const urls = extractUrlCitations(output.annotations);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
+      return { text: output.text, annotationCitations: uniqueStrings(urls) };
     }
   }
 

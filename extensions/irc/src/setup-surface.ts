@@ -15,6 +15,7 @@ import {
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import {
@@ -372,7 +373,11 @@ export const ircSetupWizard: ChannelSetupWizard = {
     setPolicy: ({ cfg, accountId, policy }) =>
       setIrcGroupAccess(cfg as CoreConfig, accountId, policy, [], normalizeGroupEntry),
     resolveAllowlist: async ({ entries }) =>
-      [...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean))] as string[],
+      uniqueStrings(
+        entries
+          .map((entry) => normalizeGroupEntry(entry))
+          .filter((entry): entry is string => Boolean(entry)),
+      ),
     applyAllowlist: ({ cfg, accountId, resolved }) =>
       setIrcGroupAccess(
         cfg as CoreConfig,

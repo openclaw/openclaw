@@ -34,5 +34,7 @@ export {
   normalizeStringEntries,
   normalizeStringEntriesLower,
   normalizeTrimmedStringList,
+  sortUniqueStrings,
+  uniqueStrings,
 } from "../shared/string-normalization.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";
