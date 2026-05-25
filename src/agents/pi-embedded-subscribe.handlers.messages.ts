@@ -82,6 +82,7 @@ function extractStandaloneMessageToolText(
     const args = asRecord(record?.arguments);
     const hasRoute = Boolean(
       normalizeOptionalString(args?.target) ||
+      normalizeOptionalString(args?.to) ||
       normalizeOptionalString(args?.channel) ||
       normalizeOptionalString(args?.accountId) ||
       Array.isArray(args?.targets),

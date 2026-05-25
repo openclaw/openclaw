@@ -684,10 +684,12 @@ describe("handleMessageEnd", () => {
     const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
     const unroutedEnvelope = createMessageToolEnvelope(visibleReply);
     const routedEnvelope = createMessageToolEnvelope(visibleReply, { target: "user:redacted" });
+    const toRoutedEnvelope = createMessageToolEnvelope(visibleReply, { to: "user:redacted" });
 
     for (const [text, api, builtinToolNames, sourceReplyDeliveryMode, expected] of [
       [unroutedEnvelope, undefined, new Set(["message"]), "message_tool_only", visibleReply],
       [routedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
+      [toRoutedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
       [routedEnvelope, undefined, new Set<string>(), undefined, routedEnvelope],
       [unroutedEnvelope, undefined, new Set(["message"]), undefined, unroutedEnvelope],
     ] as const) {
