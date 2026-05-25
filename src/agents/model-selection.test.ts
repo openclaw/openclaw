@@ -48,7 +48,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
-              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
               "gemini-3.1-flash": "gemini-3-flash-preview",
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
@@ -58,7 +58,7 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
               "gemini-3-pro": "gemini-3.1-pro-preview",
               "gemini-3-flash": "gemini-3-flash-preview",
               "gemini-3.1-pro": "gemini-3.1-pro-preview",
-              "gemini-3.1-flash-lite": "gemini-3.1-flash-lite-preview",
+              "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite",
               "gemini-3.1-flash": "gemini-3-flash-preview",
               "gemini-3.1-flash-preview": "gemini-3-flash-preview",
             },
@@ -330,10 +330,10 @@ describe("model-selection", () => {
         expected: { provider: "google-gemini-cli", model: "gemini-3.1-pro-preview" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids",
+        name: "keeps stable GA gemini 3.1 flash-lite ids",
         variants: ["google/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google",
-        expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google", model: "gemini-3.1-flash-lite" },
       },
       {
         name: "normalizes deprecated xai grok 4.20 beta ids",
@@ -405,10 +405,10 @@ describe("model-selection", () => {
         expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
       },
       {
-        name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
+        name: "keeps stable GA gemini 3.1 flash-lite ids for google-vertex",
         variants: ["google-vertex/gemini-3.1-flash-lite", "gemini-3.1-flash-lite"],
         defaultProvider: "google-vertex",
-        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite-preview" },
+        expected: { provider: "google-vertex", model: "gemini-3.1-flash-lite" },
       },
       {
         name: "normalizes anthropic-cli refs to the Claude CLI provider alias",
@@ -1784,7 +1784,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "google-vertex",
-        model: "gemini-3.1-flash-lite-preview",
+        model: "gemini-3.1-flash-lite",
       });
     });
 

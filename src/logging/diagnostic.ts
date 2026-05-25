@@ -1258,6 +1258,7 @@ export function startDiagnosticHeartbeat(
               queueDepth: state.queueDepth,
               expectedState: state.state,
               stateGeneration: state.generation,
+              staleActiveProgressAbortMs: stuckSessionAbortMs,
             },
           });
         } else if (

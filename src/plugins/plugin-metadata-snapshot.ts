@@ -6,6 +6,7 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
@@ -20,6 +21,7 @@ import {
 } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -51,6 +53,8 @@ let pluginMetadataSnapshotMemos: PluginMetadataSnapshotMemo[] = [];
 export function clearLoadPluginMetadataSnapshotMemo(): void {
   pluginMetadataSnapshotMemos = [];
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginMetadataSnapshotMemo);
 
 const MEMO_RELEVANT_ENV_KEYS = [
   "APPDATA",
@@ -86,10 +90,6 @@ function fileFingerprint(filePath: string): unknown {
   } catch {
     return [filePath, "missing"];
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
@@ -565,7 +565,17 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
   snapshot: PluginMetadataSnapshot;
 }): boolean {
-  return result.registrySource !== "derived" && result.snapshot.index.plugins.length > 0;
+  const snapshot = result.snapshot;
+  const hasCompleteSnapshotShape =
+    Array.isArray(snapshot.plugins) &&
+    Array.isArray(snapshot.diagnostics) &&
+    Array.isArray(snapshot.registryDiagnostics) &&
+    Array.isArray(snapshot.manifestRegistry.plugins) &&
+    Array.isArray(snapshot.manifestRegistry.diagnostics) &&
+    Array.isArray(snapshot.index.plugins) &&
+    Array.isArray(snapshot.index.diagnostics);
+  const hasPluginMetadata = snapshot.plugins.length > 0 || snapshot.index.plugins.length > 0;
+  return hasCompleteSnapshotShape && hasPluginMetadata;
 }
 
 export function resolvePluginMetadataSnapshot(

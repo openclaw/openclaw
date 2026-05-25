@@ -1,3 +1,5 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const DATA_URL_PREFIX = "data:";
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 const IMAGE_SIGNATURES: Array<{
@@ -134,10 +136,6 @@ export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined
 
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function sanitizeImageContentRecord(

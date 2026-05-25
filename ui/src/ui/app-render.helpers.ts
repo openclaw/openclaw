@@ -6,12 +6,18 @@ import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
+  resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
+import type { ChatState } from "./controllers/chat.ts";
+import {
+  createSessionAndRefresh,
+  loadSessions,
+  syncSelectedSessionMessageSubscription,
+} from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
@@ -125,11 +131,17 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   const previousSessionKey = state.sessionKey;
   saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  if (previousSessionKey !== sessionKey) {
+    resetChatSessionPickerState(state);
+  }
   (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = [];
   state.chatToolMessages = [];
+  state.activityEntries = [];
+  state.activityExpandedIds = new Set();
+  state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
@@ -650,6 +662,9 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,
     true,
+  );
+  void syncSelectedSessionMessageSubscription(
+    state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);

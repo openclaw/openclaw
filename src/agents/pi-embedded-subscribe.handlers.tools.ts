@@ -20,6 +20,10 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  asOptionalObjectRecord,
+  asOptionalRecord as readRecordField,
+} from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -193,13 +197,12 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
 }
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const details = (result as { details?: unknown }).details;
-  return details && typeof details === "object" && !Array.isArray(details)
-    ? (details as Record<string, unknown>)
-    : undefined;
+  return readRecordField(asOptionalObjectRecord(result)?.details);
+}
+
+function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetailsRecord(result);
+  return details?.async === true && details.status === "started";
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
@@ -427,12 +430,6 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function readRecordField(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readStringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -532,13 +529,14 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -707,7 +705,12 @@ async function emitToolResultOutput(params: {
   const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.trustedLocalMediaToolNames,
+      )
     : [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
@@ -725,6 +728,7 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
+          ctx.trustedLocalMediaToolNames,
         );
       }
     }
@@ -1027,7 +1031,12 @@ export async function handleToolExecutionEnd(
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  ctx.state.toolMetas.push({
+    toolName,
+    meta,
+    ...(asyncStarted ? { asyncStarted: true } : {}),
+  });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
@@ -1068,7 +1077,10 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
-  if (completedMutatingAction || acceptedSessionSpawn) {
+  if (asyncStarted) {
+    ctx.state.hadDeterministicSideEffect = true;
+  }
+  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -1130,7 +1142,11 @@ export async function handleToolExecutionEnd(
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const response = normalizeHeartbeatToolResponse(result?.details);
     if (response) {
+      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
+      if (isFirstHeartbeatResponse) {
+        void ctx.params.onHeartbeatToolResponse?.(response);
+      }
     }
   }
 

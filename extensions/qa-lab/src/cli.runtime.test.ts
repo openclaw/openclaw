@@ -1085,6 +1085,28 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, "memory.recall");
   });
 
+  it("prints a focused scenario match report from coverage metadata", async () => {
+    await runQaCoverageReportCommand({
+      repoRoot: process.cwd(),
+      match: ["image roundtrip"],
+    });
+
+    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
+    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
+    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
+  });
+
+  it("rejects scenario match queries for tool coverage reports", async () => {
+    await expect(
+      runQaCoverageReportCommand({
+        repoRoot: process.cwd(),
+        tools: true,
+        match: ["runtime"],
+      }),
+    ).rejects.toThrow("--match cannot be combined with --tools.");
+  });
+
   it("prints a markdown tool coverage report from runtime tool fixtures", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd(), tools: true });
 

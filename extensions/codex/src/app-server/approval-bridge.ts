@@ -9,6 +9,7 @@ import {
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   approvalRequestExplicitlyUnavailable,
@@ -877,10 +878,7 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
 }
 
 function readStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  return Array.isArray(value)
-    ? value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(record[key]);
 }
 
 function sanitizePermissionHostValue(value: string): string {

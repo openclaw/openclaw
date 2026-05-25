@@ -23,7 +23,9 @@ export function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
-export function isReusableCurrentPluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): boolean {
+export function isReusableCurrentPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+): boolean {
   return snapshot.registrySource !== "derived";
 }
 
@@ -38,10 +40,6 @@ export function setCurrentPluginMetadataSnapshot(
     workspaceDir?: string;
   } = {},
 ): void {
-  if (snapshot && !isReusableCurrentPluginMetadataSnapshot(snapshot)) {
-    clearCurrentPluginMetadataSnapshotState();
-    return;
-  }
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
     : undefined;
