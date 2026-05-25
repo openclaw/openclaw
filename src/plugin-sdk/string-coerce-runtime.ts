@@ -36,5 +36,6 @@ export {
   normalizeTrimmedStringList,
   sortUniqueStrings,
   uniqueStrings,
+  uniqueValues,
 } from "../shared/string-normalization.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";

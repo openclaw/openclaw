@@ -20,6 +20,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -426,7 +427,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
       opts?.sources && opts.sources.length > 0
-        ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
+        ? uniqueValues(opts.sources).filter((s) => this.sources.has(s))
         : undefined;
     if (
       opts?.sources &&

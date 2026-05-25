@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
@@ -765,7 +765,7 @@ function resolveTopologyMemberAccounts(
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
   memberRoles: MatrixQaParticipantRole[],
 ) {
-  const uniqueRoles = [...new Set(memberRoles)];
+  const uniqueRoles = uniqueValues(memberRoles);
   if (uniqueRoles.length === 0) {
     throw new Error("Matrix QA room provisioning requires at least one member");
   }
