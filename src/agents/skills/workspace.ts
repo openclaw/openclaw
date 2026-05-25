@@ -582,11 +582,21 @@ function loadGeneratedPluginSkillRecords(params: {
       continue;
     }
 
+    // Plugin skills live as symlinks under ~/.openclaw/plugin-skills/, so
+    // skillDir is the symlink path while skillDirRealPath is the real target.
+    // Setting canonicalSkillDir to the real path ensures syncSourceDir /
+    // syncDirName are populated, allowing syncSkillsToWorkspace to copy the
+    // actual skill directory into the sandbox workspace where the read tool
+    // can access it.  Without this, sandboxed agents see host-only symlink
+    // paths in <available_skills> and every read of the SKILL.md fails with
+    // "Path escapes sandbox root".  skillDirRealPath is safe to use here
+    // because it was already validated against allowedRootRealPaths above.
     loadedSkills.push(
       ...loadContainedSkillRecords({
         skillDir,
         source: params.source,
         maxSkillFileBytes: params.limits.maxSkillFileBytes,
+        canonicalSkillDir: skillDirRealPath,
       }),
     );
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
@@ -1246,6 +1256,7 @@ export async function syncSkillsToWorkspace(params: {
   eligibility?: SkillEligibilityContext;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
 }) {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
@@ -1263,6 +1274,7 @@ export async function syncSkillsToWorkspace(params: {
       eligibility: params.eligibility,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
+      pluginSkillsDir: params.pluginSkillsDir,
     });
 
     await fsp.rm(targetSkillsDir, { recursive: true, force: true });
