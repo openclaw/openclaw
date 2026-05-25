@@ -1,14 +1,60 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
 const requireFromTest = createRequire(import.meta.url);
 const TSX_IMPORT = requireFromTest.resolve("tsx");
 
-function expectedSourceMcpServerArgs(entrypoint: string): string[] {
-  return ["--import", TSX_IMPORT, path.resolve(entrypoint)];
+type TestOpenClawLayout = {
+  moduleUrl: string;
+  openClawRoot: string;
+  pluginToolsDistEntry: string;
+  openClawToolsDistEntry: string;
+};
+
+function expectedSourceMcpServerArgs(openClawRoot: string, entrypoint: string): string[] {
+  return ["--import", TSX_IMPORT, path.join(openClawRoot, entrypoint)];
+}
+
+function withTestOpenClawLayout<T>(
+  run: (layout: TestOpenClawLayout) => T,
+  options: { builtMcpEntries?: Array<"plugin-tools" | "openclaw-tools"> } = {},
+): T {
+  const openClawRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-config-"));
+  const pluginRoot = path.join(openClawRoot, "extensions", "acpx");
+  fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}");
+  fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}");
+
+  const pluginToolsDistEntry = path.join(openClawRoot, "dist", "mcp", "plugin-tools-serve.js");
+  const openClawToolsDistEntry = path.join(openClawRoot, "dist", "mcp", "openclaw-tools-serve.js");
+  const distEntries = new Map([
+    ["plugin-tools", pluginToolsDistEntry],
+    ["openclaw-tools", openClawToolsDistEntry],
+  ] as const);
+  for (const entryName of options?.builtMcpEntries ?? []) {
+    const entry = distEntries.get(entryName);
+    if (!entry) {
+      continue;
+    }
+    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    fs.writeFileSync(entry, "");
+  }
+
+  try {
+    return run({
+      moduleUrl: pathToFileURL(path.join(pluginRoot, "src", "config.js")).href,
+      openClawRoot,
+      pluginToolsDistEntry,
+      openClawToolsDistEntry,
+    });
+  } finally {
+    fs.rmSync(openClawRoot, { recursive: true, force: true });
+  }
 }
 
 describe("embedded acpx plugin config", () => {
@@ -154,33 +200,81 @@ describe("embedded acpx plugin config", () => {
   });
 
   it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        pluginToolsMcpBridge: true,
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
+    withTestOpenClawLayout(({ moduleUrl, openClawRoot }) => {
+      const resolved = resolveAcpxPluginConfig({
+        rawConfig: {
+          pluginToolsMcpBridge: true,
+        },
+        workspaceDir: "/tmp/openclaw-acpx",
+        moduleUrl,
+      });
 
-    const server = resolved.mcpServers["openclaw-plugin-tools"];
-    expect(server).toEqual({
-      command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/plugin-tools-serve.ts"),
+      const server = resolved.mcpServers["openclaw-plugin-tools"];
+      expect(server).toEqual({
+        command: process.execPath,
+        args: expectedSourceMcpServerArgs(openClawRoot, "src/mcp/plugin-tools-serve.ts"),
+      });
     });
   });
 
-  it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
-    const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        openClawToolsMcpBridge: true,
-      },
-      workspaceDir: "/tmp/openclaw-acpx",
-    });
+  it("uses the built plugin-tools MCP server when the dist entry exists", () => {
+    withTestOpenClawLayout(
+      ({ moduleUrl, pluginToolsDistEntry }) => {
+        const resolved = resolveAcpxPluginConfig({
+          rawConfig: {
+            pluginToolsMcpBridge: true,
+          },
+          workspaceDir: "/tmp/openclaw-acpx",
+          moduleUrl,
+        });
 
-    const server = resolved.mcpServers["openclaw-tools"];
-    expect(server).toEqual({
-      command: process.execPath,
-      args: expectedSourceMcpServerArgs("src/mcp/openclaw-tools-serve.ts"),
+        const server = resolved.mcpServers["openclaw-plugin-tools"];
+        expect(server).toEqual({
+          command: process.execPath,
+          args: [pluginToolsDistEntry],
+        });
+      },
+      { builtMcpEntries: ["plugin-tools"] },
+    );
+  });
+
+  it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
+    withTestOpenClawLayout(({ moduleUrl, openClawRoot }) => {
+      const resolved = resolveAcpxPluginConfig({
+        rawConfig: {
+          openClawToolsMcpBridge: true,
+        },
+        workspaceDir: "/tmp/openclaw-acpx",
+        moduleUrl,
+      });
+
+      const server = resolved.mcpServers["openclaw-tools"];
+      expect(server).toEqual({
+        command: process.execPath,
+        args: expectedSourceMcpServerArgs(openClawRoot, "src/mcp/openclaw-tools-serve.ts"),
+      });
     });
+  });
+
+  it("uses the built OpenClaw tools MCP server when the dist entry exists", () => {
+    withTestOpenClawLayout(
+      ({ moduleUrl, openClawToolsDistEntry }) => {
+        const resolved = resolveAcpxPluginConfig({
+          rawConfig: {
+            openClawToolsMcpBridge: true,
+          },
+          workspaceDir: "/tmp/openclaw-acpx",
+          moduleUrl,
+        });
+
+        const server = resolved.mcpServers["openclaw-tools"];
+        expect(server).toEqual({
+          command: process.execPath,
+          args: [openClawToolsDistEntry],
+        });
+      },
+      { builtMcpEntries: ["openclaw-tools"] },
+    );
   });
 
   it("resolves the plugin root from shared dist chunk paths", () => {
