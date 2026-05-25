@@ -913,6 +913,10 @@ async function sendSubagentAnnounceDirectly(params: {
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
     ) {
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      if (generatedMediaDelivery) {
+        return generatedMediaDelivery;
+      }
       return {
         delivered: true,
         path: "none",

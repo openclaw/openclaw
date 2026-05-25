@@ -2385,7 +2385,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("no-ops stale isolated cron run media completions", async () => {
+  it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
@@ -2414,6 +2414,40 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           replyInstruction: "Deliver the generated image through the requester run.",
         },
       ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-daily.png"],
+        idempotencyKey: "announce-stale-cron-media:generated-media-direct",
+      }),
+    );
+  });
+
+  it("no-ops stale isolated cron run text completions", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "stale-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-text:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-stale-cron-text",
+      sourceTool: "subagent_announce",
     });
 
     expectRecordFields(result, {
