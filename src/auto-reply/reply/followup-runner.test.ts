@@ -547,6 +547,39 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
+  it("passes prepared media user turns to embedded runtime dispatch", async () => {
+    const userMessageForPersistence = {
+      role: "user",
+      content: "describe this",
+      MediaPath: "/tmp/image.png",
+      MediaType: "image/png",
+    } as never;
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        userMessageForPersistence,
+        run: {
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.userMessageForPersistence).toBe(userMessageForPersistence);
+  });
+
   it("runs queued followups with the session id returned by admission", async () => {
     const active = createReplyOperationForTest({
       sessionKey: "main",
