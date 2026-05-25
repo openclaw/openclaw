@@ -253,6 +253,25 @@ When enabled, the Gateway **Dreams** tab shows:
 
 If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
 
+
+
+## Dreaming with LanceDB
+
+When **memory-lancedb** or **memory-lancedb-pro** is your active memory backend, built-in dreaming (implemented under memory-core) does not consolidate LanceDB vectors — outputs may degrade to raw category labels instead of themed reflections.
+
+Use the community plugin **[memory-lancedb-dreaming](https://clawhub.ai/packages/memory-lancedb-dreaming)** to run a LanceDB-native Light / REM / Deep pipeline with LLM theme naming, configurable promotion, and bilingual DREAMS.md narratives — without switching back to memory-core.
+
+**Install:** manual tarball + scripts/install.sh — see [release v0.1.12](https://github.com/airbing11/memory-lancedb-dreaming/releases/tag/v0.1.12).
+
+Two **required** plugin entry settings:
+```json
+"hooks": { "allowConversationAccess": true },
+"subagent": { "allowModelOverride": true }
+```
+
+Restart the gateway after changing hook permissions (hot reload does not re-register hooks).
+
+
 ## Related
 
 - [Memory](/concepts/memory)
