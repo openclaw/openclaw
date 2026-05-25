@@ -493,6 +493,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
+        stopReason: "stop",
         content: [
           // complete tool call — kept as-is
           { type: "toolCall", id: "call_ok", name: "read", arguments: { path: "/a" } },
@@ -540,6 +541,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
+        stopReason: "stop",
         content: [
           {
             type: "toolCall",
@@ -562,6 +564,31 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const args = spawn.arguments as { attachments?: Array<{ content?: unknown }> };
     expect(args?.attachments?.[0]?.content).toBe("secret data");
   });
+
+  it.each(["aborted", "error"] as const)(
+    "drops OpenAI Responses partialJson blocks on %s assistant turns",
+    (stopReason) => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          stopReason,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_partial|fc_123",
+              name: "Bash",
+              arguments: { command: "ls" },
+              partialJson: '{"command":"ls"',
+            },
+          ],
+        },
+        { role: "user", content: "retry" },
+      ]);
+
+      const out = sanitizeToolCallInputs(input);
+      expect(getAssistantToolCallBlocks(out)).toHaveLength(0);
+    },
+  );
 
   it("keeps valid tool calls and preserves text blocks", () => {
     const input = castAgentMessages([
