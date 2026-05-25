@@ -4,6 +4,7 @@
  *
  * Verifies:
  *   autonomy.learn_opportunity (knowledge_gap) → evolution.simulation_requested → evolution.regression_requested
+ *   weak_model_regression_suite Playbook completes on regression_requested
  *   GET /v1/evolve/drafts
  *   pending sandbox promotions survive runtime stop/start (same SQLite)
  *   evolution_weekly_export schedule playbook is loaded
@@ -33,6 +34,8 @@ function log(msg) {
   console.log(`[claworks:evolution-smoke] ${msg}`);
 }
 
+const WEAK_MODEL_REGRESSION_PLAYBOOK_ID = "weak_model_regression_suite";
+
 async function waitForEvent(eventLog, type, timeoutMs = 8000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -42,6 +45,19 @@ async function waitForEvent(eventLog, type, timeoutMs = 8000) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`timeout waiting for event ${type}`);
+}
+
+async function waitForPlaybookRun(engine, playbookId, timeoutMs = 30_000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const runs = await engine.listRuns({ playbookId, limit: 5 });
+    const run = runs.find((r) => r.status === "completed" || r.status === "failed");
+    if (run) {
+      return run;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timeout waiting for playbook ${playbookId} run`);
 }
 
 function buildRuntimeConfig(stateDir, dbName = "robot.db") {
@@ -88,7 +104,7 @@ async function main() {
 
   const playbookIds = new Set(runtime.playbookEngine.list().map((p) => p.id));
   log(`loaded playbooks: ${playbookIds.size}`);
-  assert(playbookIds.has("weak_model_regression_suite"), "missing weak_model_regression_suite");
+  assert(playbookIds.has(WEAK_MODEL_REGRESSION_PLAYBOOK_ID), "missing weak_model_regression_suite");
   assert(playbookIds.has("evolution_weekly_export"), "missing evolution_weekly_export");
   assert(
     playbookIds.has("evolution_sandbox_promotion_hitl"),
@@ -133,6 +149,16 @@ async function main() {
     "regression_requested must chain from simulation_requested",
   );
   log("autonomy → simulation_requested → regression_requested OK");
+
+  const regressionRun = await waitForPlaybookRun(
+    runtime.playbookEngine,
+    WEAK_MODEL_REGRESSION_PLAYBOOK_ID,
+  );
+  assert(
+    regressionRun.status === "completed",
+    `weak_model_regression_suite must complete, got ${regressionRun.status}`,
+  );
+  log(`weak_model_regression_suite completed run_id=${regressionRun.id}`);
 
   // ── 2) GET /v1/evolve/drafts ─────────────────────────────────────────────
   const rest = createClaworksRestHandler(runtime);
