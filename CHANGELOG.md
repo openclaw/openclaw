@@ -18,6 +18,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- IRC: store inbound channel routes with the canonical `channel:#name` target and join transient channel sends before writing. (#85906) Thanks @Kailigithub.
+- Usage: surface unknown all-zero model pricing as missing cost entries instead of a confident `$0` total. (#85882) Thanks @MichaelZelbel.
+- Agents/Codex: honor yolo app-server approval policy only for the full `never` plus `danger-full-access` case. (#85909) Thanks @earlvanze.
+- Gateway/Gmail: clear Gmail watcher renewal intervals on re-entry so hot reloads do not leak lifecycle timers. (#82947) Thanks @SebTardif.
 - Logging: exit cleanly on broken stdout/stderr pipes without masking existing failure exit codes. (#80059) Thanks @pavelzak.
 - Gateway/security: escape transcript metadata field names while extracting oversized session line prefixes. (#85934) Thanks @SebTardif.
 - Plugins/security: validate manifest model pattern regexes with the safe-regex compiler so unsafe patterns are ignored before matching. (#86046) Thanks @SebTardif.
