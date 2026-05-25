@@ -443,6 +443,95 @@ describe("processMessage group system prompt wiring", () => {
     });
   });
 
+  it("fires message_received hooks from schema-valid plugin config opt-in", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      From: GROUP_JID,
+      To: "+15550001111",
+      SessionKey: baseRoute.sessionKey,
+      AccountId: "default",
+      MessageSid: "msg1",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    await callProcessMessage({
+      cfg: {
+        plugins: {
+          entries: {
+            whatsapp: {
+              config: {
+                pluginHooks: {
+                  messageReceived: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+    expect(internalReceived).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers account hook opt-in over plugin config opt-out", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      From: GROUP_JID,
+      To: "+15550001111",
+      SessionKey: baseRoute.sessionKey,
+      AccountId: "default",
+      MessageSid: "msg1",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    await callProcessMessage({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                pluginHooks: {
+                  messageReceived: true,
+                },
+              },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            whatsapp: {
+              config: {
+                pluginHooks: {
+                  messageReceived: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
+    expect(internalReceived).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fire WhatsApp message_received hooks without explicit opt-in", async () => {
     const internalReceived = vi.fn();
     registerInternalHook("message:received", internalReceived);

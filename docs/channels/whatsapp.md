@@ -244,6 +244,12 @@ You can scope the opt-in to one account:
 }
 ```
 
+The bundled WhatsApp plugin also honors the plugin config path
+`plugins.entries.whatsapp.config.pluginHooks.messageReceived` for operators who
+manage plugin config through manifest-backed plugin entries. Account-level
+channel config takes precedence over channel-level config, which takes
+precedence over plugin-entry config.
+
 Only enable this for plugins you trust to receive inbound WhatsApp message
 content and identifiers.
 

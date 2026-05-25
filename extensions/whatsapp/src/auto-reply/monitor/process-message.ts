@@ -83,6 +83,10 @@ type WhatsAppMessageReceivedHookConfig = {
   accounts?: Record<string, unknown>;
 };
 
+type WhatsAppPluginEntryConfig = {
+  config?: WhatsAppMessageReceivedHookConfig;
+};
+
 function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -102,9 +106,13 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
     params.accountId && channelConfig?.accounts
       ? channelConfig.accounts[params.accountId]
       : undefined;
+  const pluginConfig = (
+    params.cfg.plugins?.entries?.whatsapp as WhatsAppPluginEntryConfig | undefined
+  )?.config;
   return (
     readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
     readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
+    readWhatsAppMessageReceivedHookOptIn(pluginConfig) ??
     false
   );
 }

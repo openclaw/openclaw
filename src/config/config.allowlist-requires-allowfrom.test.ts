@@ -159,3 +159,18 @@ describe("Discord mentionAliases schema", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("WhatsApp pluginHooks schema", () => {
+  it("accepts messageReceived hook opt-in on top-level and account config", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      pluginHooks: { messageReceived: true },
+      accounts: {
+        work: {
+          pluginHooks: { messageReceived: true },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
