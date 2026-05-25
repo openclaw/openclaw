@@ -414,24 +414,25 @@ describe("ensureGatewayStartupAuth", () => {
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("throws when hooks token reuses gateway password auth", async () => {
-    await expect(
-      ensureGatewayStartupAuth({
-        cfg: {
-          hooks: {
-            enabled: true,
-            token: "shared-gateway-password-1234567890",
-          },
-          gateway: {
-            auth: {
-              mode: "password",
-              password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-            },
+  it("does not block startup when hooks token reuses gateway password auth", async () => {
+    const result = await ensureGatewayStartupAuth({
+      cfg: {
+        hooks: {
+          enabled: true,
+          token: "shared-gateway-password-1234567890",
+        },
+        gateway: {
+          auth: {
+            mode: "password",
+            password: "shared-gateway-password-1234567890", // pragma: allowlist secret
           },
         },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).rejects.toThrow(/hooks\.token must not match gateway auth password/i);
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.auth.mode).toBe("password");
+    expect(result.generatedToken).toBeUndefined();
   });
 
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
@@ -600,8 +601,8 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
     ).toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("throws when hooks token reuses gateway password auth", () => {
-    expect(() =>
+  it("allows hooks token reuse of gateway password auth", () => {
+    expect(
       assertHooksTokenSeparateFromGatewayAuth({
         cfg: {
           hooks: {
@@ -616,11 +617,11 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
           allowTailscale: false,
         },
       }),
-    ).toThrow(/hooks\.token must not match gateway auth password/i);
+    ).toBeUndefined();
   });
 
-  it("throws when hooks token reuses trusted-proxy local password fallback", () => {
-    expect(() =>
+  it("allows hooks token reuse of trusted-proxy local password fallback", () => {
+    expect(
       assertHooksTokenSeparateFromGatewayAuth({
         cfg: {
           hooks: {
@@ -636,7 +637,7 @@ describe("assertHooksTokenSeparateFromGatewayAuth", () => {
           allowTailscale: false,
         },
       }),
-    ).toThrow(/hooks\.token must not match gateway auth password/i);
+    ).toBeUndefined();
   });
 
   it("allows distinct hooks token when gateway auth is password mode", () => {

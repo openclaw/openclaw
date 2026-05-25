@@ -4,6 +4,7 @@ import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
@@ -36,6 +37,11 @@ import type { ExecFn } from "./windows-acl.js";
 
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
+type SecurityAuditExplicitGatewayAuth = {
+  token?: string;
+  password?: string;
+};
+type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 
 export type {
   SecurityAuditFinding,
@@ -71,7 +77,9 @@ export type SecurityAuditOptions = {
   /** Optional cache for code-safety summaries across repeated deep audits. */
   codeSafetySummaryCache?: Map<string, Promise<unknown>>;
   /** Optional explicit auth for deep gateway probe. */
-  deepProbeAuth?: { token?: string; password?: string };
+  deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
+  /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
+  auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   /** Override workspace used for workspace plugin discovery. */
   workspaceDir?: string;
   /** Dependency injection for tests. */
@@ -96,7 +104,8 @@ export type AuditExecutionContext = {
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
   codeSafetySummaryCache: Map<string, Promise<unknown>>;
-  deepProbeAuth?: { token?: string; password?: string };
+  deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
+  auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   workspaceDir?: string;
 };
 
@@ -399,9 +408,11 @@ export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  options: { gatewayAuthOverride?: SecurityAuditGatewayAuthOverride } = {},
 ): SecurityAuditFinding[] {
   return collectGatewayConfigFindingsBase(cfg, sourceConfig, env, {
     collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
+    gatewayAuthOverride: options.gatewayAuthOverride,
   });
 }
 
@@ -1032,6 +1043,7 @@ async function createAuditExecutionContext(
     configSnapshot,
     codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map<string, Promise<unknown>>(),
     deepProbeAuth: opts.deepProbeAuth,
+    auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
 }
 
@@ -1044,13 +1056,25 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
-  findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
+  findings.push(
+    ...collectGatewayConfigFindings(cfg, context.sourceConfig, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
-  findings.push(...auditNonDeep.collectHooksHardeningFindings(cfg, env));
-  findings.push(...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env));
+  findings.push(
+    ...auditNonDeep.collectHooksHardeningFindings(cfg, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
+  findings.push(
+    ...auditNonDeep.collectGatewayHttpNoAuthFindings(cfg, env, {
+      gatewayAuthOverride: context.auditGatewayAuthOverride,
+    }),
+  );
   findings.push(...auditNonDeep.collectGatewayHttpSessionKeyOverrideFindings(cfg));
   findings.push(...auditNonDeep.collectSandboxDockerNoopFindings(cfg));
   findings.push(...auditNonDeep.collectSandboxDangerousConfigFindings(cfg));
