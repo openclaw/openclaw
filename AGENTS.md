@@ -141,6 +141,15 @@ Skills own workflows; root owns hard policy and routing.
 - Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
 - Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.
 - Use named intermediates only for domain meaning or readability; avoid temp-variable soup.
+- Code size matters. Prefer small clear code; maintainability includes not growing LOC without payoff.
+- Refactors should delete about as much local complexity as they add. If LOC grows, the new ownership/API needs to clearly pay for it.
+- Before adding helpers/files, check whether existing code can absorb the behavior with less new surface.
+- Keep APIs narrow: export only current caller needs; keep types/helpers local by default.
+- Return the smallest useful shape. Avoid broad result objects, flags, metadata unless callers use them.
+- Avoid adapter layers that only rename fields. Move real responsibility or leave code local.
+- Inline simple one-use objects/spreads when clearer. Extract only when it removes duplication or hard logic.
+- Tests prove behavior/regressions, not every internal branch.
+- For non-trivial refactors, check `git diff --numstat` before closeout. If LOC grew, trim or explain why.
 - Dynamic import: no static+dynamic import for same prod module. Use `*.runtime.ts` lazy boundary. After edits: `pnpm build`; check `[INEFFECTIVE_DYNAMIC_IMPORT]`.
 - Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
 - Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.
