@@ -187,6 +187,16 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("keeps Codex model personality disabled on turn/start", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(request.personality).toBe("none");
+  });
+
   it("allows thread config to opt into Codex code-mode-only", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

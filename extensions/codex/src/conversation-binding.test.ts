@@ -113,6 +113,7 @@ describe("codex conversation binding", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "openai-codex:default"',
@@ -169,6 +170,7 @@ describe("codex conversation binding", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
     expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[0]?.params.personality).toBe("none");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "work"',
@@ -661,6 +663,7 @@ describe("codex conversation binding", () => {
     expect(result).toEqual({ handled: true, reply: { text: "Recovered fresh" } });
     expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);
     expect(requests[1]?.params.threadId).toBe("thread-new");
+    expect(requests[1]?.params.personality).toBe("none");
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     );
