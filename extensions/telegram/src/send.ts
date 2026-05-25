@@ -638,8 +638,7 @@ export async function sendMessageTelegram(
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
-  // Resolve link preview setting from config (default: enabled).
-  // Use explicit `=== false` to avoid ?? vs ?: precedence collapse after minification (#86630).
+  // Resolve link preview setting from config (default: enabled, #86630).
   const linkPreviewOptions =
     account.config.linkPreview === false ? { is_disabled: true } : undefined;
 
