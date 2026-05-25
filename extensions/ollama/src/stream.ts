@@ -361,6 +361,35 @@ function isOllamaCloudKimiModelRef(modelId: string): boolean {
   return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
 }
 
+const KIMI_INLINE_REASONING_BOUNDARY = "️";
+const KIMI_INLINE_REASONING_MIN_PREFIX_CHARS = 80;
+const KIMI_INLINE_REASONING_MIN_ANSWER_CHARS = 8;
+
+function stripKimiInlineReasoningFromVisibleText(params: {
+  modelId: string;
+  text: string;
+}): string {
+  if (!isOllamaCloudKimiModelRef(params.modelId)) {
+    return params.text;
+  }
+  const boundaryIndex = params.text.indexOf(KIMI_INLINE_REASONING_BOUNDARY);
+  if (boundaryIndex < 0) {
+    return params.text;
+  }
+  const prefix = params.text.slice(0, boundaryIndex).trim();
+  const answer = params.text.slice(boundaryIndex + KIMI_INLINE_REASONING_BOUNDARY.length).trim();
+  if (!prefix || !answer) {
+    return params.text;
+  }
+  if (prefix.length < KIMI_INLINE_REASONING_MIN_PREFIX_CHARS) {
+    return params.text;
+  }
+  if (answer.length < KIMI_INLINE_REASONING_MIN_ANSWER_CHARS) {
+    return params.text;
+  }
+  return answer;
+}
+
 export function createConfiguredOllamaCompatStreamWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
@@ -951,7 +980,10 @@ export function buildAssistantMessage(
   if (thinking) {
     content.push({ type: "thinking", thinking });
   }
-  const text = response.message.content || "";
+  const text = stripKimiInlineReasoningFromVisibleText({
+    modelId: modelInfo.id,
+    text: response.message.content || "",
+  });
   if (text) {
     content.push({ type: "text", text });
   }
