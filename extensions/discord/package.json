@@ -9,12 +9,12 @@
   "type": "module",
   "dependencies": {
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.47",
+    "discord-api-types": "0.38.48",
     "https-proxy-agent": "9.0.0",
     "opusscript": "0.1.1",
     "typebox": "1.1.38",
     "undici": "8.3.0",
-    "ws": "8.20.1"
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
