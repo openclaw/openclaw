@@ -177,6 +177,7 @@ describe("gateway status output", () => {
             ip: "192.0.2.10",
             version: "2026.5.22",
             platform: "linux",
+            instanceId: "gateway-instance-1",
           },
           {
             kind: "sshTunnel",
@@ -197,6 +198,7 @@ describe("gateway status output", () => {
             ip: "192.0.2.10",
             version: "2026.5.22",
             platform: "linux",
+            instanceId: "gateway-instance-1",
           },
           {
             kind: "configRemote",
@@ -219,6 +221,7 @@ describe("gateway status output", () => {
       ip: "192.0.2.10",
       version: "2026.5.22",
       platform: "linux",
+      instanceId: "gateway-instance-1",
     };
     const warnings = buildGatewayStatusWarnings({
       probed: [
@@ -240,7 +243,7 @@ describe("gateway status output", () => {
     expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
   });
 
-  it("warns when same-host reachable probes have different gateway config identities", () => {
+  it("warns when same-host reachable probes do not report a process identity", () => {
     const self = {
       host: "gateway-host",
       ip: "192.0.2.10",
@@ -249,24 +252,14 @@ describe("gateway status output", () => {
     };
     const warnings = buildGatewayStatusWarnings({
       probed: [
-        createReachableTarget(
-          "localLoopback",
-          self,
-          {
-            kind: "localLoopback",
-            url: "ws://127.0.0.1:18789",
-          },
-          "/tmp/openclaw-main/config.json",
-        ),
-        createReachableTarget(
-          "explicit",
-          self,
-          {
-            kind: "explicit",
-            url: "ws://gateway-host:28789",
-          },
-          "/tmp/openclaw-rescue/config.json",
-        ),
+        createReachableTarget("localLoopback", self, {
+          kind: "localLoopback",
+          url: "ws://127.0.0.1:18789",
+        }),
+        createReachableTarget("explicit", self, {
+          kind: "explicit",
+          url: "ws://gateway-host:28789",
+        }),
       ],
       sshTarget: null,
       sshTunnelStarted: false,

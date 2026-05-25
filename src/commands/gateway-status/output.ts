@@ -34,9 +34,7 @@ function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null
       ? `instance:${entry.self.instanceId.trim().toLowerCase()}`
       : typeof entry.self.deviceId === "string" && entry.self.deviceId.trim()
         ? `device:${entry.self.deviceId.trim().toLowerCase()}`
-        : typeof entry.configSummary?.path === "string" && entry.configSummary.path.trim()
-          ? `config:${entry.configSummary.path.trim().toLowerCase()}`
-          : "";
+        : "";
   if ((!host && !ip) || !discriminator) {
     return null;
   }
