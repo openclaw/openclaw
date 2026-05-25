@@ -33,6 +33,16 @@ describe("parseIdentityMarkdown", () => {
       avatar: "avatars/openclaw.png",
     });
   });
+
+  it("extracts a trailing avatar path from descriptive avatar lines", () => {
+    const content = `
+- **Avatar:** Cyberpunk hawk, amber eyes, circuit board feathers — avatars/hawkeye-avatar.png
+`;
+    const parsed = parseIdentityMarkdown(content);
+    expect(parsed).toEqual({
+      avatar: "avatars/hawkeye-avatar.png",
+    });
+  });
 });
 
 describe("mergeIdentityMarkdownContent", () => {
