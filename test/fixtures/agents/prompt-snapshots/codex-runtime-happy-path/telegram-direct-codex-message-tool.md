@@ -226,16 +226,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 456
   },
   "totalTextOnly": {
-    "chars": 26034,
-    "roughTokens": 6509
+    "chars": 25739,
+    "roughTokens": 6435
   },
   "totalWithDynamicToolsJson": {
-    "chars": 66097,
-    "roughTokens": 16525
+    "chars": 65802,
+    "roughTokens": 16451
   },
   "userInputText": {
-    "chars": 1129,
-    "roughTokens": 283
+    "chars": 834,
+    "roughTokens": 209
   }
 }
 ```
@@ -486,7 +486,7 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 
 ### User: Turn Input Text
 
-````text
+```text
 OpenClaw runtime context for this turn:
 Treat this OpenClaw-provided context as supporting project/user reference for the current request.
 
@@ -503,28 +503,8 @@ The following project context files have been loaded:
 <MEMORY.md contents will be here>
 
 Current user request:
-Conversation info (untrusted metadata):
-```json
-{
-  "chat_id": "user:1000001",
-  "message_id": "tg-msg-0001",
-  "sender_id": "1000001",
-  "sender": "Pash"
-}
-```
-
-Sender (untrusted metadata):
-```json
-{
-  "label": "Pash (1000001)",
-  "id": "1000001",
-  "name": "Pash",
-  "username": "pash"
-}
-```
-
 Can you check whether the nightly build finished and tell me what happened?
-````
+```
 
 ### Tools: Dynamic Tool Catalog
 
