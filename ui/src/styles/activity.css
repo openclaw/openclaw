@@ -1,32 +1,9 @@
 .activity-page {
   display: grid;
-  grid-template-rows: auto auto minmax(260px, 1fr);
+  grid-template-rows: auto minmax(260px, 1fr);
   align-content: start;
   gap: 16px;
   min-height: min(680px, calc(100vh - 180px));
-}
-
-.activity-page__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.activity-page__title {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 650;
-}
-
-.activity-page__subtitle,
-.activity-page__count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.activity-page__count {
-  white-space: nowrap;
 }
 
 .activity-toolbar {
@@ -35,6 +12,15 @@
   flex-wrap: wrap;
   gap: 10px;
   padding-bottom: 2px;
+}
+
+.activity-toolbar__count {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
 }
 
 .activity-field {
@@ -277,13 +263,14 @@
     min-height: calc(100vh - 150px);
   }
 
-  .activity-page__header {
-    display: grid;
-  }
-
-  .activity-page__count,
+  .activity-toolbar__count,
   .activity-entry__meta {
     white-space: normal;
+  }
+
+  .activity-toolbar__count {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
   .activity-entry__summary {

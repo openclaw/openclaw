@@ -81,6 +81,18 @@ describe("renderActivity", () => {
     expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
   });
 
+  it("lets the route shell own the page heading", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(renderActivity(createProps()), container);
+
+    expect(container.querySelector(".activity-page__title")).toBeNull();
+    expect(container.querySelector(".activity-page__subtitle")).toBeNull();
+    expect(container.querySelector(".activity-toolbar__count")?.textContent?.trim()).toBe("1 of 1");
+  });
+
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
     await i18n.setLocale("en");
     const container = document.createElement("div");

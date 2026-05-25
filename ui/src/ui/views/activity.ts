@@ -185,20 +185,7 @@ export function renderActivity(props: ActivityProps) {
     STATUS_ORDER.some((status) => !props.statusFilters[status]);
 
   return html`
-    <section class="activity-page" aria-labelledby="activity-title">
-      <div class="activity-page__header">
-        <div>
-          <div id="activity-title" class="activity-page__title">${t("activity.title")}</div>
-          <div class="activity-page__subtitle">${t("activity.subtitle")}</div>
-        </div>
-        <div class="activity-page__count">
-          ${t("activity.visibleCount", {
-            visible: String(filtered.length),
-            total: String(props.entries.length),
-          })}
-        </div>
-      </div>
-
+    <section class="activity-page" aria-label=${t("activity.title")}>
       <div class="activity-toolbar" aria-label=${t("activity.filtersLabel")}>
         <label class="activity-field activity-field--search">
           <span>${t("activity.search")}</span>
@@ -258,6 +245,12 @@ export function renderActivity(props: ActivityProps) {
           >
             ${t("activity.clear")}
           </button>
+        </div>
+        <div class="activity-toolbar__count" aria-live="polite">
+          ${t("activity.visibleCount", {
+            visible: String(filtered.length),
+            total: String(props.entries.length),
+          })}
         </div>
       </div>
 
