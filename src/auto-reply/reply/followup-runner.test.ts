@@ -2929,6 +2929,11 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     });
 
     const runner = createFollowupRunner({
+      opts: {
+        onUserMessagePersisted: async () => {
+          throw new Error("gateway notification failed");
+        },
+      },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",

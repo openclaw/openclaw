@@ -693,11 +693,24 @@ export function createFollowupRunner(params: {
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
-            const notifyUserMessagePersisted = async (
+            const notifyUserMessagePersisted = (
               message: Parameters<NonNullable<GetReplyOptions["onUserMessagePersisted"]>>[0],
             ) => {
               queuedUserMessagePersistedAcrossFallback = true;
-              await opts?.onUserMessagePersisted?.(message);
+              try {
+                const notification = opts?.onUserMessagePersisted?.(message);
+                if (notification) {
+                  void Promise.resolve(notification).catch((error) => {
+                    logVerbose(
+                      `followup queue: user message persistence notification failed: ${formatErrorMessage(error)}`,
+                    );
+                  });
+                }
+              } catch (error) {
+                logVerbose(
+                  `followup queue: user message persistence notification failed: ${formatErrorMessage(error)}`,
+                );
+              }
             };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
