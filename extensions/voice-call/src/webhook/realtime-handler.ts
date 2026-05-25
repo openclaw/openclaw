@@ -238,6 +238,27 @@ type CallRegistration = {
   initialGreetingInstructions?: string;
 };
 
+function shouldTriggerInitialGreetingOnReady(params: {
+  initialGreetingInstructions?: string;
+  providerId: string;
+}): boolean {
+  if (!params.initialGreetingInstructions) {
+    return false;
+  }
+  return params.providerId !== "openai";
+}
+
+function resolveRealtimeSessionInstructions(params: {
+  baseInstructions?: string;
+  initialGreetingInstructions?: string;
+  providerId: string;
+}): string | undefined {
+  if (params.providerId === "openai" && params.initialGreetingInstructions) {
+    return params.initialGreetingInstructions;
+  }
+  return params.baseInstructions;
+}
+
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
 type RealtimeSpeakResult = {
@@ -653,10 +674,17 @@ export class RealtimeCallHandler {
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
-      instructions: this.config.instructions,
+      instructions: resolveRealtimeSessionInstructions({
+        baseInstructions: this.config.instructions,
+        initialGreetingInstructions,
+        providerId: this.realtimeProvider.id,
+      }),
       tools: this.config.tools,
       initialGreetingInstructions,
-      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
+      triggerGreetingOnReady: shouldTriggerInitialGreetingOnReady({
+        initialGreetingInstructions,
+        providerId: this.realtimeProvider.id,
+      }),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
