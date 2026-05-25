@@ -422,6 +422,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCancelInFlight = false;
   private responseCreatePending = false;
   private pendingResponseCreateInstructions: string | undefined;
+  private responseCreateInFlightInstructions: string | undefined;
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -971,6 +972,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.created":
         this.responseActive = true;
         this.responseCreateInFlight = false;
+        this.responseCreateInFlightInstructions = undefined;
         return;
 
       case "conversation.output_audio.delta":
@@ -1086,6 +1088,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
           this.responseActive = true;
           this.responseCreateInFlight = false;
+          if (this.responseCreateInFlightInstructions) {
+            this.pendingResponseCreateInstructions = this.responseCreateInFlightInstructions;
+            this.responseCreateInFlightInstructions = undefined;
+          }
           this.responseCreatePending = true;
           return;
         }
@@ -1201,6 +1207,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreatePending = false;
     this.pendingResponseCreateInstructions = undefined;
     this.responseCreateInFlight = true;
+    this.responseCreateInFlightInstructions = instructions;
     this.sendEvent(
       instructions
         ? {
@@ -1229,6 +1236,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
     this.pendingResponseCreateInstructions = undefined;
+    this.responseCreateInFlightInstructions = undefined;
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
