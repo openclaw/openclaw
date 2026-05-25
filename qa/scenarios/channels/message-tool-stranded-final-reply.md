@@ -30,8 +30,9 @@ execution:
   config:
     conversationId: qa-stranded-dm
     promptSnippet: qa stranded final reply check
-    prompt: "qa stranded final reply check. reply with exactly `QA-STRANDED-85714`"
+    prompt: "qa stranded final reply check. Reply to me directly in plain text with exactly `QA-STRANDED-85714`. Do NOT call any tool. Do NOT use the message tool."
     expectedMarker: QA-STRANDED-85714
+    strandedLogNeedle: "source-reply/stranded"
 ```
 
 ```yaml qa-flow
@@ -47,6 +48,9 @@ steps:
           - ref: env
           - 60000
       - call: reset
+      - set: logCursor
+        value:
+          expr: markGatewayLogCursor()
       - set: requestCountBefore
         value:
           expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
@@ -74,5 +78,15 @@ steps:
           expr: "!env.mock || scenarioRequests.every((request) => request.plannedToolName !== 'message')"
           message:
             expr: "`model should not have planned the message tool, saw ${JSON.stringify(scenarioRequests.map((request) => request.plannedToolName ?? null))}`"
-    detailsExpr: "`no-outbound stranded reply; mock requests=${scenarioRequests.length}`"
+      - set: strandedLog
+        value:
+          expr: "String(readGatewayLogs() ?? '').slice(logCursor)"
+      - set: strandedLine
+        value:
+          expr: "(strandedLog.split('\\n').find((line) => line.includes(config.strandedLogNeedle)) ?? '').trim()"
+      - assert:
+          expr: "strandedLog.includes(config.strandedLogNeedle)"
+          message:
+            expr: "`expected the gateway to log ${config.strandedLogNeedle} after a stranded message_tool_only reply, but it was absent`"
+    detailsExpr: "`no-outbound stranded reply; WARN logged=${strandedLog.includes(config.strandedLogNeedle)}; mock requests=${scenarioRequests.length}; gateway log: ${strandedLine}`"
 ```

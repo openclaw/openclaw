@@ -2995,16 +2995,25 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
 });
 
 describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
-  async function runStrandedCase(params: { messagingToolSentTargets?: unknown[] }) {
+  async function runStrandedCase(params: {
+    messagingToolSentTargets?: unknown[];
+    finalAssistantText?: string;
+    payloadText?: string;
+  }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "stranded";
     const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 1_000 };
     await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
 
+    const finalAssistantText =
+      params.finalAssistantText ?? "Here is the answer the user asked for.";
     runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "Here is the answer the user asked for." }],
-      meta: { agentMeta: {} },
+      // payloadText can differ from the assistant text to simulate metadata-only
+      // payloads (verbose notices, usage line) that must NOT trigger the warn —
+      // detection keys off the assistant final text, not the payload bundle.
+      payloads: [{ text: params.payloadText ?? finalAssistantText }],
+      meta: { agentMeta: {}, finalAssistantVisibleText: finalAssistantText },
       ...(params.messagingToolSentTargets
         ? { messagingToolSentTargets: params.messagingToolSentTargets }
         : {}),
@@ -3080,6 +3089,17 @@ describe("runReplyAgent stranded message_tool_only reply (#85714)", () => {
   it("does not warn when the message tool delivered this turn", async () => {
     await runStrandedCase({
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+    });
+    expect(warnStrandedSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn on an intentional NO_REPLY turn even when metadata payloads remain", async () => {
+    // Assistant went silent (NO_REPLY), but a verbose/usage metadata payload
+    // survives in finalPayloads. The warn must key off the assistant text, not
+    // the payload bundle, so no stranded warning should fire.
+    await runStrandedCase({
+      finalAssistantText: "NO_REPLY",
+      payloadText: "🧹 Auto-compaction complete (count 1).",
     });
     expect(warnStrandedSpy).not.toHaveBeenCalled();
   });
