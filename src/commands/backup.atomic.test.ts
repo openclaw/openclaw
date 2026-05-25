@@ -64,6 +64,24 @@ describe("backupCreateCommand atomic archive write", () => {
     }
   }
 
+  it("creates temp archive inside system temp directory, not output directory", async () => {
+    const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
+      archivePrefix: "openclaw-backup-temp-dir-",
+    });
+    try {
+      tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {
+        expect(file.startsWith(os.tmpdir())).toBe(true);
+        expect(file.startsWith(archiveDir)).toBe(false);
+        await fs.writeFile(file, "archive-bytes", "utf8");
+      });
+
+      const result = await backupCreateCommand(runtime, { output: outputPath });
+      expect(result.archivePath).toBe(outputPath);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not leave a partial final archive behind when tar creation fails", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-failure-",

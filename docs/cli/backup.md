@@ -56,6 +56,10 @@ The archive payload stores file contents from those source trees, and the embedd
 
 During archive creation, OpenClaw skips known live-mutation files that do not have restoration value, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted.
 
+## Temporary files
+
+OpenClaw creates a temporary archive inside the system temp directory (`/tmp` on Linux/macOS, `%TEMP%` on Windows) while building the backup. If the process receives a graceful **SIGINT** or **SIGTERM**, the staging directory is cleaned up before exit. Hard kills (SIGKILL, crashes, or hard timeout kills) may still leave temp files behind.
+
 Installed plugin source and manifest files under the state directory's
 `extensions/` tree are included, but their nested `node_modules/` dependency
 trees are skipped. Those dependencies are rebuildable install artifacts; after

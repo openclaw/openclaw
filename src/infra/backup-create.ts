@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +51,12 @@ export type BackupCreateOptions = {
    * silent aside from the final result.
    */
   log?: (message: string) => void;
+  /**
+   * Optional callback that receives a synchronous cleanup handler.
+   * CLI callers can use this to register signal-based cleanup without
+   * embedding process-level hooks inside the shared helper.
+   */
+  onCleanup?: (handler: () => void) => void;
 };
 
 type BackupManifestAsset = {
@@ -503,7 +509,13 @@ export async function createBackupArchive(
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
-  const tempArchivePath = buildTempArchivePath(outputPath);
+  const tempArchivePath = path.join(tempDir, `archive.${randomUUID()}.tmp`);
+
+  // Let CLI callers register signal-based cleanup while keeping this helper
+  // free of process-level hooks.
+  let cleanupOnSignal: (() => void) | null = null;
+  opts.onCleanup?.((handler) => { cleanupOnSignal = handler; });
+
   try {
     const manifest = buildManifest({
       createdAt,
@@ -579,6 +591,7 @@ export async function createBackupArchive(
     }
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
+    cleanupOnSignal?.();
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
