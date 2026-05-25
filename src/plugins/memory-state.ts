@@ -1,6 +1,6 @@
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -45,12 +45,37 @@ export type MemoryCorpusSupplement = {
     query: string;
     maxResults?: number;
     agentSessionKey?: string;
+    /**
+     * The engine corpus scope the caller requested. Supplements that
+     * want to specialize on `wiki` vs `all` can branch on this. The
+     * engine helper early-returns for `"memory"` and `"sessions"`, so
+     * in practice supplements only ever observe `"wiki"`, `"all"`, or
+     * `undefined`.
+     */
+    corpus?: "memory" | "wiki" | "all" | "sessions";
+    /**
+     * Candidates the engine has already computed for this query (via the
+     * built-in `manager.search`) on the same turn. Supplements that
+     * rerank, filter, or annotate existing results can use these
+     * directly instead of issuing a redundant `manager.search`. Optional
+     * so existing supplements that produce their own results (e.g.
+     * compiled wiki corpora) keep working unchanged. Only populated when
+     * the engine had a base result set in scope at supplement-invocation
+     * time (i.e. `corpus !== "wiki"` paths).
+     */
+    engineCandidates?: MemorySearchResult[];
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
     agentSessionKey?: string;
+    /**
+     * The engine corpus scope the caller requested. Mirrors the field
+     * on `search` so supplements can apply the same scope-aware logic
+     * to lookups.
+     */
+    corpus?: "memory" | "wiki" | "all" | "sessions";
   }): Promise<MemoryCorpusGetResult | null>;
 };
 

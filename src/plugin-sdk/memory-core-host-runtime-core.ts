@@ -34,6 +34,10 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
+// Re-export MemorySearchResult so supplements consuming the new
+// `engineCandidates` field can import its type from the same subpath
+// they already use for the corpus types.
+export type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
   clearMemoryPluginState,

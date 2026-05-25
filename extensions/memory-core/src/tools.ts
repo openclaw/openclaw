@@ -369,6 +369,13 @@ export function createMemorySearchTool(options: {
                 maxResults,
                 agentSessionKey: options.agentSessionKey,
                 corpus: requestedCorpus,
+                // Forward the engine's already-computed candidates so
+                // reranker/filter supplements can operate on them
+                // directly without re-running manager.search. Empty
+                // array if shouldQueryMemory was false (e.g.
+                // corpus=wiki — supplements that need candidates can
+                // detect this and fall back to their own retrieval).
+                engineCandidates: rawResults,
               })
             : [];
           // Wiki and memory scores use incomparable scales, so corpus=all first
