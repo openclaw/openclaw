@@ -4,6 +4,7 @@ import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
+  isRecord as isMessageRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -158,10 +159,6 @@ function normalizeForStableHash(value: unknown): unknown {
 
 function stableHash(value: unknown) {
   return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
-}
-
-function isMessageRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readUsageTotals(raw: unknown): RuntimeParityUsage {

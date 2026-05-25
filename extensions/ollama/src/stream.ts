@@ -29,6 +29,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -703,10 +704,6 @@ function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unkn
       }
     }
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
