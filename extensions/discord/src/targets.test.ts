@@ -245,6 +245,17 @@ describe("resolveDiscordTarget", () => {
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
     expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
   });
+
+  it("resolves bare numeric ids as channels with explicit defaultKind channel", async () => {
+    expectTargetFields(
+      await resolveDiscordTarget(
+        "273512430271856640",
+        { cfg, accountId: "default" },
+        { defaultKind: "channel" },
+      ),
+      { kind: "channel", id: "273512430271856640", normalized: "channel:273512430271856640" },
+    );
+  });
 });
 
 describe("normalizeDiscordMessagingTarget", () => {

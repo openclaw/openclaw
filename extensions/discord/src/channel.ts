@@ -341,11 +341,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             ).resolveDiscordTarget(
               input,
               { cfg, accountId },
-              preferredKind === "user"
-                ? { defaultKind: "user" }
-                : preferredKind === "channel" || preferredKind === "group"
-                  ? { defaultKind: "channel" }
-                  : {},
+              preferredKind === "user" ? { defaultKind: "user" } : { defaultKind: "channel" },
             );
             if (!resolved) {
               return null;
