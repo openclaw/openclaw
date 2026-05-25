@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -194,10 +195,6 @@ function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig
   return (
     config.vaultMode === "bridge" && config.bridge.enabled && config.bridge.readMemoryArtifacts
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isBoundedGatewayString(
