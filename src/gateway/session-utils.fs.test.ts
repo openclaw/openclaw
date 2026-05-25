@@ -2007,11 +2007,21 @@ describe("oversized transcript line guards", () => {
       maxMessages: 10,
     });
 
+    // The oversized line's id and parentId are extracted by regex from the
+    // prefix bytes. parentId drives active-tree selection; id is attached
+    // to the __openclaw metadata. Both must be correct for the record to
+    // appear in the right position.
+    expect(out).toHaveLength(2); // root-msg + oversized-child
+    const oversized = out[1] as Record<string, unknown>;
+    expect(oversized.role).toBe("assistant");
+    // id is preserved in __openclaw transcript metadata
+    const meta = (oversized as Record<string, Record<string, unknown>>).__openclaw;
+    expect(meta?.id).toBe("oversized-child");
+    // parentId extraction is proven by the record being included:
+    // if parentId was not extracted, the tree would orphan this node.
+
+    // The oversized content must NOT appear in the output.
     const serialized = JSON.stringify(out);
-    // The oversized line's id and parentId must be extracted correctly
-    // from the prefix via regex-based field extraction.
-    expect(serialized).toContain("oversized-child");
-    expect(serialized).toContain("root-msg");
     expect(serialized).not.toContain(oversizedContent);
   });
 
