@@ -18,4 +18,11 @@ describe("provider model id normalization", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
     expect(normalizeGooglePreviewModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");
   });
+
+  it("keeps the bare Gemini 3.1 Flash-Lite API id unchanged", () => {
+    expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+    expect(normalizeGooglePreviewModelId("google/gemini-3.1-flash-lite")).toBe(
+      "google/gemini-3.1-flash-lite",
+    );
+  });
 });

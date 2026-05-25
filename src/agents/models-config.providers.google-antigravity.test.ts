@@ -7,9 +7,6 @@ vi.mock("../plugins/provider-runtime.js", () => {
     if (provider === "google-antigravity") {
       return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
     }
-    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite") {
-      return "gemini-3.1-flash-lite-preview";
-    }
     return modelId;
   }
 
@@ -113,27 +110,9 @@ describe("google-antigravity provider normalization", () => {
 });
 
 describe("google-vertex provider normalization", () => {
-  it("normalizes gemini flash-lite IDs for google-vertex providers", () => {
+  it("keeps current gemini flash-lite IDs for google-vertex providers", () => {
     const providers = {
       "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"], {
-        api: undefined,
-      }),
-      openai: buildProvider(["gpt-5"]),
-    };
-
-    const normalized = normalizeProviderMap(providers);
-
-    expect(normalized).not.toBe(providers);
-    expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
-      "gemini-3.1-flash-lite-preview",
-      "gemini-3-flash-preview",
-    ]);
-    expect(normalized?.openai).toBe(providers.openai);
-  });
-
-  it("returns original providers object when no google-vertex IDs need normalization", () => {
-    const providers = {
-      "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], {
         api: undefined,
       }),
     };

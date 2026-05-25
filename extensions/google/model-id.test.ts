@@ -36,7 +36,10 @@ describe("google model id helpers", () => {
     );
   });
 
-  it("adds the preview suffix for gemini 3.1 flash-lite", () => {
-    expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite-preview");
+  it("keeps the bare Gemini 3.1 Flash-Lite API id unchanged", () => {
+    expect(normalizeGoogleModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+    expect(normalizeGoogleModelId("google/gemini-3.1-flash-lite")).toBe(
+      "google/gemini-3.1-flash-lite",
+    );
   });
 });
