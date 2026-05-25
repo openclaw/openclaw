@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type {
   OllamaVisibleContentSanitizer,
   OllamaVisibleContentStreamResolution,
-} from "./visible-content.js";
+} from "./visible-content-contract.js";
 
 const INLINE_REASONING_MIN_PREFIX_CHARS = 80;
 const INLINE_REASONING_MAX_PENDING_CHARS = 512;
