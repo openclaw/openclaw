@@ -28,6 +28,7 @@ import {
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
+  readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
   recordShortTermRecalls,
@@ -1723,7 +1724,7 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const entries = await filterLiveShortTermRecallEntries({
+  const allEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
     entries: filterRecallEntriesWithinLookback({
       entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
@@ -1731,6 +1732,14 @@ async function runRemDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
+  // Prefer entries staged by light sleep so REM synthesises from the
+  // sequential light→REM pipeline instead of rescanning the full store.
+  const lightKeys = await readLightStagedKeys({
+    workspaceDir: params.workspaceDir,
+    nowMs,
+  });
+  const entries =
+    lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : allEntries;
   const preview = previewRemDreaming({
     entries,
     limit: params.config.limit,

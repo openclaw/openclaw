@@ -1222,6 +1222,26 @@ export async function recordDreamingPhaseSignals(params: {
   });
 }
 
+export async function readLightStagedKeys(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<Set<string>> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return new Set();
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const store = await readPhaseSignalStore(workspaceDir, nowIso);
+  const keys = new Set<string>();
+  for (const [key, entry] of Object.entries(store.entries)) {
+    if (entry.lightHits > 0) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
 export async function rankShortTermPromotionCandidates(
   options: RankShortTermPromotionOptions,
 ): Promise<PromotionCandidate[]> {
