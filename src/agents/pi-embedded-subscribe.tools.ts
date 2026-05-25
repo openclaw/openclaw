@@ -2,6 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -141,12 +142,6 @@ function extractDirectErrorCodeField(value: unknown): string | undefined {
     readErrorCodeField(record.code) ??
     readErrorCodeField(record.gatewayCode)
   );
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 export function buildToolLifecycleErrorResult(error: unknown): {
