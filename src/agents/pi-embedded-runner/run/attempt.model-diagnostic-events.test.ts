@@ -4,6 +4,7 @@ import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
   waitForDiagnosticEventsDrained,
@@ -260,6 +261,36 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       await waitForDiagnosticEventsDrained();
       stop();
     }
+  });
+
+  it("does not retain stream progress activity when diagnostics are disabled", async () => {
+    setDiagnosticsEnabledForProcess(false);
+    async function* stream() {
+      yield { type: "text_delta", delta: "first" };
+      yield { type: "text_delta", delta: "second" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-disabled-diagnostics",
+      },
+    );
+
+    await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      }),
+    ).toEqual({});
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
