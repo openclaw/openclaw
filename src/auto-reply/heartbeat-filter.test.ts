@@ -914,14 +914,57 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     ]);
   });
 
-  it("preserves meaningful heartbeat output without terminal artifacts", () => {
-    const meaningfulMessages = [
+  it("removes trailing heartbeat output when no user message follows", () => {
+    const trailingMessages = [
       { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "Status HEARTBEAT_OK due to watchdog failure" },
     ];
     expect(
+      filterHeartbeatTranscriptArtifacts(trailingMessages, undefined, HEARTBEAT_PROMPT),
+    ).toEqual([]);
+  });
+
+  it("preserves meaningful heartbeat output when user interacts afterward", () => {
+    const meaningfulMessages = [
+      { role: "user", content: HEARTBEAT_PROMPT },
+      { role: "assistant", content: "Status HEARTBEAT_OK due to watchdog failure" },
+      { role: "user", content: "tell me more about the watchdog failure" },
+    ];
+    expect(
       filterHeartbeatTranscriptArtifacts(meaningfulMessages, undefined, HEARTBEAT_PROMPT),
     ).toEqual(meaningfulMessages);
+  });
+
+  it("removes trailing heartbeat response without HEARTBEAT_OK token", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+      { role: "user", content: HEARTBEAT_PROMPT },
+      { role: "assistant", content: "I checked your notifications and there is nothing new." },
+    ];
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+    ]);
+  });
+
+  it("preserves trailing heartbeat with tool activity even without user follow-up", () => {
+    const messages = [
+      { role: "user", content: HEARTBEAT_PROMPT },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_bash", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_bash",
+        content: [{ type: "text", text: "HEARTBEAT.md says deploy is failing" }],
+      },
+      { role: "assistant", content: "Your deployment has been failing for 3 hours." },
+    ];
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
+      messages,
+    );
   });
 
   it("preserves helper tool turns when the heartbeat produces a visible alert", () => {
