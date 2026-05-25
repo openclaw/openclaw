@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Scripts: give each gateway restart benchmark phase its own timeout budget so long restart-count profiling does not fail itself on the total sample wall clock.
 - Scripts: make the gateway restart benchmark fail by default when a restart probe fails instead of reporting a nonzero failure rate with exit 0.
 - Scripts: build CLI startup artifacts before the gateway CPU startup bench so fresh Linux runners do not report false `n/a` readiness and process metrics.
 - Scripts: keep intentional Knip unused-file findings optional so full CI and sparse proof workspaces stay aligned.

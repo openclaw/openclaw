@@ -325,7 +325,7 @@ Options:
   --runs <n>               Measured process samples per case (default: ${DEFAULT_RUNS})
   --warmup <n>             Warmup process samples per case (default: ${DEFAULT_WARMUP})
   --restarts <n>           In-process restarts per process sample (default: ${DEFAULT_RESTARTS})
-  --timeout-ms <ms>        Per-process timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>        Timeout for initial startup and each restart (default: ${DEFAULT_TIMEOUT_MS})
   --post-ready-delay-ms <ms> Resource snapshot delay after next ready (default: ${DEFAULT_POST_READY_DELAY_MS})
   --output <path>          Write machine-readable JSON to a file
   --json                   Emit machine-readable JSON
@@ -1257,6 +1257,10 @@ async function waitForIterationCondition(
   return predicate();
 }
 
+function resolvePhaseDeadlineAt(startedAt: number, timeoutMs: number): number {
+  return startedAt + timeoutMs;
+}
+
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   entry: string;
@@ -1270,7 +1274,7 @@ async function runGatewaySample(options: {
   const configPath = writeConfig(root, options.benchCase);
   const env = sanitizedEnv(root, configPath, options.benchCase);
   const sampleStartAt = performance.now();
-  const deadlineAt = sampleStartAt + options.timeoutMs;
+  const initialDeadlineAt = resolvePhaseDeadlineAt(sampleStartAt, options.timeoutMs);
   const initialStartupTrace: Record<string, number> = {};
   const events: BenchmarkEvent[] = [{ ms: 0, type: "process.spawn.start" }];
   const output: string[] = [];
@@ -1388,7 +1392,7 @@ async function runGatewaySample(options: {
 
   let failureCode: GatewayRestartFailureCode | null = null;
   const initialHealthz = await waitForProbeReady({
-    deadlineAt,
+    deadlineAt: initialDeadlineAt,
     isDone: () => childExited,
     path: "/healthz",
     port,
@@ -1400,7 +1404,7 @@ async function runGatewaySample(options: {
   const initialReadyz =
     failureCode === null
       ? await waitForProbeReady({
-          deadlineAt,
+          deadlineAt: initialDeadlineAt,
           isDone: () => childExited,
           path: "/readyz",
           port,
@@ -1415,7 +1419,7 @@ async function runGatewaySample(options: {
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     await waitForIterationCondition(
       () => hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs }),
-      deadlineAt,
+      initialDeadlineAt,
     );
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     if (!hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs })) {
@@ -1426,7 +1430,7 @@ async function runGatewaySample(options: {
   const iterations: RestartIteration[] = [];
   if (failureCode === null) {
     for (let index = 1; index <= options.restarts; index += 1) {
-      if (performance.now() >= deadlineAt || childExited) {
+      if (childExited) {
         failureCode = resolveRestartDeadlineFailure(childExited);
         break;
       }
@@ -1456,10 +1460,11 @@ async function runGatewaySample(options: {
       }
       const signalSentAt = performance.now();
       iteration.signalSentMs = signalSentAt - sampleStartAt;
+      const iterationDeadlineAt = resolvePhaseDeadlineAt(signalSentAt, options.timeoutMs);
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
 
       const healthzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1470,7 +1475,7 @@ async function runGatewaySample(options: {
         signalSentAt,
       });
       const readyzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1484,10 +1489,10 @@ async function runGatewaySample(options: {
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));
-      await waitForIterationCondition(() => hasRestartReadySignal(iteration), deadlineAt);
-      if (options.postReadyDelayMs > 0 && performance.now() < deadlineAt) {
+      await waitForIterationCondition(() => hasRestartReadySignal(iteration), iterationDeadlineAt);
+      if (options.postReadyDelayMs > 0 && performance.now() < iterationDeadlineAt) {
         await delay(
-          Math.min(options.postReadyDelayMs, Math.max(0, deadlineAt - performance.now())),
+          Math.min(options.postReadyDelayMs, Math.max(0, iterationDeadlineAt - performance.now())),
         );
       }
       iteration.resourceSnapshots.push(
@@ -1687,6 +1692,7 @@ export const testing = {
   parsePositiveInt,
   resolveRestartDeadlineFailure,
   resolveEntry,
+  resolvePhaseDeadlineAt,
   sanitizedEnv,
   shouldFailBenchmark,
   summarizeCase,

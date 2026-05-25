@@ -25,6 +25,7 @@ describe("gateway restart benchmark script", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("OpenClaw Gateway restart benchmark");
     expect(result.stdout).toContain("--restarts <n>");
+    expect(result.stdout).toContain("Timeout for initial startup and each restart");
     expect(result.stdout).toContain("--post-ready-delay-ms <ms>");
     expect(result.stdout).toContain("skipChannels (gateway restart, skip channels)");
     expect(result.stdout).toContain(
@@ -207,6 +208,15 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("reports deadline expiry separately from child exit", () => {
     expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
+  });
+
+  it("budgets timeout per restart instead of against the whole sample", () => {
+    const sampleStartAt = 1_000;
+    const timeoutMs = 30_000;
+    const restart20SignalAt = sampleStartAt + 25_000;
+
+    expect(testing.resolvePhaseDeadlineAt(sampleStartAt, timeoutMs)).toBe(31_000);
+    expect(testing.resolvePhaseDeadlineAt(restart20SignalAt, timeoutMs)).toBe(56_000);
   });
 
   it("does not fail successful restarts when probes miss the unavailable window", () => {
