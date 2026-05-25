@@ -97,7 +97,7 @@ describe("isLikelyContextOverflowError", () => {
   it("detects Codex promptError wording for a full context window", () => {
     expect(
       isLikelyContextOverflowError(
-        "Codex ran out of room in the model's context window. Start a new session or reset the conversation.",
+        "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
   });
