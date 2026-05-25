@@ -585,6 +585,61 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("derives message sequence for selected-session transcript subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "selected-session.jsonl");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "user",
+      content: [{ type: "text", text: "early selected prompt" }],
+      timestamp: Date.now(),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({ id: "msg-selected", message: transcriptMessage }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", {
+        key: "main",
+      });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.key).toBe("agent:main:main");
+
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "agent:main:main",
+        message: transcriptMessage,
+        messageId: "msg-selected",
+      });
+
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-selected",
+        messageSeq: 1,
+      });
+    } finally {
+      ws.close();
+    }
+  });
+
   test("includes spawnedBy metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     const transcriptPath = path.join(path.dirname(storePath), "sess-child.jsonl");
