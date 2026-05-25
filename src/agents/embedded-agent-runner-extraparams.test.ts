@@ -733,7 +733,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
-  it("does not add DeepSeek V4 thinking params when compat uses OpenAI-style reasoning", () => {
+  it("does not add DeepSeek V4 thinking params on the Foundry fallback path", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "microsoft-foundry",
       applyModelId: "deepseek-v4-pro",
@@ -742,7 +742,6 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-completions",
         provider: "microsoft-foundry",
         id: "deepseek-v4-pro",
-        compat: { thinkingFormat: "openai", supportsReasoningEffort: true },
       } as Model<"openai-completions">,
       payload: {
         reasoning_effort: "high",

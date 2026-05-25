@@ -898,11 +898,9 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  const thinkingFormat = (model as { compat?: { thinkingFormat?: unknown } }).compat
-    ?.thinkingFormat;
   return (
     model.api === "openai-completions" &&
-    thinkingFormat !== "openai" &&
+    model.provider !== "microsoft-foundry" &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
 }
