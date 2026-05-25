@@ -211,6 +211,32 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     vi.restoreAllMocks();
   });
 
+  it("flushes block replies again after compaction retry wait resolves", async () => {
+    const order: string[] = [];
+    let flushCount = 0;
+    const onBlockReplyFlush = vi.fn(async () => {
+      flushCount += 1;
+      order.push(`flush-${flushCount}`);
+    });
+    hoisted.waitForCompactionRetryWithAggregateTimeoutMock.mockImplementation(async () => {
+      order.push("retry-wait");
+      return { timedOut: false };
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        onBlockReplyFlush,
+      },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
+    expect(hoisted.waitForCompactionRetryWithAggregateTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["flush-1", "retry-wait", "flush-2"]);
+  });
+
   it("enables Tool Search controls for embedded PI runs when configured", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
