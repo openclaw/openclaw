@@ -332,6 +332,16 @@ describe("session MCP runtime", () => {
     expect(nestedAnchorValidator(1).valid).toBe(false);
   });
 
+  it("accepts draft-2020-12 local refs into schema arrays", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      anyOf: [{ type: "string" }],
+      $ref: "#/anyOf/0",
+    });
+    expect(validator("ok").valid).toBe(true);
+    expect(validator(1).valid).toBe(false);
+  });
+
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
     const catalogA = [
       { toolName: "alpha?", description: "question" },

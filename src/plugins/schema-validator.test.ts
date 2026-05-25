@@ -331,6 +331,31 @@ describe("schema validator", () => {
     });
   });
 
+  it("accepts local refs into schema arrays", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.array-ref",
+        schema: {
+          anyOf: [{ type: "string" }],
+          $ref: "#/anyOf/0",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.tuple-ref",
+        schema: {
+          items: [{ type: "string" }],
+          $ref: "#/items/0",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+  });
+
   it("applies defaults through refs that target embedded schema resources", () => {
     expectSuccessfulValidationValue({
       input: {

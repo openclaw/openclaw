@@ -213,10 +213,17 @@ function resolveLocalRef(resourceRoot: JsonSchemaValue, ref: string): LocalRefRe
     let current: unknown = resourceRoot;
     let currentResourceRoot = resourceRoot;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
-      if (!isRecord(current)) {
+      if (Array.isArray(current)) {
+        const index = Number(segment);
+        if (!Number.isInteger(index) || index < 0) {
+          return { found: false };
+        }
+        current = current[index];
+      } else if (isRecord(current)) {
+        current = current[segment];
+      } else {
         return { found: false };
       }
-      current = current[segment];
       if (isRecord(current) && typeof current.$id === "string") {
         currentResourceRoot = current as JsonSchemaValue;
       }
