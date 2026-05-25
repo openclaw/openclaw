@@ -1302,6 +1302,8 @@ export async function runEmbeddedAttempt(
     | undefined;
   let beforeAgentRunBlocked = false;
   let beforeAgentRunBlockedBy: string | undefined;
+  // Releases the eager session lock if post-prompt code exits before cleanup.
+  let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
@@ -2140,6 +2142,7 @@ export async function runEmbeddedAttempt(
         ...sessionWriteLockOptions,
       },
     });
+    releaseRetainedSessionLock = () => sessionLockController.dispose();
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -5070,6 +5073,13 @@ export async function runEmbeddedAttempt(
       }
     }
   } finally {
+    try {
+      await releaseRetainedSessionLock?.();
+    } catch (releaseErr) {
+      log.error(
+        `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
+      );
+    }
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),
