@@ -3609,17 +3609,17 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ];
 
     const first = loadOpenClawPlugins(options);
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual(expectedArtifacts);
 
     clearMemoryPluginState();
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: options.config as never }),
+    ).resolves.toEqual(expectedArtifacts);
   });
 
   it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
@@ -3684,9 +3684,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     ];
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: activateConfig as never }),
+    ).resolves.toEqual(expectedArtifacts);
 
     // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
     // load plugins again with activate:false. Each per-plugin snapshot/rollback must
@@ -3698,9 +3698,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config: activateConfig,
     });
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
-      expectedArtifacts,
-    );
+    await expect(
+      listActiveMemoryPublicArtifacts({ cfg: activateConfig as never }),
+    ).resolves.toEqual(expectedArtifacts);
   });
 
   it("uses discovery registration mode for non-activating loads", () => {

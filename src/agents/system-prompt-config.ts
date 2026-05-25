@@ -52,5 +52,6 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   return buildAgentSystemPrompt({
     ...renderParams,
     ...configParams,
+    memoryContext: config ? { cfg: config, agentId } : undefined,
   });
 }

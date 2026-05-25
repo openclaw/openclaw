@@ -110,6 +110,7 @@ import {
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
+  listMemoryCapabilityRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   listMemoryRuntimeRegistrations,
@@ -337,6 +338,7 @@ type CachedPluginState = {
   commands?: ReturnType<typeof listRegisteredPluginCommands>;
   interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+  memoryCapabilities: ReturnType<typeof listMemoryCapabilityRegistrations>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryRuntimes: ReturnType<typeof listMemoryRuntimeRegistrations>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -1796,6 +1798,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
+          capabilities: cached.state.memoryCapabilities,
           corpusSupplements: cached.state.memoryCorpusSupplements,
           runtimes: cached.state.memoryRuntimes,
           promptSupplements: cached.state.memoryPromptSupplements,
@@ -2707,6 +2710,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
+      const previousMemoryCapabilities = listMemoryCapabilityRegistrations();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
@@ -2729,6 +2733,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
+            capabilities: previousMemoryCapabilities,
             corpusSupplements: previousMemoryCorpusSupplements,
             runtimes: previousMemoryRuntimes,
             promptSupplements: previousMemoryPromptSupplements,
@@ -2746,6 +2751,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
+          capabilities: previousMemoryCapabilities,
           corpusSupplements: previousMemoryCorpusSupplements,
           runtimes: previousMemoryRuntimes,
           promptSupplements: previousMemoryPromptSupplements,
@@ -2819,6 +2825,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
           interactiveHandlers: listPluginInteractiveHandlers(),
           memoryCapability: getMemoryCapabilityRegistration(),
+          memoryCapabilities: listMemoryCapabilityRegistrations(),
           memoryCorpusSupplements: listMemoryCorpusSupplements(),
           memoryRuntimes: listMemoryRuntimeRegistrations(),
           registry,

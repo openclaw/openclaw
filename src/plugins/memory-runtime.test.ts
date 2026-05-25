@@ -14,6 +14,8 @@ const applyPluginAutoEnableMock =
 const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
 const getMemoryRuntimeForPluginMock =
   vi.fn<typeof import("./memory-state.js").getMemoryRuntimeForPlugin>();
+const listMemoryRuntimeRegistrationsMock =
+  vi.fn<typeof import("./memory-state.js").listMemoryRuntimeRegistrations>();
 const resolveAgentWorkspaceDirMock =
   vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
 const resolveAgentConfigMock = vi.fn<typeof import("../agents/agent-scope.js").resolveAgentConfig>(
@@ -51,6 +53,7 @@ vi.mock("./runtime/standalone-runtime-registry-loader.js", () => ({
 vi.mock("./memory-state.js", () => ({
   getMemoryRuntime: () => getMemoryRuntimeMock(),
   getMemoryRuntimeForPlugin: (pluginId: string) => getMemoryRuntimeForPluginMock(pluginId),
+  listMemoryRuntimeRegistrations: () => listMemoryRuntimeRegistrationsMock(),
 }));
 
 let getActiveMemorySearchManager: typeof import("./memory-runtime.js").getActiveMemorySearchManager;
@@ -169,6 +172,8 @@ describe("memory runtime auto-enable loading", () => {
     getMemoryRuntimeMock.mockReset();
     getMemoryRuntimeForPluginMock.mockReset();
     getMemoryRuntimeForPluginMock.mockImplementation(() => getMemoryRuntimeMock());
+    listMemoryRuntimeRegistrationsMock.mockReset();
+    listMemoryRuntimeRegistrationsMock.mockReturnValue([]);
     resolveAgentConfigMock.mockClear();
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
@@ -501,6 +506,31 @@ describe("memory runtime auto-enable loading", () => {
     },
   ] as const)("$name", async ({ config, setup }) => {
     await expectCloseMemoryRuntimeCase({ config, setup });
+  });
+
+  it("closes every registered memory runtime once without reloading plugins", async () => {
+    const sharedRuntime = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+      closeAllMemorySearchManagers: vi.fn(async () => {}),
+    };
+    const agentRuntime = {
+      getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+      resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
+      closeAllMemorySearchManagers: vi.fn(async () => {}),
+    };
+    getMemoryRuntimeMock.mockReturnValue(sharedRuntime);
+    listMemoryRuntimeRegistrationsMock.mockReturnValue([
+      { pluginId: "memory-core", runtime: sharedRuntime },
+      { pluginId: "openclaw-honcho", runtime: agentRuntime },
+      { pluginId: "memory-alias", runtime: agentRuntime },
+    ]);
+
+    await closeActiveMemorySearchManagers({} as never);
+
+    expect(sharedRuntime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+    expect(agentRuntime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+    expectNoMemoryRuntimeBootstrap();
   });
 
   it("delegates scoped cleanup to the loaded memory runtime without reloading plugins", async () => {

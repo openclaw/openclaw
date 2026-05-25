@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { getMemoryRuntime, getMemoryRuntimeForPlugin } from "./memory-state.js";
+import {
+  getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
+  listMemoryRuntimeRegistrations,
+} from "./memory-state.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import { resolveMemoryRoleSlot } from "./slot-resolution.js";
 
@@ -81,8 +85,15 @@ export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; 
 
 export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
   void cfg;
-  const runtime = getMemoryRuntime();
-  await runtime?.closeAllMemorySearchManagers?.();
+  const runtimes = new Set(
+    [
+      getMemoryRuntime(),
+      ...listMemoryRuntimeRegistrations().map((registration) => registration.runtime),
+    ].filter((runtime) => runtime?.closeAllMemorySearchManagers),
+  );
+  for (const runtime of runtimes) {
+    await runtime?.closeAllMemorySearchManagers?.();
+  }
 }
 
 export async function closeActiveMemorySearchManager(params: {
