@@ -16,6 +16,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -235,11 +236,10 @@ async function persistTextTurnTranscript(
         sessionId: params.sessionId,
         cwd: params.sessionCwd,
         config: params.config,
-        message: {
-          role: "user",
-          content: promptText,
+        message: buildPersistedUserTurnMessage({
+          text: promptText,
           timestamp: Date.now(),
-        },
+        }),
       });
     }
 
