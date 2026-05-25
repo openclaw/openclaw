@@ -433,6 +433,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
+  private pendingResponseCreateInstructions: string | undefined;
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -1259,9 +1260,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.continuingToolCallIds.size > 0
     ) {
       this.responseCreatePending = true;
+      if (instructions) {
+        this.pendingResponseCreateInstructions = instructions;
+      }
       return;
     }
     this.responseCreatePending = false;
+    this.pendingResponseCreateInstructions = undefined;
     this.responseCreateInFlight = true;
     this.sendEvent(
       instructions
@@ -1277,8 +1282,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.responseCreatePending) {
       return;
     }
+    const instructions = this.pendingResponseCreateInstructions;
     this.responseCreatePending = false;
-    this.requestResponseCreate();
+    this.pendingResponseCreateInstructions = undefined;
+    this.requestResponseCreate(instructions);
   }
 
   private resetRealtimeSessionState(): void {
@@ -1288,6 +1295,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
+    this.pendingResponseCreateInstructions = undefined;
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
