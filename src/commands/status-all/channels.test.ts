@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createScopedChannelConfigAdapter } from "../../plugin-sdk/channel-config-helpers.js";
 import { buildChannelsTable } from "./channels.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +20,57 @@ const discordPlugin = {
   config: {
     listAccountIds: () => ["default"],
   },
+};
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
+}
+
+type SecretChatAccessorAccount = {
+  enabled: boolean;
+  configured: boolean;
+  config: { allowFrom?: string[] };
+  tokenStatus: "configured_unavailable";
+  tokenSource: "secretref";
+};
+
+function inspectSecretChatAccount({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SecretChatAccessorAccount {
+  const channels = cfg.channels as Record<string, { allowFrom?: string[] } | undefined> | undefined;
+  const section = channels?.secretchat ?? {};
+  return {
+    enabled: true,
+    configured: true,
+    config: section,
+    tokenStatus: "configured_unavailable",
+    tokenSource: "secretref",
+  };
+}
+
+const secretChatPlugin = {
+  id: "secretchat",
+  meta: { label: "SecretChat" },
+  config: createScopedChannelConfigAdapter<
+    { token: string; config: { allowFrom?: string[] } },
+    SecretChatAccessorAccount
+  >({
+    sectionKey: "secretchat",
+    listAccountIds: () => ["default"],
+    resolveAccount: () => {
+      throw new Error("runtime account resolver should not run for status allowFrom");
+    },
+    inspectAccount: (cfg, accountId) => inspectSecretChatAccount({ cfg, accountId }),
+    resolveAccessorAccount: ({ cfg, accountId }) => inspectSecretChatAccount({ cfg, accountId }),
+    defaultAccountId: () => "default",
+    clearBaseFields: ["token"],
+    resolveAllowFrom: (account) => account.config.allowFrom,
+    formatAllowFrom: (allowFrom) =>
+      allowFrom.map((entry) => String(entry).replace(/^secretchat:/i, "")),
+  }),
 };
 
 vi.mock("../../channels/account-inspection.js", () => ({
@@ -158,5 +211,26 @@ describe("buildChannelsTable", () => {
 
     expect(table.rows).toStrictEqual([]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps allowlist status read-only when credentials require an inspect accessor", async () => {
+    const cfg = {
+      channels: {
+        secretchat: {
+          token: envRef("SECRETCHAT_TOKEN"),
+          allowFrom: ["secretchat:U123"],
+        },
+      },
+    };
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([secretChatPlugin]);
+    mocks.resolveInspectedChannelAccount.mockImplementationOnce(async () => ({
+      account: secretChatPlugin.config.inspectAccount?.(cfg, "default"),
+      enabled: true,
+      configured: true,
+    }));
+
+    const table = await buildChannelsTable(cfg);
+
+    expect(table.details[0]?.rows[0]?.Notes).toContain("allow:U123");
   });
 });

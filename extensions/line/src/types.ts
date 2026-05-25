@@ -1,5 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -17,8 +18,8 @@ interface LineThreadBindingsConfig {
 
 interface LineAccountBaseConfig {
   enabled?: boolean;
-  channelAccessToken?: string;
-  channelSecret?: string;
+  channelAccessToken?: SecretInput;
+  channelSecret?: SecretInput;
   tokenFile?: string;
   secretFile?: string;
   name?: string;

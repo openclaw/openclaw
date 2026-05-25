@@ -1,3 +1,4 @@
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
@@ -15,7 +16,7 @@ import {
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  resolveLineAccount,
+  inspectLineAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
@@ -44,6 +45,38 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   t("wizard.channels.docs", { link: formatDocsLink("/channels/line", "channels/line") }),
 ];
 
+function hasConfiguredLineCredential(
+  cfg: Parameters<typeof inspectLineAccount>[0]["cfg"],
+  accountId: string,
+  valueKey: "channelAccessToken" | "channelSecret",
+  fileKey: "tokenFile" | "secretFile",
+): boolean {
+  const lineConfig = cfg.channels?.line as
+    | {
+        channelAccessToken?: unknown;
+        channelSecret?: unknown;
+        tokenFile?: string;
+        secretFile?: string;
+        accounts?: Record<
+          string,
+          {
+            channelAccessToken?: unknown;
+            channelSecret?: unknown;
+            tokenFile?: string;
+            secretFile?: string;
+          }
+        >;
+      }
+    | undefined;
+  const sourceConfig =
+    accountId !== DEFAULT_ACCOUNT_ID ? lineConfig?.accounts?.[accountId] : lineConfig;
+
+  return (
+    hasConfiguredSecretInput(sourceConfig?.[valueKey]) ||
+    Boolean(normalizeOptionalString(sourceConfig?.[fileKey]))
+  );
+}
+
 const lineDmPolicy: ChannelSetupDmPolicy = {
   label: "LINE",
   channel,
@@ -60,7 +93,7 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
           allowFromKey: "channels.line.allowFrom",
         },
   getCurrent: (cfg, accountId) =>
-    resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
+    inspectLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
       .dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
     patchLineAccountConfig({
@@ -72,7 +105,7 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
           ? {
               dmPolicy: "open",
               allowFrom: mergeAllowFromEntries(
-                resolveLineAccount({
+                inspectLineAccount({
                   cfg,
                   accountId: accountId ?? resolveDefaultLineAccountId(cfg),
                 }).config.allowFrom,
@@ -118,15 +151,14 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.line.tokenInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveLineAccount({ cfg, accountId });
+        const resolved = inspectLineAccount({ cfg, accountId });
         return {
-          accountConfigured: Boolean(
-            normalizeOptionalString(resolved.channelAccessToken) &&
-            normalizeOptionalString(resolved.channelSecret),
-          ),
-          hasConfiguredValue: Boolean(
-            normalizeOptionalString(resolved.config.channelAccessToken) ??
-            normalizeOptionalString(resolved.config.tokenFile),
+          accountConfigured: resolved.configured,
+          hasConfiguredValue: hasConfiguredLineCredential(
+            cfg,
+            accountId,
+            "channelAccessToken",
+            "tokenFile",
           ),
           resolvedValue: normalizeOptionalString(resolved.channelAccessToken),
           envValue:
@@ -164,15 +196,14 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.line.secretInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveLineAccount({ cfg, accountId });
+        const resolved = inspectLineAccount({ cfg, accountId });
         return {
-          accountConfigured: Boolean(
-            normalizeOptionalString(resolved.channelAccessToken) &&
-            normalizeOptionalString(resolved.channelSecret),
-          ),
-          hasConfiguredValue: Boolean(
-            normalizeOptionalString(resolved.config.channelSecret) ??
-            normalizeOptionalString(resolved.config.secretFile),
+          accountConfigured: resolved.configured,
+          hasConfiguredValue: hasConfiguredLineCredential(
+            cfg,
+            accountId,
+            "channelSecret",
+            "secretFile",
           ),
           resolvedValue: normalizeOptionalString(resolved.channelSecret),
           envValue:

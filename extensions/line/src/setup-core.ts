@@ -1,11 +1,11 @@
 import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
+import { parseLineAllowFromId } from "./account-helpers.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  inspectLineAccount,
   listLineAccountIds,
   normalizeAccountId,
-  resolveLineAccount,
   type LineConfig,
 } from "./setup-runtime-api.js";
 
@@ -66,7 +66,7 @@ export function patchLineAccountConfig(params: {
 }
 
 export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
+  return inspectLineAccount({ cfg, accountId }).configured;
 }
 
 export { parseLineAllowFromId };

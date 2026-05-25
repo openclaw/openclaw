@@ -30,6 +30,32 @@ describe("LineConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts SecretRef credentials at top-level", () => {
+    const result = LineConfigSchema.safeParse({
+      channelAccessToken: { source: "env", provider: "default", id: "LINE_CHANNEL_ACCESS_TOKEN" },
+      channelSecret: { source: "env", provider: "default", id: "LINE_CHANNEL_SECRET" },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef credentials on account", () => {
+    const result = LineConfigSchema.safeParse({
+      accounts: {
+        work: {
+          channelAccessToken: {
+            source: "env",
+            provider: "default",
+            id: "LINE_WORK_CHANNEL_ACCESS_TOKEN",
+          },
+          channelSecret: { source: "env", provider: "default", id: "LINE_WORK_CHANNEL_SECRET" },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('rejects account dmPolicy="open" without wildcard allowFrom', () => {
     const result = LineConfigSchema.safeParse({
       accounts: {

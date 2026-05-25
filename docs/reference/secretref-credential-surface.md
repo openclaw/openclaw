@@ -83,6 +83,10 @@ Scope intent:
 - `channels.irc.nickserv.password`
 - `channels.irc.accounts.*.password`
 - `channels.irc.accounts.*.nickserv.password`
+- `channels.line.channelAccessToken`
+- `channels.line.channelSecret`
+- `channels.line.accounts.*.channelAccessToken`
+- `channels.line.accounts.*.channelSecret`
 - `channels.feishu.appSecret`
 - `channels.feishu.encryptKey`
 - `channels.feishu.verificationToken`
