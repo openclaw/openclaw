@@ -472,6 +472,7 @@ private struct CanvasContent: View {
     @State private var showGatewayActions: Bool = false
     @State private var showGatewayProblemDetails: Bool = false
     @State private var showTalkPermissionPrompt: Bool = false
+    @State private var showTalkPermissionTray: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -495,43 +496,66 @@ private struct CanvasContent: View {
         self.appModel.talkMode.gatewayTalkPermissionState.requiresTalkPermissionAction
     }
 
+    private var showTalkTray: Bool {
+        self.talkActive ||
+            self.showTalkPermissionTray ||
+            self.appModel.talkMode.gatewayTalkPermissionState.isApprovalRequestInProgress
+    }
+
     var body: some View {
         ZStack {
             ScreenTab()
         }
-        .overlay(alignment: .center) {
-            if self.talkActive {
-                TalkOrbOverlay()
-                    .transition(.opacity)
-            }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            HomeToolbar(
-                gateway: self.gatewayStatus,
-                voiceWakeEnabled: self.voiceWakeEnabled,
-                activity: self.statusActivity,
-                brighten: self.brightenButtons,
-                talkButtonEnabled: self.talkButtonEnabled,
-                talkActive: self.talkActive,
-                talkTint: self.appModel.seamColor,
-                onStatusTap: {
-                    if self.gatewayStatus == .connected {
-                        self.showGatewayActions = true
-                    } else if self.appModel.lastGatewayProblem != nil {
-                        self.showGatewayProblemDetails = true
-                    } else {
+            VStack(spacing: 0) {
+                if self.showTalkTray {
+                    TalkToolbarTray(
+                        brighten: self.brightenButtons,
+                        tint: self.appModel.seamColor,
+                        statusText: self.appModel.talkMode.statusText,
+                        agentName: self.appModel.activeAgentName,
+                        micLevel: self.appModel.talkMode.micLevel,
+                        isListening: self.appModel.talkMode.isListening,
+                        isSpeaking: self.appModel.talkMode.isSpeaking,
+                        permissionState: self.appModel.talkMode.gatewayTalkPermissionState,
+                        onEnableTalk: {
+                            self.showTalkPermissionPrompt = true
+                        },
+                        onStopTalk: {
+                            self.showTalkPermissionTray = false
+                            self.stopTalk()
+                        })
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                HomeToolbar(
+                    gateway: self.gatewayStatus,
+                    voiceWakeEnabled: self.voiceWakeEnabled,
+                    activity: self.statusActivity,
+                    brighten: self.brightenButtons,
+                    talkButtonEnabled: self.talkButtonEnabled,
+                    talkActive: self.talkActive,
+                    talkTint: self.appModel.seamColor,
+                    onStatusTap: {
+                        if self.gatewayStatus == .connected {
+                            self.showGatewayActions = true
+                        } else if self.appModel.lastGatewayProblem != nil {
+                            self.showGatewayProblemDetails = true
+                        } else {
+                            self.openSettings()
+                        }
+                    },
+                    onChatTap: {
+                        self.openChat()
+                    },
+                    onTalkTap: {
+                        self.handleTalkToolbarTap()
+                    },
+                    onSettingsTap: {
                         self.openSettings()
-                    }
-                },
-                onChatTap: {
-                    self.openChat()
-                },
-                onTalkTap: {
-                    self.handleTalkToolbarTap()
-                },
-                onSettingsTap: {
-                    self.openSettings()
-                })
+                    })
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.86), value: self.showTalkTray)
         }
         .overlay(alignment: .top) {
             if let gatewayProblem = self.appModel.lastGatewayProblem,
@@ -581,6 +605,7 @@ private struct CanvasContent: View {
                     style: .sheet,
                     onPermissionReady: {
                         self.showTalkPermissionPrompt = false
+                        self.showTalkPermissionTray = false
                         self.startTalk()
                     })
                     .padding()
@@ -635,16 +660,18 @@ private struct CanvasContent: View {
         GatewayDiagnostics.log(
             "talk.timeline tap active=\(self.talkActive) permissionBlocked=\(self.talkPermissionBlocksStart)")
         if self.talkActive {
+            self.showTalkPermissionTray = false
             self.stopTalk()
             return
         }
 
         if self.talkPermissionBlocksStart {
             self.stopTalk()
-            self.showTalkPermissionPrompt = true
+            self.showTalkPermissionTray = true
             return
         }
 
+        self.showTalkPermissionTray = false
         self.startTalk()
     }
 
