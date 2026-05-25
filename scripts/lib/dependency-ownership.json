@@ -168,7 +168,7 @@
       "class": "default-runtime-initially",
       "risk": ["terminal-rendering", "png-encoding"]
     },
-    "@openclaw/prism": {
+    "@openclaw/rastermill": {
       "owner": "core:media",
       "class": "core-runtime",
       "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]

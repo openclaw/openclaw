@@ -1,11 +1,11 @@
 import {
-  createPrism,
-  isPrismUnavailableError,
-  PrismUnavailableError,
-  readImageMetadataFromHeader as readPrismImageMetadataFromHeader,
+  createRastermill,
+  isRastermillUnavailableError,
+  RastermillUnavailableError,
+  readImageMetadataFromHeader as readRastermillImageMetadataFromHeader,
   type ImageBackendPreference,
   type ImageMetadata,
-} from "@openclaw/prism";
+} from "@openclaw/rastermill";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 
 export type { ImageMetadata };
@@ -67,8 +67,8 @@ function normalizeOpenClawImageBackend(): ImageBackendPreference | undefined {
   }
 }
 
-function createOpenClawPrism() {
-  return createPrism({
+function createOpenClawRastermill() {
+  return createRastermill({
     backend: normalizeOpenClawImageBackend(),
     maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
     maxOutputPixels: MAX_IMAGE_INPUT_PIXELS,
@@ -79,7 +79,7 @@ function createOpenClawPrism() {
 }
 
 export function isImageProcessorUnavailableError(err: unknown): boolean {
-  if (err instanceof ImageProcessorUnavailableError || isPrismUnavailableError(err)) {
+  if (err instanceof ImageProcessorUnavailableError || isRastermillUnavailableError(err)) {
     return true;
   }
 
@@ -92,7 +92,7 @@ export function isImageProcessorUnavailableError(err: unknown): boolean {
   const detail = messages.join("\n").toLowerCase();
   return (
     detail.includes("image processor unavailable") ||
-    detail.includes("prism_image_processor_unavailable")
+    detail.includes("rastermill_image_processor_unavailable")
   );
 }
 
@@ -103,55 +103,55 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
-function wrapPrismUnavailable(operation: string, error: unknown): never {
-  if (error instanceof PrismUnavailableError) {
+function wrapRastermillUnavailable(operation: string, error: unknown): never {
+  if (error instanceof RastermillUnavailableError) {
     throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
   }
   throw error;
 }
 
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return readPrismImageMetadataFromHeader(buffer);
+  return readRastermillImageMetadataFromHeader(buffer);
 }
 
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await createOpenClawPrism().metadata(buffer);
+  return await createOpenClawRastermill().metadata(buffer);
 }
 
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
   try {
-    return await createOpenClawPrism().normalize(buffer);
+    return await createOpenClawRastermill().normalize(buffer);
   } catch (error) {
     if (isImageProcessorUnavailableError(error)) {
       return buffer;
     }
-    return wrapPrismUnavailable("normalizeExifOrientation", error);
+    return wrapRastermillUnavailable("normalizeExifOrientation", error);
   }
 }
 
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   try {
-    return await createOpenClawPrism().toJpeg(params.buffer, {
+    return await createOpenClawRastermill().toJpeg(params.buffer, {
       maxSide: params.maxSide,
       quality: params.quality,
       withoutEnlargement: params.withoutEnlargement,
     });
   } catch (error) {
-    return wrapPrismUnavailable("resizeToJpeg", error);
+    return wrapRastermillUnavailable("resizeToJpeg", error);
   }
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   try {
-    return await createOpenClawPrism().convertHeicToJpeg(buffer);
+    return await createOpenClawRastermill().convertHeicToJpeg(buffer);
   } catch (error) {
-    return wrapPrismUnavailable("convertHeicToJpeg", error);
+    return wrapRastermillUnavailable("convertHeicToJpeg", error);
   }
 }
 
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   try {
-    return await createOpenClawPrism().hasAlpha(buffer);
+    return await createOpenClawRastermill().hasAlpha(buffer);
   } catch (error) {
     if (isImageProcessorUnavailableError(error)) {
       return false;
@@ -162,13 +162,13 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 
 export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   try {
-    return await createOpenClawPrism().toPng(params.buffer, {
+    return await createOpenClawRastermill().toPng(params.buffer, {
       maxSide: params.maxSide,
       compressionLevel: params.compressionLevel,
       withoutEnlargement: params.withoutEnlargement,
     });
   } catch (error) {
-    return wrapPrismUnavailable("resizeToPng", error);
+    return wrapRastermillUnavailable("resizeToPng", error);
   }
 }
 
@@ -183,11 +183,11 @@ export async function optimizeImageToPng(
   compressionLevel: number;
 }> {
   try {
-    return await createOpenClawPrism().optimizePng(buffer, {
+    return await createOpenClawRastermill().optimizePng(buffer, {
       maxBytes,
       sides: options?.sides,
     });
   } catch (error) {
-    return wrapPrismUnavailable("optimizeImageToPng", error);
+    return wrapRastermillUnavailable("optimizeImageToPng", error);
   }
 }

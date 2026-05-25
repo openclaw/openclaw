@@ -1815,7 +1815,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.2.7",
-    "@openclaw/prism": "https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e",
+    "@openclaw/rastermill": "https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729",
     "@openclaw/proxyline": "0.3.3",
     "ajv": "8.20.0",
     "chalk": "5.6.2",

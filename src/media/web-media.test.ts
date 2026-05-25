@@ -444,7 +444,7 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
-    const unavailableMessage = "PRISM_IMAGE_PROCESSOR_UNAVAILABLE";
+    const unavailableMessage = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
     vi.doMock("./media-services.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./media-services.js")>()),
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
@@ -487,7 +487,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
+      ).rejects.toThrow(/RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -517,7 +517,7 @@ describe("loadWebMedia", () => {
           maxBytes: 8,
           imageCompression: { models: [{ maxSidePx: 1024 }] },
         }),
-      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
+      ).rejects.toThrow(/RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -531,7 +531,7 @@ describe("loadWebMedia", () => {
           maxBytes: 16 * 1024 * 1024,
           imageCompression: { models: [{ maxSidePx: 512 }] },
         }),
-      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
+      ).rejects.toThrow(/RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -647,7 +647,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
+      ).rejects.toThrow(/RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 

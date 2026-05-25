@@ -160,9 +160,9 @@ describe("image input pixel guard", () => {
     expect(
       isImageProcessorUnavailableError(new ImageProcessorUnavailableError("resizeToJpeg")),
     ).toBe(true);
-    expect(isImageProcessorUnavailableError(new Error("PRISM_IMAGE_PROCESSOR_UNAVAILABLE"))).toBe(
-      true,
-    );
+    expect(
+      isImageProcessorUnavailableError(new Error("RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE")),
+    ).toBe(true);
   });
 
   it("detects PNG alpha from headers without loading an image processor", async () => {
@@ -174,7 +174,7 @@ describe("image input pixel guard", () => {
     await expect(hasAlphaChannel(opaquePng)).resolves.toBe(false);
   });
 
-  it("resizes grayscale alpha PNGs through Prism", async () => {
+  it("resizes grayscale alpha PNGs through Rastermill", async () => {
     const source = createGrayscaleAlphaPngBuffer(64, 32);
 
     await expect(hasAlphaChannel(source)).resolves.toBe(true);
@@ -188,7 +188,7 @@ describe("image input pixel guard", () => {
     await expect(getImageMetadata(jpeg)).resolves.toEqual({ width: 16, height: 8 });
   });
 
-  it("honors PNG compression levels through Prism", async () => {
+  it("honors PNG compression levels through Rastermill", async () => {
     const source = createGrayscaleAlphaPngBuffer(128, 128);
     const uncompressed = await resizeToPng({
       buffer: source,

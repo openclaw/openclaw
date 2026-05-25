@@ -85,12 +85,12 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.2.7
         version: 0.2.7
-      '@openclaw/prism':
-        specifier: https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e
-        version: https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
+      '@openclaw/rastermill':
+        specifier: https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729
+        version: https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -3062,16 +3062,16 @@ packages:
     resolution: {integrity: sha512-l/Yj3K2ChR/gI+bZo1wIe7rjKyTFwGOAw120cTCMRT8LZbVhJhTbiZLGIRBMv0Gc9GQjYE8EjPBza3RdrSSbyQ==}
     engines: {node: '>=20.11'}
 
-  '@openclaw/prism@https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e':
-    resolution: {gitHosted: true, integrity: sha512-6HuqTHoKrFOD6kGV42JfGvXRL6TMv4SNAbEc06jTkhs6s8uczqhcX8rFkVgbUOeUbu+3xzMQ0g94JeAI2kKIgw==, tarball: https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e}
-    version: 0.1.0
-    engines: {node: '>=20'}
-
   '@openclaw/proxyline@0.3.3':
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
       undici: '>=8.3.0 <9'
+
+  '@openclaw/rastermill@https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729':
+    resolution: {gitHosted: true, integrity: sha512-+/3BGjDl+odFcvdHtF6o37m9elMFck+IvqmoNVeq+ITp6J0RtjIvPEcruGa6pVhSSSaPoHCJUwa1TOMkwUn6dA==, tarball: https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729}
+    version: 0.1.0
+    engines: {node: '>=20'}
 
   '@opentelemetry/api-logs@0.218.0':
     resolution: {integrity: sha512-fmEWp5kXlGEc3i/lR698Hz41DfGyN4Tbe4g7L1AxSc7fF8Xeh/FQ9Quqpa9dVA413Q1Ad43QOLzU4JoXgbFPWw==}
@@ -8649,13 +8649,13 @@ snapshots:
       jszip: 3.10.1
       tar: 7.5.15
 
-  '@openclaw/prism@https://codeload.github.com/openclaw/prism/tar.gz/a3e529dc060f08a8aab12f01510a74c14e0ef48e':
-    dependencies:
-      '@silvia-odwyer/photon-node': 0.3.4
-
   '@openclaw/proxyline@0.3.3(undici@8.3.0)':
     dependencies:
       undici: 8.3.0
+
+  '@openclaw/rastermill@https://codeload.github.com/openclaw/rastermill/tar.gz/7a98d1994eb801726ef3029ab5f084e252bb9729':
+    dependencies:
+      '@silvia-odwyer/photon-node': 0.3.4
 
   '@opentelemetry/api-logs@0.218.0':
     dependencies:
