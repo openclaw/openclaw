@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { productizeUserCopy } from "../cli/product-surface.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
@@ -21,6 +22,7 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+const DOCTOR_FIX_HINT = `Run \`${formatCliCommand("openclaw doctor --fix")}\`.`;
 
 function doctorFixHint(value: string): string {
   return productizeUserCopy(value);
@@ -53,7 +55,7 @@ const gatewayConfigCheck: HealthCheck = {
         message: "gateway.mode is unset; gateway start will be blocked.",
         path: "gateway.mode",
         fixHint: doctorFixHint(
-          "Run `openclaw configure` and set Gateway mode (local/remote), or `openclaw config set gateway.mode local`.",
+          `Run \`${formatCliCommand("openclaw configure")}\` and set Gateway mode (local/remote), or \`${formatCliCommand("openclaw config set gateway.mode local")}\`.`,
         ),
       });
     }
@@ -144,7 +146,7 @@ const gatewayAuthCheck: HealthCheck = {
         message: "Gateway auth is off or missing a token.",
         path: "gateway.auth",
         fixHint: doctorFixHint(
-          "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
+          `Run \`${formatCliCommand("openclaw doctor --fix --generate-gateway-token")}\` to generate a token.`,
         ),
       },
     ];
@@ -228,7 +230,7 @@ const legacyStateCheck: HealthCheck = {
         severity: "warning",
         message: line.replace(/^- /, ""),
         path: detected.stateDir,
-        fixHint: doctorFixHint("Run `openclaw doctor --fix` to migrate legacy state."),
+        fixHint: doctorFixHint(`${DOCTOR_FIX_HINT} to migrate legacy state.`),
       }),
     );
   },
@@ -517,7 +519,7 @@ const workspaceStatusCheck: HealthCheck = {
         } alongside the active workspace.`,
         path: workspaceDir,
         fixHint: doctorFixHint(
-          "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
+          `Inspect the legacy directories and migrate or remove them; see \`${formatCliCommand("openclaw doctor")}\` for the detailed migration prompt.`,
         ),
       },
     ];
@@ -565,7 +567,7 @@ function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
     message: `${skill.name} is allowed but unavailable: ${formatMissingSkillSummary(skill)}.`,
     path: skillReadinessPath(skill),
     fixHint: doctorFixHint(
-      "Install/configure the missing requirement, or run `openclaw doctor --fix` to disable unused unavailable skills.",
+      `Install/configure the missing requirement, or run \`${formatCliCommand("openclaw doctor --fix")}\` to disable unused unavailable skills.`,
     ),
   };
 }
@@ -597,7 +599,7 @@ function browserResidueFinding(residue: LegacyClawdBrowserProfileResidue): Healt
     path: residue.legacyProfileDir,
     ocPath: "oc://state/browser/clawd",
     fixHint: doctorFixHint(
-      "Run `openclaw doctor --fix` to archive the stale clawd profile safely instead of deleting it in place.",
+      `${DOCTOR_FIX_HINT} to archive the stale clawd profile safely instead of deleting it in place.`,
     ),
   };
 }
