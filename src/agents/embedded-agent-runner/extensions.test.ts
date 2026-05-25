@@ -20,7 +20,10 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
+function buildSafeguardFactories(
+  cfg: OpenClawConfig,
+  options: { agentId?: string; workspaceDir?: string } = {},
+) {
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
@@ -29,8 +32,9 @@ function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
 
   const factories = buildEmbeddedExtensionFactories({
     cfg,
+    agentId: options.agentId,
     sessionManager,
-    workspaceDir,
+    workspaceDir: options.workspaceDir,
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
@@ -121,7 +125,7 @@ describe("buildEmbeddedExtensionFactories", () => {
           },
         },
       } as OpenClawConfig,
-      "/tmp/openclaw-workspace",
+      { workspaceDir: "/tmp/openclaw-workspace" },
     );
 
     expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
@@ -155,6 +159,55 @@ describe("buildEmbeddedExtensionFactories", () => {
     } as OpenClawConfig);
 
     expect(getCompactionSafeguardRuntime(sessionManager)?.provider).toBe("slot-provider");
+  });
+
+  it("uses the agent memory.compaction plugin provider over the global slot", () => {
+    registerCompactionProvider(
+      {
+        id: "global-provider",
+        label: "Global Provider",
+        summarize: async () => "global summary",
+      },
+      { ownerPluginId: "global-compactor" },
+    );
+    registerCompactionProvider(
+      {
+        id: "agent-provider",
+        label: "Agent Provider",
+        summarize: async () => "agent summary",
+      },
+      { ownerPluginId: "agent-compactor" },
+    );
+
+    const { sessionManager } = buildSafeguardFactories(
+      {
+        plugins: {
+          slots: {
+            "memory.compaction": "global-compactor",
+          },
+        },
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: {
+                  "memory.compaction": "agent-compactor",
+                },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      { agentId: "research" },
+    );
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.provider).toBe("agent-provider");
   });
 
   it("keeps explicit compaction.provider ahead of memory.compaction slot provider", () => {

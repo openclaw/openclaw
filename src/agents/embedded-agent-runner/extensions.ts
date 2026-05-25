@@ -145,6 +145,7 @@ function buildContextPruningFactory(params: {
 
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
+  agentId?: string;
   sessionManager: SessionManager;
   workspaceDir?: string;
   provider: string;
@@ -156,7 +157,7 @@ export function buildEmbeddedExtensionFactories(params: {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const compactionSlot =
       params.cfg && !compactionCfg?.provider
-        ? resolveMemoryRoleSlot({ cfg: params.cfg, role: "compaction" })
+        ? resolveMemoryRoleSlot({ cfg: params.cfg, role: "compaction", agentId: params.agentId })
         : undefined;
     const slotCompactionProvider =
       typeof compactionSlot === "string"
