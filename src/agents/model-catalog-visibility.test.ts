@@ -4,7 +4,7 @@ import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 describe("resolveVisibleModelCatalog", () => {
-  it("can use static auth checks for gateway read-only model lists", () => {
+  it("can use static auth checks for gateway read-only model lists", async () => {
     const authChecker = vi.fn((provider: string) => provider === "openai");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
@@ -12,7 +12,7 @@ describe("resolveVisibleModelCatalog", () => {
     ];
     const cfg = {} as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "openai",
@@ -26,7 +26,7 @@ describe("resolveVisibleModelCatalog", () => {
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
-  it("limits visible catalog to provider wildcard entries after default discovery", () => {
+  it("limits visible catalog to provider wildcard entries after default discovery", async () => {
     const authChecker = vi.fn((provider: string) => provider !== "blocked");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
@@ -47,7 +47,7 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "anthropic",
@@ -66,7 +66,7 @@ describe("resolveVisibleModelCatalog", () => {
     ]);
   });
 
-  it("does not broaden visibility when selected providers have no catalog rows", () => {
+  it("does not broaden visibility when selected providers have no catalog rows", async () => {
     const authChecker = vi.fn(() => true);
 
     const cfg = {
@@ -79,7 +79,7 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
       defaultProvider: "anthropic",

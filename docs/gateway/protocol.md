@@ -161,7 +161,7 @@ operator token:
       {
         "deviceToken": "…",
         "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
       }
     ]
   }
@@ -169,9 +169,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin`, `operator.pairing`, or
-`operator.talk.secrets`. Those scopes require a separate approved operator
-pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+mobile operator loop without granting `operator.admin` or `operator.pairing`.
+It does include `operator.talk.secrets` so the native client can read the Talk
+configuration it needs after bootstrap. Broader admin and pairing scopes require
+a separate approved operator pairing or token flow. Clients should persist
+`hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
 
@@ -379,10 +381,12 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
     - `talk.session.cancelOutput` stops assistant audio output, primarily for VAD-gated barge-in in Gateway relay sessions.
     - `talk.session.submitToolResult` completes a provider tool call emitted by a Gateway-owned realtime relay session. Pass `options: { willContinue: true }` for interim tool output when a final result will follow, or `options: { suppressResponse: true }` when the tool result should satisfy the provider call without starting another realtime assistant response.
+    - `talk.session.steer` sends active-run voice control into a Gateway-owned agent-backed Talk session. It accepts `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
     - `talk.session.close` closes a Gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
     - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the Gateway owns config, credentials, instructions, and tool policy.
     - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to Gateway policy. The first supported tool is `openclaw_agent_consult`; clients receive a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result.
+    - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The Gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
@@ -703,7 +707,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+  includes `operator.talk.secrets` for native Talk configuration reads and
+  excludes `operator.admin` and `operator.pairing`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
@@ -757,6 +762,14 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
   - direct-loopback `gateway-client` backend RPCs authenticated with the shared
     gateway token/password.
+- Omitting device identity has scope consequences. When a Control UI connection
+  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
+  clears self-declared scopes to an empty set for token, password, and
+  trusted-proxy auth. The connection is allowed on explicit trust paths, but
+  scope-gated methods fail. The exception is local Control UI token/password
+  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
+  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
+  break-glass scope-preservation path.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

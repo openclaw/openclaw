@@ -27,6 +27,16 @@ describe("toSanitizedMarkdownHtml", () => {
     );
   });
 
+  it("strips unsupported citation control markers before display", () => {
+    const html = toSanitizedMarkdownHtml(
+      "v2026.5.20 release note citeturn2view0\n\nStill readable.",
+    );
+
+    expect(html).toBe("<p>v2026.5.20 release note</p>\n<p>Still readable.</p>\n");
+    expect(html).not.toContain("cite");
+    expect(html).not.toContain("turn2view0");
+  });
+
   // ── Additional tests for markdown-it migration ──
   describe("www autolinks", () => {
     it("links www.example.com", () => {
@@ -354,6 +364,38 @@ describe("toSanitizedMarkdownHtml", () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
       expect(html).toBe(
         '<div class="code-block-wrapper"><div class="code-block-header"><button type="button" class="code-block-copy" data-code="code" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button></div><pre><code>code\n</code></pre></div>',
+      );
+    });
+
+    it("omits copy chrome when rendering user-preserved code blocks", () => {
+      const source = `python3 - <<'PY'
+import openpyxl
+
+for ws in wb.worksheets:
+    print(f"--- {ws.title} ---")
+    rows = 0
+
+    for row in ws.iter_rows(values_only=True):
+        print(row)
+PY
+`;
+      const html = toSanitizedMarkdownHtml(`\`\`\`bash\n${source}\`\`\``, {
+        codeBlockChrome: "none",
+      });
+      const fragment = htmlFragment(html);
+
+      expect(fragment.querySelector(".code-block-copy")).toBeNull();
+      expect(fragment.textContent).toBe(source);
+    });
+
+    it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
+      const markdown = "```\ncode\n```";
+      const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });
+      const copyable = toSanitizedMarkdownHtml(markdown);
+
+      expect(htmlFragment(plain).querySelector(".code-block-copy")).toBeNull();
+      expect(htmlFragment(copyable).querySelector(".code-block-copy")).toBeInstanceOf(
+        HTMLButtonElement,
       );
     });
 

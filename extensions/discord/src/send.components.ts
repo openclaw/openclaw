@@ -21,7 +21,7 @@ import {
   type MessagePayloadObject,
   type RequestClient,
 } from "./internal/discord.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -170,12 +170,23 @@ type DiscordComponentSendOpts = {
 export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
+  ttlMs?: number;
 }): void {
   registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
+    ttlMs: params.ttlMs,
   });
+}
+
+function resolveDiscordComponentRegistryTtlMs(
+  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
+): number | undefined {
+  const ttlMs = accountConfig?.agentComponents?.ttlMs;
+  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
+    ? Math.floor(ttlMs)
+    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -279,7 +290,7 @@ export async function sendDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channelType = await resolveDiscordChannelType(rest, channelId);
@@ -316,6 +327,7 @@ export async function sendDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({
@@ -341,7 +353,7 @@ export async function editDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,
@@ -371,6 +383,7 @@ export async function editDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({

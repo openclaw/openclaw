@@ -43,6 +43,7 @@ type CodexDynamicToolHookContext = {
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 export type CodexDynamicToolBridge = {
+  availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   handleToolCall: (
     params: CodexDynamicToolCallParams,
@@ -70,6 +71,7 @@ const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
+  registeredTools?: AnyAgentTool[];
   signal: AbortSignal;
   hookContext?: CodexDynamicToolHookContext;
   loading?: CodexDynamicToolsLoading;
@@ -85,6 +87,8 @@ export function createCodexDynamicToolBridge(params: {
     return wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false });
   });
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
+  const registeredTools = params.registeredTools ?? tools;
+  const registeredToolNames = new Set(registeredTools.map((tool) => tool.name));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -106,7 +110,14 @@ export function createCodexDynamicToolBridge(params: {
   ]);
 
   return {
-    specs: tools.map((tool) =>
+    availableSpecs: tools.map((tool) =>
+      createCodexDynamicToolSpec({
+        tool,
+        loading: params.loading ?? "searchable",
+        directToolNames,
+      }),
+    ),
+    specs: registeredTools.map((tool) =>
       createCodexDynamicToolSpec({
         tool,
         loading: params.loading ?? "searchable",
@@ -117,6 +128,17 @@ export function createCodexDynamicToolBridge(params: {
     handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
       if (!tool) {
+        if (registeredToolNames.has(call.tool)) {
+          return {
+            contentItems: [
+              {
+                type: "inputText",
+                text: `OpenClaw tool is not available for this turn: ${call.tool}`,
+              },
+            ],
+            success: false,
+          };
+        }
         return {
           contentItems: [{ type: "inputText", text: `Unknown OpenClaw tool: ${call.tool}` }],
           success: false,
@@ -125,8 +147,10 @@ export function createCodexDynamicToolBridge(params: {
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
+      let didStartExecution = false;
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isToolResultError(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
@@ -167,13 +191,26 @@ export function createCodexDynamicToolBridge(params: {
           result,
           startedAt,
         });
-        return withDiagnosticTerminalType(
+        const terminalType = inferToolResultDiagnosticTerminalType(result, resultIsError);
+        const response = withDiagnosticTerminalType(
           {
             contentItems: convertToolContents(result.content, toolResultMaxChars),
             success: !resultIsError,
           },
-          inferToolResultDiagnosticTerminalType(result, resultIsError),
+          terminalType,
         );
+        withDynamicToolTermination(
+          response,
+          rawResult.terminate === true ||
+            result.terminate === true ||
+            isToolResultYield(rawResult) ||
+            isToolResultYield(result),
+        );
+        withDynamicToolAsyncStarted(
+          response,
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
+        );
+        return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         collectToolTelemetry({
           toolName: tool.name,
@@ -194,17 +231,20 @@ export function createCodexDynamicToolBridge(params: {
           error: error instanceof Error ? error.message : String(error),
           startedAt,
         });
-        return withDiagnosticTerminalType(
-          {
-            contentItems: [
-              {
-                type: "inputText",
-                text: error instanceof Error ? error.message : String(error),
-              },
-            ],
-            success: false,
-          },
-          "error",
+        return withSideEffectEvidence(
+          withDiagnosticTerminalType(
+            {
+              contentItems: [
+                {
+                  type: "inputText",
+                  text: error instanceof Error ? error.message : String(error),
+                },
+              ],
+              success: false,
+            },
+            "error",
+          ),
+          didStartExecution,
         );
       }
     },
@@ -230,7 +270,6 @@ function createCodexDynamicToolSpec(params: {
     deferLoading: true,
   };
 }
-
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
@@ -433,8 +472,24 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "success" &&
     status !== "completed" &&
     status !== "recorded" &&
-    status !== "running"
+    status !== "pending" &&
+    status !== "started" &&
+    status !== "running" &&
+    status !== "yielded"
   );
+}
+
+function isToolResultYield(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  if (!isRecord(details) || typeof details.status !== "string") {
+    return false;
+  }
+  return details.status.trim().toLowerCase() === "yielded";
+}
+
+function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
 }
 
 function inferToolResultDiagnosticTerminalType(
@@ -459,6 +514,51 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
     configurable: true,
     enumerable: false,
     value: terminalType,
+  });
+  return response;
+}
+
+function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  sideEffectEvidence: boolean,
+): T {
+  if (!sideEffectEvidence) {
+    return response;
+  }
+  Object.defineProperty(response, "sideEffectEvidence", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  terminate: boolean,
+): T {
+  if (!terminate) {
+    return response;
+  }
+  Object.defineProperty(response, "terminate", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  asyncStarted: boolean,
+): T {
+  if (!asyncStarted) {
+    return response;
+  }
+  Object.defineProperty(response, "asyncStarted", {
+    configurable: true,
+    enumerable: false,
+    value: true,
   });
   return response;
 }

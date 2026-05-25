@@ -133,6 +133,12 @@ type TelegramQaScenarioResult = {
   rttMs?: number;
   requestStartedAt?: string;
   responseObservedAt?: string;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
   sentMessageId?: number;
   responseMessageId?: number;
 };
@@ -1283,6 +1289,12 @@ function assertTelegramScenarioReply(params: {
   }
 }
 
+function isTelegramObservedMessageTimeoutError(error: unknown, timeoutMs: number) {
+  return formatErrorMessage(error).startsWith(
+    `timed out after ${timeoutMs}ms waiting for Telegram message`,
+  );
+}
+
 function resolveTelegramQaScenarioSteps(run: TelegramQaScenarioRun): TelegramQaScenarioStep[] {
   if (run.steps.length === 0) {
     throw new Error("Telegram QA scenario must include at least one step");
@@ -1341,11 +1353,7 @@ async function runTelegramQaScenarioStep(params: {
       sentMessageId: sent.message_id,
     };
   } catch (error) {
-    if (
-      !params.step.expectReply &&
-      formatErrorMessage(error) ===
-        `timed out after ${stepTimeoutMs}ms waiting for Telegram message`
-    ) {
+    if (!params.step.expectReply && isTelegramObservedMessageTimeoutError(error, stepTimeoutMs)) {
       return {
         matched: undefined,
         requestStartedAt: new Date(requestStartedAtMs).toISOString(),
@@ -1741,6 +1749,12 @@ export async function runTelegramQaLive(params: {
           rttMs: canaryTiming.rttMs,
           requestStartedAt: canaryTiming.requestStartedAt,
           responseObservedAt: canaryTiming.responseObservedAt,
+          rttMeasurement: {
+            finalMatchedReplyRttMs: canaryTiming.rttMs,
+            requestStartedAt: canaryTiming.requestStartedAt,
+            responseObservedAt: canaryTiming.responseObservedAt,
+            source: "request-to-observed-message",
+          },
           sentMessageId: redactPublicMetadata ? undefined : canaryTiming.sentMessageId,
           responseMessageId: redactPublicMetadata ? undefined : canaryTiming.responseMessageId,
         });
@@ -1883,6 +1897,12 @@ export async function runTelegramQaLive(params: {
               rttMs,
               requestStartedAt: firstRequestStartedAt,
               responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: rttMs,
+                requestStartedAt: new Date(lastRequestStartedAtMs).toISOString(),
+                responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
+                source: "request-to-observed-message",
+              },
               sentMessageId: redactPublicMetadata ? undefined : lastSentMessageId,
               responseMessageId: redactPublicMetadata ? undefined : lastMatched.message.messageId,
             } satisfies TelegramQaScenarioResult;
@@ -2041,6 +2061,7 @@ export const testing = {
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
+  isTelegramObservedMessageTimeoutError,
   listTelegramQaScenarioCatalog,
   matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,

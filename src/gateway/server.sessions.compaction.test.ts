@@ -245,6 +245,25 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       main: sessionStoreEntry("sess-main", {
         thinkingLevel: "medium",
         reasoningLevel: "stream",
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: Date.now() - 5_000,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 120,
+          contextTokenBudget: 200,
+          promptBudgetBeforeReserve: 180,
+          reserveTokens: 20,
+          effectiveReserveTokens: 20,
+          remainingPromptBudgetTokens: 60,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        },
       }),
     },
   });
@@ -357,10 +376,101 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean }
+    {
+      compactionCount?: number;
+      contextBudgetStatus?: unknown;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
   >;
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
+  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
+  expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+
+  ws.close();
+});
+
+test("sessions.compact treats Codex native compaction start as pending, not completed", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-codex.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello codex" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-codex", {
+        agentHarnessId: "codex",
+        compactionCount: 2,
+        totalTokens: 54_321,
+        totalTokensFresh: true,
+      }),
+    },
+  });
+  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: false,
+    result: {
+      summary: "",
+      firstKeptEntryId: "",
+      tokensBefore: 54_321,
+      details: {
+        backend: "codex-app-server",
+        threadId: "thread-1",
+        signal: "thread/compact/start",
+        pending: true,
+      },
+    },
+  });
+
+  const { ws } = await openClient();
+  await rpcReq(ws, "sessions.subscribe", {});
+  const endEventPromise = onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.operation" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.operation === "compact" &&
+      (message.payload as { operation?: unknown; phase?: unknown })?.phase === "end",
+  );
+
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    result?: { details?: unknown };
+  }>(ws, "sessions.compact", {
+    key: "main",
+  });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.key).toBe("agent:main:main");
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.result?.details).toMatchObject({
+    backend: "codex-app-server",
+    threadId: "thread-1",
+    signal: "thread/compact/start",
+    pending: true,
+  });
+  const endEvent = await endEventPromise;
+  expect(endEvent.payload).toMatchObject({
+    operation: "compact",
+    phase: "end",
+    sessionKey: "agent:main:main",
+    completed: false,
+  });
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
+  expect(store["agent:main:main"]?.compactionCount).toBe(2);
+  expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
 
   ws.close();

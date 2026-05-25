@@ -32,6 +32,7 @@ import {
 } from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
@@ -142,6 +143,11 @@ function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } 
 
 function commandBase(command: string): string {
   return path.parse(command).name;
+}
+
+function isAntigravityCliCommand(command: string): boolean {
+  const commandId = commandBase(command);
+  return commandId === "agy" || commandId === "antigravity";
 }
 
 function findArgValue(args: string[], keys: string[]): string | undefined {
@@ -589,12 +595,18 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const requestOverrides = resolveMediaRequestOverrides(params.config);
-    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
-    const imageInput = {
+    const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
+      maxBytes,
+    });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
+    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
+    const imageInput = {
+      buffer: normalizedMedia.buffer,
+      fileName: media.fileName,
+      mime: normalizedMedia.mime,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,
@@ -808,6 +820,7 @@ export async function runCliEntry(params: {
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
     });
     const resolved = await resolveCliOutput({
       command,

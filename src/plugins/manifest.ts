@@ -402,11 +402,13 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  embeddingProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  meetingNotesSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
@@ -426,6 +428,15 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<
+    Record<
+      "pdf",
+      {
+        textExtraction?: string;
+        image?: string | false;
+      }
+    >
+  >;
 };
 
 export type PluginManifestProviderBaseUrlGuard = {
@@ -602,6 +613,26 @@ function normalizeMediaUnderstandingNativeDocumentInputs(value: unknown): Array<
   return values.length > 0 ? values : undefined;
 }
 
+function normalizeMediaUnderstandingDocumentModels(
+  value: unknown,
+): PluginManifestMediaUnderstandingProviderMetadata["documentModels"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const pdfRaw = value.pdf;
+  if (!isRecord(pdfRaw)) {
+    return undefined;
+  }
+  const textExtraction = normalizeOptionalString(pdfRaw.textExtraction);
+  const image: string | false | undefined =
+    pdfRaw.image === false ? false : normalizeOptionalString(pdfRaw.image);
+  const pdf = {
+    ...(textExtraction ? { textExtraction } : {}),
+    ...(image !== undefined ? { image } : {}),
+  };
+  return Object.keys(pdf).length > 0 ? { pdf } : undefined;
+}
+
 function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
@@ -621,11 +652,13 @@ function normalizeMediaUnderstandingProviderMetadata(
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,
     );
+    const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
     const metadata = {
       ...(capabilities ? { capabilities } : {}),
       ...(defaultModels ? { defaultModels } : {}),
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
+      ...(documentModels ? { documentModels } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;
@@ -799,6 +832,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
+  const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -806,6 +840,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const meetingNotesSourceProviders = normalizeTrimmedStringList(value.meetingNotesSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
@@ -820,11 +855,13 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
+    ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(meetingNotesSourceProviders.length > 0 ? { meetingNotesSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
@@ -1607,11 +1644,12 @@ export function loadPluginManifest(
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
   const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-    ownedProviders: new Set(providers),
+    ownedProviders: new Set([...providers, ...cliBackends]),
   });
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
@@ -1623,7 +1661,6 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
-  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);

@@ -158,7 +158,9 @@ function resolveManifestPluginSourcePath(params: {
 export type PluginManifestContractListKey =
   | "speechProviders"
   | "externalAuthProviders"
+  | "embeddingProviders"
   | "mediaUnderstandingProviders"
+  | "meetingNotesSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -371,11 +373,13 @@ function mergeManifestContracts(
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
     "externalAuthProviders",
+    "embeddingProviders",
     "memoryEmbeddingProviders",
     "speechProviders",
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
+    "meetingNotesSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
     "videoGenerationProviders",
@@ -753,19 +757,30 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
-  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
+  const candidatePaths = [
+    params.candidate.rootDir,
+    params.candidate.packageDir,
+    params.candidate.source,
+    params.candidate.setupSource,
+  ]
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  if (trackedPaths.length === 0) {
+  if (trackedPaths.length === 0 || candidatePaths.length === 0) {
     return false;
   }
-  return trackedPaths.some((trackedPath) => {
-    return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
+  return candidatePaths.some((candidatePath) => {
+    return trackedPaths.some((trackedPath) => {
+      return candidatePath === trackedPath || isPathInside(trackedPath, candidatePath);
+    });
   });
 }
 

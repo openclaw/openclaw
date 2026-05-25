@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createGrayscaleAlphaPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import {
   convertHeicToJpeg,
@@ -12,6 +13,7 @@ import {
   isImageProcessorUnavailableError,
   MAX_IMAGE_INPUT_PIXELS,
   resizeToJpeg,
+  resizeToPng,
 } from "./image-ops.js";
 import { createPngBufferWithDimensions } from "./test-helpers.js";
 
@@ -39,6 +41,32 @@ function createHeifLikeBuffer(...sizes: Array<{ width: number; height: number }>
   const iprp = isoBox("iprp", ipco);
   const meta = isoBox("meta", Buffer.concat([Buffer.alloc(4), iprp]));
   return Buffer.concat([isoBox("ftyp", ftypPayload), meta]);
+}
+
+function createBmpHeaderBuffer(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(26);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22);
+  return buffer;
+}
+
+function createTiffHeaderBuffer(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(38);
+  buffer.write("II", 0, "ascii");
+  buffer.writeUInt16LE(42, 2);
+  buffer.writeUInt32LE(8, 4);
+  buffer.writeUInt16LE(2, 8);
+  buffer.writeUInt16LE(256, 10);
+  buffer.writeUInt16LE(4, 12);
+  buffer.writeUInt32LE(1, 14);
+  buffer.writeUInt32LE(width, 18);
+  buffer.writeUInt16LE(257, 22);
+  buffer.writeUInt16LE(4, 24);
+  buffer.writeUInt32LE(1, 26);
+  buffer.writeUInt32LE(height, 30);
+  return buffer;
 }
 
 describe("image input pixel guard", () => {
@@ -79,6 +107,17 @@ describe("image input pixel guard", () => {
     ).resolves.toEqual({
       width: 640,
       height: 480,
+    });
+  });
+
+  it("reads BMP and TIFF dimensions before selecting an image backend", async () => {
+    await expect(getImageMetadata(createBmpHeaderBuffer(640, 480))).resolves.toEqual({
+      width: 640,
+      height: 480,
+    });
+    await expect(getImageMetadata(createTiffHeaderBuffer(320, 240))).resolves.toEqual({
+      width: 320,
+      height: 240,
     });
   });
 
@@ -123,7 +162,7 @@ describe("image input pixel guard", () => {
     ).toBe(true);
     expect(
       isImageProcessorUnavailableError(
-        new Error("Optional dependency sharp is required for image attachment processing"),
+        new Error("Photon did not expose the required image processor API"),
       ),
     ).toBe(true);
   });
@@ -135,6 +174,39 @@ describe("image input pixel guard", () => {
 
     await expect(hasAlphaChannel(alphaPng)).resolves.toBe(true);
     await expect(hasAlphaChannel(opaquePng)).resolves.toBe(false);
+  });
+
+  it("resizes grayscale alpha PNGs through the Photon backend", async () => {
+    const source = createGrayscaleAlphaPngBuffer(64, 32);
+
+    await expect(hasAlphaChannel(source)).resolves.toBe(true);
+    const jpeg = await resizeToJpeg({
+      buffer: source,
+      maxSide: 16,
+      quality: 80,
+      withoutEnlargement: true,
+    });
+
+    await expect(getImageMetadata(jpeg)).resolves.toEqual({ width: 16, height: 8 });
+  });
+
+  it("honors PNG compression levels in the Photon backend", async () => {
+    const source = createGrayscaleAlphaPngBuffer(128, 128);
+    const uncompressed = await resizeToPng({
+      buffer: source,
+      maxSide: 128,
+      compressionLevel: 0,
+      withoutEnlargement: true,
+    });
+    const compressed = await resizeToPng({
+      buffer: source,
+      maxSide: 128,
+      compressionLevel: 9,
+      withoutEnlargement: true,
+    });
+
+    expect(compressed.length).toBeLessThan(uncompressed.length);
+    await expect(getImageMetadata(compressed)).resolves.toEqual({ width: 128, height: 128 });
   });
 
   const itIfFfmpeg = resolveSystemBin("ffmpeg", { trust: "standard" }) ? it : it.skip;

@@ -1,12 +1,13 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
-import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
+import { readSessionEntry } from "../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import {
   DEFAULT_AGENT_ID,
   isSubagentSessionKey,
@@ -24,6 +25,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
+import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
   normalizeCronRunDiagnostics,
@@ -59,6 +61,7 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
+import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
@@ -438,9 +441,7 @@ function normalizeCronLaneSegment(value: string | undefined, fallback: string): 
 
 function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
   const explicitAgentId = job.agentId?.trim();
-  const agentId = normalizeAgentId(
-    explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey),
-  );
+  const agentId = normalizeAgentId(explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey));
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
@@ -463,7 +464,8 @@ function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    return deliveryContextFromSession(loadSessionStore(storePath)[targetSessionKey]);
+    const sessionEntry = readSessionEntry(storePath, targetSessionKey) as SessionEntry | undefined;
+    return deliveryContextFromSession(sessionEntry);
   } catch {
     return undefined;
   }
@@ -511,6 +513,7 @@ function tryCreateCronTaskRun(params: {
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
+      progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
     });
     return runId;
   } catch (error) {
@@ -559,28 +562,6 @@ function tryFinishCronTaskRun(
 }
 /** Default max retries for one-shot jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
-
-const TRANSIENT_PATTERNS: Record<string, RegExp> = {
-  rate_limit:
-    /(rate[_ ]limit|too many requests|429|resource has been exhausted|cloudflare|tokens per day)/i,
-  overloaded:
-    /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
-  network: /(network|econnreset|econnrefused|fetch failed|socket)/i,
-  timeout: /(timeout|etimedout)/i,
-  server_error: /\b5\d{2}\b/,
-};
-
-function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]): boolean {
-  if (!error || typeof error !== "string") {
-    return false;
-  }
-  const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
-  const classified = resolveFailoverReasonFromError(error);
-  if (classified && keys.includes(classified as CronRetryOn)) {
-    return true;
-  }
-  return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
-}
 
 function resolveCronNextRunWithLowerBound(params: {
   state: CronServiceState;
@@ -970,10 +951,14 @@ export function applyJobResult(
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
-        const transient = isTransientCronError(result.error, retryConfig.retryOn);
+        const retryHint = resolveCronExecutionRetryHint(
+          result.error,
+          retryConfig.retryOn,
+          job.state.lastErrorReason,
+        );
         // consecutiveErrors is always set to ≥1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
-        if (transient && consecutive <= retryConfig.maxAttempts) {
+        if (retryHint.retryable && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
           const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
           job.state.nextRunAtMs = result.endedAt + backoff;
@@ -1000,7 +985,8 @@ export function applyJobResult(
               jobName: job.name,
               consecutiveErrors: consecutive,
               error: result.error,
-              reason: transient ? "max retries exhausted" : "permanent error",
+              reason: retryHint.retryable ? "max retries exhausted" : "permanent error",
+              retryCategory: retryHint.category,
             },
             "cron: disabling one-shot job after error",
           );

@@ -852,7 +852,10 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
+  // Read-only diagnostic load: skip the cache and the defensive return clone so a
+  // very large monolithic sessions.json is materialized once, not several times.
+  // Re-cloning a multi-hundred-MB store here is what made `doctor` OOM (#56827).
+  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {

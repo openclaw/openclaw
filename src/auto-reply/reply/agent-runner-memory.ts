@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -85,11 +86,36 @@ async function runEmbeddedPiAgentDefault(
   return await runEmbeddedPiAgent(...args);
 }
 
+async function ensureMemoryFlushTargetFile(params: {
+  workspaceDir: string;
+  relativePath: string;
+}): Promise<void> {
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  const relativePath = normalizeOptionalString(params.relativePath);
+  if (!workspaceDir || !relativePath || path.isAbsolute(relativePath)) {
+    throw new Error("Invalid memory flush target path");
+  }
+  const workspaceRoot = path.resolve(workspaceDir);
+  const targetPath = path.resolve(workspaceRoot, relativePath);
+  const targetRelativePath = path.relative(workspaceRoot, targetPath);
+  if (
+    !targetRelativePath ||
+    targetRelativePath.startsWith("..") ||
+    path.isAbsolute(targetRelativePath)
+  ) {
+    throw new Error("Memory flush target path must stay inside the workspace");
+  }
+  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+  const handle = await fs.promises.open(targetPath, "a");
+  await handle.close();
+}
+
 const memoryDeps = {
   compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
   runWithModelFallback,
   ensureSelectedAgentHarnessPlugin,
   runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+  ensureMemoryFlushTargetFile,
   registerAgentRunContext,
   refreshQueuedFollowupSession,
   incrementCompactionCount,
@@ -104,6 +130,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
     ensureSelectedAgentHarnessPlugin,
     compactEmbeddedPiSession: compactEmbeddedPiSessionDefault,
     runEmbeddedPiAgent: runEmbeddedPiAgentDefault,
+    ensureMemoryFlushTargetFile,
     registerAgentRunContext,
     refreshQueuedFollowupSession,
     incrementCompactionCount,
@@ -202,6 +229,19 @@ function resolveFollowupContextConfigProvider(params: {
   runtimePolicySessionKey?: string;
 }): string {
   const provider = params.followupRun.run.provider;
+  return resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: resolveFollowupAgentRuntimeId(params),
+  });
+}
+
+function resolveFollowupAgentRuntimeId(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): string {
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -216,13 +256,10 @@ function resolveFollowupContextConfigProvider(params: {
       ? persistedRuntimeOverride
       : matchingSessionEntry?.agentHarnessId;
   if (persistedRuntimeId) {
-    return resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: persistedRuntimeId,
-    });
+    return persistedRuntimeId;
   }
   const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
     config: params.cfg,
     agentId: params.followupRun.run.agentId,
@@ -232,10 +269,17 @@ function resolveFollowupContextConfigProvider(params: {
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
   });
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-  });
+  return harnessPolicy.runtime;
+}
+
+function followupUsesCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): boolean {
+  return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -586,6 +630,23 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
+  if (
+    followupUsesCodexRuntime({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    })
+  ) {
+    // Codex runtime sessions should reach Codex with their real thread state.
+    // Its harness owns automatic compaction; OpenClaw preflight compaction is
+    // only for non-Codex embedded runtimes.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
+    );
+    return entry ?? params.sessionEntry;
+  }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
@@ -631,10 +692,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof activeTranscriptBytes === "number" &&
     typeof maxActiveTranscriptBytes === "number" &&
     activeTranscriptBytes >= maxActiveTranscriptBytes;
-  const shouldUseTranscriptFallback = entry.totalTokensFresh === false || !hasPersistedTotalTokens;
-  if (!shouldUseTranscriptFallback && !shouldCompactByTranscriptBytes) {
-    return entry ?? params.sessionEntry;
-  }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
@@ -738,16 +795,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-    senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
   if (!result?.ok || !result.compacted) {
-    logVerbose(
-      `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${result?.reason ?? "not_compacted"}`,
-    );
-    return entry ?? params.sessionEntry;
+    const reason = result?.reason ?? "not_compacted";
+    logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 
   await incrementCompactionCount({
@@ -1019,6 +1074,10 @@ export async function runMemoryFlushIfNeeded(params: {
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
+  await memoryDeps.ensureMemoryFlushTargetFile({
+    workspaceDir: params.followupRun.run.workspaceDir,
+    relativePath: memoryFlushWritePath,
+  });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     activeMemoryFlushPlan.systemPrompt,

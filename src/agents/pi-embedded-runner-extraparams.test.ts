@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
+  clearProviderRuntimePluginCacheForTest: vi.fn(),
   testing: {
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
+    clearProviderRuntimePluginCacheForTest: vi.fn(),
   },
   prepareProviderExtraParams: () => undefined,
   resolveProviderExtraParamsForTransport: () => undefined,
@@ -204,15 +206,12 @@ function createTestToolStreamWrapper(
 
 function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
-  modelId: string,
+  _modelId: string,
 ): string[] {
   const configuredBetas = Array.isArray(extraParams?.anthropicBeta)
     ? extraParams.anthropicBeta.filter((value): value is string => typeof value === "string")
     : [];
-  if (!extraParams?.context1m || !/(opus|sonnet)/i.test(modelId)) {
-    return configuredBetas;
-  }
-  return [...ANTHROPIC_DEFAULT_BETAS, ...configuredBetas, ANTHROPIC_CONTEXT_1M_BETA];
+  return configuredBetas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA);
 }
 
 function resolveAnthropicServiceTier(extraParams: Record<string, unknown> | undefined) {
@@ -228,6 +227,10 @@ function isAnthropicOauthApiKey(apiKey: unknown): boolean {
   return typeof apiKey === "string" && apiKey.startsWith("sk-ant-oat");
 }
 
+function isAnthropicGa1MModel(modelId: string): boolean {
+  return /^(claude-opus-4[-.]6|claude-opus-4[-.]7|claude-sonnet-4[-.]6)/i.test(modelId);
+}
+
 function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }): boolean {
   const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
   return model.provider === "anthropic" && (!baseUrl || baseUrl.includes("api.anthropic.com"));
@@ -236,9 +239,10 @@ function isDirectAnthropicModel(model: { provider?: string; baseUrl?: string }):
 function createAnthropicBetaHeadersWrapper(baseStreamFn: StreamFn | undefined, betas: string[]) {
   const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
   return ((model, context, options) => {
+    const configuredBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA);
     const nextBetas = isAnthropicOauthApiKey(options?.apiKey)
-      ? [...ANTHROPIC_OAUTH_BETAS, ...betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)]
-      : betas;
+      ? [...ANTHROPIC_OAUTH_BETAS, ...ANTHROPIC_DEFAULT_BETAS, ...configuredBetas]
+      : [...ANTHROPIC_DEFAULT_BETAS, ...configuredBetas];
     const existingBeta =
       typeof options?.headers?.["anthropic-beta"] === "string"
         ? options.headers["anthropic-beta"]
@@ -384,7 +388,11 @@ function installFullProviderRuntimeDepsForTest() {
           params.context.extraParams,
           params.context.modelId,
         );
-        if (anthropicBetas?.length) {
+        if (
+          anthropicBetas.length ||
+          (params.context.extraParams?.context1m === true &&
+            isAnthropicGa1MModel(params.context.modelId))
+        ) {
           streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
         }
         const serviceTier = resolveAnthropicServiceTier(params.context.extraParams);
@@ -2687,7 +2695,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBe("long");
   });
 
-  it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
+  it("does not add 1M beta header when context1m is enabled (GA migration)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildModelConfig("anthropic/claude-opus-4-6", { context1m: true });
 
@@ -2700,7 +2708,6 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
     void agent.streamFn?.(model, context, {
       apiKey: "sk-ant-api03-test", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
@@ -2709,9 +2716,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
       "X-Custom": "1",
-      // Includes pi-ai default betas (preserved to avoid overwrite) + context1m
-      "anthropic-beta":
-        "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,context-1m-2025-08-07",
+      "anthropic-beta": "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
     });
   });
 
@@ -2728,7 +2733,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(headers).toEqual({ "X-Custom": "1" });
   });
 
-  it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
+  it("skips legacy context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push(options);
@@ -2758,7 +2763,6 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
     void agent.streamFn?.(model, context, {
       apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
@@ -2766,13 +2770,12 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     const betaHeader = calls[0]?.headers?.["anthropic-beta"] as string;
-    // Must include the OAuth-required betas so they aren't stripped by pi-ai's mergeHeaders
     expect(betaHeader).toContain("oauth-2025-04-20");
     expect(betaHeader).toContain("claude-code-20250219");
     expect(betaHeader).not.toContain("context-1m-2025-08-07");
   });
 
-  it("merges existing anthropic-beta headers with configured betas", () => {
+  it("merges existing anthropic-beta headers with configured betas (no context-1m)", () => {
     const cfg = buildModelConfig("anthropic/claude-sonnet-4-5", {
       context1m: true,
       anthropicBeta: ["files-api-2025-04-14"],
@@ -2786,9 +2789,11 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
 
+    // context1m no longer injects a beta header (GA); only the explicitly
+    // configured anthropicBeta entry should appear alongside pi-ai defaults.
     expect(headers).toEqual({
       "anthropic-beta":
-        "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14,context-1m-2025-08-07",
+        "prompt-caching-2024-07-31,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,files-api-2025-04-14",
     });
   });
 

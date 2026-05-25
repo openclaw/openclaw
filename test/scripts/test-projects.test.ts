@@ -8,7 +8,9 @@ import {
   applyDefaultVitestNoOutputTimeout,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
+  buildVitestArgs,
   buildVitestRunPlans,
+  findUnmatchedExplicitTestTargets,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -269,6 +271,20 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(
+        [
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-support.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toEqual([]);
   });
 
   it("routes contract roots to separate contract shards", () => {
@@ -554,6 +570,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes changed ui build helpers to their importing tests", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/config/control-ui-chunking.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/control-ui-chunking.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes unit ui test targets to the unit ui lane", () => {
     expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
       {
@@ -581,6 +612,37 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes control ui e2e tests to the ui e2e lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/e2e/chat-flow.e2e.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/e2e/chat-flow.e2e.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/test-helpers/control-ui-e2e.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/e2e"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-e2e.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/e2e/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestArgs(["ui/src/ui/e2e"])).toContain("--configLoader");
   });
 
   it("routes changed unit ui tests to the unit ui lane", () => {
@@ -875,6 +937,24 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "test/vitest/vitest.agents-core.config.ts",
+    "test/vitest/vitest.agents-pi-embedded.config.ts",
+    "test/vitest/vitest.agents-support.config.ts",
+    "test/vitest/vitest.agents-tools.config.ts",
+  ])("routes split agents vitest config %s to itself", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: target,
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
     "src/gateway/gateway.test.ts",
     "src/gateway/server.startup-matrix-migration.integration.test.ts",
     "src/gateway/sessions-history-http.test.ts",
@@ -890,6 +970,22 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it.each(["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"])(
+    "routes TUI PTY integration target %s to the PTY lane",
+    (target) => {
+      const plans = buildVitestRunPlans([target], process.cwd());
+
+      expect(plans).toEqual([
+        {
+          config: "test/vitest/vitest.tui-pty.config.ts",
+          forwardedArgs: [],
+          includePatterns: [target],
+          watchMode: false,
+        },
+      ]);
+    },
+  );
 });
 
 describe("scripts/test-projects local heavy-check lock", () => {
@@ -1028,6 +1124,12 @@ describe("scripts/test-projects full-suite sharding", () => {
 
     expect(missing).toStrictEqual([]);
     expect(duplicated).toStrictEqual([]);
+  });
+
+  it("covers the fast TUI PTY lane in full-suite routing", () => {
+    expect(fullSuiteMatches.get("src/tui/tui-pty-harness.e2e.test.ts")).toEqual([
+      "test/vitest/vitest.tui-pty.config.ts",
+    ]);
   });
 
   it("uses the large host-aware local profile on roomy local hosts", () => {
@@ -1236,6 +1338,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.shared-core.config.ts",
       "test/vitest/vitest.tasks.config.ts",
       "test/vitest/vitest.tui.config.ts",
+      "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",

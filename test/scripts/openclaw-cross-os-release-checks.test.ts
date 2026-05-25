@@ -9,12 +9,13 @@ import {
 } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -49,7 +50,10 @@ import {
   packageHasScript,
   readInstalledVersion,
   readRunnerOverrideEnv,
+  runCommand,
+  resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
+  resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
@@ -107,6 +111,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeLessThanOrEqual(60);
   });
 
+  it("records packaged-fresh phase timings for release-check summaries", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const freshLaneSource = source.slice(
+      source.indexOf("async function runFreshLane"),
+      source.indexOf("async function runUpgradeLane"),
+    );
+
+    expect(freshLaneSource).toContain('runTimedLanePhase(lane, "install-candidate"');
+    expect(freshLaneSource).toContain('runTimedLanePhase(lane, "agent-turn"');
+    expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
+  });
+
   it("accepts OK agent output from the captured log when stdout is empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
     try {
@@ -151,6 +167,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("Command timed out and could not be terminated cleanly"),
       ),
     ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects embedded fallback agent turns as non-gateway proof", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-fallback-"));
+    const logPath = join(dir, "agent.log");
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: gateway closed",
+      }),
+    ).toBe(true);
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(
+      agentTurnUsedEmbeddedFallback(
+        { stdout: "", stderr: "" },
+        { logText: 'EMBEDDED FALLBACK: Gateway agent failed\n{"payloads":[{"text":"OK"}]}' },
+      ),
+    ).toBe(true);
+    try {
+      writeFileSync(logPath, "EMBEDDED FALLBACK: Gateway agent failed\n");
+      expect(agentTurnUsedEmbeddedFallback({ stdout: "", stderr: "" }, { logPath })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("skips optional live agent turns only for model availability failures", () => {
@@ -644,6 +694,77 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
+  it("wraps Windows cmd shims without Node shell argv", () => {
+    expect(
+      resolveCommandSpawnInvocation(
+        String.raw`C:\Program Files\nodejs\npm.cmd`,
+        ["view", "openclaw@latest", "version"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\Program Files\nodejs\npm.cmd" view openclaw@latest version"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps installed Windows CLI cmd fallbacks without Node shell argv", () => {
+    expect(
+      resolveInstalledCliInvocation(
+        win32.join(String.raw`C:\OpenClaw Prefix`, "openclaw.cmd"),
+        ["gateway", "run", "--port", "1234"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\OpenClaw Prefix\openclaw.cmd" gateway run --port 1234"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs resolved command invocations and writes command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('ok')"],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+        },
+      );
+
+      expect(result).toMatchObject({
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+      });
+      expect(readFileSync(logPath, "utf8")).toContain("start command=");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("derives the installed prefix from resolved CLI paths", () => {
     expect(
       resolveInstalledPrefixDirFromCliPath(
@@ -753,6 +874,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       }),
     ).toEqual({
       FOO: "bar",
+      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     });
   });

@@ -74,14 +74,15 @@ function loadRootAliasWithStubs(options?: {
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
   };
+  const context = {
+    process: {
+      env: options?.env ?? {},
+      platform: options?.platform ?? "darwin",
+    },
+  };
   const wrapper = vm.runInNewContext(
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
-    {
-      process: {
-        env: options?.env ?? {},
-        platform: options?.platform ?? "darwin",
-      },
-    },
+    context,
     { filename: rootAliasPath },
   ) as (
     exports: Record<string, unknown>,
@@ -158,6 +159,7 @@ function loadRootAliasWithStubs(options?: {
       return createJitiOptions;
     },
     loadedSpecifiers,
+    globalContext: context as Record<PropertyKey, unknown>,
   };
 }
 
@@ -422,10 +424,17 @@ describe("plugin-sdk root alias", () => {
 
   it("ignores unsafe private local-only plugin-sdk subpaths in the CJS root alias", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
+    const qaLabPath = path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts");
+    const ssrfRuntimeInternalPath = path.join(
+      packageRoot,
+      "src",
+      "plugin-sdk",
+      "ssrf-runtime-internal.ts",
+    );
     const lazyModule = loadRootAliasWithStubs({
       env: { OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" },
-      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path"],
-      existingPaths: [path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts")],
+      privateLocalOnlySubpaths: ["qa-lab", "../escape", "nested/path", "ssrf-runtime-internal"],
+      existingPaths: [qaLabPath, ssrfRuntimeInternalPath],
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
@@ -433,28 +442,26 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
-    expect(aliasMap["openclaw/plugin-sdk/qa-lab"]).toBe(
-      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
-    );
-    expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(
-      path.join(packageRoot, "src", "plugin-sdk", "qa-lab.ts"),
-    );
+    expect(aliasMap["openclaw/plugin-sdk/qa-lab"]).toBe(qaLabPath);
+    expect(aliasMap["@openclaw/plugin-sdk/qa-lab"]).toBe(qaLabPath);
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/../escape");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/ssrf-runtime-internal");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/ssrf-runtime-internal");
   });
 
   it("keeps non-QA private local-only plugin-sdk subpaths out of the CJS root alias", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
-    const sourceCodexNativeTaskRuntimePath = path.join(
+    const sourceCodexMcpProjectionPath = path.join(
       packageRoot,
       "src",
       "plugin-sdk",
-      "codex-native-task-runtime.ts",
+      "codex-mcp-projection.ts",
     );
     const sourceQaRuntimePath = path.join(packageRoot, "src", "plugin-sdk", "qa-runtime.ts");
     const lazyModule = loadRootAliasWithStubs({
-      privateLocalOnlySubpaths: ["codex-native-task-runtime", "qa-runtime"],
-      existingPaths: [sourceCodexNativeTaskRuntimePath, sourceQaRuntimePath],
+      privateLocalOnlySubpaths: ["codex-mcp-projection", "qa-runtime"],
+      existingPaths: [sourceCodexMcpProjectionPath, sourceQaRuntimePath],
       monolithicExports: {
         slowHelper: (): string => "loaded",
       },
@@ -462,8 +469,8 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
-    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/codex-native-task-runtime");
-    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/codex-native-task-runtime");
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/codex-mcp-projection");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/codex-mcp-projection");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/qa-runtime");
   });
 
@@ -516,6 +523,31 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
     );
+  });
+
+  it("bridges diagnostic listeners through shared process state when the lazy module is isolated", () => {
+    const seen: string[] = [];
+    const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )((event) => {
+      seen.push(event.type);
+    });
+    const state = lazyModule.globalContext[Symbol.for("openclaw.diagnosticEvents.state.v1")] as {
+      listeners: Set<(event: { type: string }, metadata: { trusted: boolean }) => void>;
+    };
+
+    for (const listener of state.listeners) {
+      listener({ type: "model.usage" }, { trusted: false });
+      listener({ type: "log.record" }, { trusted: false });
+      listener({ type: "model.usage" }, { trusted: true });
+    }
+    unsubscribe();
+
+    expect(seen).toEqual(["model.usage"]);
+    expect(state.listeners.size).toBe(0);
   });
 
   it.each([

@@ -742,7 +742,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -809,7 +808,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -852,7 +850,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
-            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;
@@ -1038,6 +1035,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
         provider,
         modelId,
         model,
@@ -1149,6 +1147,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionManager,
             sessionId: params.sessionId,
             policy: transcriptPolicy,
+            preserveLatestAssistantThinking: false,
           });
           const validated = await validateReplayTurns({
             messages: prior,

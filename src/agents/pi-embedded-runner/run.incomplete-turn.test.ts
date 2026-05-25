@@ -1,6 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
+import {
+  hasCommittedMessagingToolDeliveryEvidence,
+  hasOutboundDeliveryEvidence,
+} from "./delivery-evidence.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -313,6 +316,46 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ]);
     expect(result.meta.livenessState).toBe("blocked");
     expect(result.meta.replayInvalid).toBe(false);
+  });
+
+  it("promotes successful final assistant text when a prompt timeout races completion", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const finalText =
+      "1. Verdict: the answer completed cleanly. 2. Evidence: the runner captured final text.";
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: finalText }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      runId: "run-prompt-timeout-final-assistant-recovered",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([{ text: finalText }]);
+    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
+    expect(result.meta.finalAssistantRawText).toBe(finalText);
+    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.completion).toEqual({
+      stopReason: "stop",
+      finishReason: "stop",
+    });
+    expect(result.meta.executionTrace?.attempts?.at(-1)).toMatchObject({
+      result: "success",
+      stage: "assistant",
+    });
   });
 
   it("auto-activates strict-agentic for unconfigured GPT-5 openai runs and surfaces the blocked state", async () => {
@@ -1192,6 +1235,45 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
+    const interruptedToolOnlyAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "bash", meta: "workspace" }],
+      messagesSnapshot: [
+        {
+          role: "user",
+          content: "check running processes",
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          content: "",
+          isError: false,
+          details: { aggregated: "" },
+          timestamp: 2,
+        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+      ],
+    });
+
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
+      aborted: false,
+      timedOut: false,
+      attempt: interruptedToolOnlyAttempt,
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+
+    const explicitCancellationText = resolveIncompleteTurnPayloadText({
+      payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
+      aborted: true,
+      timedOut: false,
+      attempt: interruptedToolOnlyAttempt,
+    });
+
+    expect(explicitCancellationText).toBeNull();
+  });
+
   it("detects tool-use terminal turn with pre-tool text as incomplete (#76477)", () => {
     // When the last assistant message ended with stopReason=toolUse, pre-tool
     // text alone must not suppress the incomplete-turn guard. The model
@@ -1218,6 +1300,40 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("does not surface incomplete-turn error while an async media task is running", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            meta: 'generate prompt="a portrait"',
+            asyncStarted: true,
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "image_generate",
+              input: { action: "generate", prompt: "a portrait" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
   });
 
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
@@ -1484,6 +1600,82 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("does not retry empty turns after an accepted sessions_spawn delivery", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "gemma4:31b",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        acceptedSessionSpawns: [
+          {
+            runId: "run-child",
+            childSessionKey: "agent:claude:subagent:child",
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "ollama",
+          model: "gemma4:31b",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("retries empty openai-codex-responses turns with non-zero output tokens (#85364)", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      modelApi: "openai-codex-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [],
+          usage: { input: 24794, output: 111, cacheRead: 4608, totalTokens: 29513 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
+  it("retries empty openai-responses turns without visible text", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [],
+          usage: { input: 5000, output: 200, totalTokens: 5200 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("retries generic empty OpenAI-compatible turns from custom endpoints", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "llama-cpp-local",
@@ -1654,6 +1846,100 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("suppresses the incomplete-turn warning after an accepted sessions_spawn terminal success", () => {
+    const attemptWithAcceptedSpawn: Partial<EmbeddedRunAttemptResult> & {
+      acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+    } = {
+      assistantTexts: [],
+      acceptedSessionSpawns: [
+        {
+          runId: "run-child",
+          childSessionKey: "agent:claude:subagent:child",
+        },
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    };
+
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult(attemptWithAcceptedSpawn),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("still returns a timeout payload when the parent prompt times out after an accepted sessions_spawn", async () => {
+    const acceptedSessionSpawns = [
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ];
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        acceptedSessionSpawns,
+        timedOut: true,
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-timeout-after-accepted-spawn",
+    });
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        isError: true,
+      },
+    ]);
+    expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+  });
+
+  it("still surfaces the incomplete-turn warning without an accepted sessions_spawn success", () => {
+    const attemptWithMalformedSpawn: Partial<EmbeddedRunAttemptResult> & {
+      acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+    } = {
+      assistantTexts: [],
+      acceptedSessionSpawns: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        content: [],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    };
+
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult(attemptWithMalformedSpawn),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
   it("still surfaces the incomplete-turn warning when no messaging delivery was committed", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 0,
@@ -1715,6 +2001,17 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
+  it("treats async-started background tools as replay-invalid side effects", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("treats committed messaging media as replay-invalid side effect metadata", () => {
     expect(
       buildAttemptReplayMetadata({
@@ -1736,6 +2033,40 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats accepted sessions_spawn as replay-invalid outbound delivery", () => {
+    const acceptedSessionSpawns = [
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ];
+
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        acceptedSessionSpawns,
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+    expect(hasOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
+  });
+
+  it("ignores malformed accepted sessions_spawn delivery evidence", () => {
+    expect(
+      hasOutboundDeliveryEvidence({
+        acceptedSessionSpawns: [
+          null,
+          {
+            runId: "run-child",
+            childSessionKey: " ",
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("leaves committed delivery plus tool errors to the tool-error payload path", () => {
@@ -1897,6 +2228,42 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+  });
+
+  it("surfaces empty Codex app-server replies after successful sparse bash output", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "bash", meta: "exit=0" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "" }],
+            details: { aggregated: "" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            content: [{ type: "text", text: "" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(incompleteTurnText).toContain("verify before retrying");
   });
 
   it("retries generic empty Bedrock Converse turns without visible text", () => {

@@ -121,7 +121,6 @@ vi.mock("./session-updates.runtime.js", () => ({
 
 vi.mock("./session-system-events.js", () => ({
   drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
-  drainFormattedSystemEventBlock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -131,7 +130,7 @@ vi.mock("./typing-mode.js", () => ({
 let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
 let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
-let drainFormattedSystemEventBlock: typeof import("./session-system-events.js").drainFormattedSystemEventBlock;
+let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
@@ -218,7 +217,6 @@ function baseParams(
       onReplyStart: vi.fn().mockResolvedValue(undefined),
       cleanup: vi.fn(),
     } as never,
-    defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-1",
     timeoutMs: 30_000,
     isNewSession: true,
@@ -278,7 +276,7 @@ describe("runPreparedReply media-only handling", () => {
     ({ runPreparedReply } = await import("./get-reply-run.js"));
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
-    ({ drainFormattedSystemEventBlock } = await import("./session-system-events.js"));
+    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
@@ -933,6 +931,142 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
   });
 
+  it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(
+      secondImagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+            {
+              kind: "image.description",
+              attachmentIndex: 1,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "another tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toBeUndefined();
+    expect(call.followupRun.imageOrder).toBeUndefined();
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
+  it("rehydrates only current MediaPaths missing image understanding", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImageData = Buffer.from("second image bytes");
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(secondImagePath, secondImageData);
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: secondImageData.toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({
@@ -1069,23 +1203,33 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+    const activeOperation = createReplyOperation({
+      sessionId: "session-active",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
 
-    const result = await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        isNewSession: true,
-        sessionId: "session-reset-new",
-      }),
-    );
+    try {
+      const result = await runPreparedReply(
+        baseParams({
+          resetTriggered: true,
+          isNewSession: true,
+          sessionId: "session-reset-new",
+        }),
+      );
 
-    expect(result).toEqual({ text: "ok" });
-    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call?.shouldSteer).toBe(false);
-    expect(call?.shouldFollowup).toBe(false);
-    expect(call?.resetTriggered).toBe(true);
+      expect(result).toEqual({ text: "ok" });
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+      expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+      const call = requireRunReplyAgentCall();
+      expect(call?.shouldSteer).toBe(false);
+      expect(call?.shouldFollowup).toBe(false);
+      expect(call?.resetTriggered).toBe(true);
+    } finally {
+      activeOperation.complete();
+    }
   });
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -1158,6 +1302,75 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+
+  it("does not queue a run behind its provided pre-dispatch reply operation", async () => {
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const operation = createReplyOperation({
+      sessionId: "session-pre-dispatch-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-pre-dispatch-owner",
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(true);
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionId: "session-pre-dispatch-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(vi.mocked(piRuntime.isEmbeddedPiRunActive)).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReset().mockReturnValue(false);
+    }
+  });
+
+  it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    const operation = createReplyOperation({
+      sessionId: "session-reset-owner",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-reset-owner");
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            resetTriggered: true,
+            isNewSession: true,
+            sessionId: "session-reset-owner",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(call.replyOperation).toBe(operation);
+      expect(commandQueue.clearCommandLane).not.toHaveBeenCalled();
+      expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    } finally {
+      operation.complete();
+      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("re-resolves auth profile after waiting for a prior run", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1204,153 +1417,6 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves image override auth profile without mutating stored session profile", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-auth",
-      sessionFile: "/tmp/session-image-auth.jsonl",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-1",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile when the override provider matches the default provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-default-provider-auth",
-      sessionFile: "/tmp/session-image-default-provider-auth.jsonl",
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-default-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile from the pre-override runtime provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-runtime-provider-auth",
-      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
-      modelProvider: "anthropic",
-      model: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        imageModelOverrideBaseProvider: "anthropic",
-        isNewSession: false,
-        sessionId: "session-image-runtime-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
@@ -1413,7 +1479,7 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
-  it("continues when the original owner clears before an unrelated run appears", async () => {
+  it("reports still shutting down when a new owner appears after waiting", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -1441,23 +1507,19 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();
   });
   it("re-drains system events after waiting behind an active run", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
-    vi.mocked(drainFormattedSystemEventBlock)
-      .mockResolvedValueOnce({
-        text: "System: [t] Initial event.",
-        forceSenderIsOwnerFalse: false,
-      })
-      .mockResolvedValueOnce({
-        text: "System: [t] Post-compaction context.",
-        forceSenderIsOwnerFalse: false,
-      });
+    vi.mocked(drainFormattedSystemEvents)
+      .mockResolvedValueOnce("System: [t] Initial event.")
+      .mockResolvedValueOnce("System: [t] Post-compaction context.");
 
     const previousRun = createReplyOperation({
       sessionId: "session-events-after-wait",
@@ -1694,6 +1756,60 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);
     expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+  });
+
+  it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const activeLaneAbortController = new AbortController();
+    const sourceAbortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          abortSignal: activeLaneAbortController.signal,
+          queuedFollowupAbortSignal: sourceAbortController.signal,
+        } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> & {
+          queuedFollowupAbortSignal?: AbortSignal;
+        },
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          MessageSid: "993",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(sourceAbortController.signal);
   });
 
   it("detaches queued user requests from superseded source abort signals", async () => {
@@ -2162,10 +2278,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Model switched.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Model switched.");
 
     await runPreparedReply(baseParams());
 
@@ -2174,24 +2287,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
-  it("downgrades sender ownership when drained system events request owner downgrade", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] External webhook payload.",
-      forceSenderIsOwnerFalse: true,
-    });
-    const params = ownerParams();
-
-    await runPreparedReply(params);
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.run.senderIsOwner).toBe(false);
-  });
-
-  it("keeps sender ownership when drained system events do not request owner downgrade", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Trusted event.",
-      forceSenderIsOwnerFalse: false,
-    });
+  it("keeps sender ownership when queued system events are prepended", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] External webhook payload.",
+    );
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -2200,11 +2299,20 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
-  it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Relay text mentions System (untrusted): but event is trusted.",
-      forceSenderIsOwnerFalse: false,
-    });
+  it("keeps sender ownership when drained system events are present", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
+    const params = ownerParams();
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.run.senderIsOwner).toBe(true);
+  });
+
+  it("does not downgrade sender ownership when event text contains the untrusted marker", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+    );
     const params = ownerParams();
 
     await runPreparedReply(params);
@@ -2214,13 +2322,10 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("preserves first-token think hint when system events are prepended", async () => {
-    // drainFormattedSystemEventBlock returns the events block; the caller prepends it.
+    // drainFormattedSystemEvents returns the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"
     // does not shadow the low|medium|high shorthand.
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Node connected.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPreparedReply(
       baseParams({
@@ -2241,12 +2346,9 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("carries system events into followupRun.prompt for deferred turns", async () => {
-    // drainFormattedSystemEventBlock returns the events block; the caller prepends it to
+    // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce({
-      text: "System: [t] Node connected.",
-      forceSenderIsOwnerFalse: false,
-    });
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Node connected.");
 
     await runPreparedReply(baseParams());
 
@@ -2257,7 +2359,7 @@ describe("runPreparedReply media-only handling", () => {
   it("does not strip think-hint token from deferred queue body", async () => {
     // In steer mode the inferred thinkLevel is never consumed, so the first token
     // must not be stripped from the queue/steer body (followupRun.prompt).
-    vi.mocked(drainFormattedSystemEventBlock).mockResolvedValueOnce(undefined);
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(undefined);
 
     await runPreparedReply(
       baseParams({

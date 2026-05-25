@@ -3,8 +3,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
+  createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
 } from "./app-chat.ts";
@@ -357,6 +356,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
 // Lazy-loaded view modules are deferred so the initial bundle stays small.
 // The shared loader renders visible fallback states instead of leaving a tab blank.
 const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
+const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
@@ -911,6 +911,7 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
@@ -1679,7 +1680,7 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header class="topbar">
+      <header class="topbar" ?inert=${chatFocus} aria-hidden=${chatFocus ? "true" : nothing}>
         <div class="topnav-shell">
           <button
             type="button"
@@ -1872,11 +1873,11 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "config"
           ? nothing
           : html`<section
-              class=${isChat && state.chatHeaderControlsHidden
+              class=${chatHeaderHidden
                 ? "content-header content-header--chat-hidden"
                 : "content-header"}
-              ?inert=${isChat && state.chatHeaderControlsHidden}
-              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+              ?inert=${chatHeaderHidden}
+              aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
                 ${isChat
@@ -1959,6 +1960,55 @@ export function renderApp(state: AppViewState) {
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
             })
+          : nothing}
+        ${state.tab === "activity"
+          ? renderLazyView(lazyActivity, (m) =>
+              m.renderActivity({
+                entries: state.activityEntries,
+                filterText: state.activityFilterText,
+                statusFilters: state.activityStatusFilters,
+                toolFilter: state.activityToolFilter,
+                expandedIds: state.activityExpandedIds,
+                autoFollow: state.activityAutoFollow,
+                onFilterTextChange: (next) => (state.activityFilterText = next),
+                onToolFilterChange: (next) => (state.activityToolFilter = next),
+                onStatusToggle: (status, enabled) => {
+                  state.activityStatusFilters = {
+                    ...state.activityStatusFilters,
+                    [status]: enabled,
+                  };
+                },
+                onToggleAutoFollow: (next) => {
+                  state.activityAutoFollow = next;
+                  if (next) {
+                    state.scheduleActivityScroll(true);
+                  }
+                },
+                onClear: () => {
+                  state.activityEntries = [];
+                  state.activityExpandedIds = new Set();
+                  state.activityAtBottom = true;
+                },
+                onExpandAll: () => {
+                  state.activityExpandedIds = new Set(
+                    state.activityEntries.map((entry) => entry.id),
+                  );
+                },
+                onCollapseAll: () => {
+                  state.activityExpandedIds = new Set();
+                },
+                onEntryToggle: (id, open) => {
+                  const next = new Set(state.activityExpandedIds);
+                  if (open) {
+                    next.add(id);
+                  } else {
+                    next.delete(id);
+                  }
+                  state.activityExpandedIds = next;
+                },
+                onScroll: (event) => state.handleActivityScroll(event),
+              }),
+            )
           : nothing}
         ${state.tab === "instances"
           ? renderLazyView(lazyInstances, (m) =>
@@ -2711,6 +2761,7 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkStatus: state.realtimeTalkStatus,
                   realtimeTalkDetail: state.realtimeTalkDetail,
                   realtimeTalkTranscript: state.realtimeTalkTranscript,
+                  realtimeTalkConversation: state.realtimeTalkConversation,
                   realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
                   realtimeTalkOptions: state.realtimeTalkOptions,
                   connected: state.connected,
@@ -2749,10 +2800,7 @@ export function renderApp(state: AppViewState) {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
-                      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-                      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-                      includeGlobal: true,
-                      includeUnknown: true,
+                      ...createChatSessionsLoadOverrides(state),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),

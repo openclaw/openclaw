@@ -51,6 +51,7 @@ import {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 } from "./suite-planning.js";
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
@@ -212,6 +213,38 @@ function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuit
   throw new Error(
     "QA suite requires startLab when no lab handle is provided; use the runtime launcher or pass startLab explicitly.",
   );
+}
+
+function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+  lab?: QaLabServerHandle;
+  startLab?: QaSuiteStartLabFn;
+}) {
+  if (
+    !shouldUseIsolatedQaSuiteScenarioWorkers({
+      scenarios: params.scenarios,
+      concurrency: params.concurrency,
+    })
+  ) {
+    return false;
+  }
+
+  if (params.concurrency === 1 && params.lab && !params.startLab) {
+    return false;
+  }
+
+  return true;
+}
+
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  if (typeof params.explicit === "boolean") {
+    return params.explicit;
+  }
+  return params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario));
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -378,8 +411,41 @@ function createQaSuiteReportNotes(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
 }) {
   return params.transport.createReportNotes(params);
+}
+
+function buildQaIsolatedScenarioWorkerParams(params: {
+  repoRoot: string;
+  outputDir: string;
+  providerMode: QaProviderMode;
+  transportId: QaTransportId;
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  input?: QaSuiteRunParams;
+  startLab: QaSuiteStartLabFn;
+}): QaSuiteRunParams {
+  return {
+    repoRoot: params.repoRoot,
+    outputDir: params.outputDir,
+    providerMode: params.providerMode,
+    transportId: params.transportId,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+    fastMode: params.fastMode,
+    thinkingDefault: params.input?.thinkingDefault,
+    claudeCliAuthMode: params.input?.claudeCliAuthMode,
+    scenarioIds: [params.scenario.id],
+    enabledPluginIds: params.input?.enabledPluginIds,
+    concurrency: 1,
+    startLab: params.startLab,
+    controlUiEnabled: scenarioRequiresControlUi(params.scenario),
+    transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
+    forcedRuntime: params.input?.forcedRuntime,
+  };
 }
 
 function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
@@ -770,6 +836,7 @@ async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 }) {
@@ -974,6 +1041,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `run start: scenarios=${selectedCatalogScenarios.length} concurrency=${concurrency} transport=${transportId}`,
   );
+  const useIsolatedScenarioWorkers = shouldRunQaSuiteWithIsolatedScenarioWorkers({
+    scenarios: selectedCatalogScenarios,
+    concurrency,
+    lab: params?.lab,
+    startLab: params?.startLab,
+  });
+  const controlUiEnabled = resolveQaSuiteControlUiEnabled({
+    explicit: params?.controlUiEnabled,
+    scenarios: selectedCatalogScenarios,
+  });
 
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
@@ -998,7 +1075,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     });
   }
 
-  if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
+  if (useIsolatedScenarioWorkers) {
     const ownsLab = !params?.lab;
     const startLab = requireQaSuiteStartLab(params?.startLab);
     const lab =
@@ -1052,6 +1129,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
             alternateModel,
             fastMode,
             concurrency,
+            isolatedWorkers: true,
             scenarioIds:
               params?.scenarioIds && params.scenarioIds.length > 0
                 ? selectedCatalogScenarios.map((scenario) => scenario.id)
@@ -1093,25 +1171,20 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
           updateScenarioRun();
           try {
             const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
-            const result: QaSuiteResult = await runQaSuite({
-              repoRoot,
-              outputDir: scenarioOutputDir,
-              providerMode,
-              transportId,
-              primaryModel,
-              alternateModel,
-              fastMode,
-              thinkingDefault: params?.thinkingDefault,
-              claudeCliAuthMode: params?.claudeCliAuthMode,
-              scenarioIds: [scenario.id],
-              enabledPluginIds: params?.enabledPluginIds,
-              concurrency: 1,
-              startLab,
-              // Most isolated workers do not need their own Control UI proxy.
-              // Control UI scenarios do, because they open the worker's
-              // gateway-backed app directly.
-              controlUiEnabled: scenarioRequiresControlUi(scenario),
-            });
+            const result: QaSuiteResult = await runQaSuite(
+              buildQaIsolatedScenarioWorkerParams({
+                repoRoot,
+                outputDir: scenarioOutputDir,
+                providerMode,
+                transportId,
+                primaryModel,
+                alternateModel,
+                fastMode,
+                startLab,
+                scenario,
+                input: params,
+              }),
+            );
             const scenarioResult: QaSuiteScenarioResult =
               result.scenarios[0] ??
               ({
@@ -1199,6 +1272,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         alternateModel,
         fastMode,
         concurrency,
+        isolatedWorkers: true,
         // When the caller supplied an explicit non-empty --scenario filter,
         // record the executed (post-selectQaSuiteScenarios-normalized) ids
         // so the summary matches what actually ran. When the caller passed
@@ -1271,7 +1345,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     fastMode,
     thinkingDefault: params?.thinkingDefault,
     claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled: params?.controlUiEnabled ?? true,
+    controlUiEnabled,
     enabledPluginIds,
     forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
@@ -1290,10 +1364,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
   );
-  lab.setControlUi({
-    controlUiProxyTarget: gateway.baseUrl,
-    controlUiProxyToken: gateway.token,
-  });
+  if (controlUiEnabled) {
+    lab.setControlUi({
+      controlUiProxyTarget: gateway.baseUrl,
+      controlUiProxyToken: gateway.token,
+    });
+  }
   const env: QaSuiteEnvironment = {
     lab,
     mock,
@@ -1459,6 +1535,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       alternateModel,
       fastMode,
       concurrency,
+      isolatedWorkers: false,
       // Same "filtered → executed list, unfiltered → null" convention as
       // the concurrent-path writeQaSuiteArtifacts call above.
       scenarioIds:
@@ -1512,13 +1589,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 export const qaSuiteProgressTesting = {
   appendNodeOption,
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
+  buildQaIsolatedScenarioWorkerParams,
   buildQaSuiteRuntimeMetrics,
   buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  resolveQaSuiteControlUiEnabled,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
+  shouldRunQaSuiteWithIsolatedScenarioWorkers,
   shouldLogQaSuiteProgress,
   waitForQaLabReadyOrStopOwned,
 };

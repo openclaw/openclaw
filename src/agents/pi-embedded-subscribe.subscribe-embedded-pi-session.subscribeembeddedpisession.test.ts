@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
@@ -52,6 +53,7 @@ describe("subscribeEmbeddedPiSession", () => {
     subscribeEmbeddedPiSession({
       session,
       ...options,
+      trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
     return { emit };
   }
@@ -1173,6 +1175,106 @@ describe("subscribeEmbeddedPiSession", () => {
       phase: "end",
       livenessState: "working",
       replayInvalid: true,
+    });
+  });
+
+  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-spawn-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-1",
+      args: { prompt: "continue in a child session" },
+      isError: false,
+      result: {
+        details: {
+          status: "accepted",
+          runId: "run-child",
+          childSessionKey: "agent:claude:subagent:child",
+        },
+      },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.getAcceptedSessionSpawns()).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
+  });
+
+  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onHeartbeatToolResponse = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-heartbeat-terminal",
+      sessionKey: "agent:main:main",
+      onHeartbeatToolResponse,
+    });
+
+    const result = {
+      details: {
+        status: "recorded",
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+    };
+    emitToolRun({
+      emit,
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolCallId: "heartbeat-1",
+      args: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isError: false,
+      result,
+    });
+    emitToolRun({
+      emit,
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolCallId: "heartbeat-2",
+      args: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isError: false,
+      result,
+    });
+    await flushBlockReplyCallbacks();
+
+    expect(subscription.getHeartbeatToolResponse()).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+    expect(onHeartbeatToolResponse).toHaveBeenCalledTimes(1);
+    expect(onHeartbeatToolResponse).toHaveBeenCalledWith({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
     });
   });
 });

@@ -1,8 +1,17 @@
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import {
+  getTopicName,
+  resetTopicNameCacheForTest,
+  resolveTopicNameCacheScope,
+  setTelegramTopicNameStoreFactoryForTest,
+} from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -42,6 +51,38 @@ const createForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
+
+type TopicNameEntryForTest = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
+
+const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntryForTest>>();
+
+function installTopicNameStoreForTest() {
+  topicNameStoresForTest.clear();
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    const entries = topicNameStoresForTest.get(namespace) ?? new Map();
+    topicNameStoresForTest.set(namespace, entries);
+    return {
+      async register(key, value) {
+        entries.set(key, value);
+      },
+      async entries() {
+        return Array.from(entries, ([key, value]) => ({ key, value }));
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async clear() {
+        entries.clear();
+      },
+    };
+  });
+}
 
 type MockCallSource = {
   mock: {
@@ -93,6 +134,10 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
   }
 
+  function topicCacheScopeFor(cfg: OpenClawConfig, accountId: string): string {
+    return resolveTopicNameCacheScope(resolveStorePath(cfg.session?.store, { agentId: accountId }));
+  }
+
   async function sendInlineButtonsMessage(params: {
     to: string;
     buttons: Array<Array<{ text: string; callback_data: string; style?: string }>>;
@@ -131,6 +176,8 @@ describe("handleTelegramAction", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    resetTopicNameCacheForTest();
+    installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
       sendMessageTelegram,
@@ -155,6 +202,9 @@ describe("handleTelegramAction", () => {
   });
 
   afterEach(() => {
+    setTelegramTopicNameStoreFactoryForTest(undefined);
+    resetTopicNameCacheForTest();
+    topicNameStoresForTest.clear();
     envSnapshot.restore();
   });
 
@@ -388,6 +438,21 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("normalizes legacy group targets for sendMessage actions", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "group:-1001234567890:topic:77",
+        content: "Recovered",
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "legacy group target");
+    expect(call[0]).toBe("-1001234567890:topic:77");
+    expect(call[1]).toBe("Recovered");
+  });
+
   it("marks the matching inbound event delivered after a successful send", async () => {
     let count = 0;
     const end = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {
@@ -559,6 +624,60 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "send alias options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBe("https://example.com/image.jpg");
+  });
+
+  it.each(["path", "filePath"] as const)("uses top-level %s as sendMessage media", async (key) => {
+    const mediaPath = `/tmp/customer_support_${key}.png`;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "telegram:-100123:topic:879",
+        message: "Productivity",
+        [key]: mediaPath,
+      },
+      telegramConfig(),
+    );
+    const call = mockCall(sendMessageTelegram, 0, `${key} media`);
+    expect(call[0]).toBe("telegram:-100123:topic:879");
+    expect(call[1]).toBe("Productivity");
+    const options = requireRecord(call[2], `${key} media options`);
+    expect(options.token).toBe("tok");
+    expect(options.mediaUrl).toBe(mediaPath);
+  });
+
+  it("sends all attachment paths as sendMessage media", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "telegram:-100123:topic:879",
+        message: "1/2 Productivity",
+        attachments: [
+          {
+            type: "image",
+            path: "/tmp/customer_support_productivity.png",
+            name: "customer_support_productivity.png",
+          },
+          {
+            type: "image",
+            filePath: "/tmp/customer_support_resolution.png",
+            name: "customer_support_resolution.png",
+          },
+        ],
+      },
+      telegramConfig(),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "attachment media");
+    expect(call[0]).toBe("telegram:-100123:topic:879");
+    expect(call[1]).toBe("1/2 Productivity");
+    const options = requireRecord(call[2], "attachment media options");
+    expect(options.token).toBe("tok");
+    expect(options.mediaUrl).toBe("/tmp/customer_support_productivity.png");
+    const followUpCall = mockCall(sendMessageTelegram, 1, "second attachment media");
+    expect(followUpCall[0]).toBe("telegram:-100123:topic:879");
+    expect(followUpCall[1]).toBe("");
+    const followUpOptions = requireRecord(followUpCall[2], "second attachment media options");
+    expect(followUpOptions.token).toBe("tok");
+    expect(followUpOptions.mediaUrl).toBe("/tmp/customer_support_resolution.png");
   });
 
   it("sends a poll", async () => {
@@ -795,6 +914,53 @@ describe("handleTelegramAction", () => {
       expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
     },
   );
+
+  it("stores created forum topic names in the account-scoped cache", async () => {
+    createForumTopicTelegram.mockResolvedValueOnce({
+      topicId: 99,
+      name: "Topic",
+      chatId: "-100123",
+    });
+    const cfg = {
+      ...telegramConfig({ actions: { createForumTopic: true } }),
+      session: { store: path.join(os.tmpdir(), "openclaw-telegram-action-sessions.json") },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", name: "Topic" },
+      cfg,
+    );
+
+    const scope = topicCacheScopeFor(cfg, "work");
+    await expect(getTopicName("-100123", 99, scope)).resolves.toBe("Topic");
+    await expect(getTopicName("alias-chat", 99, scope)).resolves.toBeUndefined();
+  });
+
+  it("stores edited forum topic names in the account-scoped cache", async () => {
+    editForumTopicTelegram.mockResolvedValueOnce({
+      ok: true,
+      chatId: "-100123",
+      messageThreadId: 42,
+      name: "New",
+    });
+    const cfg = {
+      ...telegramConfig({ actions: { editForumTopic: true } }),
+      session: { store: path.join(os.tmpdir(), "openclaw-telegram-action-sessions.json") },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        accountId: "work",
+        chatId: "alias-chat",
+        messageThreadId: 42,
+        name: "New",
+      },
+      cfg,
+    );
+
+    await expect(getTopicName("-100123", 42, topicCacheScopeFor(cfg, "work"))).resolves.toBe("New");
+  });
 
   it.each([
     {

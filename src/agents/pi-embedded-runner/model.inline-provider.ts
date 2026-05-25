@@ -40,6 +40,7 @@ export function normalizeResolvedTransportApi(
     case "bedrock-converse-stream":
     case "github-copilot":
     case "google-generative-ai":
+    case "google-vertex":
     case "ollama":
     case "openai-codex-responses":
     case "openai-completions":
@@ -141,7 +142,7 @@ export function buildInlineProviderModels(
     return (entry?.models ?? []).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
-        baseUrl: entry?.baseUrl,
+        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
       });
       const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
         stripSecretRefMarkers: true,
