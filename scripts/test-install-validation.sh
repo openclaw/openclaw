@@ -108,6 +108,12 @@ printf '\x9b\x33\x31\x6dPWNED\x9b\x30\x6d rest of line\n' > "$TMPDIR_TEST/c1_esc
 #     substitution strips the NULs, so the old string check would false-accept.
 printf '\x00\x00#!/bin/bash\necho pwned\n' > "$TMPDIR_TEST/nul_prefix.sh"
 
+# (i) Partial download: starts with a valid shebang but is truncated mid-line.
+#     A failed curl/wget can leave behind a partial file that passes the shebang
+#     check.  The download_file failure guard (|| return 1) must prevent this
+#     from ever reaching validate_downloaded_script.
+printf '#!/bin/bash\nset -e\necho "starting install"\napt-get ' > "$TMPDIR_TEST/partial.sh"
+
 # ===========================================================================
 #  GREEN tests — WITH validation (new behavior), bad files are REJECTED
 # ===========================================================================
@@ -172,6 +178,39 @@ if validate_script "$TMPDIR_TEST/valid_env.sh" 2>/dev/null; then
     ok "valid script (#!env bash) → accepted"
 else
     ko "valid script (#!env bash) → should have been accepted"
+fi
+
+# Partial download: has a valid shebang so validate_script ACCEPTS it.
+# This proves the download_file failure guard (|| return 1) is essential:
+# without it, a failed curl that left a partial file would pass validation.
+if validate_script "$TMPDIR_TEST/partial.sh" 2>/dev/null; then
+    ok "partial download (valid shebang) → accepted by validation alone"
+else
+    ko "partial download → should have been accepted by validation alone"
+fi
+
+# Simulate the full download-then-validate pipeline with a failing downloader.
+# download_file returns non-zero but leaves the partial file on disk.
+simulate_failed_download() {
+    local tmp="$1" url="$2"
+    # Downloader "fails" (returns 1) after writing partial content
+    cp "$TMPDIR_TEST/partial.sh" "$tmp"
+    return 1
+}
+
+run_remote_bash_guarded() {
+    local url="$1"
+    local tmp
+    tmp="$(mktemp)"
+    simulate_failed_download "$tmp" "$url" || return 1
+    validate_script "$tmp" "$url" || return 1
+    /bin/bash "$tmp"
+}
+
+if ! run_remote_bash_guarded "https://example.com/partial-download" 2>/dev/null; then
+    ok "failed download (partial) → pipeline rejected before validation"
+else
+    ko "failed download (partial) → pipeline should have rejected (download_file guard missing)"
 fi
 
 # ===========================================================================

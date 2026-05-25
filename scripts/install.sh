@@ -118,7 +118,7 @@ run_remote_bash() {
     local url="$1"
     local tmp
     tmp="$(mktempfile)"
-    download_file "$url" "$tmp"
+    download_file "$url" "$tmp" || return 1
     validate_downloaded_script "$tmp" "$url" || return 1
     /bin/bash "$tmp"
 }
@@ -1859,7 +1859,7 @@ install_node() {
         if command -v apt-get &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp" || return 1
             validate_downloaded_script "$tmp" "https://deb.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
@@ -1871,7 +1871,7 @@ install_node() {
         elif command -v dnf &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp" || return 1
             validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
@@ -1883,7 +1883,7 @@ install_node() {
         elif command -v yum &> /dev/null; then
             local tmp
             tmp="$(mktempfile)"
-            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp"
+            run_quiet_step "Downloading NodeSource setup script" download_file "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" "$tmp" || return 1
             validate_downloaded_script "$tmp" "https://rpm.nodesource.com/setup_${NODE_DEFAULT_MAJOR}.x" || return 1
             if is_root; then
                 run_quiet_step "Configuring NodeSource repository" bash "$tmp"
