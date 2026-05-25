@@ -19,6 +19,7 @@ Best-effort local-only provenance for OpenClaw PR/issue bodies. Use during agent
 - Keep user prompts, assistant visible decisions, terse tool summaries, and test/proof outcomes.
 - Remove session turns unrelated to the PR/issue work. Use the PR/issue title, branch name, changed files, and stated goal as scope; omit earlier/later unrelated tasks even when they are in the same session log.
 - Best effort only: PR/issue creation must continue if no safe transcript is found.
+- Add the `## Agent Transcript` section only when inserting a real transcript. Never add a placeholder transcript heading or text such as "A sanitized local transcript preview was generated but not included."
 - Use a collapsed `<details>` section and update existing markers instead of duplicating sections.
 
 ## Helper
@@ -74,7 +75,7 @@ Append/update a body file before `gh pr create --body-file` or connector PR crea
 5. Before insertion, trim unrelated session turns from the generated section. Keep only turns that explain this PR/issue's goal, implementation choices, files, tests, proof, blockers, and final outcome.
 6. If the user approves, run `append-body`.
 7. Use the enriched body file for creation/update.
-8. If no safe session is found, say nothing and continue without transcript. If the user declines, continue without transcript.
+8. If no safe session is found, say nothing and continue without transcript. If the user declines, continue without transcript and do not add any transcript placeholder section.
 
 ## Review Artifacts
 
