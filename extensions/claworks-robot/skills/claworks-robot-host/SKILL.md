@@ -54,7 +54,7 @@ For **remote** ClaWorks over HTTP/MCP, use the separate `openclaw-claworks-exten
 |                          | `cw_kb_create_ingest_job`  | Create batch ingest job                                |
 |                          | `cw_kb_process_ingest_job` | Process pending ingest job                             |
 | **Alarms**               | `cw_alarm_summary`         | Active alarm counts by severity                        |
-| **LLM**                  | `cw_agent_chat`            | One-shot LLM completion via OpenClaw runtime           |
+| **LLM**                  | `cw_agent_chat`            | One-shot LLM completion via Gateway runtime            |
 
 ## Config
 

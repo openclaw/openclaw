@@ -52,8 +52,17 @@ pnpm install
 
 ## 第三步：初始化配置
 
+**推荐首次路径（doctor → init → repair → onboard 一条龙）：**
+
+```bash
+pnpm claworks:setup
+```
+
+**或仅写入配置骨架（不含交互 onboard）：**
+
 ```bash
 pnpm claworks:init
+# 对齐 product-config-repair：pnpm claworks:repair
 ```
 
 执行后会生成 `~/.claworks/claworks.json`，输出类似：
@@ -158,6 +167,7 @@ Pack symlinks: base, process-industry, enterprise-general, enterprise-commercial
 
 ```bash
 pnpm claworks:gateway
+# 或等价：pnpm claworks:start（经 claworks.mjs，自动 CLAWORKS_PRODUCT=1 + bootstrap）
 ```
 
 **生产模式（编译后，启动更快）：**

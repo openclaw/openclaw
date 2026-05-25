@@ -159,7 +159,7 @@ Doctor 新增检查项：`gateway_bridge_llm` / `gateway_bridge_notify` / `gatew
 ### 8.3 推荐开箱路径（生产前）
 
 ```bash
-pnpm claworks:setup                   # doctor --fix → init → onboard（首次）
+pnpm claworks:setup                   # doctor --fix → init → repair → onboard（首次）
 pnpm claworks:start                   # Gateway 18800（含 bootstrap）
 pnpm claworks:doctor                  # 双层 health
 pnpm claworks:smoke                   # 快速验收
