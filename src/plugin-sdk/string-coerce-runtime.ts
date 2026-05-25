@@ -36,6 +36,7 @@ export {
   normalizeStringEntries,
   normalizeStringEntriesLower,
   normalizeUniqueStringEntries,
+  normalizeUniqueTrimmedStringList,
   normalizeTrimmedStringList,
   sortUniqueStrings,
   uniqueStrings,
