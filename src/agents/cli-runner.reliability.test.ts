@@ -914,6 +914,41 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("does not execute the CLI when approved user turn persistence fails", async () => {
+    supervisorSpawnMock.mockClear();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-fail-"));
+    const blockedParent = path.join(dir, "not-a-directory");
+    fs.writeFileSync(blockedParent, "occupied", "utf-8");
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-fails",
+      });
+
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile: path.join(blockedParent, "s1.jsonl"),
+            workspaceDir: dir,
+            prompt: "runtime prompt",
+            userTurnTranscript: { text: "display prompt" },
+            onUserMessagePersisted,
+          },
+        }),
+      ).rejects.toThrow();
+
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists approved CLI media user turns without caller-side transcript shaping", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

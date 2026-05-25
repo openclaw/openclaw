@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { tryAppendInlineUserTurnTranscriptMessage } from "../sessions/user-turn-transcript.js";
+import { appendInlineUserTurnTranscriptMessage } from "../sessions/user-turn-transcript.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -137,15 +137,14 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     cwd: params.workspaceDir,
-    errorContext: "CLI user turn transcript",
     ...(params.config ? { config: params.config } : {}),
   };
   const persisted = params.userTurnTranscript.message
-    ? await tryAppendInlineUserTurnTranscriptMessage({
+    ? await appendInlineUserTurnTranscriptMessage({
         ...transcriptTarget,
         message: params.userTurnTranscript.message,
       })
-    : await tryAppendInlineUserTurnTranscriptMessage({
+    : await appendInlineUserTurnTranscriptMessage({
         ...transcriptTarget,
         input: {
           text: params.userTurnTranscript.text,
