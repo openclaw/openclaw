@@ -192,6 +192,48 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.activeProcessSessions).toBeUndefined();
   });
 
+  it("routes OpenAI Codex OAuth compaction fallback through the Codex provider (#86373)", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        auth: {
+          order: {
+            openai: ["openai-codex:work"],
+            "openai-codex": ["openai-codex:work"],
+          },
+        },
+        models: {
+          providers: {
+            openai: { agentRuntime: { id: "codex" } },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai-codex:work",
+    });
+
+    expect(result.provider).toBe("openai-codex");
+    expect(result.model).toBe("gpt-5.5");
+    expect(result.authProfileId).toBe("openai-codex:work");
+  });
+
+  it("does not reroute non-OpenAI compaction providers (#86373)", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      provider: "anthropic",
+      modelId: "claude-opus-4-5",
+      authProfileId: "anthropic:default",
+    });
+
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-5");
+    expect(result.authProfileId).toBe("anthropic:default");
+  });
+
   it("applies runtime defaults when resolving the effective compaction target", () => {
     expect(
       resolveEmbeddedCompactionTarget({

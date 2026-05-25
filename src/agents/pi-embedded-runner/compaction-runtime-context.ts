@@ -6,6 +6,7 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { resolveSelectedOpenAIPiRuntimeProvider } from "../openai-codex-routing.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
@@ -51,8 +52,22 @@ export function resolveEmbeddedCompactionTarget(params: {
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
   if (!override) {
+    // Apply the same OpenAI/Codex OAuth runtime routing as the main run path.
+    // Without this, sessions using `provider=openai` with an `openai-codex:*`
+    // auth profile would fall through to the plain OpenAI API-key path during
+    // compaction and fail with a missing API key (#86373).
+    const runtimeProvider =
+      provider != null
+        ? resolveSelectedOpenAIPiRuntimeProvider({
+            provider,
+            harnessRuntime: "pi",
+            authProfileProvider: params.authProfileId?.split(":", 1)[0],
+            authProfileId: params.authProfileId ?? undefined,
+            config: params.config,
+          })
+        : provider;
     return {
-      provider,
+      provider: runtimeProvider || provider,
       model,
       authProfileId: params.authProfileId ?? undefined,
     };
