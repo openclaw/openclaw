@@ -6,6 +6,8 @@
  *   autonomy.learn_opportunity (knowledge_gap) → evolution.simulation_requested → evolution.regression_requested
  *   weak_model_regression_suite Playbook completes on regression_requested
  *   GET /v1/evolve/drafts
+ *   GET /v1/evolve/drafts/:id (simulation)
+ *   POST /v1/evolve/promote-draft (approved=true / simulation.passed=false)
  *   pending sandbox promotions survive runtime stop/start (same SQLite)
  *   evolution_weekly_export schedule playbook is loaded
  *
@@ -180,6 +182,128 @@ async function main() {
   assert(draftsBody.status === "ok", "drafts response missing status=ok");
   assert(Array.isArray(draftsBody.drafts), "drafts must be array");
   log(`GET /v1/evolve/drafts OK (count=${draftsBody.count ?? draftsBody.drafts.length})`);
+
+  // ── 2b) evolve draft promote gate ───────────────────────────────────────
+  const { cacheDraftSimulation } =
+    await import("../packages/claworks-runtime/src/kernel/evolve-engine.ts");
+  const EVOLUTION_DRAFTS_NAMESPACE = "evolution_drafts";
+  const smokePlaybookYaml = [
+    "id: ev_smoke_promote_pb",
+    "name: Smoke Promote PB",
+    "trigger:",
+    "  kind: event",
+    "  pattern: smoke.promote.test",
+    "steps: []",
+  ].join("\n");
+  const smokeProposalId = `evolved_smoke_${Date.now()}`;
+  const smokeDraftBody = [
+    `# Playbook Draft: Smoke Promote`,
+    "status: pending_review",
+    `proposal_id: ${smokeProposalId}`,
+    "confidence: 0.9",
+    "",
+    smokePlaybookYaml,
+  ].join("\n");
+
+  eventLog.length = 0;
+  await runtime.kb.ingest(smokeDraftBody, {
+    namespace: EVOLUTION_DRAFTS_NAMESPACE,
+    source: "evolution-smoke",
+    title: "Smoke Promote",
+    metadata: {
+      status: "pending_review",
+      proposal_id: smokeProposalId,
+      confidence: 0.9,
+    },
+  });
+  await runtime.kernel.publish("evolve.playbook_drafted", "evolution-smoke", {
+    id: smokeProposalId,
+    title: "Smoke Promote",
+    status: "pending_review",
+    namespace: EVOLUTION_DRAFTS_NAMESPACE,
+  });
+  await waitForEvent(eventLog, "evolve.suggestions_ready");
+  const readyEvt = eventLog.find((e) => e.type === "evolve.suggestions_ready");
+  assert(readyEvt?.payload?.simulation?.passed === true, "draft sandbox simulation must pass");
+  log(`evolve.suggestions_ready simulation.passed=true proposal_id=${smokeProposalId}`);
+
+  const draftRes = await fetch(`${base}/v1/evolve/drafts/${encodeURIComponent(smokeProposalId)}`);
+  const draftBody = await draftRes.json();
+  assert(draftRes.status === 200, `GET /v1/evolve/drafts/:id failed: ${draftRes.status}`);
+  assert(draftBody.draft?.simulation?.passed === true, "GET draft must include simulation.passed");
+  log(`GET /v1/evolve/drafts/:id OK simulation.passed=true`);
+
+  const promoteOkRes = await fetch(`${base}/v1/evolve/promote-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      proposal_id: smokeProposalId,
+      approved: true,
+      verify_after_deploy: false,
+    }),
+  });
+  const promoteOkBody = await promoteOkRes.json();
+  assert(promoteOkRes.status === 200, `promote-draft approved failed: ${promoteOkRes.status}`);
+  assert(
+    promoteOkBody.status === "deployed" || promoteOkBody.status === "deployed_unverified",
+    `expected deployed status, got ${promoteOkBody.status}`,
+  );
+  log(`POST /v1/evolve/promote-draft approved=true OK status=${promoteOkBody.status}`);
+
+  const failProposalId = `evolved_smoke_fail_${Date.now()}`;
+  const failPlaybookYaml = [
+    "id: ev_smoke_promote_fail_pb",
+    "name: Smoke Promote Fail PB",
+    "trigger:",
+    "  kind: event",
+    "  pattern: smoke.promote.fail",
+    "steps: []",
+  ].join("\n");
+  const failDraftBody = [
+    `# Playbook Draft: Smoke Promote Fail`,
+    "status: pending_review",
+    `proposal_id: ${failProposalId}`,
+    "confidence: 0.5",
+    "",
+    failPlaybookYaml,
+  ].join("\n");
+  await runtime.kb.ingest(failDraftBody, {
+    namespace: EVOLUTION_DRAFTS_NAMESPACE,
+    source: "evolution-smoke",
+    title: "Smoke Promote Fail",
+    metadata: {
+      status: "pending_review",
+      proposal_id: failProposalId,
+      confidence: 0.5,
+    },
+  });
+  cacheDraftSimulation(failProposalId, {
+    passed: false,
+    yaml_valid: true,
+    status: "error",
+    reason: "smoke forced failure",
+  });
+
+  const promoteFailRes = await fetch(`${base}/v1/evolve/promote-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      proposal_id: failProposalId,
+      approved: true,
+      verify_after_deploy: false,
+    }),
+  });
+  const promoteFailBody = await promoteFailRes.json();
+  assert(
+    promoteFailRes.status === 200,
+    `promote-draft fail-closed HTTP error: ${promoteFailRes.status}`,
+  );
+  assert(promoteFailBody.status === "error", "simulation.passed=false must reject promote");
+  assert(
+    String(promoteFailBody.reason ?? "").includes("simulation"),
+    "reject reason must mention simulation",
+  );
+  log("POST /v1/evolve/promote-draft simulation.passed=false rejected OK");
 
   await new Promise((resolve) => server.close(() => resolve()));
 
