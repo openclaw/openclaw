@@ -2,7 +2,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
-import type { FinalizedMsgContext, MsgContext, SupplementalContextFacts } from "../templating.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -13,10 +13,6 @@ export type FinalizeInboundContextOptions = {
 };
 
 const DEFAULT_MEDIA_TYPE = "application/octet-stream";
-
-type MsgContextWithSupplemental = MsgContext & {
-  SupplementalContext?: SupplementalContextFacts;
-};
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -47,7 +43,7 @@ function countMediaEntries(ctx: MsgContext): number {
   return Math.max(pathCount, urlCount, single);
 }
 
-function applySupplementalContext(ctx: MsgContextWithSupplemental): void {
+function applySupplementalContext(ctx: MsgContext): void {
   const supplemental = ctx.SupplementalContext;
   if (!supplemental) {
     return;
@@ -80,7 +76,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
 ): T & FinalizedMsgContext {
-  const normalized = ctx as T & MsgContextWithSupplemental;
+  const normalized = ctx as T & MsgContext;
   applySupplementalContext(normalized);
 
   normalized.Body = sanitizeInboundSystemTags(
