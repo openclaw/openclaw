@@ -51,5 +51,19 @@ describe("user turn transcript persistence", () => {
         MediaTypes: ["document", "application/octet-stream"],
       });
     });
+
+    it("keeps media paths and types aligned when incomplete entries are skipped", () => {
+      expect(
+        buildPersistedUserTurnMediaFields([
+          { contentType: "image/png" },
+          { path: "/tmp/b.jpg", contentType: "image/jpeg" },
+        ]),
+      ).toEqual({
+        MediaPath: "/tmp/b.jpg",
+        MediaPaths: ["/tmp/b.jpg"],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+      });
+    });
   });
 });
