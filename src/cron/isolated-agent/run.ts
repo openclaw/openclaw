@@ -1281,13 +1281,13 @@ export async function runCronIsolatedAgentTurn(params: {
   } finally {
     if (diagnosticsEnabled) {
       logSessionStateChange({
-        sessionId: prepared.context.runSessionId,
+        sessionId: prepared.context.currentRunSessionId(),
         sessionKey: prepared.context.runSessionKey,
         state: "idle",
       });
       logMessageProcessed({
         channel: "cron",
-        sessionId: prepared.context.runSessionId,
+        sessionId: prepared.context.currentRunSessionId(),
         sessionKey: prepared.context.runSessionKey,
         durationMs: Date.now() - turnStartedAtMs,
         outcome,
