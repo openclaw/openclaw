@@ -62,6 +62,7 @@ const mockState = vi.hoisted(() => ({
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
+  lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
     sessionFile: string;
@@ -194,10 +195,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
+      userTurnInput?: unknown;
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
+      mockState.lastDispatchUserTurnInput = params.userTurnInput;
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
       }
@@ -703,6 +706,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
+    mockState.lastDispatchUserTurnInput = undefined;
     mockState.modelCatalog = null;
     mockState.emittedTranscriptUpdates = [];
     mockState.savedMediaResults = [];
@@ -2986,7 +2990,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
   });
 
-  it("emits a user transcript update when chat.send starts an agent run", async () => {
+  it("leaves text-only agent-run user persistence to Pi", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-agent-run-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3001,13 +3005,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const userUpdate = findUserUpdate();
-    const message = userUpdateMessage(userUpdate);
-    expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
-    expect(userUpdate?.sessionKey).toBe("main");
-    expect(message?.role).toBe("user");
-    expect(message?.content).toBe("hello from dashboard");
-    expect(typeof message?.timestamp).toBe("number");
+    expect(findUserUpdate()).toBeUndefined();
+    expect(mockState.lastDispatchUserTurnInput).toBeUndefined();
     const finalBroadcast = (
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
@@ -3100,7 +3099,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(userUpdates).toHaveLength(0);
   });
 
-  it("adds persisted media paths to the user transcript update", async () => {
+  it("prepares persisted media paths for Pi user-turn persistence", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-images-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3135,9 +3134,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const userUpdate = findUserUpdate();
-      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
-      expect(userUpdate?.sessionKey).toBe("main");
       expect(mockState.savedMediaCalls).toEqual([
         {
           contentType: "image/png",
@@ -3152,33 +3148,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ]);
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
       expect(typeof mockState.savedMediaCalls[1]?.size).toBe("number");
-      const message = userUpdateMessage(userUpdate) as
+      const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            content?: unknown;
-            MediaPath?: string;
-            MediaPaths?: string[];
-            MediaType?: string;
-            MediaTypes?: string[];
+            text?: unknown;
+            media?: Array<{ path?: string; contentType?: string }>;
           }
         | undefined;
-      if (!message) {
-        throw new Error("expected user transcript update with media metadata");
+      if (!userTurnInput) {
+        throw new Error("expected user turn input with media metadata");
       }
-      expect(message.content).toBe("edit these");
-      expect(message.MediaPath).toBe("/tmp/chat-send-image-a.png");
-      expect(message.MediaPaths).toEqual([
-        "/tmp/chat-send-image-a.png",
-        "/tmp/chat-send-image-b.jpg",
+      expect(findUserUpdate()).toBeUndefined();
+      expect(userTurnInput.text).toBe("edit these");
+      expect(userTurnInput.media).toEqual([
+        { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
+        { path: "/tmp/chat-send-image-b.jpg", contentType: "image/jpeg" },
       ]);
-      expect(message.MediaType).toBe("image/png");
-      expect(message.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
   });
 
-  it("persists non-image chat.send attachments as media refs without dispatch images", async () => {
+  it("prepares non-image chat.send attachments as media refs without dispatch images", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-file-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3208,14 +3199,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const userUpdate = findUserUpdate();
-      const message = userUpdateMessage(userUpdate) as
+      const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            content?: unknown;
-            MediaPath?: string;
-            MediaPaths?: string[];
-            MediaType?: string;
-            MediaTypes?: string[];
+            text?: unknown;
+            media?: Array<{ path?: string; contentType?: string }>;
           }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
@@ -3224,11 +3211,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.savedMediaCalls[0]?.contentType).toBe("application/pdf");
       expect(mockState.savedMediaCalls[0]?.subdir).toBe("inbound");
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
-      expect(message?.content).toBe("summarize this");
-      expect(message?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
-      expect(message?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
-      expect(message?.MediaType).toBe("application/pdf");
-      expect(message?.MediaTypes).toEqual(["application/pdf"]);
+      expect(findUserUpdate()).toBeUndefined();
+      expect(userTurnInput?.text).toBe("summarize this");
+      expect(userTurnInput?.media).toEqual([
+        { path: "/tmp/chat-send-brief.pdf", contentType: "application/pdf" },
+      ]);
     });
   });
 
@@ -3280,28 +3267,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const userUpdate = mockState.emittedTranscriptUpdates.find(
-        (update) =>
-          typeof update.message === "object" &&
-          update.message !== null &&
-          (update.message as { role?: unknown }).role === "user",
-      );
-      const message = userUpdate?.message as
+      const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            MediaPath?: string;
-            MediaPaths?: string[];
-            MediaType?: string;
-            MediaTypes?: string[];
+            media?: Array<{ path?: string; contentType?: string }>;
           }
         | undefined;
-      expect(message?.MediaPath).toBe("/tmp/chat-send-inline.png");
-      expect(message?.MediaPaths).toEqual(["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"]);
-      expect(message?.MediaType).toBe("image/png");
-      expect(message?.MediaTypes).toEqual(["image/png", "image/png"]);
+      expect(findUserUpdate()).toBeUndefined();
+      expect(userTurnInput?.media).toEqual([
+        { path: "/tmp/chat-send-inline.png", contentType: "image/png" },
+        { path: "/tmp/offloaded-big.png", contentType: "image/png" },
+      ]);
     });
   });
 
-  it("skips transcript media notes for ACP bridge clients", async () => {
+  it("leaves ACP bridge user persistence to the agent runtime", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-acp-images-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -3339,11 +3318,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const userUpdate = findUserUpdate();
-      const message = userUpdateMessage(userUpdate);
       expect(mockState.savedMediaCalls).toStrictEqual([]);
-      expect(message?.role).toBe("user");
-      expect(message?.content).toBe("bridge image");
+      expect(findUserUpdate()).toBeUndefined();
+      expect(mockState.lastDispatchUserTurnInput).toBeUndefined();
     });
   });
 

@@ -35,6 +35,7 @@ import {
 import {
   buildPersistedUserTurnMediaInputsFromFields,
   buildPersistedUserTurnMessage,
+  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -407,6 +408,7 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+  userTurnInput?: UserTurnInput;
 };
 
 export async function runPreparedReply(
@@ -1132,13 +1134,17 @@ export async function runPreparedReply(
       ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
-  const userMessageForPersistence =
-    userTurnMediaForPersistence.length > 0
-      ? buildPersistedUserTurnMessage({
+  const userTurnInput =
+    params.userTurnInput ??
+    (userTurnMediaForPersistence.length > 0
+      ? {
           text: baseBodyTrimmedRaw,
           media: userTurnMediaForPersistence,
-        })
-      : undefined;
+        }
+      : undefined);
+  const userMessageForPersistence = userTurnInput
+    ? buildPersistedUserTurnMessage(userTurnInput)
+    : undefined;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,

@@ -16,13 +16,15 @@ export type PersistedUserTurnMediaFields = {
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 
-export type BuildPersistedUserTurnMessageParams = {
+export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
   mediaOnlyText?: string;
 };
+
+export type BuildPersistedUserTurnMessageParams = UserTurnInput;
 
 export type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
