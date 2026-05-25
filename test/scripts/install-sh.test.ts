@@ -109,14 +109,17 @@ describe("install.sh", () => {
 
   it("installs Node.js with apk on Alpine before falling back to NodeSource", () => {
     expect(script).toContain("finish_linux_node_install()");
+    expect(script).toContain("is_alpine_linux()");
+    expect(script).toContain("install_node_with_apk()");
     expect(script).toContain('ui_info "Installing Node.js via apk (Alpine Linux detected)"');
     expect(script).toContain('run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm');
     expect(script).toContain(
       'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
     );
+    expect(script).toContain('run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm');
     expect(script).toContain("if ! node_is_at_least_required; then");
 
-    const apkIndex = script.indexOf("if command -v apk &> /dev/null; then");
+    const apkIndex = script.indexOf("if command -v apk &> /dev/null && is_alpine_linux; then");
     const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
     expect(apkIndex).toBeGreaterThan(-1);
     expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
@@ -130,10 +133,12 @@ describe("install.sh", () => {
       require_sudo() { :; }
       install_build_tools_linux() { return 0; }
       is_root() { return 0; }
+      is_alpine_linux() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
       apk() { :; }
+      node_is_at_least_required() { return 0; }
       finish_linux_node_install() { printf 'finish-linux-node\\n'; }
       install_node
     `);
@@ -143,6 +148,182 @@ describe("install.sh", () => {
     expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
     expect(result.stdout).toContain("finish-linux-node");
     expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
+  it("tries nodejs-current when Alpine nodejs is below the runtime floor", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      NODE_FAKE_VERSION=v20.15.1
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_warn() { printf 'warn:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        "\${@:2}"
+      }
+      apk() {
+        printf 'apk:%s\\n' "$*"
+        if [[ "$*" == *"nodejs-current"* ]]; then
+          NODE_FAKE_VERSION=v22.22.2
+        fi
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf '%s\\n' "$NODE_FAKE_VERSION"
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      finish_linux_node_install() { printf 'finish-linux-node\\n'; }
+      install_node
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
+    expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
+    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
+    expect(result.stdout).toContain("finish-linux-node");
+  });
+
+  it("fails with Alpine version guidance when apk cannot provide the runtime floor", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      NODE_FAKE_VERSION=v20.15.1
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      is_alpine_linux() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      ui_warn() { printf 'warn:%s\\n' "$*"; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        "\${@:2}"
+      }
+      apk() {
+        printf 'apk:%s\\n' "$*"
+        if [[ "$*" == *"nodejs-current"* ]]; then
+          NODE_FAKE_VERSION=v21.7.3
+        fi
+      }
+      node() {
+        if [[ "\${1:-}" == "-v" ]]; then
+          printf '%s\\n' "$NODE_FAKE_VERSION"
+        fi
+      }
+      activate_supported_node_on_path() { :; }
+      install_node
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
+    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
+    expect(result.stdout).toContain("error:Alpine apk repositories did not provide Node.js v22.19+");
+    expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
+  });
+
+  it("installs Git with apk on Alpine", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-git-apk-"));
+    const bin = join(tmp, "bin");
+    const apkLog = join(tmp, "apk-args.txt");
+    mkdirSync(bin, { recursive: true });
+    const fakeApk = join(bin, "apk");
+    writeFileSync(
+      fakeApk,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(apkLog)}`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeApk, 0o755);
+
+    try {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=${JSON.stringify(`${bin}:/bin`)}
+        OS=linux
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_alpine_linux() { return 0; }
+        ui_success() { printf 'success:%s\\n' "$*"; }
+        ui_error() { printf 'error:%s\\n' "$*"; }
+        run_quiet_step() {
+          printf 'step:%s|%s\\n' "$1" "\${*:2}"
+          "\${@:2}"
+        }
+        install_git
+      `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("step:Installing Git|apk add --no-cache git");
+      expect(result.stdout).toContain("success:Git installed");
+      expect(readFileSync(apkLog, "utf8").trim()).toBe("add --no-cache git");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("does not select apk Git on non-Alpine hosts", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-git-native-"));
+    const bin = join(tmp, "bin");
+    const apkLog = join(tmp, "apk-args.txt");
+    mkdirSync(bin, { recursive: true });
+    const fakeApk = join(bin, "apk");
+    const fakeApt = join(bin, "apt-get");
+    writeFileSync(apkLog, "");
+    writeFileSync(
+      fakeApk,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        `printf '%s\\n' "$*" >> ${JSON.stringify(apkLog)}`,
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(fakeApt, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(fakeApk, 0o755);
+    chmodSync(fakeApt, 0o755);
+
+    try {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=${JSON.stringify(`${bin}:/bin`)}
+        OS=linux
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_alpine_linux() { return 1; }
+        apt_get_update() { printf 'apt-update\\n'; }
+        apt_get_install() { printf 'apt-install:%s\\n' "$*"; }
+        ui_success() { printf 'success:%s\\n' "$*"; }
+        ui_error() { printf 'error:%s\\n' "$*"; }
+        run_quiet_step() {
+          printf 'step:%s|%s\\n' "$1" "\${*:2}"
+          "\${@:2}"
+        }
+        install_git
+      `);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("step:Updating package index|apt_get_update");
+      expect(result.stdout).toContain("apt-update");
+      expect(result.stdout).toContain("step:Installing Git|apt_get_install git");
+      expect(result.stdout).toContain("apt-install:git");
+      expect(readFileSync(apkLog, "utf8")).toBe("");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("clears npm freshness filters for package installs", () => {
@@ -156,10 +337,12 @@ describe("install.sh", () => {
   it("does not emit --before when raw user npmrc config contains min-release-age", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npmrc-"));
     const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
     const npmrc = join(tmp, "user.npmrc");
     const calls = join(tmp, "npm-calls.txt");
     const installArgs = join(tmp, "npm-install-args.txt");
     mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
     writeFileSync(npmrc, "min-release-age=7\n");
     const fakeNpm = join(bin, "npm");
     writeFileSync(
@@ -194,10 +377,11 @@ describe("install.sh", () => {
           'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
         ].join("\n"),
         {
+          HOME: home,
           NPM_CONFIG_USERCONFIG: npmrc,
           NPM_FAKE_CALLS: calls,
           NPM_FAKE_INSTALL_ARGS: installArgs,
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: `${bin}:/usr/local/bin:/usr/bin:/bin`,
         },
       );
 
@@ -638,6 +822,13 @@ describe("install.sh", () => {
         [
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "type() {",
+          '  if [[ "$*" == "-P -a node" ]]; then',
+          `    printf '%s\\n' ${JSON.stringify(staleNode)} ${JSON.stringify(supportedNode)}`,
+          "    return 0",
+          "  fi",
+          '  builtin type "$@"',
+          "}",
           "set +e",
           "OS=linux",
           "promote_supported_node_binary",

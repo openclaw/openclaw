@@ -624,6 +624,21 @@ is_arch_linux() {
     return 1
 }
 
+is_alpine_linux() {
+    if [[ -f /etc/alpine-release ]]; then
+        return 0
+    fi
+    if [[ -f /etc/os-release ]]; then
+        local os_id os_id_like
+        os_id="$(grep -E '^ID=' /etc/os-release 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true)"
+        os_id_like="$(grep -E '^ID_LIKE=' /etc/os-release 2>/dev/null | cut -d'=' -f2 | tr -d '"' || true)"
+        if [[ "$os_id" == "alpine" || "$os_id_like" == *alpine* ]]; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 apt_get() {
     if is_root; then
         env DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" apt-get "$@"
@@ -679,7 +694,7 @@ install_build_tools_linux() {
         return 0
     fi
 
-    if command -v apk &> /dev/null; then
+    if command -v apk &> /dev/null && is_alpine_linux; then
         if is_root; then
             run_quiet_step "Installing build tools" apk add --no-cache build-base python3 cmake
         else
@@ -1715,6 +1730,44 @@ finish_linux_node_install() {
     print_active_node_paths || true
 }
 
+install_node_with_apk() {
+    ui_info "Installing Node.js via apk (Alpine Linux detected)"
+    if is_root; then
+        run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
+    else
+        run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
+    fi
+
+    activate_supported_node_on_path || true
+    if node_is_at_least_required; then
+        finish_linux_node_install
+        return 0
+    fi
+
+    local apk_node_version
+    apk_node_version="$(node -v 2>/dev/null || echo "missing")"
+    ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
+    ui_info "Trying Alpine nodejs-current package"
+    if is_root; then
+        run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
+    else
+        run_quiet_step "Installing nodejs-current" sudo apk add --no-cache nodejs-current npm
+    fi
+
+    activate_supported_node_on_path || true
+    if node_is_at_least_required; then
+        finish_linux_node_install
+        return 0
+    fi
+
+    local active_path active_version
+    active_path="$(command -v node 2>/dev/null || echo "not found")"
+    active_version="$(node -v 2>/dev/null || echo "missing")"
+    ui_error "Alpine apk repositories did not provide Node.js v${NODE_MIN_VERSION}+; found ${active_version} (${active_path})"
+    echo "Use Alpine 3.21+ or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
+    exit 1
+}
+
 # Install Node.js
 install_node() {
     if [[ "$OS" == "macos" ]]; then
@@ -1751,14 +1804,8 @@ install_node() {
             return 0
         fi
 
-        if command -v apk &> /dev/null; then
-            ui_info "Installing Node.js via apk (Alpine Linux detected)"
-            if is_root; then
-                run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm
-            else
-                run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm
-            fi
-            finish_linux_node_install
+        if command -v apk &> /dev/null && is_alpine_linux; then
+            install_node_with_apk
             return 0
         fi
 
@@ -1857,7 +1904,13 @@ install_git() {
         run_quiet_step "Installing Git" brew install git
     elif [[ "$OS" == "linux" ]]; then
         require_sudo
-        if command -v apt-get &> /dev/null; then
+        if command -v apk &> /dev/null && is_alpine_linux; then
+            if is_root; then
+                run_quiet_step "Installing Git" apk add --no-cache git
+            else
+                run_quiet_step "Installing Git" sudo apk add --no-cache git
+            fi
+        elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
             run_quiet_step "Installing Git" apt_get_install git
         elif command -v pacman &> /dev/null || is_arch_linux; then
