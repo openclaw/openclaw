@@ -443,6 +443,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           maxTokens: finiteOption(params.maxTokens),
           temperature: finiteOption(params.temperature),
           signal: params.signal,
+          ...(params.reasoning ? { reasoning: params.reasoning } : {}),
         },
       });
 

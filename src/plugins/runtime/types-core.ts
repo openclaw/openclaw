@@ -120,6 +120,10 @@ export type LlmCompleteParams = {
   purpose?: string;
   /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
   agentId?: string;
+  /** Thinking/reasoning level override for providers that support it. */
+  reasoning?:
+    | import("../../auto-reply/thinking.js").ThinkLevel
+    | import("@earendil-works/pi-ai").ThinkingLevel;
 };
 
 export type LlmCompleteResult = {
