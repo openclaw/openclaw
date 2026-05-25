@@ -80,6 +80,8 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   };
   protected readonly vector = { enabled: false, available: false };
   protected readonly cache = { enabled: false };
+  protected providerUnavailableReason?: string;
+  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
   protected db = createDbMock();
 
   readonly indexedPaths: string[] = [];
