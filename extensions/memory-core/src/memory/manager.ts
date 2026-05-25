@@ -33,6 +33,8 @@ import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js"
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
+  acquireManagedCacheKey,
+  closeIdleManagedCacheEntries,
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
   resolveSingletonManagedCache,
@@ -69,8 +71,11 @@ export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
-const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
-  resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+const INDEX_MANAGER_CACHE = resolveSingletonManagedCache<MemoryIndexManager>(
+  MEMORY_INDEX_MANAGER_CACHE_KEY,
+);
+const INDEX_CACHE = INDEX_MANAGER_CACHE.cache;
+const INDEX_CACHE_PENDING = INDEX_MANAGER_CACHE.pending;
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -85,8 +90,46 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   await closeManagedCacheEntries({
     cache: INDEX_CACHE,
     pending: INDEX_CACHE_PENDING,
+    lastAccessAt: INDEX_MANAGER_CACHE.lastAccessAt,
+    inflightCount: INDEX_MANAGER_CACHE.inflightCount,
     onCloseError: (err) => {
       log.warn(`failed to close memory index manager: ${String(err)}`);
+    },
+  });
+}
+
+// Idle-TTL eviction for cached MemoryIndexManager instances in long-running
+// gateway daemons. Each manager owns a chokidar FSWatcher that accumulates
+// native handles and file descriptors over time; CLI-exit-only cleanup
+// (see closeAllMemoryIndexManagers) is not enough for daemon processes.
+//
+// This is intended to run on a slow periodic tick (every few minutes). The
+// idle threshold should be larger than the typical gap between memory
+// searches to avoid churning the cache.
+//
+// Managers currently running a long-lived operation (full reindex, batch
+// reindex, async sync-on-search) wrap themselves in MemoryIndexManager.
+// withBusy(), which bumps an inflightCount refcount on the singleton
+// cache. closeIdleManagedCacheEntries honors that refcount and skips
+// busy entries; busyDeferred is the count of such skipped keys for this
+// scan and is logged when non-zero.
+export async function closeIdleMemoryIndexManagers(opts: { idleMs: number }): Promise<{
+  evicted: number;
+  skippedBusy: number;
+  skippedRevalidated: number;
+  remaining: number;
+}> {
+  return await closeIdleManagedCacheEntries({
+    cache: INDEX_MANAGER_CACHE,
+    idleMs: opts.idleMs,
+    onCloseError: (err) => {
+      log.warn(`failed to close idle memory index manager: ${String(err)}`);
+    },
+    onEvictKey: (key) => {
+      // Drop the embedding probe entry so the next request re-probes the
+      // provider rather than serving a stale TTL result tied to the evicted
+      // manager instance.
+      EMBEDDING_PROBE_CACHE.delete(key);
     },
   });
 }
@@ -109,7 +152,17 @@ export async function closeMemoryIndexManagersForAgent(params: {
   if (!manager) {
     return;
   }
-  INDEX_CACHE.delete(key);
+  // Identity-guarded teardown: only clear metadata if we are still the
+  // current cache occupant for this key. A racing getOrCreate(key) that
+  // observes manager.closed === true may install a replacement here
+  // between our snapshot above and these deletes; in that case we must
+  // leave the replacement's metadata alone. See the matching identity
+  // guard in MemoryIndexManager.close() for the full rationale.
+  if (INDEX_CACHE.get(key) === manager) {
+    INDEX_CACHE.delete(key);
+    INDEX_MANAGER_CACHE.lastAccessAt.delete(key);
+    INDEX_MANAGER_CACHE.inflightCount.delete(key);
+  }
   try {
     await manager.close();
   } catch (err) {
@@ -214,6 +267,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return await getOrCreateManagedCacheEntry({
       cache: INDEX_CACHE,
       pending: INDEX_CACHE_PENDING,
+      lastAccessAt: INDEX_MANAGER_CACHE.lastAccessAt,
       key,
       bypassCache: transient,
       create: async () =>
@@ -386,6 +440,25 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       /** When set, only these chunk sources are considered (must be enabled for this manager). */
+      sources?: MemorySource[];
+    },
+  ): Promise<MemorySearchResult[]> {
+    // Mark this manager as in-flight for the full search lifetime so the
+    // idle sweeper cannot close us while embedding/vector/FTS work is in
+    // progress. The inner sync() call below will acquire its own ref
+    // (refcounting is additive), and the search() refcount drops in the
+    // finally below.
+    return await this.withBusy(async () => this.searchInternal(query, opts));
+  }
+
+  private async searchInternal(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
     },
   ): Promise<MemorySearchResult[]> {
@@ -729,6 +802,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
   }
 
+  // Runs `fn` with this manager's cache key marked as in-flight so the
+  // idle-eviction sweeper (closeIdleMemoryIndexManagers) will not close
+  // us mid-operation. Safe to nest: each call acquires its own ref.
+  //
+  // Use this on long-running operations whose runtime can exceed the
+  // configured idle threshold (full reindex, batch reindex, search-time
+  // async sync, etc.). Short-lived synchronous reads against the cached
+  // manager do not need wrapping; they refresh lastAccessAt on cache hit.
+  protected async withBusy<T>(fn: () => Promise<T>): Promise<T> {
+    const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   async sync(params?: {
     reason?: string;
     force?: boolean;
@@ -738,19 +828,31 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.closed) {
       return;
     }
-    if (this.syncing) {
-      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionFiles);
-      }
-      return this.syncing;
-    }
-    this.syncing = (async () => {
+    // Hold the busy ref across the entire sync lifetime, including the
+    // provider initialization step below. Without this outer wrapper, the
+    // idle sweeper could observe a stale lastAccessAt and busy=0 while we
+    // are blocked inside ensureProviderInitialized() and evict the manager
+    // before the inner reindex even starts.
+    return await this.withBusy(async () => {
       await this.ensureProviderInitialized();
-      await this.runSyncWithReadonlyRecovery(params);
-    })().finally(() => {
-      this.syncing = null;
+      if (this.syncing) {
+        if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+          return this.enqueueTargetedSessionSync(params.sessionFiles);
+        }
+        return this.syncing;
+      }
+      // Wrap the underlying recovery loop in a nested busy ref so the
+      // idle sweeper still skips us after the outer withBusy() unwinds
+      // (e.g. when a search() caller awaits us but a longer reindex keeps
+      // running). Nested refcounts are additive; both releases must fire
+      // for the entry to become evict-eligible.
+      const release = acquireManagedCacheKey(INDEX_MANAGER_CACHE, this.cacheKey);
+      this.syncing = this.runSyncWithReadonlyRecovery(params).finally(() => {
+        this.syncing = null;
+        release();
+      });
+      await (this.syncing ?? Promise.resolve());
     });
-    return this.syncing ?? Promise.resolve();
   }
 
   private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
@@ -952,15 +1054,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.vector.semanticAvailable = false;
       return false;
     }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: vector search not available
-    if (!this.provider) {
-      this.vector.semanticAvailable = false;
-      return false;
-    }
-    const ready = await this.probeVectorStoreAvailability();
-    this.vector.semanticAvailable = ready;
-    return ready;
+    // Hold busy across provider init so idle eviction cannot close the
+    // manager mid-probe.
+    return await this.withBusy(async () => {
+      await this.ensureProviderInitialized();
+      // FTS-only mode: vector search not available
+      if (!this.provider) {
+        this.vector.semanticAvailable = false;
+        return false;
+      }
+      const ready = await this.probeVectorStoreAvailability();
+      this.vector.semanticAvailable = ready;
+      return ready;
+    });
   }
 
   async probeVectorStoreAvailability(): Promise<boolean> {
@@ -1005,21 +1111,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (cached) {
       return cached;
     }
-    await this.ensureProviderInitialized();
-    // FTS-only mode: embeddings not available but search still works
-    if (!this.provider) {
-      return this.cacheProbeResult({
-        ok: false,
-        error: this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
-      });
-    }
-    try {
-      await this.embedBatchWithRetry(["ping"]);
-      return this.cacheProbeResult({ ok: true });
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      return this.cacheProbeResult({ ok: false, error: message });
-    }
+    // Hold busy across provider init so idle eviction cannot close the
+    // manager mid-probe.
+    return await this.withBusy(async () => {
+      await this.ensureProviderInitialized();
+      // FTS-only mode: embeddings not available but search still works
+      if (!this.provider) {
+        return this.cacheProbeResult({
+          ok: false,
+          error:
+            this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
+        });
+      }
+      try {
+        await this.embedBatchWithRetry(["ping"]);
+        return this.cacheProbeResult({ ok: true });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        return this.cacheProbeResult({ ok: false, error: message });
+      }
+    });
   }
 
   async close(): Promise<void> {
@@ -1102,8 +1213,34 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await drainTrackedProviders();
     } finally {
       closeMemoryDatabase(this.db);
+      // Identity-guarded teardown. Between the top of close() and this
+      // finally block, a concurrent getOrCreate(this.cacheKey) may have
+      // inserted a replacement manager into the same key (it sees our
+      // already-closed marker, removes us, and installs a fresh
+      // instance). In that case we must leave the replacement's
+      // metadata untouched:
+      //
+      //   - INDEX_CACHE.delete would already be a no-op because the
+      //     value is no longer us, but spell out the identity check.
+      //   - INDEX_MANAGER_CACHE.lastAccessAt.delete on a stale key would
+      //     erase the replacement's freshly-recorded access timestamp
+      //     and make the replacement invisible to the next idle sweep
+      //     (it would then live forever, defeating the whole point of
+      //     the sidecar).
+      //   - INDEX_MANAGER_CACHE.inflightCount.delete on a stale key
+      //     would clear refcounts the replacement is actively using.
+      //
+      // So all three metadata maps are gated on the same identity
+      // check. release() callbacks held by callers of the prior
+      // acquireManagedCacheKey() remain idempotent: a release fired
+      // after we are no longer the cache occupant decrements an entry
+      // that may now belong to the replacement, but that is still safe
+      // because (a) we incremented it while we were the occupant, and
+      // (b) the symmetric decrement is the expected accounting.
       if (INDEX_CACHE.get(this.cacheKey) === this) {
         INDEX_CACHE.delete(this.cacheKey);
+        INDEX_MANAGER_CACHE.lastAccessAt.delete(this.cacheKey);
+        INDEX_MANAGER_CACHE.inflightCount.delete(this.cacheKey);
       }
     }
     const closeError = closeErrors.values().next().value;

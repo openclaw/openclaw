@@ -510,6 +510,31 @@ export type MemorySearchConfig = {
      * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
      */
     embeddingBatchTimeoutSeconds?: number;
+    /**
+     * Idle TTL (ms) for cached `MemoryIndexManager` instances in long-running
+     * gateways. After this many idle milliseconds a manager is closed and its
+     * chokidar `FSWatcher` is released. Defaults to 15 minutes; `0` disables
+     * eviction.
+     *
+     * **Scope: gateway-wide (process-wide) only.** This setting is read from
+     * `agents.defaults.memorySearch.sync.idleEvictMs`. The underlying
+     * `INDEX_CACHE` is a module-level singleton shared by every agent in the
+     * gateway process, and the sweep runs once per cadence over the entire
+     * cache; there is no per-agent sweep timer. A value placed on a specific
+     * `agents.list[].memorySearch.sync.idleEvictMs` entry is currently
+     * accepted by the config schema but **ignored at runtime** — set this
+     * field on `agents.defaults` instead.
+     */
+    idleEvictMs?: number;
+    /**
+     * How often the idle-eviction sweep runs (ms). Defaults to 5 minutes; `0`
+     * disables the periodic sweep.
+     *
+     * **Scope: gateway-wide (process-wide) only**, same reasoning as
+     * `idleEvictMs` above — read from `agents.defaults.memorySearch.sync`;
+     * per-agent overrides are ignored at runtime.
+     */
+    idleEvictScanMs?: number;
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;

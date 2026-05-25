@@ -308,6 +308,26 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 Unset uses the provider default: 600 seconds for local/self-hosted providers such as `local`, `ollama`, and `lmstudio`, and 120 seconds for hosted providers. Increase this when local CPU-bound embedding batches are healthy but slow.
 </ParamField>
 
+### Idle eviction for cached memory managers
+
+Long-running gateway daemons cache one `MemoryIndexManager` per workspace inside a process-wide `INDEX_CACHE`. Each cached manager owns a chokidar `FSWatcher` and (with `sync.watch=true`, the default) a read file descriptor per watched `memory/*.md` file. Without eviction these resources grow for the daemon's entire lifetime; a periodic sweep closes managers that have been idle for a while so the watchers and fds are released.
+
+Both knobs below are **gateway-wide** — they are read from `agents.defaults.memorySearch.sync.*`. The cache itself is process-wide, so there is no coherent per-agent answer when two agents share the same workspace and disagree on the threshold. Per-agent values under `agents.list[].memorySearch.sync.*` are currently accepted by the config schema (it is shared with `agents.defaults`) but are silently ignored by the sweep. Set the field on `agents.defaults` instead.
+
+<ParamField path="sync.idleEvictMs" type="number" default="900000">
+  Idle TTL in milliseconds. A cached `MemoryIndexManager` that has not served a request for this long is closed on the next sweep, releasing its chokidar `FSWatcher` and any read fds held by `awaitWriteFinish`.
+
+Default: `900000` (15 minutes). Set to `0` to disable eviction entirely (the cache then grows for the daemon lifetime, the pre-`#86293` behavior).
+</ParamField>
+
+<ParamField path="sync.idleEvictScanMs" type="number" default="300000">
+  How often the gateway runs the idle-eviction sweep, in milliseconds. Lower for tighter resource caps at the cost of more sweep work; raise to reduce sweep overhead at the cost of higher peak fd / RSS between sweeps.
+
+Default: `300000` (5 minutes). Set to `0` to disable the periodic sweep entirely (independent of `idleEvictMs`).
+</ParamField>
+
+An in-flight protection layer prevents the sweep from closing a manager that is currently running `sync()`, `search()`, or `ensureProviderInitialized()`; busy managers are deferred to the next sweep, so the only cost of an aggressive `idleEvictMs` is wall-clock latency on the next request that re-opens the manager.
+
 ---
 
 ## Hybrid search config
