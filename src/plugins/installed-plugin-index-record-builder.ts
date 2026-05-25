@@ -77,16 +77,30 @@ export function collectPluginManifestCompatCodes(
   return sortUnique(codes) as readonly PluginCompatCode[];
 }
 
+// Memoized: resolving a candidate's package.json path runs several synchronous
+// realpathSync/existsSync calls, and buildInstalledPluginIndexRecords() resolves
+// every candidate on a per-turn hot path. The candidate filesystem layout is
+// stable for the process lifetime. See openclaw/openclaw#85251.
+const resolvePackageJsonPathCache = new Map<string, string | undefined>();
+
 function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
   if (!candidate?.packageDir) {
     return undefined;
   }
+  const cacheKey = `${candidate.packageDir} ${candidate.rootDir}`;
+  const cached = resolvePackageJsonPathCache.get(cacheKey);
+  if (cached !== undefined || resolvePackageJsonPathCache.has(cacheKey)) {
+    return cached;
+  }
   const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
   const rootDir = safeRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir);
-  return fs.existsSync(packageJsonPath) && isPathInsideWithRealpath(rootDir, packageJsonPath)
-    ? packageJsonPath
-    : undefined;
+  const resolved =
+    fs.existsSync(packageJsonPath) && isPathInsideWithRealpath(rootDir, packageJsonPath)
+      ? packageJsonPath
+      : undefined;
+  resolvePackageJsonPathCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
