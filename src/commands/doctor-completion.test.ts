@@ -23,7 +23,7 @@ describe("shell completion health mapping", () => {
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/shell-completion",
-        severity: "warning",
+        severity: "info",
         path: "shellCompletion.zsh",
       }),
     ]);
@@ -48,6 +48,7 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([
       expect.objectContaining({
+        severity: "info",
         message: expect.stringContaining("cache is missing"),
         fixHint: expect.stringContaining("openclaw doctor --fix"),
       }),

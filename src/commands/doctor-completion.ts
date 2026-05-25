@@ -95,7 +95,7 @@ export function shellCompletionStatusToHealthFindings(
     return [
       {
         checkId,
-        severity: "warning",
+        severity: "info",
         message: `Your ${status.shell} profile uses slow dynamic completion (source <(...)).`,
         path,
         fixHint: "Run `openclaw doctor --fix` to upgrade to cached completion.",
@@ -106,7 +106,7 @@ export function shellCompletionStatusToHealthFindings(
     return [
       {
         checkId,
-        severity: "warning",
+        severity: "info",
         message: `Shell completion is configured in your ${status.shell} profile but the cache is missing.`,
         path,
         fixHint: `Run \`openclaw completion --write-state\` or \`openclaw doctor --fix\` to regenerate ${status.cachePath}.`,
