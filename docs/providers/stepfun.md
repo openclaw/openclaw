@@ -1,8 +1,9 @@
 ---
-summary: "Use StepFun models with OpenClaw"
+summary: "Use StepFun text and image models with OpenClaw"
 read_when:
   - You want StepFun models in OpenClaw
   - You need StepFun setup guidance
+  - You want StepFun image generation or editing
 title: "StepFun"
 ---
 
@@ -38,6 +39,27 @@ Step Plan (`stepfun-plan`):
 | ---------------------------------- | ------- | ---------- | -------------------------- |
 | `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model    |
 | `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model |
+
+## Image generation
+
+Both provider ids also register the bundled
+[`image_generate`](/tools/image-generation) tool. Use provider-prefixed model
+refs so OpenClaw routes to the matching endpoint family.
+
+| Provider surface | Model ref                        | Endpoint family              | Notes                                   |
+| ---------------- | -------------------------------- | ---------------------------- | --------------------------------------- |
+| Standard         | `stepfun/step-image-edit-2`      | Region-matched standard URL  | Generate + edit; 1 output; 1 input edit |
+| Step Plan        | `stepfun-plan/step-image-edit-2` | Region-matched Step Plan URL | Generate + edit; 1 output; 1 input edit |
+
+- Standard image calls use `/images/generations` and `/images/edits` under the
+  standard StepFun base URL.
+- Step Plan image calls use the same `/images/generations` and
+  `/images/edits` paths under the Step Plan base URL.
+- Supported StepFun image sizes are `1024x1024`, `768x1360`, `896x1184`,
+  `1360x768`, and `1184x896`.
+- OpenClaw currently exposes StepFun image generation with `response_format:
+"b64_json"` and one reference image for edit mode, matching the StepFun
+  image API constraints documented for `step-image-edit-2`.
 
 ## Getting started
 

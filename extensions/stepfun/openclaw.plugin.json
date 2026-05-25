@@ -138,6 +138,9 @@
       "cliDescription": "StepFun API key"
     }
   ],
+  "contracts": {
+    "imageGenerationProviders": ["stepfun", "stepfun-plan"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -6,6 +6,10 @@ import {
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  buildStepFunImageGenerationProvider,
+  buildStepFunPlanImageGenerationProvider,
+} from "./image-generation-provider.js";
+import {
   applyStepFunPlanConfig,
   applyStepFunPlanConfigCn,
   applyStepFunStandardConfig,
@@ -248,5 +252,7 @@ export default definePluginEntry({
           }),
       },
     });
+    api.registerImageGenerationProvider(buildStepFunImageGenerationProvider());
+    api.registerImageGenerationProvider(buildStepFunPlanImageGenerationProvider());
   },
 });

@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, xAI, Vydra"
+summary: "Generate and edit images via image_generate across OpenAI, Google, fal, MiniMax, ComfyUI, DeepInfra, OpenRouter, LiteLLM, StepFun, xAI, Vydra"
 read_when:
   - Generating or editing images via the agent
   - Configuring image-generation providers and models
@@ -29,7 +29,8 @@ or sign in with OpenAI Codex OAuth.
 <Steps>
   <Step title="Configure auth">
     Set an API key for at least one provider (for example `OPENAI_API_KEY`,
-    `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) or sign in with OpenAI Codex OAuth.
+    `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, or `STEPFUN_API_KEY`) or sign in
+    with OpenAI Codex OAuth.
   </Step>
   <Step title="Pick a default model (optional)">
     ```json5
@@ -82,6 +83,8 @@ internal image endpoints remain blocked by default.
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
 | Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| StepFun image generation                             | `stepfun/step-image-edit-2`                        | `STEPFUN_API_KEY`                      |
+| StepFun Step Plan image generation                   | `stepfun-plan/step-image-edit-2`                   | `STEPFUN_API_KEY`                      |
 
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
@@ -103,6 +106,8 @@ backend emits it.
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
 | OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| StepFun    | `step-image-edit-2`                     | Yes (1 image)                      | `STEPFUN_API_KEY`                                     |
+| Step Plan  | `step-image-edit-2`                     | Yes (1 image)                      | `STEPFUN_API_KEY`                                     |
 | Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
 | xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
@@ -121,13 +126,13 @@ current session:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | StepFun | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ------- | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 1       | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | 1 image | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | ✓       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | -       | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | -       | -     | 1K, 2K         |
 
 ## Tool parameters
 
