@@ -211,6 +211,9 @@ docs/.generated/*.jsonl
 # Deprecated changelog fragment workflow
 changelog/fragments/
 
+# Runtime-evolved playbooks (local test artifacts; pack metadata stays tracked)
+contrib/packs/user_evolved/ontology/playbooks/evolved_*.yaml
+
 # Local scratch workspace
 .tmp/
 .cache/
