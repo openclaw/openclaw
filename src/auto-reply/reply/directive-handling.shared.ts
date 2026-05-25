@@ -27,11 +27,7 @@ function canPersistInternalDirective(params: {
   surface?: string;
   gatewayClientScopes?: string[];
 }): boolean {
-  const hasGatewayContext =
-    params.gatewayClientScopes !== undefined ||
-    params.messageProvider !== undefined ||
-    params.surface !== undefined;
-  if (!hasGatewayContext) {
+  if (params.gatewayClientScopes === undefined) {
     return true;
   }
   const scopes = params.gatewayClientScopes ?? [];
