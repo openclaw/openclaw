@@ -91,6 +91,13 @@ export {
   type RealtimeVoiceTurnContextTrackerOptions,
 } from "../talk/turn-context-tracker.js";
 export {
+  createRealtimeVoiceOutputActivityTracker,
+  type RealtimeVoiceOutputActivityDelta,
+  type RealtimeVoiceOutputActivitySnapshot,
+  type RealtimeVoiceOutputActivityTracker,
+  type RealtimeVoiceOutputActivityTrackerOptions,
+} from "../talk/output-activity-tracker.js";
+export {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,
   buildRealtimeVoiceAgentConsultPrompt,
