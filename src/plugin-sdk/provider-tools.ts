@@ -455,6 +455,25 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   const variants = record[unionKey] as unknown[];
   const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+  const hasNullVariant = nonNullVariants.length < normalizedVariants.length;
+
+  const constUnion = extractConstUnion(nonNullVariants);
+  if (constUnion && constUnion.values.length > 0) {
+    const merged: Record<string, unknown> = { ...normalized };
+    if (constUnion.type !== undefined && merged.type === undefined) {
+      merged.type = constUnion.type;
+    }
+    if (constUnion.values.length === 1) {
+      merged.const = constUnion.values[0];
+    } else {
+      merged.enum = constUnion.values;
+    }
+    if (hasNullVariant) {
+      merged.nullable = true;
+    }
+    return merged;
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
@@ -464,10 +483,37 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     ...(selected as Record<string, unknown>),
     ...normalized,
   };
-  if (nonNullVariants.length < normalizedVariants.length) {
+  if (hasNullVariant) {
     merged.nullable = true;
   }
   return merged;
+}
+
+function extractConstUnion(
+  variants: unknown[],
+): { values: unknown[]; type: string | undefined } | undefined {
+  if (variants.length === 0) {
+    return undefined;
+  }
+  const values: unknown[] = [];
+  const types = new Set<string>();
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+      return undefined;
+    }
+    const record = variant as Record<string, unknown>;
+    if (!("const" in record)) {
+      return undefined;
+    }
+    values.push(record.const);
+    if (typeof record.type === "string") {
+      types.add(record.type);
+    }
+  }
+  return {
+    values,
+    type: types.size === 1 ? (types.values().next().value as string) : undefined,
+  };
 }
 
 export function normalizeDeepSeekToolSchemas(

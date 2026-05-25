@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugin SDK: preserve `anyOf`/`oneOf` unions of `const` literals as JSON Schema `enum` when normalizing tool schemas for DeepSeek-routed models, so multi-option tool parameters built from `Type.Union([Type.Literal(...), ...])` no longer collapse to a single `const`. (#86468)
 - Memory/local embeddings: run local GGUF embeddings in an isolated worker sidecar and degrade to configured fallback or keyword search on worker failure so native embedding crashes do not take down the Gateway. (#85348) Thanks @osolmaz.
 - Gateway: clear the runtime config snapshot before `SIGUSR1` in-process restarts so config changes survive the next gateway loop. (#86388) Thanks @XuZehan-iCenter.
 - Models: show OAuth delegation markers as configured `models.json` auth while keeping runtime route usability checks strict. (#86378) Thanks @rohitjavvadi.

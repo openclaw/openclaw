@@ -356,4 +356,279 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
     expect(diagnostics).toStrictEqual([]);
   });
+
+  it("preserves const-literal anyOf unions as enums for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "feishu_update_doc",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              description: "update mode",
+              anyOf: [
+                { const: "overwrite", type: "string" },
+                { const: "append", type: "string" },
+                { const: "replace_range", type: "string" },
+                { const: "replace_all", type: "string" },
+                { const: "insert_before", type: "string" },
+                { const: "insert_after", type: "string" },
+                { const: "delete_range", type: "string" },
+              ],
+            },
+          },
+          required: ["mode"],
+        },
+      },
+    ] as never;
+
+    const ctx = {
+      provider: "deepseek" as const,
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions" as const,
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    };
+    const normalized = hooks.normalizeToolSchemas(ctx);
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          description: "update mode",
+          type: "string",
+          enum: [
+            "overwrite",
+            "append",
+            "replace_range",
+            "replace_all",
+            "insert_before",
+            "insert_after",
+            "delete_range",
+          ],
+        },
+      },
+      required: ["mode"],
+    });
+    expect(hooks.inspectToolSchemas({ ...ctx, tools: normalized })).toStrictEqual([]);
+  });
+
+  it("keeps nullable string union behavior unchanged for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "with_optional",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            ticker: {
+              anyOf: [{ type: "string" }, { type: "null" }],
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        ticker: { type: "string", nullable: true },
+      },
+    });
+  });
+
+  it("combines const variants with a null variant into a nullable enum for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "with_nullable_const",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: {
+              anyOf: [
+                { const: "a", type: "string" },
+                { const: "b", type: "string" },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["a", "b"],
+          nullable: true,
+        },
+      },
+    });
+  });
+
+  it("preserves numeric const unions as enums for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "with_numeric_union",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            level: {
+              anyOf: [
+                { const: 1, type: "number" },
+                { const: 2, type: "number" },
+              ],
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        level: { type: "number", enum: [1, 2] },
+      },
+    });
+  });
+
+  it("handles nested anyOf inside object properties for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "nested_union",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            payload: {
+              type: "object",
+              properties: {
+                action: {
+                  anyOf: [
+                    { const: "create", type: "string" },
+                    { const: "delete", type: "string" },
+                  ],
+                },
+              },
+              required: ["action"],
+            },
+          },
+          required: ["payload"],
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["create", "delete"] },
+          },
+          required: ["action"],
+        },
+      },
+      required: ["payload"],
+    });
+  });
+
+  it("collapses a single-element const anyOf to a const for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "single_const",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: {
+              anyOf: [{ const: "only", type: "string" }],
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        kind: { type: "string", const: "only" },
+      },
+    });
+  });
 });
