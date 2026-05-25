@@ -23,6 +23,7 @@ vi.mock("../icons.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
+  looksLikeHalfBlockArt: () => false,
 }));
 
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {

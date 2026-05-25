@@ -23,6 +23,7 @@ vi.mock("../../local-storage.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
+  looksLikeHalfBlockArt: () => false,
 }));
 
 vi.mock("../icons.ts", () => ({

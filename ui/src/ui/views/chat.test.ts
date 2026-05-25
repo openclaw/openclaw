@@ -156,6 +156,7 @@ vi.mock("../chat/grouped-render.ts", () => ({
 
 vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
+  looksLikeHalfBlockArt: () => false,
 }));
 
 vi.mock("../chat/tool-expansion-state.ts", () => ({
