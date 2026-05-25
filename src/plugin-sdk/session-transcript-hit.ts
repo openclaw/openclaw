@@ -151,7 +151,8 @@ export function resolveTranscriptStemToSessionKeys(params: {
           continue;
         }
       }
-      if (normalizeQmdSessionStem(entry.sessionId) === normalizedStem) {
+      const entrySessionId = normalizeOptionalString(entry.sessionId);
+      if (entrySessionId && normalizeQmdSessionStem(entrySessionId) === normalizedStem) {
         matches.push(sessionKey);
       }
     }
