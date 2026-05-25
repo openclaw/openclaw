@@ -2,6 +2,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import {
   WIKI_SEARCH_BACKENDS,
   WIKI_SEARCH_CORPORA,
@@ -9,6 +10,7 @@ import {
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
 
@@ -27,7 +29,39 @@ function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: 
 }
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
+const WikiRefreshSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
+const WikiReceiptSchema = Type.Object(
+  {
+    run_id: Type.String({ minLength: 1, maxLength: 200 }),
+    task: Type.String({ minLength: 1, maxLength: 4000 }),
+    memory_preflight: Type.Object(
+      {
+        performed: Type.Boolean(),
+        wiki_injectable: Type.Boolean(),
+        reason_if_not: Type.Union([Type.String({ minLength: 1, maxLength: 1000 }), Type.Null()]),
+        files_read: Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), {
+          maxItems: 500,
+        }),
+        claims_used: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+          maxItems: 1000,
+        }),
+      },
+      { additionalProperties: false },
+    ),
+    decisions_influenced_by_memory: Type.Array(Type.String({ minLength: 1, maxLength: 4000 }), {
+      maxItems: 500,
+    }),
+    writeback: Type.Object(
+      {
+        performed: Type.Boolean(),
+        paths: Type.Array(Type.String({ minLength: 1, maxLength: 2000 }), { maxItems: 500 }),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
@@ -98,7 +132,7 @@ async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  return await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
 type WikiToolMemoryContext = {
@@ -115,16 +149,75 @@ export function createWikiStatusTool(
     name: "wiki_status",
     label: "Wiki Status",
     description:
-      "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
+      "Pure-read inspection of the current memory wiki vault mode, cache freshness, health, and Obsidian CLI availability. Call wiki_refresh first when imported sources must be synced.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig);
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
       });
       return {
         content: [{ type: "text", text: renderMemoryWikiStatus(status) }],
         details: status,
+      };
+    },
+  };
+}
+
+export function createWikiRefreshTool(
+  config: ResolvedMemoryWikiConfig,
+  appConfig?: OpenClawConfig,
+): AnyAgentTool {
+  return {
+    name: "wiki_refresh",
+    label: "Wiki Refresh",
+    description:
+      "Write-scoped migration path for callers that previously used wiki_status as a refresh heartbeat. Imports bridge or unsafe-local sources and rebuilds compiled cache artifacts.",
+    parameters: WikiRefreshSchema,
+    execute: async () => {
+      const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+      const compile = await compileMemoryWikiVault(config, {
+        touchCacheArtifacts: true,
+        sourceImport: { operation: "refresh", ...sync },
+      });
+      const manifestPath = compile.manifestPath
+        ? formatWikiToolReportPath(config, compile.manifestPath)
+        : undefined;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Refreshed memory wiki cache (${compile.pages.length} pages, ${compile.claimCount} claims).${
+              manifestPath ? ` Manifest: ${manifestPath}` : ""
+            }`,
+          },
+        ],
+        details: {
+          refreshed: true,
+          pageCount: compile.pages.length,
+          claimCount: compile.claimCount,
+          updatedFilesCount: compile.updatedFiles.length,
+          manifestPath,
+          sourceImport: { operation: "refresh", ...sync },
+        },
+      };
+    },
+  };
+}
+
+export function createWikiRecordReceiptTool(config: ResolvedMemoryWikiConfig): AnyAgentTool {
+  return {
+    name: "wiki_record_receipt",
+    label: "Wiki Record Receipt",
+    description:
+      "Record an audited memory utilization receipt after using durable memory or the compiled wiki.",
+    parameters: WikiReceiptSchema,
+    execute: async (_toolCallId, rawParams) => {
+      const result = await recordMemoryUtilizationReceipt({ config, receipt: rawParams });
+      const logPath = formatWikiToolReportPath(config, result.logPath);
+      return {
+        content: [{ type: "text", text: `Recorded memory receipt ${result.runId}.` }],
+        details: { ...result, logPath },
       };
     },
   };

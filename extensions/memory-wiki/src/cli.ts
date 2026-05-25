@@ -32,8 +32,10 @@ import {
   WIKI_SEARCH_MODES,
   type WikiSearchMode,
 } from "./query.js";
-import { syncMemoryWikiImportedSources } from "./source-sync.js";
-import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
+import {
+  syncMemoryWikiImportedSources,
+  type MemoryWikiImportedSourceSyncResult,
+} from "./source-sync.js";
 import {
   buildMemoryWikiDoctorReport,
   renderMemoryWikiDoctor,
@@ -69,6 +71,10 @@ type WikiInitCommandOptions = {
 };
 
 type WikiCompileCommandOptions = {
+  json?: boolean;
+};
+
+type WikiRefreshCommandOptions = {
   json?: boolean;
 };
 
@@ -412,11 +418,17 @@ async function runSyncedWikiCommandWithSummary<T>(params: {
   appConfig?: OpenClawConfig;
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
-  run: () => Promise<T>;
+  run: (sync: MemoryWikiImportedSourceSyncResult) => Promise<T>;
   render: (result: T) => string;
 }): Promise<T> {
-  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  return runWikiCommandWithSummary(params);
+  const sync = await syncMemoryWikiImportedSources({
+    config: params.config,
+    appConfig: params.appConfig,
+  });
+  return runWikiCommandWithSummary({
+    ...params,
+    run: () => params.run(sync),
+  });
 }
 
 function addWikiSearchConfigOptions<T extends Command>(command: T): T {
@@ -453,12 +465,9 @@ export async function runWikiStatus(params: {
   const routeThroughGateway = shouldRouteBridgeRuntimeThroughGateway(params.config);
   const status = routeThroughGateway
     ? await callWikiGateway("wiki.status")
-    : await (async () => {
-        await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-        return await resolveMemoryWikiStatus(params.config, {
-          appConfig: params.appConfig,
-        });
-      })();
+    : await resolveMemoryWikiStatus(params.config, {
+        appConfig: params.appConfig,
+      });
   writeOutput(
     routeThroughGateway
       ? formatGatewayJsonOrText(status, params.json, renderMemoryWikiStatus)
@@ -522,9 +531,33 @@ export async function runWikiCompile(params: {
     appConfig: params.appConfig,
     json: params.json,
     stdout: params.stdout,
-    run: () => compileMemoryWikiVault(params.config),
+    run: (sync) =>
+      compileMemoryWikiVault(params.config, {
+        sourceImport: { operation: "compile", ...sync },
+      }),
     render: (value) =>
       `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
+  });
+}
+
+export async function runWikiRefresh(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+}) {
+  return runSyncedWikiCommandWithSummary({
+    config: params.config,
+    appConfig: params.appConfig,
+    json: params.json,
+    stdout: params.stdout,
+    run: (sync) =>
+      compileMemoryWikiVault(params.config, {
+        touchCacheArtifacts: true,
+        sourceImport: { operation: "refresh", ...sync },
+      }),
+    render: (value) =>
+      `Refreshed wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
   });
 }
 
@@ -921,6 +954,14 @@ export function registerWikiCli(
     .option("--json", "Print JSON")
     .action(async (opts: WikiCompileCommandOptions) => {
       await runWikiCompile({ config, appConfig, json: opts.json });
+    });
+
+  wiki
+    .command("refresh")
+    .description("Import bridge sources and refresh generated wiki indexes")
+    .option("--json", "Print JSON")
+    .action(async (opts: WikiRefreshCommandOptions) => {
+      await runWikiRefresh({ config, appConfig, json: opts.json });
     });
 
   wiki

@@ -27,6 +27,8 @@ describe("memory-wiki plugin", () => {
       "wiki.init",
       "wiki.doctor",
       "wiki.compile",
+      "wiki.refresh",
+      "wiki.record_receipt",
       "wiki.ingest",
       "wiki.lint",
       "wiki.bridge.import",
@@ -40,11 +42,13 @@ describe("memory-wiki plugin", () => {
       "wiki.obsidian.command",
       "wiki.obsidian.daily",
     ]);
-    expect(registerTool).toHaveBeenCalledTimes(5);
+    expect(registerTool).toHaveBeenCalledTimes(7);
     expect(registerTool.mock.calls.map((call) => call[1]?.name)).toEqual([
       "wiki_status",
+      "wiki_refresh",
       "wiki_lint",
       "wiki_apply",
+      "wiki_record_receipt",
       "wiki_search",
       "wiki_get",
     ]);

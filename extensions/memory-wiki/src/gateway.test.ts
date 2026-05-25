@@ -4,12 +4,14 @@ import {
   normalizeMemoryWikiMutationInput,
   type ApplyMemoryWikiMutation,
 } from "./apply.js";
+import { compileMemoryWikiVault } from "./compile.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { listMemoryWikiPalace } from "./memory-palace.js";
 import { searchMemoryWiki } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -55,6 +57,10 @@ vi.mock("./query.js", () => ({
   getMemoryWikiPage: vi.fn(),
   searchMemoryWiki: vi.fn(),
   WIKI_SEARCH_MODES: ["auto", "find-person", "route-question", "source-evidence", "raw-claim"],
+}));
+
+vi.mock("./receipts.js", () => ({
+  recordMemoryUtilizationReceipt: vi.fn(),
 }));
 
 vi.mock("./source-sync.js", () => ({
@@ -119,6 +125,13 @@ describe("memory-wiki gateway methods", () => {
       indexUpdatedFiles: [],
       indexRefreshReason: "no-import-changes",
     });
+    vi.mocked(compileMemoryWikiVault).mockResolvedValue({
+      vaultRoot: "/tmp/wiki",
+      pages: [],
+      updatedFiles: [],
+      reportPaths: {},
+      claimCount: 0,
+    } as never);
     vi.mocked(resolveMemoryWikiStatus).mockResolvedValue({
       vaultMode: "isolated",
       vaultExists: true,
@@ -159,6 +172,11 @@ describe("memory-wiki gateway methods", () => {
       items: [],
       total: 0,
     } as never);
+    vi.mocked(recordMemoryUtilizationReceipt).mockResolvedValue({
+      recorded: true,
+      runId: "run.alpha",
+      logPath: "/tmp/wiki/.openclaw-wiki/telemetry/memory-receipts.jsonl",
+    });
   });
 
   it("registers Obsidian CLI methods with write scope", async () => {
@@ -182,7 +200,7 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it("returns wiki status over the gateway", async () => {
+  it("returns wiki status over the gateway without syncing imported sources", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
 
@@ -198,13 +216,126 @@ describe("memory-wiki gateway methods", () => {
       respond,
     });
 
-    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(syncMemoryWikiImportedSources).not.toHaveBeenCalled();
     expect(resolveMemoryWikiStatus).toHaveBeenCalledWith(config, {
       appConfig: undefined,
     });
     expect(readRespondPayload(respond)).toEqual({
       vaultMode: "isolated",
       vaultExists: true,
+    });
+  });
+
+  it("passes import sync provenance into write-scoped wiki compile", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.compile");
+    if (!handler) {
+      throw new Error("wiki.compile handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {},
+      respond,
+    });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, {
+      sourceImport: expect.objectContaining({
+        operation: "compile",
+        importedCount: 0,
+      }),
+    });
+    expect(readRespondPayload(respond)).toEqual(
+      expect.objectContaining({
+        vaultRoot: "/tmp/wiki",
+      }),
+    );
+  });
+
+  it("runs import sync and compile through write-scoped wiki refresh", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.refresh");
+    if (!handler) {
+      throw new Error("wiki.refresh handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {},
+      respond,
+    });
+
+    expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
+    expect(compileMemoryWikiVault).toHaveBeenCalledWith(config, {
+      touchCacheArtifacts: true,
+      sourceImport: expect.objectContaining({
+        operation: "refresh",
+        importedCount: 0,
+      }),
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sync: expect.objectContaining({
+          importedCount: 0,
+        }),
+        compile: expect.objectContaining({
+          vaultRoot: "/tmp/wiki",
+        }),
+      }),
+    );
+  });
+
+  it("records memory utilization receipts through a write-scoped gateway method", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const receipt = {
+      run_id: "run.alpha",
+      task: "verify memory receipt plumbing",
+      memory_preflight: {
+        performed: true,
+        wiki_injectable: true,
+        reason_if_not: null,
+        files_read: [".openclaw-wiki/cache/agent-digest.json"],
+        claims_used: ["claim.alpha"],
+      },
+      decisions_influenced_by_memory: ["Used claim.alpha to choose the narrow gateway method."],
+      writeback: {
+        performed: false,
+        paths: [],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.record_receipt")).toEqual({
+      scope: "operator.write",
+    });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.record_receipt");
+    if (!handler) {
+      throw new Error("wiki.record_receipt handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: { receipt },
+      respond,
+    });
+
+    expect(recordMemoryUtilizationReceipt).toHaveBeenCalledWith({
+      config,
+      receipt,
+    });
+    expect(readRespondPayload(respond)).toEqual({
+      recorded: true,
+      runId: "run.alpha",
+      logPath: "/tmp/wiki/.openclaw-wiki/telemetry/memory-receipts.jsonl",
     });
   });
 

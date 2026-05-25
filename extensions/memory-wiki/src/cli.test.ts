@@ -8,6 +8,7 @@ import {
   runWikiBridgeImport,
   runWikiChatGptImport,
   runWikiChatGptRollback,
+  runWikiCompile,
   runWikiDoctor,
   runWikiStatus,
 } from "./cli.js";
@@ -138,6 +139,18 @@ describe("memory-wiki cli", () => {
         unsafeLocal: 0,
         other: 0,
       },
+      injection: {
+        injectable: false,
+        reason: "digest_missing",
+        now: "2026-01-01T00:00:00.000Z",
+        outputs: {
+          digest: { name: "digest", path: null, exists: false, reason: "digest_missing" },
+          claims: { name: "claims", path: null, exists: false, reason: "claims_missing" },
+          manifest: { name: "manifest", path: null, exists: false, reason: "manifest_missing" },
+        },
+        maxAgeMs: 24 * 60 * 60 * 1000,
+        requiredOutputs: ["digest", "claims", "manifest"],
+      },
       warnings: [],
     };
   }
@@ -170,6 +183,28 @@ describe("memory-wiki cli", () => {
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
     );
+  });
+
+  it("records compile source-import provenance from synced CLI compile", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+
+    await runWikiCompile({
+      config,
+      json: true,
+      stdout: { write: vi.fn(() => true) as never },
+    });
+
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ) as { source_import: { operation: string; imported_count: number } };
+
+    expect(manifest.source_import).toMatchObject({
+      operation: "compile",
+      imported_count: 0,
+    });
   });
 
   it("registers apply metadata and preserves the page body", async () => {

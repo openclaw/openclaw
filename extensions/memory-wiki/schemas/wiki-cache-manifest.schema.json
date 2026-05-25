@@ -1,0 +1,244 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.local/schemas/memory-wiki/wiki-cache-manifest.schema.json",
+  "title": "Memory Wiki Cache Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "run_id",
+    "pipeline_version",
+    "generated_at",
+    "source_import",
+    "claim_extraction",
+    "compile",
+    "freshness",
+    "outputs",
+    "hashes"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 12
+    },
+    "pipeline_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+    },
+    "source_import": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "imported_count",
+        "updated_count",
+        "skipped_count",
+        "removed_count",
+        "artifact_count",
+        "workspace_count",
+        "page_path_count",
+        "indexes_refreshed",
+        "index_refresh_reason"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["compile", "refresh"]
+        },
+        "imported_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updated_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page_path_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "indexes_refreshed": {
+          "type": "boolean"
+        },
+        "index_refresh_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "claim_extraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extractor", "claim_count", "statement_count", "missing_statement_count"],
+      "properties": {
+        "extractor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "claim_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "statement_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_statement_count": {
+          "type": "integer",
+          "const": 0
+        }
+      }
+    },
+    "compile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_count", "page_counts", "managed_cache_file_count"],
+      "properties": {
+        "page_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity", "concept", "source", "synthesis", "report"],
+          "properties": {
+            "entity": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "concept": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "source": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "synthesis": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "report": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "managed_cache_file_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_digest_mtime",
+        "claims_jsonl_mtime",
+        "oldest_output_mtime",
+        "newest_output_mtime"
+      ],
+      "properties": {
+        "agent_digest_mtime": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "claims_jsonl_mtime": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "oldest_output_mtime": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "newest_output_mtime": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        }
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_digest", "claims_jsonl"],
+      "properties": {
+        "agent_digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "size_bytes"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "const": ".openclaw-wiki/cache/agent-digest.json"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "claims_jsonl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "size_bytes"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "const": ".openclaw-wiki/cache/claims.jsonl"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_digest_sha256", "claims_jsonl_sha256"],
+      "properties": {
+        "agent_digest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "claims_jsonl_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

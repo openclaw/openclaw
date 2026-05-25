@@ -1,10 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 import { lintMemoryWikiVault } from "./lint.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import {
+  createWikiApplyTool,
+  createWikiLintTool,
+  createWikiRecordReceiptTool,
+  createWikiRefreshTool,
+  createWikiStatusTool,
+} from "./tool.js";
+
+const syncMemoryWikiImportedSourcesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./source-sync.js", () => ({
+  syncMemoryWikiImportedSources: syncMemoryWikiImportedSourcesMock,
+}));
 
 function asSchemaObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -15,6 +27,99 @@ function asSchemaObject(value: unknown): Record<string, unknown> {
 
 describe("memory-wiki tools", () => {
   const harness = createMemoryWikiTestHarness();
+
+  beforeEach(() => {
+    syncMemoryWikiImportedSourcesMock.mockReset();
+    syncMemoryWikiImportedSourcesMock.mockResolvedValue({
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+      artifactCount: 0,
+      workspaces: 0,
+      pagePaths: [],
+      indexesRefreshed: false,
+      indexUpdatedFiles: [],
+      indexRefreshReason: "no-import-changes",
+    });
+  });
+
+  it("keeps wiki_status pure read", async () => {
+    const { config } = await harness.createVault({ initialize: true });
+    const tool = createWikiStatusTool(config);
+
+    const result = await tool.execute("status-call", {});
+
+    expect(syncMemoryWikiImportedSourcesMock).not.toHaveBeenCalled();
+    expect(asSchemaObject(result.details)).toMatchObject({
+      vaultExists: true,
+    });
+  });
+
+  it("offers wiki_refresh as the explicit status-heartbeat migration path", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiRefreshTool(config);
+
+    const result = await tool.execute("refresh-call", {});
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    const details = asSchemaObject(result.details);
+
+    expect(syncMemoryWikiImportedSourcesMock).toHaveBeenCalledWith({
+      config,
+      appConfig: undefined,
+    });
+    expect(text).toContain("Refreshed memory wiki cache");
+    expect(text).toContain("Manifest: .openclaw-wiki/cache/wiki-cache-manifest.json");
+    expect(details).toMatchObject({
+      refreshed: true,
+      manifestPath: ".openclaw-wiki/cache/wiki-cache-manifest.json",
+      sourceImport: {
+        operation: "refresh",
+        importedCount: 0,
+      },
+    });
+    await expect(
+      fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "cache", "wiki-cache-manifest.json"),
+        "utf8",
+      ),
+    ).resolves.toContain('"source_import"');
+  });
+
+  it("records memory receipts through a model-facing tool", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiRecordReceiptTool(config);
+
+    const result = await tool.execute("receipt-call", {
+      run_id: "run-123",
+      task: "Verify memory wiki receipt tool",
+      memory_preflight: {
+        performed: true,
+        wiki_injectable: true,
+        reason_if_not: null,
+        files_read: [".openclaw-wiki/cache/agent-digest.json"],
+        claims_used: ["claim.alpha"],
+      },
+      decisions_influenced_by_memory: ["Used claim.alpha to avoid guessing."],
+      writeback: {
+        performed: false,
+        paths: [],
+      },
+    });
+
+    const details = asSchemaObject(result.details);
+    expect(details).toMatchObject({
+      recorded: true,
+      runId: "run-123",
+      logPath: ".openclaw-wiki/telemetry/memory-receipts.jsonl",
+    });
+    await expect(
+      fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "telemetry", "memory-receipts.jsonl"),
+        "utf8",
+      ),
+    ).resolves.toContain('"run_id":"run-123"');
+  });
 
   it("allows provenance metadata in wiki_apply claim evidence", () => {
     const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);

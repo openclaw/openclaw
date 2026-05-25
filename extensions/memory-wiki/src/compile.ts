@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -36,6 +37,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { reconcileClaims, type ReconcileClaimInput } from "./reconcile-claims.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
@@ -47,6 +49,9 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
 ];
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+const WIKI_CACHE_MANIFEST_PATH = ".openclaw-wiki/cache/wiki-cache-manifest.json";
+const MEMORY_WIKI_CACHE_PIPELINE_VERSION = "memory-wiki-cache.v1";
+const DEFAULT_CLAIM_CONFIDENCE = 0.55;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
 const MAX_SHARED_SOURCE_FANOUT = 24;
 
@@ -323,12 +328,31 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
   },
 ];
 
+export type CompileMemoryWikiSourceImport = {
+  operation?: "compile" | "refresh";
+  importedCount?: number;
+  updatedCount?: number;
+  skippedCount?: number;
+  removedCount?: number;
+  artifactCount?: number;
+  workspaces?: number;
+  pagePaths?: string[];
+  indexesRefreshed?: boolean;
+  indexRefreshReason?: string;
+};
+
 export type CompileMemoryWikiResult = {
   vaultRoot: string;
   pageCounts: Record<WikiPageKind, number>;
   pages: WikiPageSummary[];
   claimCount: number;
   updatedFiles: string[];
+  manifestPath?: string;
+};
+
+export type CompileMemoryWikiOptions = {
+  touchCacheArtifacts?: boolean;
+  sourceImport?: CompileMemoryWikiSourceImport;
 };
 
 export type RefreshMemoryWikiIndexesResult = {
@@ -1210,50 +1234,421 @@ function buildAgentDigest(params: {
   };
 }
 
-function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] {
-  return params.pages
-    .flatMap((page) =>
-      sortClaims(page).map((claim) => {
-        const freshness = assessClaimFreshness({ page, claim });
-        return JSON.stringify({
-          ...(claim.id ? { id: claim.id } : {}),
-          pageId: page.id,
-          pageTitle: page.title,
-          pageKind: page.kind,
-          pagePath: page.relativePath,
-          pageType: page.pageType,
-          entityType: page.entityType,
-          canonicalId: page.canonicalId,
-          aliases: page.aliases,
-          text: claim.text,
-          status: normalizeClaimStatus(claim.status),
-          confidence: claim.confidence,
-          sourceIds: page.sourceIds,
-          evidenceKinds: [...new Set(claim.evidence.flatMap((entry) => entry.kind ?? []))],
-          privacyTiers: [
-            ...new Set(
-              [
-                page.privacyTier,
-                page.personCard?.privacyTier,
-                ...claim.evidence.map((entry) => entry.privacyTier),
-              ].flatMap((entry) => entry ?? []),
-            ),
-          ],
-          evidenceCount: claim.evidence.length,
-          missingEvidence: claim.evidence.length === 0,
-          evidence: claim.evidence,
-          freshnessLevel: freshness.level,
-          lastTouchedAt: freshness.lastTouchedAt,
-        });
-      }),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
+function timestampFromCandidates(candidates: Array<string | undefined>): string | undefined {
+  let bestValue: string | undefined;
+  let bestMs = -1;
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed) && parsed > bestMs) {
+      bestMs = parsed;
+      bestValue = new Date(parsed).toISOString();
+    }
+  }
+  return bestValue;
 }
 
+function hashClaimIdParts(parts: string[], length = 16): string {
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, length);
+}
+
+function buildFallbackClaimIdBase(page: WikiPageSummary, claim: WikiClaim): string {
+  return `claim.${hashClaimIdParts([page.relativePath, claim.claimKey ?? "", claim.text])}`;
+}
+
+function buildFallbackClaimDisambiguator(claim: WikiClaim): string {
+  return hashClaimIdParts(
+    [
+      claim.status ?? "",
+      typeof claim.confidence === "number" ? claim.confidence.toString() : "",
+      claim.sourcePath ?? "",
+      claim.sourceRepo ?? "",
+      claim.sourceCommit ?? "",
+      claim.sourceClass ?? "",
+      typeof claim.authorityTier === "number" ? claim.authorityTier.toString() : "",
+      claim.assertedAt ?? "",
+      claim.extractedAt ?? "",
+      claim.validFrom ?? "",
+      claim.validUntil ?? "",
+      JSON.stringify(claim.evidence),
+    ],
+    10,
+  );
+}
+
+function buildStableClaimIdsForPage(page: WikiPageSummary): Map<WikiClaim, string> {
+  const baseCounts = new Map<string, number>();
+  const fingerprintCounts = new Map<string, number>();
+
+  for (const claim of page.claims) {
+    if (claim.id?.trim()) {
+      continue;
+    }
+    const base = buildFallbackClaimIdBase(page, claim);
+    const fingerprint = `${base}\n${buildFallbackClaimDisambiguator(claim)}`;
+    baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1);
+    fingerprintCounts.set(fingerprint, (fingerprintCounts.get(fingerprint) ?? 0) + 1);
+  }
+
+  const occurrences = new Map<string, number>();
+  const claimIds = new Map<WikiClaim, string>();
+  for (const claim of page.claims) {
+    const explicitId = claim.id?.trim();
+    if (explicitId) {
+      claimIds.set(claim, explicitId);
+      continue;
+    }
+
+    const base = buildFallbackClaimIdBase(page, claim);
+    if ((baseCounts.get(base) ?? 0) === 1) {
+      claimIds.set(claim, base);
+      continue;
+    }
+
+    const disambiguator = buildFallbackClaimDisambiguator(claim);
+    const fingerprint = `${base}\n${disambiguator}`;
+    const disambiguated = `${base}.${disambiguator}`;
+    if ((fingerprintCounts.get(fingerprint) ?? 0) === 1) {
+      claimIds.set(claim, disambiguated);
+      continue;
+    }
+
+    const occurrence = (occurrences.get(fingerprint) ?? 0) + 1;
+    occurrences.set(fingerprint, occurrence);
+    claimIds.set(claim, `${disambiguated}.${occurrence}`);
+  }
+
+  return claimIds;
+}
+
+function resolveClaimSourceClass(page: WikiPageSummary, claim: WikiClaim): string {
+  if (claim.sourceClass?.trim()) {
+    return claim.sourceClass.trim();
+  }
+  if (page.sourceType?.trim()) {
+    return page.sourceType.trim();
+  }
+  return page.kind;
+}
+
+function defaultAuthorityTier(sourceClass: string): number {
+  const normalized = normalizeLowercaseStringOrEmpty(sourceClass);
+  if (/operator|canonical|official|repo/.test(normalized)) {
+    return 80;
+  }
+  if (/synthesis|report/.test(normalized)) {
+    return 60;
+  }
+  if (normalized.includes("source")) {
+    return 50;
+  }
+  if (/memory-bridge|bridge/.test(normalized)) {
+    return 40;
+  }
+  if (normalized.includes("unsafe")) {
+    return 20;
+  }
+  return 30;
+}
+
+type ClaimsDigestRecord = {
+  id?: string;
+  claim_id: string;
+  claim_key: string;
+  statement: string;
+  text: string;
+  status: string;
+  source_path?: string;
+  source_repo?: string;
+  source_commit?: string;
+  source_class: string;
+  authority_tier: number;
+  asserted_at: string;
+  extracted_at: string;
+  valid_from: string;
+  valid_until: string | null;
+  supersedes: string[];
+  superseded_by: string[];
+  confidence?: number;
+  page_id?: string;
+  pageId?: string;
+  page_title: string;
+  pageTitle: string;
+  page_kind: WikiPageKind;
+  pageKind: WikiPageKind;
+  page_path: string;
+  pagePath: string;
+  pageType?: string;
+  entityType?: string;
+  canonicalId?: string;
+  aliases?: string[];
+  source_ids: string[];
+  sourceIds: string[];
+  evidenceKinds: string[];
+  privacyTiers: string[];
+  evidence_count: number;
+  evidenceCount: number;
+  missing_evidence: boolean;
+  missingEvidence: boolean;
+  evidence: WikiClaim["evidence"];
+  freshness_level: WikiFreshnessLevel;
+  freshnessLevel: WikiFreshnessLevel;
+  last_touched_at: string | null;
+  lastTouchedAt?: string;
+};
+
+function buildClaimsDigestRecords(params: { pages: WikiPageSummary[] }): ClaimsDigestRecord[] {
+  const raw = params.pages.flatMap((page) => {
+    const claimIds = buildStableClaimIdsForPage(page);
+    return sortClaims(page).map((claim) => {
+      const claimId = claimIds.get(claim);
+      if (!claimId) {
+        throw new Error(`Unable to resolve stable claim id for ${page.relativePath}`);
+      }
+      const sourceClass = resolveClaimSourceClass(page, claim);
+      const assertedAt = timestampFromCandidates([
+        claim.assertedAt,
+        claim.updatedAt,
+        page.updatedAt,
+        ...claim.evidence.map((entry) => entry.updatedAt),
+      ]);
+      const input: ReconcileClaimInput = {
+        claim_id: claimId,
+        claim_key: claim.claimKey,
+        statement: claim.text,
+        status: claim.status,
+        source_path: claim.sourcePath ?? page.sourcePath,
+        source_repo: claim.sourceRepo,
+        source_commit: claim.sourceCommit,
+        source_class: sourceClass,
+        authority_tier: claim.authorityTier ?? defaultAuthorityTier(sourceClass),
+        asserted_at: assertedAt,
+        extracted_at: claim.extractedAt ?? assertedAt,
+        valid_from: claim.validFrom ?? assertedAt,
+        valid_until: claim.validUntil,
+        supersedes: claim.supersedes,
+        superseded_by: claim.supersededBy,
+        confidence: claim.confidence ?? DEFAULT_CLAIM_CONFIDENCE,
+        page_path: page.relativePath,
+      };
+      return { page, claim, input };
+    });
+  });
+
+  const reconciledClaims = reconcileClaims({ claims: raw.map((entry) => entry.input) });
+  if (reconciledClaims.length !== raw.length) {
+    throw new Error(
+      `Reconciled claim count mismatch: expected ${raw.length}, got ${reconciledClaims.length}`,
+    );
+  }
+
+  return raw
+    .map(({ page, claim }, index) => {
+      const reconciled = reconciledClaims[index];
+      if (!reconciled) {
+        throw new Error(`Missing reconciled claim at index ${index}`);
+      }
+      const freshness = assessClaimFreshness({ page, claim });
+      const record: ClaimsDigestRecord = {
+        claim_id: reconciled.claim_id,
+        claim_key: reconciled.claim_key,
+        statement: reconciled.statement,
+        text: reconciled.statement,
+        status: reconciled.status,
+        source_class: reconciled.source_class,
+        authority_tier: reconciled.authority_tier,
+        asserted_at: reconciled.asserted_at,
+        extracted_at: reconciled.extracted_at,
+        valid_from: reconciled.valid_from,
+        valid_until: reconciled.valid_until,
+        supersedes: reconciled.supersedes,
+        superseded_by: reconciled.superseded_by,
+        page_title: page.title,
+        pageTitle: page.title,
+        page_kind: page.kind,
+        pageKind: page.kind,
+        page_path: page.relativePath,
+        pagePath: page.relativePath,
+        source_ids: [...page.sourceIds],
+        sourceIds: [...page.sourceIds],
+        evidenceKinds: [...new Set(claim.evidence.flatMap((entry) => entry.kind ?? []))],
+        privacyTiers: [
+          ...new Set(
+            [
+              page.privacyTier,
+              page.personCard?.privacyTier,
+              ...claim.evidence.map((entry) => entry.privacyTier),
+            ].flatMap((entry) => entry ?? []),
+          ),
+        ],
+        evidence_count: claim.evidence.length,
+        evidenceCount: claim.evidence.length,
+        missing_evidence: claim.evidence.length === 0,
+        missingEvidence: claim.evidence.length === 0,
+        evidence: claim.evidence,
+        freshness_level: freshness.level,
+        freshnessLevel: freshness.level,
+        last_touched_at: freshness.lastTouchedAt ?? null,
+      };
+      if (claim.id) {
+        record.id = claim.id;
+      }
+      if (reconciled.source_path) {
+        record.source_path = reconciled.source_path;
+      }
+      if (reconciled.source_repo) {
+        record.source_repo = reconciled.source_repo;
+      }
+      if (reconciled.source_commit) {
+        record.source_commit = reconciled.source_commit;
+      }
+      if (typeof reconciled.confidence === "number") {
+        record.confidence = reconciled.confidence;
+      }
+      if (page.id) {
+        record.page_id = page.id;
+        record.pageId = page.id;
+      }
+      if (page.pageType) {
+        record.pageType = page.pageType;
+      }
+      if (page.entityType) {
+        record.entityType = page.entityType;
+      }
+      if (page.canonicalId) {
+        record.canonicalId = page.canonicalId;
+      }
+      if (page.aliases.length > 0) {
+        record.aliases = [...page.aliases];
+      }
+      if (freshness.lastTouchedAt) {
+        record.lastTouchedAt = freshness.lastTouchedAt;
+      }
+      return record;
+    })
+    .toSorted((left, right) => left.claim_id.localeCompare(right.claim_id));
+}
+
+function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] {
+  return buildClaimsDigestRecords(params).map((claim) => JSON.stringify(claim));
+}
+
+async function hashFileSha256(filePath: string): Promise<string> {
+  return createHash("sha256")
+    .update(await fs.readFile(filePath))
+    .digest("hex");
+}
+
+async function writeTextFileAtomicallyIfChanged(params: {
+  filePath: string;
+  content: string;
+}): Promise<boolean> {
+  const existing = await fs.readFile(params.filePath, "utf8").catch(() => undefined);
+  if (existing === params.content) {
+    return false;
+  }
+  await fs.mkdir(path.dirname(params.filePath), { recursive: true });
+  const tmpPath = path.join(
+    path.dirname(params.filePath),
+    `.${path.basename(params.filePath)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  await fs.writeFile(tmpPath, params.content, "utf8");
+  await fs.rename(tmpPath, params.filePath);
+  return true;
+}
+
+function buildSourceImportManifest(sourceImport?: CompileMemoryWikiSourceImport) {
+  return {
+    operation: sourceImport?.operation ?? "compile",
+    imported_count: sourceImport?.importedCount ?? 0,
+    updated_count: sourceImport?.updatedCount ?? 0,
+    skipped_count: sourceImport?.skippedCount ?? 0,
+    removed_count: sourceImport?.removedCount ?? 0,
+    artifact_count: sourceImport?.artifactCount ?? 0,
+    workspace_count: sourceImport?.workspaces ?? 0,
+    page_path_count: sourceImport?.pagePaths?.length ?? 0,
+    indexes_refreshed: sourceImport?.indexesRefreshed ?? false,
+    index_refresh_reason: sourceImport?.indexRefreshReason ?? "not-run",
+  };
+}
+
+async function writeWikiCacheManifest(params: {
+  rootDir: string;
+  pages: WikiPageSummary[];
+  pageCounts: Record<WikiPageKind, number>;
+  updatedFilesBeforeManifest: string[];
+  sourceImport?: CompileMemoryWikiSourceImport;
+}): Promise<string[]> {
+  const agentDigestPath = path.join(params.rootDir, AGENT_DIGEST_PATH);
+  const claimsDigestPath = path.join(params.rootDir, CLAIMS_DIGEST_PATH);
+  const manifestPath = path.join(params.rootDir, WIKI_CACHE_MANIFEST_PATH);
+  const [agentDigestStat, claimsDigestStat, agentDigestSha256, claimsJsonlSha256] =
+    await Promise.all([
+      fs.stat(agentDigestPath),
+      fs.stat(claimsDigestPath),
+      hashFileSha256(agentDigestPath),
+      hashFileSha256(claimsDigestPath),
+    ]);
+  const oldestOutputMtimeMs = Math.min(agentDigestStat.mtimeMs, claimsDigestStat.mtimeMs);
+  const newestOutputMtimeMs = Math.max(agentDigestStat.mtimeMs, claimsDigestStat.mtimeMs);
+  const generatedAt = new Date(newestOutputMtimeMs).toISOString();
+  const claimCount = params.pages.reduce((total, page) => total + page.claims.length, 0);
+  const runIdHash = createHash("sha256")
+    .update(JSON.stringify({ generatedAt, agentDigestSha256, claimsJsonlSha256 }))
+    .digest("hex")
+    .slice(0, 24);
+  const manifest = {
+    manifest_version: 1,
+    run_id: `wiki-cache-${runIdHash}`,
+    pipeline_version: MEMORY_WIKI_CACHE_PIPELINE_VERSION,
+    generated_at: generatedAt,
+    source_import: buildSourceImportManifest(params.sourceImport),
+    claim_extraction: {
+      extractor: "frontmatter.claims",
+      claim_count: claimCount,
+      statement_count: claimCount,
+      missing_statement_count: 0,
+    },
+    compile: {
+      page_count: params.pages.length,
+      page_counts: params.pageCounts,
+      managed_cache_file_count: 2,
+    },
+    freshness: {
+      agent_digest_mtime: agentDigestStat.mtime.toISOString(),
+      claims_jsonl_mtime: claimsDigestStat.mtime.toISOString(),
+      oldest_output_mtime: new Date(oldestOutputMtimeMs).toISOString(),
+      newest_output_mtime: new Date(newestOutputMtimeMs).toISOString(),
+    },
+    outputs: {
+      agent_digest: {
+        path: AGENT_DIGEST_PATH,
+        size_bytes: agentDigestStat.size,
+      },
+      claims_jsonl: {
+        path: CLAIMS_DIGEST_PATH,
+        size_bytes: claimsDigestStat.size,
+      },
+    },
+    hashes: {
+      agent_digest_sha256: agentDigestSha256,
+      claims_jsonl_sha256: claimsJsonlSha256,
+    },
+  };
+  const changed = await writeTextFileAtomicallyIfChanged({
+    filePath: manifestPath,
+    content: `${JSON.stringify(manifest, null, 2)}
+`,
+  });
+  return changed ? [manifestPath] : [];
+}
 async function writeAgentDigestArtifacts(params: {
   rootDir: string;
   pages: WikiPageSummary[];
   pageCounts: Record<WikiPageKind, number>;
+  touchCacheArtifacts?: boolean;
 }): Promise<string[]> {
   const updatedFiles: string[] = [];
   const agentDigestPath = path.join(params.rootDir, AGENT_DIGEST_PATH);
@@ -1270,14 +1665,19 @@ async function writeAgentDigestArtifacts(params: {
     buildClaimsDigestLines({ pages: params.pages }).join("\n"),
   );
 
+  const root = await fsRoot(params.rootDir);
   for (const [filePath, content] of [
     [agentDigestPath, agentDigest],
     [claimsDigestPath, claimsDigest],
   ] as const) {
     const relativePath = path.relative(params.rootDir, filePath);
-    const root = await fsRoot(params.rootDir);
-    const existing = await root.readText(relativePath).catch(() => "");
+    const existing = await root.readText(relativePath).catch(() => undefined);
     if (existing === content) {
+      if (params.touchCacheArtifacts) {
+        const now = new Date();
+        await fs.utimes(filePath, now, now);
+        updatedFiles.push(filePath);
+      }
       continue;
     }
     await root.write(relativePath, content);
@@ -1288,6 +1688,7 @@ async function writeAgentDigestArtifacts(params: {
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: CompileMemoryWikiOptions = {},
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
   const rootDir = config.vault.path;
@@ -1306,9 +1707,9 @@ export async function compileMemoryWikiVault(
     rootDir,
     pages,
     pageCounts: counts,
+    touchCacheArtifacts: options.touchCacheArtifacts,
   });
   updatedFiles.push(...digestUpdatedFiles);
-
   const rootIndexPath = path.join(rootDir, "index.md");
   if (
     await writeManagedMarkdownFile({
@@ -1340,6 +1741,15 @@ export async function compileMemoryWikiVault(
     }
   }
 
+  const manifestUpdatedFiles = await writeWikiCacheManifest({
+    rootDir,
+    pages,
+    pageCounts: counts,
+    updatedFilesBeforeManifest: updatedFiles,
+    sourceImport: options.sourceImport,
+  });
+  updatedFiles.push(...manifestUpdatedFiles);
+
   if (updatedFiles.length > 0) {
     await appendMemoryWikiLog(rootDir, {
       type: "compile",
@@ -1357,6 +1767,7 @@ export async function compileMemoryWikiVault(
     pages,
     claimCount: pages.reduce((total, page) => total + page.claims.length, 0),
     updatedFiles,
+    manifestPath: path.join(rootDir, WIKI_CACHE_MANIFEST_PATH),
   };
 }
 
@@ -1379,7 +1790,10 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
-  syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  syncResult: Omit<
+    CompileMemoryWikiSourceImport,
+    "operation" | "indexesRefreshed" | "indexRefreshReason"
+  > & { importedCount: number; updatedCount: number; removedCount: number };
 }): Promise<RefreshMemoryWikiIndexesResult> {
   await initializeMemoryWikiVault(params.config);
   if (!params.config.ingest.autoCompile) {
@@ -1399,10 +1813,24 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
       reason: "no-import-changes",
     };
   }
-  const compile = await compileMemoryWikiVault(params.config);
+  const reason = missingIndexes && !importChanged ? "missing-indexes" : "import-changed";
+  const compile = await compileMemoryWikiVault(params.config, {
+    sourceImport: {
+      operation: "refresh",
+      importedCount: params.syncResult.importedCount,
+      updatedCount: params.syncResult.updatedCount,
+      skippedCount: params.syncResult.skippedCount,
+      removedCount: params.syncResult.removedCount,
+      artifactCount: params.syncResult.artifactCount,
+      workspaces: params.syncResult.workspaces,
+      pagePaths: params.syncResult.pagePaths,
+      indexesRefreshed: true,
+      indexRefreshReason: reason,
+    },
+  });
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason,
     compile,
   };
 }

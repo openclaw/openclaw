@@ -23,6 +23,7 @@ export type WikiClaimHealth = {
   pageTitle: string;
   pageId?: string;
   claimId?: string;
+  claimKey?: string;
   text: string;
   status: string;
   confidence?: number;
@@ -150,12 +151,14 @@ function buildWikiClaimHealth(params: {
   now?: Date;
 }): WikiClaimHealth {
   const claimId = params.claim.id?.trim();
+  const claimKey = params.claim.claimKey?.trim();
   return {
-    key: `${params.page.relativePath}#${claimId ?? `claim-${params.index + 1}`}`,
+    key: `${params.page.relativePath}#${claimId ?? claimKey ?? `claim-${params.index + 1}`}`,
     pagePath: params.page.relativePath,
     pageTitle: params.page.title,
     ...(params.page.id ? { pageId: params.page.id } : {}),
     ...(claimId ? { claimId } : {}),
+    ...(claimKey ? { claimKey } : {}),
     text: params.claim.text,
     status: normalizeClaimStatus(params.claim.status),
     ...(typeof params.claim.confidence === "number" ? { confidence: params.claim.confidence } : {}),
@@ -176,18 +179,19 @@ export function buildClaimContradictionClusters(params: {
   now?: Date;
 }): WikiClaimContradictionCluster[] {
   const claimHealth = collectWikiClaimHealth(params.pages, params.now);
-  const byId = new Map<string, WikiClaimHealth[]>();
+  const byLogicalKey = new Map<string, WikiClaimHealth[]>();
   for (const claim of claimHealth) {
-    if (!claim.claimId) {
+    const logicalKey = claim.claimKey ?? claim.claimId;
+    if (!logicalKey) {
       continue;
     }
-    const current = byId.get(claim.claimId) ?? [];
+    const current = byLogicalKey.get(logicalKey) ?? [];
     current.push(claim);
-    byId.set(claim.claimId, current);
+    byLogicalKey.set(logicalKey, current);
   }
 
-  return [...byId.entries()]
-    .flatMap(([claimId, entries]) => {
+  return [...byLogicalKey.entries()]
+    .flatMap(([claimKey, entries]) => {
       if (entries.length < 2) {
         return [];
       }
@@ -198,8 +202,8 @@ export function buildClaimContradictionClusters(params: {
       }
       return [
         {
-          key: claimId,
-          label: claimId,
+          key: claimKey,
+          label: claimKey,
           entries: [...entries].toSorted((left, right) =>
             left.pagePath.localeCompare(right.pagePath),
           ),

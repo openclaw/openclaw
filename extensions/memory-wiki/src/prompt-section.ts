@@ -1,9 +1,13 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import { resolveMemoryWikiConfig, type ResolvedMemoryWikiConfig } from "./config.js";
+import {
+  DEFAULT_WIKI_INJECTABLE_MAX_AGE_MS,
+  DEFAULT_WIKI_INJECTABLE_REQUIRED_OUTPUTS,
+  isWikiInjectableSync,
+  resolveWikiCachePaths,
+} from "./freshness.js";
 
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
 const DIGEST_MAX_CLAIMS_PER_PAGE = 2;
 
@@ -31,7 +35,7 @@ type PromptDigest = {
 };
 
 function tryReadPromptDigest(config: ResolvedMemoryWikiConfig): PromptDigest | null {
-  const digestPath = path.join(config.vault.path, AGENT_DIGEST_PATH);
+  const { digestPath } = resolveWikiCachePaths(config.vault.path);
   try {
     const raw = fs.readFileSync(digestPath, "utf8");
     const parsed = JSON.parse(raw) as PromptDigest;
@@ -98,6 +102,14 @@ function buildDigestPromptSection(config: ResolvedMemoryWikiConfig): string[] {
   if (!config.context.includeCompiledDigestPrompt) {
     return [];
   }
+  const injection = isWikiInjectableSync({
+    ...resolveWikiCachePaths(config.vault.path),
+    maxAgeMs: DEFAULT_WIKI_INJECTABLE_MAX_AGE_MS,
+    requiredOutputs: DEFAULT_WIKI_INJECTABLE_REQUIRED_OUTPUTS,
+  });
+  if (!injection.injectable) {
+    return [];
+  }
   const digest = tryReadPromptDigest(config);
   if (!digest?.pages?.length) {
     return [];
@@ -159,6 +171,7 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
   const hasWikiGet = availableTools.has("wiki_get");
   const hasWikiApply = availableTools.has("wiki_apply");
   const hasWikiLint = availableTools.has("wiki_lint");
+  const hasWikiRecordReceipt = availableTools.has("wiki_record_receipt");
 
   if (
     !hasMemorySearch &&
@@ -166,7 +179,8 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
     !hasWikiSearch &&
     !hasWikiGet &&
     !hasWikiApply &&
-    !hasWikiLint
+    !hasWikiLint &&
+    !hasWikiRecordReceipt
   ) {
     return [];
   }
@@ -208,6 +222,11 @@ function buildWikiToolGuidance(availableTools: Set<string>): string[] {
   }
   if (hasWikiLint) {
     lines.push("After meaningful wiki updates, run `wiki_lint` before trusting the vault.");
+  }
+  if (hasWikiRecordReceipt) {
+    lines.push(
+      "When memory affects a decision, finish by recording a receipt with `wiki_record_receipt`.",
+    );
   }
   lines.push("");
   return lines;

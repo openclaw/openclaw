@@ -17,6 +17,22 @@ afterAll(async () => {
   }
 });
 
+async function writeInjectableDigest(rootDir: string, digest: unknown): Promise<void> {
+  const cacheDir = path.join(rootDir, ".openclaw-wiki", "cache");
+  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.writeFile(
+    path.join(cacheDir, "agent-digest.json"),
+    JSON.stringify(digest, null, 2),
+    "utf8",
+  );
+  await fs.writeFile(path.join(cacheDir, "claims.jsonl"), '{"claim_id":"claim.alpha"}\n', "utf8");
+  await fs.writeFile(
+    path.join(cacheDir, "wiki-cache-manifest.json"),
+    '{"schema_version":"test"}\n',
+    "utf8",
+  );
+}
+
 describe("buildWikiPromptSection", () => {
   it("prefers shared memory corpus guidance when memory tools are available", () => {
     const lines = buildWikiPromptSection({
@@ -34,36 +50,27 @@ describe("buildWikiPromptSection", () => {
 
   it("can append a compact compiled digest snapshot when enabled", async () => {
     const rootDir = path.join(suiteRoot, "digest-enabled");
-    await fs.mkdir(path.join(rootDir, ".openclaw-wiki", "cache"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"),
-      JSON.stringify(
+    await writeInjectableDigest(rootDir, {
+      claimCount: 8,
+      contradictionClusters: [{ key: "claim.alpha.db" }],
+      pages: [
         {
-          claimCount: 8,
-          contradictionClusters: [{ key: "claim.alpha.db" }],
-          pages: [
+          title: "Alpha",
+          kind: "entity",
+          claimCount: 3,
+          questions: ["Still active?"],
+          contradictions: ["Conflicts with source.beta"],
+          topClaims: [
             {
-              title: "Alpha",
-              kind: "entity",
-              claimCount: 3,
-              questions: ["Still active?"],
-              contradictions: ["Conflicts with source.beta"],
-              topClaims: [
-                {
-                  text: "Alpha uses PostgreSQL for production writes.",
-                  status: "supported",
-                  confidence: 0.91,
-                  freshnessLevel: "fresh",
-                },
-              ],
+              text: "Alpha uses PostgreSQL for production writes.",
+              status: "supported",
+              confidence: 0.91,
+              freshnessLevel: "fresh",
             },
           ],
         },
-        null,
-        2,
-      ),
-      "utf8",
-    );
+      ],
+    });
     const builder = createWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
@@ -102,8 +109,6 @@ describe("buildWikiPromptSection", () => {
 
   it("stabilizes digest prompt ordering for prompt-cache-friendly output", async () => {
     const rootDir = path.join(suiteRoot, "digest-stable");
-    const digestPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
-    await fs.mkdir(path.dirname(digestPath), { recursive: true });
 
     const builder = createWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
@@ -162,10 +167,10 @@ describe("buildWikiPromptSection", () => {
       ],
     };
 
-    await fs.writeFile(digestPath, JSON.stringify(firstDigest, null, 2), "utf8");
+    await writeInjectableDigest(rootDir, firstDigest);
     const firstLines = builder({ availableTools: new Set(["web_search"]) });
 
-    await fs.writeFile(digestPath, JSON.stringify(secondDigest, null, 2), "utf8");
+    await writeInjectableDigest(rootDir, secondDigest);
     const secondLines = builder({ availableTools: new Set(["web_search"]) });
 
     expect(firstLines).toEqual(secondLines);
@@ -175,5 +180,30 @@ describe("buildWikiPromptSection", () => {
     expect(firstLines.join("\n")).toContain(
       "Alpha was renamed in 2026. (confidence 0.42, freshness aging)",
     );
+  });
+
+  it("skips the compiled digest snapshot when the cache is stale", async () => {
+    const rootDir = path.join(suiteRoot, "digest-stale");
+    await writeInjectableDigest(rootDir, {
+      claimCount: 1,
+      pages: [
+        {
+          title: "Stale",
+          kind: "source",
+          claimCount: 1,
+          topClaims: [{ text: "This stale cache should not be injected." }],
+        },
+      ],
+    });
+    const stale = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    await fs.utimes(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), stale, stale);
+    const builder = createWikiPromptSectionBuilder(
+      resolveMemoryWikiConfig({
+        vault: { path: rootDir },
+        context: { includeCompiledDigestPrompt: true },
+      }),
+    );
+
+    expect(builder({ availableTools: new Set(["web_search"]) })).toStrictEqual([]);
   });
 });

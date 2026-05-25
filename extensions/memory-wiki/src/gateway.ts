@@ -21,6 +21,7 @@ import {
   runObsidianSearch,
 } from "./obsidian.js";
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
+import { recordMemoryUtilizationReceipt } from "./receipts.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { buildMemoryWikiDoctorReport, resolveMemoryWikiStatus } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -84,6 +85,10 @@ function readEnumParam<T extends string>(
   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function respondError(respond: GatewayRespond, error: unknown) {
   const message = formatErrorMessage(error);
   respond(false, undefined, { code: "internal_error", message });
@@ -103,7 +108,7 @@ async function syncImportedSourcesIfNeeded(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ) {
-  await syncMemoryWikiImportedSources({ config, appConfig });
+  return await syncMemoryWikiImportedSources({ config, appConfig });
 }
 
 export function registerMemoryWikiGatewayMethods(params: {
@@ -117,7 +122,6 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.status",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
         respond(
           true,
           await resolveMemoryWikiStatus(config, {
@@ -202,8 +206,49 @@ export function registerMemoryWikiGatewayMethods(params: {
     "wiki.compile",
     async ({ respond }) => {
       try {
-        await syncImportedSourcesIfNeeded(config, appConfig);
-        respond(true, await compileMemoryWikiVault(config));
+        const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+        respond(
+          true,
+          await compileMemoryWikiVault(config, {
+            sourceImport: { operation: "compile", ...sync },
+          }),
+        );
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "wiki.refresh",
+    async ({ respond }) => {
+      try {
+        const sync = await syncImportedSourcesIfNeeded(config, appConfig);
+        const compile = await compileMemoryWikiVault(config, {
+          touchCacheArtifacts: true,
+          sourceImport: { operation: "refresh", ...sync },
+        });
+        respond(true, { sync, compile });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "wiki.record_receipt",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const receipt = isRecord(requestParams.receipt) ? requestParams.receipt : requestParams;
+        respond(
+          true,
+          await recordMemoryUtilizationReceipt({
+            config,
+            receipt,
+          }),
+        );
       } catch (error) {
         respondError(respond, error);
       }
