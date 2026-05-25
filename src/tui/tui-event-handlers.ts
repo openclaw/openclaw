@@ -1,5 +1,9 @@
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -153,7 +157,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
-  const isSameSessionKey = (left: string | undefined, right: string | undefined): boolean => {
+  const isSameSessionKey = (
+    left: string | undefined,
+    right: string | undefined,
+  ): boolean => {
     const normalizedLeft = (left ?? "").trim().toLowerCase();
     const normalizedRight = (right ?? "").trim().toLowerCase();
     if (!normalizedLeft || !normalizedRight) {
@@ -165,7 +172,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     const parsedLeft = parseAgentSessionKey(normalizedLeft);
     const parsedRight = parseAgentSessionKey(normalizedRight);
     if (parsedLeft && parsedRight) {
-      return parsedLeft.agentId === parsedRight.agentId && parsedLeft.rest === parsedRight.rest;
+      return (
+        parsedLeft.agentId === parsedRight.agentId &&
+        parsedLeft.rest === parsedRight.rest
+      );
     }
     if (parsedLeft) {
       return parsedLeft.rest === normalizedRight;
@@ -198,7 +208,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.activeChatRunId = evt.runId;
     }
     if (evt.state === "delta") {
-      const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
+      const displayText = streamAssembler.ingestDelta(
+        evt.runId,
+        evt.message,
+        state.showThinking,
+      );
       if (!displayText) {
         return;
       }
@@ -228,8 +242,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       maybeRefreshHistoryForRun(evt.runId);
       const stopReason =
-        evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
-          ? typeof (evt.message as Record<string, unknown>).stopReason === "string"
+        evt.message &&
+        typeof evt.message === "object" &&
+        !Array.isArray(evt.message)
+          ? typeof (evt.message as Record<string, unknown>).stopReason ===
+            "string"
             ? ((evt.message as Record<string, unknown>).stopReason as string)
             : ""
           : "";
@@ -278,7 +295,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
+    const isKnownRun =
+      isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
       return;
     }
@@ -311,7 +329,11 @@ export function createEventHandlers(context: EventHandlerContext) {
             isError: Boolean(data.isError),
           });
         } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
+          chatLog.updateToolResult(
+            toolCallId,
+            { content: [] },
+            { isError: Boolean(data.isError) },
+          );
         }
       }
       tui.requestRender();
