@@ -35,7 +35,7 @@ function usage() {
     "  --limit <count>       Number of groups/configs to print (default: 25)",
     "  --top-files <count>   Number of files to print (default: 25)",
     "  --allow-failures      Write a report even when a Vitest run exits non-zero",
-    "  --no-rss              Skip macOS max RSS measurement",
+    "  --no-rss              Skip max RSS measurement",
     "  --help                Show this help",
     "",
     "Examples:",
@@ -60,7 +60,7 @@ export function parseTestGroupReportArgs(argv) {
     limit: 25,
     output: null,
     reports: [],
-    rss: process.platform === "darwin",
+    rss: process.platform !== "win32",
     topFiles: 25,
     vitestArgs: [],
   };
@@ -156,9 +156,26 @@ function sanitizePathSegment(value) {
   );
 }
 
+function resolveTimeArgs(command) {
+  if (process.platform === "darwin") {
+    return { command: "/usr/bin/time", args: ["-l", ...command] };
+  }
+  if (process.platform === "linux") {
+    return { command: "/usr/bin/time", args: ["-v", ...command] };
+  }
+  return { command: command[0], args: command.slice(1) };
+}
+
 function parseMaxRssBytes(output) {
-  const match = output.match(/(\d+)\s+maximum resident set size/u);
-  return match ? Number.parseInt(match[1], 10) : null;
+  const macMatch = output.match(/(\d+)\s+maximum resident set size/u);
+  if (macMatch) {
+    return Number.parseInt(macMatch[1], 10);
+  }
+  const linuxMatch = output.match(/Maximum resident set size \(kbytes\):\s*(\d+)/u);
+  if (linuxMatch) {
+    return Number.parseInt(linuxMatch[1], 10) * 1024;
+  }
+  return null;
 }
 
 function runVitestJsonReport(params) {
@@ -177,24 +194,23 @@ function runVitestJsonReport(params) {
     ...params.vitestArgs,
   ];
   const startedAt = process.hrtime.bigint();
-  const result = spawnSync(
-    params.rss ? "/usr/bin/time" : command[0],
-    params.rss ? ["-l", ...command] : command.slice(1),
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: [
-          process.env.NODE_OPTIONS?.trim(),
-          ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
-        ]
-          .filter(Boolean)
-          .join(" "),
-      },
-      maxBuffer: 1024 * 1024 * 64,
+  const spawnCommand = params.rss
+    ? resolveTimeArgs(command)
+    : { command: command[0], args: command.slice(1) };
+  const result = spawnSync(spawnCommand.command, spawnCommand.args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS?.trim(),
+        ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
+      ]
+        .filter(Boolean)
+        .join(" "),
     },
-  );
+    maxBuffer: 1024 * 1024 * 64,
+  });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   fs.writeFileSync(params.logPath, output, "utf8");

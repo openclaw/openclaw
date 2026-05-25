@@ -240,7 +240,7 @@ describe("scripts/test-group-report arg parsing", () => {
       limit: 25,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
       topFiles: 25,
       vitestArgs: ["--maxWorkers=1"],
     });
@@ -266,7 +266,7 @@ describe("scripts/test-group-report arg parsing", () => {
       limit: 5,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
       topFiles: 3,
       vitestArgs: [],
     });
