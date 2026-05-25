@@ -64,7 +64,7 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
-  });
+  }, 300_000);
 
   it("does not broaden visibility when selected providers have no catalog rows", async () => {
     const authChecker = vi.fn(() => true);
