@@ -325,7 +325,7 @@ function createScopedAuthProfileStore(
 }
 
 function buildTraceToolSummary(params: {
-  toolMetas?: Array<{ toolName: string; meta?: string }>;
+  toolMetas?: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
   hadFailure: boolean;
 }): ToolSummaryTrace | undefined {
   if (!params.toolMetas?.length) {

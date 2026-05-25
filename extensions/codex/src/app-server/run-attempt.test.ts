@@ -66,7 +66,11 @@ import {
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexDynamicToolCallParams, CodexServerNotification } from "./protocol.js";
+import type {
+  CodexDynamicToolCallParams,
+  CodexDynamicToolCallResponse,
+  CodexServerNotification,
+} from "./protocol.js";
 import {
   readRecentCodexRateLimits,
   rememberCodexRateLimits,
@@ -3276,6 +3280,32 @@ describe("runCodexAppServerAttempt", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
+  it("keeps async-start metadata on internal dynamic tool progress only", () => {
+    const response: CodexDynamicToolCallResponse = {
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+      success: true,
+    };
+    Object.defineProperty(response, "asyncStarted", {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+
+    const protocolResponse = testing.toCodexDynamicToolProtocolResponse(response);
+    const progressResponse = testing.toCodexDynamicToolProgressResponse(response, protocolResponse);
+
+    expect(protocolResponse).toEqual({
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+      success: true,
+    });
+    expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
+    expect(progressResponse).toEqual({
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+      details: { async: true, status: "started" },
+      success: true,
+    });
+  });
+
   it("clears dynamic tool diagnostics after successful terminal responses", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
@@ -3990,6 +4020,7 @@ describe("runCodexAppServerAttempt", () => {
     projector.recordDynamicToolResult({
       callId: call.callId,
       tool: call.tool,
+      asyncStarted: toolResult.asyncStarted === true,
       success: toolResult.success,
       terminalType: toolResult.diagnosticTerminalType ?? "completed",
       sideEffectEvidence: toolResult.sideEffectEvidence === true,
