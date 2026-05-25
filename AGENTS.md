@@ -163,7 +163,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Docs / Changelog
 
-- Use `$openclaw-docs` for docs writing/review. Docs change with behavior/API.
+- Use `$technical-documentation` for docs writing/review. Docs change with behavior/API.
 - Codex harness upgrade (`extensions/codex/package.json` `@openai/codex`): refresh `docs/plugins/codex-harness.md` model snapshot from the new harness `model/list`.
 - Docs final answers: include relevant full `https://docs.openclaw.ai/...` URL(s). If issue/PR work too, GitHub URL last.
 - Changelog entries: active version `### Changes`/`### Fixes`; single-line bullets only.

@@ -163,6 +163,9 @@ originating chat, and the next queued follow-up message answers that native
 server request instead of being steered as extra context. Other MCP elicitation
 requests fail closed.
 
+For the general plugin approval flow that carries these prompts, see
+[Plugin permission requests](/plugins/plugin-permission-requests).
+
 ## Queue steering
 
 Active-run queue steering maps onto Codex app-server `turn/steer`. With the
