@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   formatDiagnosticTraceparentForPropagation,
   hasPendingInternalDiagnosticEvent,
+  isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -170,13 +172,15 @@ describe("diagnostic-events", () => {
     ]);
   });
 
-  it("marks only internal trusted diagnostic emissions as trusted", async () => {
+  it("marks dispatcher provenance separately from trust", async () => {
     const events: Array<{
+      internal: boolean;
       metadataTrusted: boolean;
       type: string;
     }> = [];
     onInternalDiagnosticEvent((event, metadata) => {
       events.push({
+        internal: isInternalDiagnosticEventMetadata(metadata),
         metadataTrusted: metadata.trusted,
         type: event.type,
       });
@@ -185,6 +189,10 @@ describe("diagnostic-events", () => {
     emitDiagnosticEvent({
       type: "message.queued",
       source: "plugin",
+    });
+    emitInternalDiagnosticEvent({
+      type: "webhook.received",
+      channel: "telegram",
     });
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
@@ -196,9 +204,11 @@ describe("diagnostic-events", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(events).toEqual([
-      { metadataTrusted: false, type: "message.queued" },
-      { metadataTrusted: true, type: "model.call.started" },
+      { internal: false, metadataTrusted: false, type: "message.queued" },
+      { internal: true, metadataTrusted: false, type: "webhook.received" },
+      { internal: false, metadataTrusted: true, type: "model.call.started" },
     ]);
+    expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
   });
 
   it("formats traceparent for propagation only from dispatcher-trusted metadata", () => {

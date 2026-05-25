@@ -70,14 +70,15 @@ openclaw plugins enable diagnostics-otel
 
 ## Signals exported
 
-| Signal      | What goes in it                                                                                                                                                                      |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Metrics** | Counters and histograms for token usage, cost, run duration, skill usage, message flow, Talk events, queue lanes, session state/recovery, tool execution, exec, and memory pressure. |
-| **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                              |
-| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                  |
+| Signal      | What goes in it                                                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Metrics** | Counters and histograms for token usage, cost, run duration, failover, skill usage, message flow, Talk events, queue lanes, session state/recovery, tool execution, oversized payloads, exec, and memory pressure. |
+| **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                                                            |
+| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                                                |
 
-Toggle `traces`, `metrics`, and `logs` independently. All three default to on
-when `diagnostics.otel.enabled` is true.
+Toggle `traces`, `metrics`, and `logs` independently. Traces and metrics
+default to on when `diagnostics.otel.enabled` is true. Logs default to off and
+are exported only when `diagnostics.otel.logs` is explicitly `true`.
 
 ## Configuration reference
 
@@ -189,6 +190,7 @@ message bodies are also approved for export.
 - `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
 - `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed model response events; no raw response content)
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
+- `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
 ### Message flow
@@ -260,9 +262,22 @@ unchanged, so dashboards should alert on sustained increases rather than every
 heartbeat tick. For the config knob and defaults, see
 [Configuration reference](/gateway/configuration-reference#diagnostics).
 
+Liveness warnings also emit:
+
+- `openclaw.liveness.warning` (counter, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_delay_p99_ms` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_delay_max_ms` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_utilization` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.cpu_core_ratio` (histogram, attrs: `openclaw.liveness.reason`)
+
 ### Harness lifecycle
 
 - `openclaw.harness.duration_ms` (histogram, attrs: `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.harness.phase` on errors)
+
+### Tool execution
+
+- `openclaw.tool.execution.duration_ms` (histogram, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, plus `openclaw.errorCategory` on errors)
+- `openclaw.tool.execution.blocked` (counter, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, `openclaw.deniedReason`)
 
 ### Exec
 
@@ -270,6 +285,8 @@ heartbeat tick. For the config knob and defaults, see
 
 ### Diagnostics internals (memory and tool loop)
 
+- `openclaw.payload.large` (counter, attrs: `openclaw.payload.surface`, `openclaw.payload.action`, `openclaw.channel`, `openclaw.plugin`, `openclaw.reason`)
+- `openclaw.payload.large_bytes` (histogram, attrs: same as `openclaw.payload.large`)
 - `openclaw.memory.heap_used_bytes` (histogram, attrs: `openclaw.memory.kind`)
 - `openclaw.memory.rss_bytes` (histogram)
 - `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`)

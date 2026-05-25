@@ -702,6 +702,7 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   : never;
 
 export type DiagnosticEventMetadata = Readonly<{
+  internal?: boolean;
   trusted: boolean;
 }>;
 
@@ -968,7 +969,7 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
     maxQueueLength: MAX_ASYNC_DIAGNOSTIC_EVENTS,
     drainBatchSize: MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN,
   });
-  dispatchDiagnosticEvent(state, event, { trusted: false });
+  dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
 }
 
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
@@ -996,14 +997,22 @@ function enrichDiagnosticEvent(
   return enriched;
 }
 
-function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: boolean) {
+function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMetadata {
+  return { internal: true, trusted };
+}
+
+function emitDiagnosticEventWithTrust(
+  event: DiagnosticEventInput,
+  trusted: boolean,
+  internal = false,
+) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
     return;
   }
 
   const enriched = enrichDiagnosticEvent(state, event);
-  const metadata: DiagnosticEventMetadata = { trusted };
+  const metadata = internal ? createInternalDiagnosticMetadata(trusted) : { trusted };
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
@@ -1026,6 +1035,10 @@ function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: bool
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false);
+}
+
+export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
+  emitDiagnosticEventWithTrust(event, false, true);
 }
 
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
@@ -1058,7 +1071,7 @@ export function hasPendingInternalDiagnosticEvent(
     } catch {
       continue;
     }
-    if (predicate(event, Object.freeze({ ...entry.metadata }))) {
+    if (predicate(event, createDiagnosticMetadataForListener(entry.metadata))) {
       return true;
     }
   }
@@ -1082,6 +1095,10 @@ export function formatDiagnosticTraceparentForPropagation(
     return undefined;
   }
   return formatDiagnosticTraceparent(event.trace);
+}
+
+export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
+  return metadata.internal === true;
 }
 
 export function resetDiagnosticEventsForTest(): void {

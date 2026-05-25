@@ -9,6 +9,7 @@ export {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
+  isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
