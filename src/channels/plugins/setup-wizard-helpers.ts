@@ -79,10 +79,7 @@ export function mergeAllowFromEntries(
 }
 
 export function splitSetupEntries(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
 type ParsedSetupEntry = { value: string } | { error: string };

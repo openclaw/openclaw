@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
@@ -29,9 +29,7 @@ function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   const deniedPluginIds = new Set(params.config?.plugins?.deny ?? []);
   const entries = params.config?.plugins?.entries ?? {};
   return sortUniqueStrings(
-    allow
-      .map((pluginId) => pluginId.trim())
-      .filter(Boolean)
+    normalizeStringEntries(allow)
       .filter((pluginId) => !onlyPluginIdSet || onlyPluginIdSet.has(pluginId))
       .filter((pluginId) => !deniedPluginIds.has(pluginId))
       .filter((pluginId) => entries[pluginId]?.enabled !== false),

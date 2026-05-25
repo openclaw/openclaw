@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
+import {
+  normalizeSortedUniqueStringEntries,
+  normalizeStringEntries,
+} from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -23,10 +26,7 @@ type TraversalState = {
 };
 
 function normalizePathPattern(pathPattern: string): string[] {
-  return pathPattern
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(pathPattern.split("."));
 }
 
 function appendPathSegment(path: string, segment: string): string {
