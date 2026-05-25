@@ -335,6 +335,8 @@ describe("docker build helper", () => {
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
+    expect(runner).toContain('tee "$RUN_LOG"');
+    expect(runner).not.toContain('cat "$RUN_LOG"');
     expect(probe).toContain('"openclaw.plugin.json"');
     expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runtimeSmoke).toContain("900000");
