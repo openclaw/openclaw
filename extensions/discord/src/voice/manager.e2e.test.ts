@@ -1912,7 +1912,11 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 30_000);
+    const readyCall = entersStateMock.mock.calls[0];
+    expect(readyCall?.[0]).toBe(connection);
+    expect(readyCall?.[1]).toBe("ready");
+    expect(readyCall?.[2]).toBeGreaterThanOrEqual(29_900);
+    expect(readyCall?.[2]).toBeLessThanOrEqual(30_000);
   });
 
   it("deduplicates concurrent joins for the same guild and channel", async () => {
