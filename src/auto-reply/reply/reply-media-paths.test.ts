@@ -252,6 +252,26 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 
+  it("stages absolute workspace media paths before sandbox mapping", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const absolutePath = "/Users/peter/.openclaw/workspace/reports/report.html";
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: [absolutePath],
+    });
+
+    expectMedia(result, "/tmp/outbound-media/report.html", ["/tmp/outbound-media/report.html"]);
+    expectOutboundAttachmentCall(0, absolutePath, 5 * 1024 * 1024);
+  });
+
   it("stages absolute workspace media paths so the PR scenario now works", async () => {
     const absolutePath = "/Users/peter/.openclaw/workspace/exports/images/chart.png";
     const normalize = createReplyMediaPathNormalizer({

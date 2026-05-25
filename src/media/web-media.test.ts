@@ -759,6 +759,19 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("allows host-read HTML files when the buffer validates as text", async () => {
+    const htmlFile = path.join(fixtureRoot, "report.html");
+    await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
+    const result = await loadWebMedia(htmlFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/html");
+  });
+
   it.each([
     {
       label: "ZIP",
@@ -819,6 +832,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
+    { label: "HTML", fileName: "opaque.html" },
     { label: "Markdown", fileName: "opaque.md" },
   ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -840,6 +854,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "prefix-tail.csv" },
+    { label: "HTML", fileName: "prefix-tail.html" },
     { label: "Markdown", fileName: "prefix-tail.md" },
   ])(
     "rejects %s files with a text prefix and binary tail after the old sample window",
@@ -869,6 +884,12 @@ describe("loadWebMedia", () => {
       body: ",,,,,,,,,,\n",
     },
     {
+      label: "HTML",
+      fileName: "punctuation.html",
+      contentType: "text/html",
+      body: "<!doctype html><hr><br>\n",
+    },
+    {
       label: "Markdown",
       fileName: "punctuation.md",
       contentType: "text/markdown",
@@ -891,6 +912,12 @@ describe("loadWebMedia", () => {
       body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
     },
     {
+      label: "HTML",
+      fileName: "legacy.html",
+      contentType: "text/html",
+      body: Buffer.from("<p>caf\xe9</p>\n", "latin1"),
+    },
+    {
       label: "Markdown",
       fileName: "legacy.md",
       contentType: "text/markdown",
@@ -907,6 +934,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "nul-padded.csv" },
+    { label: "HTML", fileName: "nul-padded.html" },
     { label: "Markdown", fileName: "nul-padded.md" },
   ])("rejects NUL-padded binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -930,6 +958,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "bom-binary.csv" },
+    { label: "HTML", fileName: "bom-binary.html" },
     { label: "Markdown", fileName: "bom-binary.md" },
   ])("rejects UTF-16 BOM-prefixed binary data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -953,6 +982,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "alternating-high.csv" },
+    { label: "HTML", fileName: "alternating-high.html" },
     { label: "Markdown", fileName: "alternating-high.md" },
   ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
@@ -977,6 +1007,7 @@ describe("loadWebMedia", () => {
 
   it.each([
     { label: "CSV", fileName: "high-bytes.csv" },
+    { label: "HTML", fileName: "high-bytes.html" },
     { label: "Markdown", fileName: "high-bytes.md" },
   ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
