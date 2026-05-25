@@ -10,6 +10,7 @@ import {
   type AgentHarnessTaskRuntime,
   type AgentHarnessTaskRecord,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
   extractCodexNativeSubagentCompletions,
@@ -840,11 +841,6 @@ function readSpawnAgentPath(thread: JsonObject | undefined): string | undefined 
 function readString(record: JsonObject | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
 }
 
 function readStringArray(value: unknown): string[] {
