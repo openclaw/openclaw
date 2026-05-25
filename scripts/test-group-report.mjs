@@ -269,13 +269,27 @@ function withUniqueLabels(plans) {
   });
 }
 
+function buildFullSuiteLeafRunPlans() {
+  const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+  process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
+  try {
+    return buildFullSuiteVitestRunPlans([], process.cwd());
+  } finally {
+    if (previousLeafShards === undefined) {
+      delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    } else {
+      process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+    }
+  }
+}
+
 export function resolveRunPlans(args) {
   if (args.reports.length > 0) {
     return [];
   }
   if (args.fullSuite) {
     return withUniqueLabels(
-      buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => ({
+      buildFullSuiteLeafRunPlans().map((plan) => ({
         config: plan.config,
         forwardedArgs: plan.forwardedArgs ?? [],
         label: normalizeConfigLabel(plan.config),
