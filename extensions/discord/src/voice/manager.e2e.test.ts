@@ -3018,6 +3018,63 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("openclaw wake answer");
   });
 
+  it("ignores default agent wake names longer than two words", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "fallback wake answer" }] });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Claw Bot Helper" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const longNameTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    longNameTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Claw Bot Helper, should not wake", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    const fallbackTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    fallbackTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "OpenClaw, fallback still wakes", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("fallback still wakes");
+    expect(lastAgentCommandArgs().message).not.toContain("OpenClaw");
+    expectUserMessageIncludes("fallback wake answer");
+  });
+
   it("accepts leading fuzzy wake names before realtime agent-proxy consults", async () => {
     const manager = createManager(
       {
@@ -3084,6 +3141,17 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandArgsAt(2).message).toContain("step through the maintainer queue.");
     expect(agentCommandArgsAt(2).message).not.toContain("Multi");
 
+    const martyTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    martyTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Marty, can you hear me?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(3).message).toContain("can you hear me?");
+    expect(agentCommandArgsAt(3).message).not.toContain("Marty");
+
     const openClawTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
@@ -3092,8 +3160,8 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open claw can you still hear me?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandArgsAt(3).message).toContain("can you still hear me?");
-    expect(agentCommandArgsAt(3).message).not.toContain("Open claw");
+    expect(agentCommandArgsAt(4).message).toContain("can you still hear me?");
+    expect(agentCommandArgsAt(4).message).not.toContain("Open claw");
 
     const openClubTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
@@ -3103,8 +3171,8 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open Club, can you hear me now?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandArgsAt(4).message).toContain("can you hear me now?");
-    expect(agentCommandArgsAt(4).message).not.toContain("Open Club");
+    expect(agentCommandArgsAt(5).message).toContain("can you hear me now?");
+    expect(agentCommandArgsAt(5).message).not.toContain("Open Club");
 
     const openCloudTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
@@ -3114,8 +3182,19 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open Cloud, can you hear me too?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandArgsAt(5).message).toContain("can you hear me too?");
-    expect(agentCommandArgsAt(5).message).not.toContain("Open Cloud");
+    expect(agentCommandArgsAt(6).message).toContain("can you hear me too?");
+    expect(agentCommandArgsAt(6).message).not.toContain("Open Cloud");
+
+    const trailingMultiTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    trailingMultiTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Can you still hear trailing, Multi.", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(7).message).toContain("Can you still hear trailing");
+    expect(agentCommandArgsAt(7).message).not.toContain("Multi");
 
     const openChatTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
@@ -3125,7 +3204,7 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open chat, can you hear me now?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandMock).toHaveBeenCalledTimes(6);
+    expect(agentCommandMock).toHaveBeenCalledTimes(8);
   });
 
   it("rejects non-wake fuzzy leading phrases before realtime agent-proxy consults", async () => {
@@ -3167,6 +3246,14 @@ describe("DiscordVoiceManager", () => {
     );
     ambientTurn?.sendInputAudio(Buffer.alloc(8));
     bridgeParams?.onTranscript?.("user", "This is a multi-step maintainer problem.", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    const middleWakeWordTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    middleWakeWordTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "I asked multi about this already.", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
     const openLawTurn = entry.realtime?.beginSpeakerTurn(
@@ -3217,7 +3304,7 @@ describe("DiscordVoiceManager", () => {
           provider: "openai",
           consultPolicy: "auto",
           requireWakeName: true,
-          wakeNames: ["Claw", "Claw Bot"],
+          wakeNames: ["Claw", "Claw Bot", "Okay Google"],
         },
       },
     });
@@ -3249,6 +3336,68 @@ describe("DiscordVoiceManager", () => {
     expect(lastAgentCommandArgs().message).not.toContain("Claw");
     expect(lastAgentCommandArgs().message).not.toContain("Bot");
     expectUserMessageIncludes("configured wake answer");
+
+    const openerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    openerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Okay Google, try the opener name", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(lastAgentCommandArgs().message).toContain("try the opener name");
+    expect(lastAgentCommandArgs().message).not.toContain("Okay");
+    expect(lastAgentCommandArgs().message).not.toContain("Google");
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not accept configured realtime wake names longer than two words", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: {
+          provider: "openai",
+          consultPolicy: "auto",
+          requireWakeName: true,
+          wakeNames: ["Claw Bot Helper"],
+        },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    bridgeParams?.onTranscript?.("user", "Claw Bot Helper, ship it", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    const fallbackTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    fallbackTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "OpenClaw, ship it", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
   });
 
   it("lets status questions fall back to normal realtime handling when no run is active", async () => {

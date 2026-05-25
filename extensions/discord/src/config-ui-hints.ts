@@ -239,7 +239,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "Names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
