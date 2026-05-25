@@ -78,9 +78,9 @@ vi.mock("../reply.runtime.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")
-  >("openclaw/plugin-sdk/inbound-reply-dispatch");
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")>(
+    "openclaw/plugin-sdk/inbound-reply-dispatch",
+  );
   return {
     ...actual,
     runPreparedInboundReplyTurn: (params: {
@@ -254,9 +254,7 @@ function createPreparedSlackMessage() {
       record: {},
       history: [],
     },
-  } as unknown as Parameters<
-    typeof import("./dispatch.js").dispatchPreparedSlackMessage
-  >[0];
+  } as unknown as Parameters<typeof import("./dispatch.js").dispatchPreparedSlackMessage>[0];
 }
 
 // ---------------------------------------------------------------------------
