@@ -52,7 +52,10 @@ type DoctorHealthContribution = FlowContribution & {
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-const LEGACY_POSITIONAL_REPAIR_CHECK_IDS = new Set(["core/doctor/shell-completion"]);
+const LEGACY_POSITIONAL_REPAIR_CHECK_IDS = new Set([
+  "core/doctor/shell-completion",
+  "core/doctor/ui-protocol-freshness",
+]);
 
 const loadAgentDefaultsModule = async () => await import("../agents/defaults.js");
 const loadAgentScopeModule = async () => await import("../agents/agent-scope.js");
