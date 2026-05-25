@@ -31,6 +31,12 @@ Before go-live, verify each OT connector:
 
 **database-poll** (optional): preset `database-poll`; set `CW_DB_URL`, `CW_DB_TABLE`, `CW_DB_POLL_MS`. Without `CW_DB_URL` the bridge runs in demo mode (synthetic rows) — not for production.
 
+**Live OT runbook** (no plant hardware required for the checklist):
+
+- Simulate validation: `pnpm claworks:ot-dry-run`
+- Field sign-off checklist (read-only): `pnpm claworks:ot-live-checklist`
+- Full runbook: [`docs/claworks/ot-live.md`](../docs/claworks/ot-live.md)
+
 ## Built-in presets
 
 Configure in `claworks.json` under `plugins.entries.claworks-robot.config.connectors`:

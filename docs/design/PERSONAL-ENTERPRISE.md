@@ -14,14 +14,14 @@ cp contrib/examples/claworks-personal.env.example ~/.claworks/personal.env
 set -a && source ~/.claworks/personal.env && set +a
 ```
 
-| 变量                        | 说明                                 |
-| --------------------------- | ------------------------------------ |
-| `CLAWORKS_PRODUCT_PROFILE`  | 固定 `personal_work`                 |
-| `CLAWORKS_QWEN_BASE_URL`    | 自托管 OpenAI 兼容根 URL（含 `/v1`） |
-| `CLAWORKS_QWEN_CHAT_MODEL`  | 对话模型 id                          |
-| `CLAWORKS_QWEN_EMBED_MODEL` | 向量嵌入模型 id（KB 用）             |
+| 变量                        | 说明                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `CLAWORKS_PRODUCT_PROFILE`  | 固定 `personal_work`                                                            |
+| `CLAWORKS_QWEN_BASE_URL`    | 自托管 OpenAI 兼容根 URL（含 `/v1`）                                            |
+| `CLAWORKS_QWEN_CHAT_MODEL`  | 对话模型 id                                                                     |
+| `CLAWORKS_QWEN_EMBED_MODEL` | 向量嵌入模型 id（KB 用）                                                        |
 | `CLAWORKS_KB_WATCH_DIRS`    | filesystem-kb 监视目录（OpenClaw KB 见 `docs/claworks/oriosearch-kb-setup.md`） |
-| `CLAWORKS_OPENCLAW_KB_ROOT` | iMac 挂载的 `knowledge_base` 根路径                                              |
+| `CLAWORKS_OPENCLAW_KB_ROOT` | iMac 挂载的 `knowledge_base` 根路径                                             |
 
 ---
 

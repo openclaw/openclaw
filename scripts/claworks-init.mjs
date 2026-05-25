@@ -77,10 +77,10 @@ function seedPackSymlinks(sourceDir, stateDir, packIds) {
   return linked;
 }
 
-function buildConnectorsConfig(claworksRoot) {
+function buildConnectorsConfig(claworksRoot, { secureInit = false } = {}) {
   if (process.env.CLAWORKS_DEMO_CONNECTORS === "1") {
     return {
-      echo: { preset: "echo", enabled: true },
+      echo: { preset: "echo", enabled: !secureInit },
       mqtt: { preset: "mqtt", enabled: true },
       "rest-poll": {
         preset: "rest-poll",
@@ -104,7 +104,7 @@ function buildConnectorsConfig(claworksRoot) {
     };
   }
   return {
-    echo: { preset: "echo", enabled: true },
+    echo: { preset: "echo", enabled: !secureInit },
   };
 }
 
@@ -178,7 +178,7 @@ const config = {
           im_bridge: {
             auto_on_message_received: process.env.CLAWORKS_INIT_PROFILE?.trim() !== "minimal",
           },
-          connectors: buildConnectorsConfig(root),
+          connectors: buildConnectorsConfig(root, { secureInit }),
         },
       },
     },
@@ -227,6 +227,12 @@ function applySecureUpgrade(existing) {
   entry.config.api.api_key = apiKey;
   entry.config.api.require_api_key = true;
   entry.config.production_mode = true;
+
+  entry.config.connectors ??= {};
+  const echoCfg = entry.config.connectors.echo ?? { preset: "echo" };
+  if (echoCfg.enabled !== false) {
+    entry.config.connectors.echo = { ...echoCfg, enabled: false };
+  }
 
   return {
     config: next,

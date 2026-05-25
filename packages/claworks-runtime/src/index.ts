@@ -73,6 +73,7 @@ export {
 } from "./kernel/trace-diagnostics.js";
 
 export {
+  defaultClaworksStateDir,
   discoverPackSourceDir,
   hasPackSourcesAvailable,
   isClaworksRobotConfigPresent,

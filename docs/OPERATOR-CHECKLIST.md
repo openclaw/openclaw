@@ -105,10 +105,13 @@ openclaw plugins install -l ../openclaw-claworks-extension/extensions/claworks
 
 ## 6. 日常运维速查
 
-| 操作         | 命令                                                   |
-| ------------ | ------------------------------------------------------ |
-| 健康检查     | `curl -s http://127.0.0.1:18800/v1/health`             |
-| 诊断修复     | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor --fix`    |
-| Pack 热重载  | `POST /v1/packs/reload`（需 API key）                  |
-| 生产签收清单 | [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md)         |
-| 五仓本地备份 | [`LOCAL-GIT.md`](LOCAL-GIT.md) → `ecosystem-backup.sh` |
+| 操作             | 命令                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| 健康检查         | `curl -s http://127.0.0.1:18800/v1/health`                                               |
+| 诊断修复         | `CLAWORKS_PRODUCT=1 node claworks.mjs doctor --fix`                                      |
+| Pack 热重载      | `POST /v1/packs/reload`（需 API key）                                                    |
+| OT 模拟验收      | `pnpm claworks:ot-dry-run`（无 Gateway / 无实机）                                        |
+| OT 实机签收清单  | `pnpm claworks:ot-live-checklist` · runbook [`claworks/ot-live.md`](claworks/ot-live.md) |
+| OpenClaw KB 导入 | [`claworks/oriosearch-kb-setup.md`](claworks/oriosearch-kb-setup.md)                     |
+| 生产签收清单     | [`RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md)                                           |
+| 五仓本地备份     | [`LOCAL-GIT.md`](LOCAL-GIT.md) → `ecosystem-backup.sh`                                   |

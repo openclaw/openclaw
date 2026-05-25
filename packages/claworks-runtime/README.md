@@ -2,7 +2,7 @@
 
 ClaWorks 核心运行时库：EventKernel、DataPlane、OrchPlane、REST / A2A / MCP 接口。
 
-OpenClaw 插件 `extensions/claworks-robot` 通过本包挂载 HTTP 路由与服务；也可在进程内直接 `createClaworksRuntime()` 嵌入。
+ClaWorks robot 插件 `extensions/claworks-robot` 通过本包挂载 HTTP 路由与服务；也可在进程内直接 `createClaworksRuntime()` 嵌入。
 
 ```typescript
 import {
