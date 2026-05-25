@@ -122,4 +122,16 @@ describe("product-surface", () => {
       ),
     ).toContain("`claworks plugins install`");
   });
+
+  it("rewrites doctor visible-reply fallback copy", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyProductSurfaceCopy(
+        "OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat.",
+        env,
+      ),
+    ).toBe(
+      "ClaWorks falls back to automatic visible replies, so normal replies may post to the source chat.",
+    );
+  });
 });

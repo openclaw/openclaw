@@ -597,6 +597,23 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain("automatic direct-chat replies");
   });
 
+  it("productizes visible reply fallback warnings for ClaWorks", () => {
+    vi.stubEnv("CLAWORKS_PRODUCT", "1");
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      messages: {
+        visibleReplies: "message_tool",
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+      tools: {
+        allow: ["read"],
+      },
+    });
+    expect(warnings.some((line) => line.includes("ClaWorks falls back"))).toBe(true);
+    expect(warnings.some((line) => line.includes("OpenClaw falls back"))).toBe(false);
+  });
+
   it("warns separately for explicit global and group visible reply policy mismatches", () => {
     const warnings = collectVisibleReplyToolPolicyWarnings({
       messages: {

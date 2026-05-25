@@ -11,15 +11,25 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { formatCliCommand } from "./command-format.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import { productizeUserCopy } from "./product-surface.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
+
+function pluginCliMessage(value: string): string {
+  return productizeUserCopy(value);
+}
+
+function cliCmd(command: string): string {
+  return formatCliCommand(command);
+}
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
@@ -162,10 +172,10 @@ export function resolveMissingPluginCommandMessage(
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
       if (parentPluginId === normalizedPluginId) {
-        return (
-          `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-          `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-          `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+        return pluginCliMessage(
+          `The \`${cliCmd(`openclaw ${normalizedPluginId}`)}\` command is unavailable because ` +
+            `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+            `\`plugins.allow\` if you want that bundled plugin CLI surface.`,
         );
       }
       return (
@@ -175,10 +185,10 @@ export function resolveMissingPluginCommandMessage(
       );
     }
     if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
-      return (
-        `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-        `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
-        "the bundled plugin command surface."
+      return pluginCliMessage(
+        `The \`${cliCmd(`openclaw ${normalizedPluginId}`)}\` command is unavailable because ` +
+          `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+          "the bundled plugin command surface.",
       );
     }
     if (
@@ -186,20 +196,20 @@ export function resolveMissingPluginCommandMessage(
       commandAlias.enabledByDefault !== true &&
       config?.plugins?.entries?.[parentPluginId]?.enabled !== true
     ) {
-      return (
-        `The \`openclaw ${normalizedPluginId}\` command is provided by the ` +
-        `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
-        `\`openclaw plugins enable ${parentPluginId}\` to enable that CLI surface.`
+      return pluginCliMessage(
+        `The \`${cliCmd(`openclaw ${normalizedPluginId}`)}\` command is provided by the ` +
+          `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
+          `\`${cliCmd(`openclaw plugins enable ${parentPluginId}`)}\` to enable that CLI surface.`,
       );
     }
     if (commandAlias.kind === "runtime-slash") {
       const cliHint = commandAlias.cliCommand
-        ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
+        ? `Use \`${cliCmd(`openclaw ${commandAlias.cliCommand}`)}\` for related CLI operations, or `
         : "Use ";
-      return (
+      return pluginCliMessage(
         `"${normalizedPluginId}" is a runtime slash command (/${normalizedPluginId}), not a CLI command. ` +
-        `It is provided by the "${parentPluginId}" plugin. ` +
-        `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
+          `It is provided by the "${parentPluginId}" plugin. ` +
+          `${cliHint}\`/${normalizedPluginId}\` in a chat session.`,
       );
     }
   }
@@ -235,16 +245,16 @@ export function resolveMissingPluginCommandMessage(
       // Soften the wording when the runtime resolver could only prove
       // manifest-level ownership.
       if (toolOwner.availability === "manifest-only") {
-        return (
+        return pluginCliMessage(
           `"${normalizedPluginId}" may be provided by the "${toolOwner.pluginId}" plugin ` +
-          `as an agent tool, not a CLI subcommand. ` +
-          "Run `openclaw --help` to see available CLI subcommands."
+            `as an agent tool, not a CLI subcommand. ` +
+            `Run \`${cliCmd("openclaw --help")}\` to see available CLI subcommands.`,
         );
       }
-      return (
+      return pluginCliMessage(
         `"${normalizedPluginId}" is an agent tool available from the "${toolOwner.pluginId}" plugin, ` +
-        `not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. ` +
-        "Run `openclaw --help` to see available CLI subcommands."
+          `not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. ` +
+          `Run \`${cliCmd("openclaw --help")}\` to see available CLI subcommands.`,
       );
     }
   }
@@ -280,17 +290,17 @@ export function resolveMissingPluginCommandMessage(
         `\`plugins.allow\` instead of "${normalizedPluginId}".`
       );
     }
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
-      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+    return pluginCliMessage(
+      `The \`${cliCmd(`openclaw ${normalizedPluginId}`)}\` command is unavailable because ` +
+        `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+        `\`plugins.allow\` if you want that bundled plugin CLI surface.`,
     );
   }
   if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
-    return (
-      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
-      `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
-      "the bundled plugin CLI surface."
+    return pluginCliMessage(
+      `The \`${cliCmd(`openclaw ${normalizedPluginId}`)}\` command is unavailable because ` +
+        `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+        "the bundled plugin CLI surface.",
     );
   }
   return null;

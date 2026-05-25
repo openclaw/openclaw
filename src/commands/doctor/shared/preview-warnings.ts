@@ -5,6 +5,7 @@ import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import { productizeUserCopy } from "../../../cli/product-surface.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
@@ -304,9 +305,11 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
       return warnings;
     }
     warnings.push(
-      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
-        targets,
-      )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+      productizeUserCopy(
+        `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+          targets,
+        )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+      ),
     );
   }
 
@@ -317,9 +320,11 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
       return warnings;
     }
     warnings.push(
-      `- messages.visibleReplies is set to "message_tool", but the message tool is unavailable for ${formatTargets(
-        targets,
-      )}; OpenClaw falls back to automatic direct-chat replies, so normal replies may post to the source chat. Enable the message tool or set messages.visibleReplies to "automatic".`,
+      productizeUserCopy(
+        `- messages.visibleReplies is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+          targets,
+        )}; OpenClaw falls back to automatic direct-chat replies, so normal replies may post to the source chat. Enable the message tool or set messages.visibleReplies to "automatic".`,
+      ),
     );
   }
   return warnings;

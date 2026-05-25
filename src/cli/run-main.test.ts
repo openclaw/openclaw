@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {
   rewriteUpdateFlagArgv,
@@ -519,5 +519,20 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain("may be provided by");
     expect(message).toContain('"feishu"');
     expect(message).not.toContain("registered by");
+  });
+
+  it("productizes plugin CLI unavailable messages for ClaWorks", () => {
+    vi.stubEnv("CLAWORKS_PRODUCT", "1");
+    const message = resolveMissingPluginCommandMessage(
+      "browser",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: browserCommandAliasRegistry },
+    );
+    expect(message).toContain("`claworks browser`");
+    expect(message).not.toContain("`openclaw browser`");
   });
 });

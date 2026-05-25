@@ -3,6 +3,10 @@
 **状态**：阶段 A 已落地（根 `package.json` → `claworks`，全局 bin 仅 `claworks`）  
 **目标**：npm 包名 `claworks`，CLI 主名 `claworks`，`@claworks/runtime` 可公开发布。
 
+### 白标完成度（2026-05-25）
+
+用户可见 CLI/onboarding 路径已基本完成白标：`claworks --version`、`doctor --help`、`configure --help` 均显示 ClaWorks 品牌与 `docs.claworks.ai`；278 项 product-surface / product-copy / doctor / config / extension 烟测全部通过。源码中仍保留 `formatCliCommand("openclaw …")` 与 `OpenClawConfig` 等 upstream 兼容层（运行时经 `productizeUserCopy` 替换）；wizard i18n 原文为有意保留的上游源字符串——不影响主流程，详见 [`OPENCLAW-ALIGNMENT-AUDIT.md`](OPENCLAW-ALIGNMENT-AUDIT.md)。阶段 B（npm 发布 / Docker 镜像名）仍为待办。
+
 ---
 
 ## 阶段 A — 文档与 CLI（低风险）
