@@ -17,3 +17,7 @@ export function normalizeOptionalLowercaseString(value: unknown): string | undef
 export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
+
+export function uniqueStrings(values: Iterable<string>): string[] {
+  return [...new Set(values)];
+}

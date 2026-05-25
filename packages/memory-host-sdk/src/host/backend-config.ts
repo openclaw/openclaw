@@ -18,7 +18,7 @@ import {
   splitShellArgs,
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "./string-utils.js";
 
 function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
@@ -403,7 +403,7 @@ export function resolveMemoryBackendConfig(params: {
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean);
-  const dedupedExtraPaths = Array.from(new Set(mergedExtraPaths));
+  const dedupedExtraPaths = uniqueStrings(mergedExtraPaths);
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );

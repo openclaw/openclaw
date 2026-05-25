@@ -29,6 +29,7 @@ import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
+import { uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -96,7 +97,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
     );
-  return Array.from(new Set(resolved));
+  return uniqueStrings(resolved);
 }
 
 export function isMemoryPath(relPath: string): boolean {
