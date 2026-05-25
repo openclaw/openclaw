@@ -1,4 +1,8 @@
 import {
+  maybeResolveTextAlias,
+  normalizeCommandBody,
+} from "openclaw/plugin-sdk/command-auth-native";
+import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -190,6 +194,10 @@ export function releaseTelegramReplyFenceAbortController(
   maybeDeleteTelegramReplyFenceState(key, state);
 }
 
+function isRecognizedTelegramTextCommand(rawText: string): boolean {
+  return maybeResolveTextAlias(normalizeCommandBody(rawText)) != null;
+}
+
 export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   Body?: string;
   ChatType?: string;
@@ -207,10 +215,10 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   ) {
     return false;
   }
-  if (dispatchText.trimStart().startsWith("/")) {
-    return true;
-  }
   if (ctxPayload.ChatType === "direct") {
+    if (ctxPayload.CommandAuthorized && isRecognizedTelegramTextCommand(dispatchText)) {
+      return true;
+    }
     return false;
   }
   return true;
