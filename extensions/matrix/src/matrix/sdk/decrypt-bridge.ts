@@ -78,23 +78,16 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private activeRetryRuns = 0;
   private readonly retryIdleResolvers = new Set<() => void>();
   private cryptoRetrySignalsBound = false;
-  private readonly deps: {
-    client: MatrixDecryptIfNeededClient;
-    toRaw: (event: MatrixEvent) => TRawEvent;
-    emitDecryptedEvent: (roomId: string, event: TRawEvent) => void;
-    emitMessage: (roomId: string, event: TRawEvent) => void;
-    emitFailedDecryption: (roomId: string, event: TRawEvent, error: Error) => void;
-  };
 
-  constructor(deps: {
-    client: MatrixDecryptIfNeededClient;
-    toRaw: (event: MatrixEvent) => TRawEvent;
-    emitDecryptedEvent: (roomId: string, event: TRawEvent) => void;
-    emitMessage: (roomId: string, event: TRawEvent) => void;
-    emitFailedDecryption: (roomId: string, event: TRawEvent, error: Error) => void;
-  }) {
-    this.deps = deps;
-  }
+  constructor(
+    private readonly deps: {
+      client: MatrixDecryptIfNeededClient;
+      toRaw: (event: MatrixEvent) => TRawEvent;
+      emitDecryptedEvent: (roomId: string, event: TRawEvent) => void;
+      emitMessage: (roomId: string, event: TRawEvent) => void;
+      emitFailedDecryption: (roomId: string, event: TRawEvent, error: Error) => void;
+    },
+  ) {}
 
   shouldEmitUnencryptedMessage(roomId: string, eventId: string): boolean {
     if (!eventId) {

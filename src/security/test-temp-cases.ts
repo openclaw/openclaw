@@ -5,11 +5,8 @@ import path from "node:path";
 export class AsyncTempCaseFactory {
   private caseId = 0;
   private fixtureRoot = "";
-  private readonly prefix: string;
 
-  constructor(prefix: string) {
-    this.prefix = prefix;
-  }
+  constructor(private readonly prefix: string) {}
 
   async setup() {
     this.fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), this.prefix));

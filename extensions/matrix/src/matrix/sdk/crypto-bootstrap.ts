@@ -42,11 +42,8 @@ const CROSS_SIGNING_PUBLICATION_WAIT_MS = 5_000;
 
 export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private verificationHandlerRegistered = false;
-  private readonly deps: MatrixCryptoBootstrapperDeps<TRawEvent>;
 
-  constructor(deps: MatrixCryptoBootstrapperDeps<TRawEvent>) {
-    this.deps = deps;
-  }
+  constructor(private readonly deps: MatrixCryptoBootstrapperDeps<TRawEvent>) {}
 
   async bootstrap(
     crypto: MatrixCryptoBootstrapApi,

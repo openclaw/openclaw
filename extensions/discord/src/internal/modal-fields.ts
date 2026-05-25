@@ -45,19 +45,11 @@ function flattenModalComponents(components: unknown[]): unknown[] {
 }
 
 export class ModalFields {
-  private values: Record<string, string | string[]>;
-  private resolved?: ModalResolvedData;
-  private client?: StructureClient;
-
   constructor(
-    values: Record<string, string | string[]>,
-    resolved?: ModalResolvedData,
-    client?: StructureClient,
-  ) {
-    this.values = values;
-    this.resolved = resolved;
-    this.client = client;
-  }
+    private values: Record<string, string | string[]>,
+    private resolved?: ModalResolvedData,
+    private client?: StructureClient,
+  ) {}
 
   private value(id: string, required: boolean): string | string[] | undefined {
     const value = this.values[id];

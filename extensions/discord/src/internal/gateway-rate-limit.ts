@@ -9,13 +9,11 @@ export class GatewaySendLimiter {
   private outboundSendTimestamps: number[] = [];
   private outboundQueue: QueuedGatewaySend[] = [];
   private outboundFlushTimer?: NodeJS.Timeout;
-  private sendNow: (payload: string) => void;
-  private emitError: (error: Error) => void;
 
-  constructor(sendNow: (payload: string) => void, emitError: (error: Error) => void) {
-    this.sendNow = sendNow;
-    this.emitError = emitError;
-  }
+  constructor(
+    private sendNow: (payload: string) => void,
+    private emitError: (error: Error) => void,
+  ) {}
 
   send(serialized: string, options?: { critical?: boolean }): void {
     if (options?.critical || this.canSend(Date.now())) {

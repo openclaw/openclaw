@@ -27,13 +27,11 @@ import { isPlainObject } from "../utils.js";
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export class MissingEnvVarError extends Error {
-  public readonly varName: string;
-  public readonly configPath: string;
-
-  constructor(varName: string, configPath: string) {
+  constructor(
+    public readonly varName: string,
+    public readonly configPath: string,
+  ) {
     super(`Missing env var "${varName}" referenced at config path: ${configPath}`);
-    this.varName = varName;
-    this.configPath = configPath;
     this.name = "MissingEnvVarError";
   }
 }

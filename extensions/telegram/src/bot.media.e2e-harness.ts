@@ -116,11 +116,7 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     command = vi.fn();
     stop = stopSpy;
     catch = vi.fn();
-    public token: string;
-
-    constructor(token: string) {
-      this.token = token;
-    }
+    constructor(public token: string) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
   sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],

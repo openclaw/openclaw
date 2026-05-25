@@ -44,12 +44,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private toolBuffers = new Map<string, ToolBuffer>();
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
-  private readonly session: RealtimeTalkWebRtcSdpSessionResult;
-  private readonly ctx: RealtimeTalkTransportContext;
 
-  constructor(session: RealtimeTalkWebRtcSdpSessionResult, ctx: RealtimeTalkTransportContext) {
-    this.session = session;
-    this.ctx = ctx;
+  constructor(
+    private readonly session: RealtimeTalkWebRtcSdpSessionResult,
+    private readonly ctx: RealtimeTalkTransportContext,
+  ) {
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
   }
 

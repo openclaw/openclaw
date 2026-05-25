@@ -116,28 +116,21 @@ vi.mock("grammy", () => ({
       },
     };
     catch = vi.fn();
-    public token: string;
-    public options?: {
-      client?: { fetch?: typeof fetch; timeoutSeconds?: number };
-    };
-
     constructor(
-      token: string,
-      options?: {
+      public token: string,
+      public options?: {
         client?: { fetch?: typeof fetch; timeoutSeconds?: number };
       },
     ) {
-      this.token = token;
-      this.options = options;
       botCtorSpy(token, options);
     }
   },
   HttpError: class HttpError extends Error {
-    public error?: unknown;
-
-    constructor(message = "HttpError", error?: unknown) {
+    constructor(
+      message = "HttpError",
+      public error?: unknown,
+    ) {
       super(message);
-      this.error = error;
     }
   },
   GrammyError: class GrammyError extends Error {

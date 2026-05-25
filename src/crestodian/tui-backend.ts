@@ -98,10 +98,11 @@ class CrestodianTuiBackend implements TuiBackend {
   private handoff: CrestodianOperation | null = null;
   private requestExit: (() => void) | null = null;
   private readonly messages: CrestodianHistoryMessage[] = [];
-  private readonly opts: CrestodianTuiOptions;
 
-  constructor(opts: CrestodianTuiOptions, welcome: string) {
-    this.opts = opts;
+  constructor(
+    private readonly opts: CrestodianTuiOptions,
+    welcome: string,
+  ) {
     this.messages.push(message("assistant", welcome));
   }
 

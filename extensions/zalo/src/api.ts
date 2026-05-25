@@ -86,13 +86,12 @@ export type ZaloGetUpdatesParams = {
 };
 
 export class ZaloApiError extends Error {
-  public readonly errorCode?: number;
-  public readonly description?: string;
-
-  constructor(message: string, errorCode?: number, description?: string) {
+  constructor(
+    message: string,
+    public readonly errorCode?: number,
+    public readonly description?: string,
+  ) {
     super(message);
-    this.errorCode = errorCode;
-    this.description = description;
     this.name = "ZaloApiError";
   }
 

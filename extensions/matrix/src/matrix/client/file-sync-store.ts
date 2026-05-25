@@ -136,11 +136,9 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
   private dirty = false;
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
-  private readonly storagePath: string;
 
-  constructor(storagePath: string) {
+  constructor(private readonly storagePath: string) {
     super();
-    this.storagePath = storagePath;
 
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;

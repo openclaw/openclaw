@@ -103,13 +103,10 @@ function recordField(value: unknown, field: string): Record<string, unknown> {
 function installUndiciRuntimeDeps(): void {
   const runtime = createMockUndiciRuntime();
   class Pool {
-    readonly origin: unknown;
-    readonly options: unknown;
-
-    constructor(origin: unknown, options: unknown) {
-      this.origin = origin;
-      this.options = options;
-    }
+    constructor(
+      readonly origin: unknown,
+      readonly options: unknown,
+    ) {}
   }
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     ...runtime,

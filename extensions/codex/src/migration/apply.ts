@@ -70,11 +70,8 @@ export type CodexMigrationTargetAppServerPreparation = {
 };
 
 class CodexPluginConfigConflictError extends Error {
-  readonly reason: string;
-
-  constructor(reason: string) {
+  constructor(readonly reason: string) {
     super(reason);
-    this.reason = reason;
     this.name = "CodexPluginConfigConflictError";
   }
 }

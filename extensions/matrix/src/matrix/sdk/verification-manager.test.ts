@@ -13,19 +13,12 @@ import {
 } from "./verification-manager.js";
 
 class MockVerifier extends EventEmitter implements MatrixVerifierLike {
-  private readonly sasCallbacks: MatrixShowSasCallbacks | null;
-  private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null;
-  private readonly verifyImpl: () => Promise<void>;
-
   constructor(
-    sasCallbacks: MatrixShowSasCallbacks | null,
-    qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    verifyImpl: () => Promise<void> = async () => {},
+    private readonly sasCallbacks: MatrixShowSasCallbacks | null,
+    private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
+    private readonly verifyImpl: () => Promise<void> = async () => {},
   ) {
     super();
-    this.sasCallbacks = sasCallbacks;
-    this.qrCallbacks = qrCallbacks;
-    this.verifyImpl = verifyImpl;
   }
 
   verify(): Promise<void> {

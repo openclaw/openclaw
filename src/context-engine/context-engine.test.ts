@@ -269,10 +269,10 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
 class SessionKeyRuntimeErrorEngine implements ContextEngine {
   readonly info: ContextEngineInfo;
   assembleCalls = 0;
-  private readonly errorMessage;
-
-  constructor(engineId = "sessionkey-runtime-error", errorMessage = "sessionKey lookup failed") {
-    this.errorMessage = errorMessage;
+  constructor(
+    engineId = "sessionkey-runtime-error",
+    private readonly errorMessage = "sessionKey lookup failed",
+  ) {
     this.info = {
       id: engineId,
       name: "SessionKey Runtime Error Engine",

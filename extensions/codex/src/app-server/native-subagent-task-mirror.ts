@@ -29,12 +29,11 @@ export class CodexNativeSubagentTaskMirror {
   private readonly mirroredThreadIds = new Set<string>();
   private readonly terminalRunIds = new Set<string>();
   private readonly now: () => number;
-  private readonly params: CodexNativeSubagentTaskMirrorParams;
-  private readonly runtime: TaskLifecycleRuntime;
 
-  constructor(params: CodexNativeSubagentTaskMirrorParams, runtime: TaskLifecycleRuntime) {
-    this.params = params;
-    this.runtime = runtime;
+  constructor(
+    private readonly params: CodexNativeSubagentTaskMirrorParams,
+    private readonly runtime: TaskLifecycleRuntime,
+  ) {
     this.now = params.now ?? Date.now;
   }
 

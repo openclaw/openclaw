@@ -252,10 +252,8 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
-  private readonly opts: TelegramPollingSessionOpts;
 
-  constructor(opts: TelegramPollingSessionOpts) {
-    this.opts = opts;
+  constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
       log: opts.log,
       initialTransport: opts.telegramTransport,

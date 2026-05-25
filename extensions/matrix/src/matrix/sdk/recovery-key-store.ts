@@ -35,11 +35,8 @@ export class MatrixRecoveryKeyStore {
   private stagedRecoveryKey: MatrixStoredRecoveryKey | null = null;
   private stagedRecoveryKeyUsed = false;
   private readonly stagedCacheKeyIds = new Set<string>();
-  private readonly recoveryKeyPath?: string;
 
-  constructor(recoveryKeyPath?: string) {
-    this.recoveryKeyPath = recoveryKeyPath;
-  }
+  constructor(private readonly recoveryKeyPath?: string) {}
 
   buildCryptoCallbacks(): MatrixCryptoCallbacks {
     return {

@@ -153,17 +153,12 @@ export class MatrixVerificationManager {
   private readonly trackedVerificationRequests = new WeakSet<object>();
   private readonly trackedVerificationVerifiers = new WeakSet<object>();
   private readonly summaryListeners = new Set<MatrixVerificationSummaryListener>();
-  private readonly opts: {
-    trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
-  };
 
   constructor(
-    opts: {
+    private readonly opts: {
       trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
     } = {},
-  ) {
-    this.opts = opts;
-  }
+  ) {}
 
   private readRequestValue<T>(
     _request: MatrixVerificationRequestLike,

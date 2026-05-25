@@ -36,21 +36,15 @@ export class RealtimeAudioPacer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
-  private readonly params: {
-    maxQueuedAudioBytes?: number;
-    onBackpressure?: () => void;
-    send: RealtimeAudioSend;
-    serializer: RealtimeAudioSerializer;
-  };
 
-  constructor(params: {
-    maxQueuedAudioBytes?: number;
-    onBackpressure?: () => void;
-    send: RealtimeAudioSend;
-    serializer: RealtimeAudioSerializer;
-  }) {
-    this.params = params;
-  }
+  constructor(
+    private readonly params: {
+      maxQueuedAudioBytes?: number;
+      onBackpressure?: () => void;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
+    },
+  ) {}
 
   sendAudio(muLaw: Buffer): void {
     if (this.closed || muLaw.length === 0) {
@@ -166,21 +160,14 @@ export class RealtimeMulawSpeechStartDetector {
   private loudChunks = 0;
   private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
   private speaking = false;
-  private readonly params: {
-    requiredLoudChunks?: number;
-    requiredQuietChunks?: number;
-    rmsThreshold?: number;
-  };
 
   constructor(
-    params: {
+    private readonly params: {
       requiredLoudChunks?: number;
       requiredQuietChunks?: number;
       rmsThreshold?: number;
     } = {},
-  ) {
-    this.params = params;
-  }
+  ) {}
 
   accept(muLaw: Buffer): boolean {
     const rms = calculateMulawRms(muLaw);

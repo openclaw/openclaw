@@ -51,19 +51,11 @@ function readChildOptions(
 }
 
 export class OptionsHandler {
-  private rawOptions: APIApplicationCommandInteractionDataOption[] | undefined;
-  private client: OptionsClient;
-  private resolvedChannels: Record<string, APIInteractionDataResolvedChannel> | undefined;
-
   constructor(
-    rawOptions: APIApplicationCommandInteractionDataOption[] | undefined,
-    client: OptionsClient,
-    resolvedChannels: Record<string, APIInteractionDataResolvedChannel> | undefined,
-  ) {
-    this.rawOptions = rawOptions;
-    this.client = client;
-    this.resolvedChannels = resolvedChannels;
-  }
+    private rawOptions: APIApplicationCommandInteractionDataOption[] | undefined,
+    private client: OptionsClient,
+    private resolvedChannels: Record<string, APIInteractionDataResolvedChannel> | undefined,
+  ) {}
 
   getString(name: string): string | null {
     const option = findOption(this.rawOptions, name);

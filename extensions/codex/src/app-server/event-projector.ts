@@ -171,22 +171,13 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
-  private readonly params: EmbeddedRunAttemptParams;
-  private readonly threadId: string;
-  private readonly turnId: string;
-  private readonly options: CodexAppServerEventProjectorOptions;
 
   constructor(
-    params: EmbeddedRunAttemptParams,
-    threadId: string,
-    turnId: string,
-    options: CodexAppServerEventProjectorOptions = {},
-  ) {
-    this.params = params;
-    this.threadId = threadId;
-    this.turnId = turnId;
-    this.options = options;
-  }
+    private readonly params: EmbeddedRunAttemptParams,
+    private readonly threadId: string,
+    private readonly turnId: string,
+    private readonly options: CodexAppServerEventProjectorOptions = {},
+  ) {}
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;

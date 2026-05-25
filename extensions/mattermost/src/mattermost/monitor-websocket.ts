@@ -78,13 +78,11 @@ function parseMattermostPost(value: unknown): MattermostPost | null {
 }
 
 export class WebSocketClosedBeforeOpenError extends Error {
-  public readonly code: number;
-  public readonly reason?: string;
-
-  constructor(code: number, reason?: string) {
+  constructor(
+    public readonly code: number,
+    public readonly reason?: string,
+  ) {
     super(`websocket closed before open (code ${code})`);
-    this.code = code;
-    this.reason = reason;
     this.name = "WebSocketClosedBeforeOpenError";
   }
 }

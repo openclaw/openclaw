@@ -59,13 +59,11 @@ export function resolveCurrentModelRef(ctx: MigrationProviderContext): string | 
 }
 
 class ModelApplyAbortError extends Error {
-  readonly status: "conflict" | "skipped";
-  readonly reason: string;
-
-  constructor(status: "conflict" | "skipped", reason: string) {
+  constructor(
+    readonly status: "conflict" | "skipped",
+    readonly reason: string,
+  ) {
     super(reason);
-    this.status = status;
-    this.reason = reason;
     this.name = "ModelApplyAbortError";
   }
 }

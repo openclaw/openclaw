@@ -304,11 +304,8 @@ const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
 class ConfigSetDryRunValidationError extends Error {
-  readonly result: ConfigSetDryRunResult;
-
-  constructor(result: ConfigSetDryRunResult) {
+  constructor(readonly result: ConfigSetDryRunResult) {
     super("config set dry-run validation failed");
-    this.result = result;
     this.name = "ConfigSetDryRunValidationError";
   }
 }

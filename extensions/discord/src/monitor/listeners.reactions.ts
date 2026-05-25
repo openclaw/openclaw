@@ -54,11 +54,8 @@ type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordRe
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
 export class DiscordReactionListener extends MessageReactionAddListener {
-  private params: DiscordReactionListenerParams;
-
-  constructor(params: DiscordReactionListenerParams) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
-    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -75,11 +72,8 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  private params: DiscordReactionListenerParams;
-
-  constructor(params: DiscordReactionListenerParams) {
+  constructor(private params: DiscordReactionListenerParams) {
     super();
-    this.params = params;
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {

@@ -156,11 +156,8 @@ export class Row<T extends BaseMessageInteractiveComponent> extends BaseComponen
 export class TextDisplay extends BaseComponent {
   readonly type = ComponentType.TextDisplay;
   override readonly isV2 = true;
-  public content?: string;
-
-  constructor(content?: string) {
+  constructor(public content?: string) {
     super();
-    this.content = content;
   }
   serialize(): APITextDisplayComponent {
     return clean({ type: this.type, content: this.content }) as APITextDisplayComponent;
@@ -189,11 +186,8 @@ export class Separator extends BaseComponent {
 export class Thumbnail extends BaseComponent {
   readonly type = ComponentType.Thumbnail;
   override readonly isV2 = true;
-  public url?: string;
-
-  constructor(url?: string) {
+  constructor(public url?: string) {
     super();
-    this.url = url;
   }
   serialize(): APIThumbnailComponent {
     return clean({
@@ -206,13 +200,11 @@ export class Thumbnail extends BaseComponent {
 export class Section extends BaseComponent {
   readonly type = ComponentType.Section;
   override readonly isV2 = true;
-  public components: TextDisplay[];
-  public accessory?: Thumbnail | Button | LinkButton;
-
-  constructor(components: TextDisplay[] = [], accessory?: Thumbnail | Button | LinkButton) {
+  constructor(
+    public components: TextDisplay[] = [],
+    public accessory?: Thumbnail | Button | LinkButton,
+  ) {
     super();
-    this.components = components;
-    this.accessory = accessory;
   }
   serialize(): APISectionComponent {
     return clean({
@@ -226,11 +218,8 @@ export class Section extends BaseComponent {
 export class MediaGallery extends BaseComponent {
   readonly type = ComponentType.MediaGallery;
   override readonly isV2 = true;
-  public items: Array<{ url: string; description?: string; spoiler?: boolean }>;
-
-  constructor(items: Array<{ url: string; description?: string; spoiler?: boolean }> = []) {
+  constructor(public items: Array<{ url: string; description?: string; spoiler?: boolean }> = []) {
     super();
-    this.items = items;
   }
   serialize(): APIMediaGalleryComponent {
     return {
@@ -247,13 +236,11 @@ export class MediaGallery extends BaseComponent {
 export class File extends BaseComponent {
   readonly type = ComponentType.File;
   override readonly isV2 = true;
-  public file?: `attachment://${string}`;
-  public spoiler;
-
-  constructor(file?: `attachment://${string}`, spoiler = false) {
+  constructor(
+    public file?: `attachment://${string}`,
+    public spoiler = false,
+  ) {
     super();
-    this.file = file;
-    this.spoiler = spoiler;
   }
   serialize(): APIFileComponent {
     return clean({

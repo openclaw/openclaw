@@ -142,25 +142,13 @@ describe("shared runtime seam contracts", () => {
 
   it("keeps guarded fetch on mocked global fetches even when a dispatcher is attached", async () => {
     class MockAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockEnvHttpProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
 
     const runtimeFetch = vi.fn(async () => new Response("runtime", { status: 200 }));

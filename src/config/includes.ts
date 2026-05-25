@@ -63,23 +63,19 @@ type IncludeRoot = {
 // ============================================================================
 
 export class ConfigIncludeError extends Error {
-  public readonly includePath: string;
-  public override readonly cause?: Error;
-
-  constructor(message: string, includePath: string, cause?: Error) {
+  constructor(
+    message: string,
+    public readonly includePath: string,
+    public override readonly cause?: Error,
+  ) {
     super(message);
-    this.includePath = includePath;
-    this.cause = cause;
     this.name = "ConfigIncludeError";
   }
 }
 
 export class CircularIncludeError extends ConfigIncludeError {
-  public readonly chain: string[];
-
-  constructor(chain: string[]) {
+  constructor(public readonly chain: string[]) {
     super(`Circular include detected: ${chain.join(" -> ")}`, chain[chain.length - 1]);
-    this.chain = chain;
     this.name = "CircularIncludeError";
   }
 }
@@ -115,17 +111,13 @@ class IncludeProcessor {
   private depth = 0;
   private readonly configRoot: IncludeRoot;
   private readonly allowedRoots: ReadonlyArray<IncludeRoot>;
-  private basePath: string;
-  private resolver: IncludeResolver;
 
   constructor(
-    basePath: string,
-    resolver: IncludeResolver,
+    private basePath: string,
+    private resolver: IncludeResolver,
     rootDir?: string,
     allowedRoots?: ReadonlyArray<IncludeRoot>,
   ) {
-    this.basePath = basePath;
-    this.resolver = resolver;
     this.visited.add(path.normalize(basePath));
     const configRootDir = path.normalize(rootDir ?? path.dirname(basePath));
     this.configRoot = {

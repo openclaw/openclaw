@@ -46,11 +46,7 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 class WizardSessionPrompter implements WizardPrompter {
-  private session: WizardSession;
-
-  constructor(session: WizardSession) {
-    this.session = session;
-  }
+  constructor(private session: WizardSession) {}
 
   async intro(title: string): Promise<void> {
     await this.prompt({
@@ -178,10 +174,8 @@ export class WizardSession {
   private answerDeferred = new Map<string, Deferred<unknown>>();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
-  private runner: (prompter: WizardPrompter) => Promise<void>;
 
-  constructor(runner: (prompter: WizardPrompter) => Promise<void>) {
-    this.runner = runner;
+  constructor(private runner: (prompter: WizardPrompter) => Promise<void>) {
     const prompter = new WizardSessionPrompter(this);
     void this.run(prompter);
   }

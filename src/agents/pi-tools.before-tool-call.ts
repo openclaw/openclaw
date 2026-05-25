@@ -153,11 +153,8 @@ const MAX_LOOP_WARNING_KEYS = 256;
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
 export class BeforeToolCallBlockedError extends Error {
-  readonly reason: string;
-
-  constructor(reason: string) {
+  constructor(readonly reason: string) {
     super(reason);
-    this.reason = reason;
     this.name = "BeforeToolCallBlockedError";
   }
 }

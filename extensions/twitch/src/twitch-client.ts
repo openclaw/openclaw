@@ -17,11 +17,8 @@ export class TwitchClientManager {
   private connectionPromises = new Map<string, Promise<ChatClient>>();
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
   private messageHandlerTokens = new Map<string, symbol>();
-  private logger: ChannelLogSink;
 
-  constructor(logger: ChannelLogSink) {
-    this.logger = logger;
-  }
+  constructor(private logger: ChannelLogSink) {}
 
   /**
    * Create an auth provider for the account.

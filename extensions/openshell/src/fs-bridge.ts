@@ -29,13 +29,11 @@ class OpenShellFsBridge implements SandboxFsBridge {
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
-  private readonly sandbox: OpenShellFsBridgeContext;
-  private readonly backend: OpenShellSandboxBackend;
 
-  constructor(sandbox: OpenShellFsBridgeContext, backend: OpenShellSandboxBackend) {
-    this.sandbox = sandbox;
-    this.backend = backend;
-  }
+  constructor(
+    private readonly sandbox: OpenShellFsBridgeContext,
+    private readonly backend: OpenShellSandboxBackend,
+  ) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);

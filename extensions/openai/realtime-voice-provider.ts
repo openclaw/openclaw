@@ -427,10 +427,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
-  private readonly config: OpenAIRealtimeVoiceBridgeConfig;
 
-  constructor(config: OpenAIRealtimeVoiceBridgeConfig) {
-    this.config = config;
+  constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
   }
 

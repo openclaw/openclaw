@@ -4,7 +4,6 @@
     "allowSyntheticDefaultImports": true,
     "declaration": true,
     "esModuleInterop": true,
-    "erasableSyntaxOnly": true,
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,

@@ -122,12 +122,11 @@ export class BaseInteraction {
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
   private readonly response = new InteractionResponseController();
-  public client: InteractionClient;
-  public rawData: RawInteraction;
 
-  constructor(client: InteractionClient, rawData: RawInteraction) {
-    this.client = client;
-    this.rawData = rawData;
+  constructor(
+    public client: InteractionClient,
+    public rawData: RawInteraction,
+  ) {
     this.id = rawData.id;
     this.token = rawData.token;
     this.user = readInteractionUser(rawData, client);

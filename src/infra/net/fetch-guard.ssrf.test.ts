@@ -504,25 +504,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     };
 
     class MockAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockEnvHttpProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
 
     (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
@@ -555,25 +543,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     const globalFetch = vi.fn(async () => okResponse());
 
     class MockAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockEnvHttpProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
 
     (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
@@ -630,25 +606,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     );
 
     class MockAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockEnvHttpProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
 
     (globalThis as Record<string, unknown>).fetch = flaggedGlobalFetch as typeof fetch;
@@ -683,25 +647,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     };
 
     class MockAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockEnvHttpProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
     class MockProxyAgent {
-      readonly options: unknown;
-
-      constructor(options: unknown) {
-        this.options = options;
-      }
+      constructor(readonly options: unknown) {}
     }
 
     (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;

@@ -529,13 +529,10 @@ export class OpenClaw {
 }
 
 export class Agent {
-  private readonly client: OpenClaw;
-  readonly id: string;
-
-  constructor(client: OpenClaw, id: string) {
-    this.client = client;
-    this.id = id;
-  }
+  constructor(
+    private readonly client: OpenClaw,
+    readonly id: string,
+  ) {}
 
   async run(input: string | Omit<AgentRunParams, "agentId">): Promise<Run> {
     const params: AgentRunParams =
@@ -552,15 +549,11 @@ export class Agent {
 }
 
 export class Run {
-  private readonly client: OpenClaw;
-  readonly id: string;
-  readonly sessionKey?: string;
-
-  constructor(client: OpenClaw, id: string, sessionKey?: string) {
-    this.client = client;
-    this.id = id;
-    this.sessionKey = sessionKey;
-  }
+  constructor(
+    private readonly client: OpenClaw,
+    readonly id: string,
+    readonly sessionKey?: string,
+  ) {}
 
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
     return this.client.runEvents(this.id, filter);
@@ -602,15 +595,11 @@ export class Run {
 }
 
 export class Session {
-  private readonly client: OpenClaw;
-  readonly key: string;
-  readonly info?: unknown;
-
-  constructor(client: OpenClaw, key: string, info?: unknown) {
-    this.client = client;
-    this.key = key;
-    this.info = info;
-  }
+  constructor(
+    private readonly client: OpenClaw,
+    readonly key: string,
+    readonly info?: unknown,
+  ) {}
 
   async send(input: string | Omit<SessionSendParams, "key">): Promise<Run> {
     const params: SessionSendParams =
@@ -641,11 +630,7 @@ export class Session {
 }
 
 export class AgentsNamespace {
-  private readonly client: OpenClaw;
-
-  constructor(client: OpenClaw) {
-    this.client = client;
-  }
+  constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
     return await this.client.request("agents.list", params);
@@ -669,11 +654,7 @@ export class AgentsNamespace {
 }
 
 export class SessionsNamespace {
-  private readonly client: OpenClaw;
-
-  constructor(client: OpenClaw) {
-    this.client = client;
-  }
+  constructor(private readonly client: OpenClaw) {}
 
   async list(params?: Record<string, unknown>): Promise<unknown> {
     return await this.client.request("sessions.list", params);
@@ -705,11 +686,7 @@ export class SessionsNamespace {
 }
 
 export class RunsNamespace {
-  private readonly client: OpenClaw;
-
-  constructor(client: OpenClaw) {
-    this.client = client;
-  }
+  constructor(private readonly client: OpenClaw) {}
 
   async create(params: RunCreateParams): Promise<Run> {
     const raw = await this.client.request("agent", buildAgentParams(params), {
@@ -742,13 +719,10 @@ export class RunsNamespace {
 }
 
 class RpcNamespace {
-  protected readonly client: OpenClaw;
-  private readonly prefix: string;
-
-  constructor(client: OpenClaw, prefix: string) {
-    this.client = client;
-    this.prefix = prefix;
-  }
+  constructor(
+    protected readonly client: OpenClaw,
+    private readonly prefix: string,
+  ) {}
 
   protected async call<T = unknown>(
     method: string,
@@ -844,11 +818,7 @@ export class ArtifactsNamespace extends RpcNamespace {
 }
 
 export class ApprovalsNamespace {
-  private readonly client: OpenClaw;
-
-  constructor(client: OpenClaw) {
-    this.client = client;
-  }
+  constructor(private readonly client: OpenClaw) {}
 
   async list(params?: unknown): Promise<unknown> {
     return await this.client.request("exec.approval.list", params);

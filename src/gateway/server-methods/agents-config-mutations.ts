@@ -18,17 +18,15 @@ export type AgentDeleteMutationResult = {
 };
 
 export class AgentConfigPreconditionError extends Error {
-  readonly kind: "already-exists" | "not-found";
-  readonly agentId: string;
-
-  constructor(kind: "already-exists" | "not-found", agentId: string) {
+  constructor(
+    readonly kind: "already-exists" | "not-found",
+    readonly agentId: string,
+  ) {
     super(
       kind === "already-exists"
         ? `agent "${agentId}" already exists`
         : `agent "${agentId}" not found`,
     );
-    this.kind = kind;
-    this.agentId = agentId;
     this.name = "AgentConfigPreconditionError";
   }
 }

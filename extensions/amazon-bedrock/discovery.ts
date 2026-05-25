@@ -166,18 +166,10 @@ async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
 
 function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
   class ListFoundationModelsCommand {
-    readonly input: Record<string, unknown>;
-
-    constructor(input: Record<string, unknown> = {}) {
-      this.input = input;
-    }
+    constructor(readonly input: Record<string, unknown> = {}) {}
   }
   class ListInferenceProfilesCommand {
-    readonly input: Record<string, unknown>;
-
-    constructor(input: Record<string, unknown> = {}) {
-      this.input = input;
-    }
+    constructor(readonly input: Record<string, unknown> = {}) {}
   }
   return {
     createClient() {

@@ -82,15 +82,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
-  private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult;
-  private readonly ctx: RealtimeTalkTransportContext;
 
   constructor(
-    session: RealtimeTalkJsonPcmWebSocketSessionResult,
-    ctx: RealtimeTalkTransportContext,
+    private readonly session: RealtimeTalkJsonPcmWebSocketSessionResult,
+    private readonly ctx: RealtimeTalkTransportContext,
   ) {
-    this.session = session;
-    this.ctx = ctx;
     this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
   }
 

@@ -23,14 +23,13 @@ export class DiscordVoiceSpeakerContextResolver {
       expiresAt: number;
     }
   >();
-  private readonly params: {
-    client: Client;
-    ownerAllowFrom?: string[];
-  };
 
-  constructor(params: { client: Client; ownerAllowFrom?: string[] }) {
-    this.params = params;
-  }
+  constructor(
+    private readonly params: {
+      client: Client;
+      ownerAllowFrom?: string[];
+    },
+  ) {}
 
   async resolveContext(guildId: string, userId: string): Promise<VoiceSpeakerContext> {
     const cached = this.getCachedContext(guildId, userId);

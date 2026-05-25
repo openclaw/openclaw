@@ -456,24 +456,17 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.resetOutputStream("player-idle");
     this.completeExactSpeechResponse("player-idle");
   };
-  private readonly params: {
-    cfg: OpenClawConfig;
-    discordConfig: DiscordAccountConfig;
-    entry: VoiceSessionEntry;
-    mode: Exclude<DiscordVoiceMode, "stt-tts">;
-    bootstrapContextInstructions?: string;
-    runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
-  };
 
-  constructor(params: {
-    cfg: OpenClawConfig;
-    discordConfig: DiscordAccountConfig;
-    entry: VoiceSessionEntry;
-    mode: Exclude<DiscordVoiceMode, "stt-tts">;
-    bootstrapContextInstructions?: string;
-    runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
-  }) {
-    this.params = params;
+  constructor(
+    private readonly params: {
+      cfg: OpenClawConfig;
+      discordConfig: DiscordAccountConfig;
+      entry: VoiceSessionEntry;
+      mode: Exclude<DiscordVoiceMode, "stt-tts">;
+      bootstrapContextInstructions?: string;
+      runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
+    },
+  ) {
     this.talkback = createRealtimeVoiceAgentTalkbackQueue({
       debounceMs: this.realtimeConfig?.debounceMs ?? DISCORD_REALTIME_TALKBACK_DEBOUNCE_MS,
       isStopped: () => this.stopped,

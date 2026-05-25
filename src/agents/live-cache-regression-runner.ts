@@ -67,13 +67,11 @@ type LiveCacheRegressionResult = {
 };
 
 class CacheProbeTextMismatchError extends Error {
-  readonly suffix: string;
-  readonly text: string;
-
-  constructor(suffix: string, text: string) {
+  constructor(
+    readonly suffix: string,
+    readonly text: string,
+  ) {
     super(`expected response to contain CACHE-OK ${suffix}, got ${JSON.stringify(text)}`);
-    this.suffix = suffix;
-    this.text = text;
   }
 }
 

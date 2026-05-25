@@ -166,11 +166,7 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
   },
   MediaAttachmentCache: class {
-    private readonly attachments: Array<{ path?: string; index: number }>;
-
-    constructor(attachments: Array<{ path?: string; index: number }>) {
-      this.attachments = attachments;
-    }
+    constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
       const path = attachment?.path;
@@ -902,11 +898,7 @@ describe("tryDispatchAcpReply", () => {
         }),
         runtime: {
           MediaAttachmentCache: class {
-            private readonly attachments: Array<{ path?: string; index: number }>;
-
-            constructor(attachments: Array<{ path?: string; index: number }>) {
-              this.attachments = attachments;
-            }
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
             async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
               const attachment = this.attachments.find((item) => item.index === attachmentIndex);
               return {
@@ -1047,11 +1039,7 @@ describe("tryDispatchAcpReply", () => {
         }),
         runtime: {
           MediaAttachmentCache: class {
-            private readonly attachments: Array<{ path?: string; index: number }>;
-
-            constructor(attachments: Array<{ path?: string; index: number }>) {
-              this.attachments = attachments;
-            }
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
             async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
               seenAttachmentIndexes.push(attachmentIndex);
               const attachment = this.attachments.find((item) => item.index === attachmentIndex);
@@ -1154,11 +1142,7 @@ describe("tryDispatchAcpReply", () => {
         }),
         runtime: {
           MediaAttachmentCache: class {
-            private readonly attachments: Array<{ path?: string; index: number }>;
-
-            constructor(attachments: Array<{ path?: string; index: number }>) {
-              this.attachments = attachments;
-            }
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
             async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
               const attachment = this.attachments.find((item) => item.index === attachmentIndex);
               return {

@@ -28,36 +28,19 @@ export class TypingKeepAlive {
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
   private renewalsRemaining = TYPING_RENEWAL_LIMIT;
-  private readonly getToken: () => Promise<string>;
-  private readonly clearCache: () => void;
-  private readonly sendInputNotify: SendInputNotifyFn;
-  private readonly openid: string;
-  private readonly msgId: string | undefined;
-  private readonly log?: {
-    info: (msg: string) => void;
-    error: (msg: string) => void;
-    debug?: (msg: string) => void;
-  };
 
   constructor(
-    getToken: () => Promise<string>,
-    clearCache: () => void,
-    sendInputNotify: SendInputNotifyFn,
-    openid: string,
-    msgId: string | undefined,
-    log?: {
+    private readonly getToken: () => Promise<string>,
+    private readonly clearCache: () => void,
+    private readonly sendInputNotify: SendInputNotifyFn,
+    private readonly openid: string,
+    private readonly msgId: string | undefined,
+    private readonly log?: {
       info: (msg: string) => void;
       error: (msg: string) => void;
       debug?: (msg: string) => void;
     },
-  ) {
-    this.getToken = getToken;
-    this.clearCache = clearCache;
-    this.sendInputNotify = sendInputNotify;
-    this.openid = openid;
-    this.msgId = msgId;
-    this.log = log;
-  }
+  ) {}
 
   /** Start periodic keep-alive sends. */
   start(): void {

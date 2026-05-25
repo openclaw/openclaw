@@ -993,13 +993,11 @@ function sanitizeToolCallIdPart(value: string): string {
 
 export class ToolSearchRuntime {
   private callSequence = 0;
-  private readonly ctx: ToolSearchToolContext;
-  private readonly config: ToolSearchConfig;
 
-  constructor(ctx: ToolSearchToolContext, config: ToolSearchConfig) {
-    this.ctx = ctx;
-    this.config = config;
-  }
+  constructor(
+    private readonly ctx: ToolSearchToolContext,
+    private readonly config: ToolSearchConfig,
+  ) {}
 
   search = async (query: string, options?: { limit?: number }) => {
     const catalog = resolveCatalog(this.ctx);

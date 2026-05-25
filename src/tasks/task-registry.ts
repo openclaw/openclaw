@@ -103,23 +103,15 @@ export type ParentFlowLinkErrorCode =
   | "terminal";
 
 export class ParentFlowLinkError extends Error {
-  public readonly code: ParentFlowLinkErrorCode;
-  public readonly details?: {
-    flowId?: string;
-    status?: TaskFlowRecord["status"];
-  };
-
   constructor(
-    code: ParentFlowLinkErrorCode,
+    public readonly code: ParentFlowLinkErrorCode,
     message: string,
-    details?: {
+    public readonly details?: {
       flowId?: string;
       status?: TaskFlowRecord["status"];
     },
   ) {
     super(message);
-    this.code = code;
-    this.details = details;
     this.name = "ParentFlowLinkError";
   }
 }

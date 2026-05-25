@@ -64,13 +64,10 @@ vi.mock("grammy", () => ({
     ALL_UPDATE_TYPES: ["message"],
   },
   InputFile: class {
-    public buffer: Buffer;
-    public fileName?: string;
-
-    constructor(buffer: Buffer, fileName?: string) {
-      this.buffer = buffer;
-      this.fileName = fileName;
-    }
+    constructor(
+      public buffer: Buffer,
+      public fileName?: string,
+    ) {}
   },
   GrammyError: class GrammyError extends Error {
     description = "";

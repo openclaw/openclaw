@@ -356,12 +356,10 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     stop = grammySpies.stopSpy;
     command = grammySpies.commandSpy;
     catch = vi.fn();
-    public token: string;
-    public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown };
-
-    constructor(token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) {
-      this.token = token;
-      this.options = options;
+    constructor(
+      public token: string,
+      public options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown },
+    ) {
       (grammySpies.botCtorSpy as unknown as (token: string, options?: unknown) => void)(
         token,
         options,

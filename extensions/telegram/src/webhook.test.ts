@@ -86,11 +86,7 @@ vi.mock("grammy", async () => {
     InputFile:
       actual.InputFile ??
       class InputFile {
-        public readonly path: string;
-
-        constructor(path: string) {
-          this.path = path;
-        }
+        constructor(public readonly path: string) {}
       },
     GrammyError:
       actual.GrammyError ??

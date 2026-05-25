@@ -821,11 +821,8 @@ class CodexSideQuestionCollector {
       }
     | undefined;
   completed = false;
-  private readonly params: AgentHarnessSideQuestionParams;
 
-  constructor(params: AgentHarnessSideQuestionParams) {
-    this.params = params;
-  }
+  constructor(private readonly params: AgentHarnessSideQuestionParams) {}
 
   setTurn(threadId: string, turnId: string): void {
     this.threadId = threadId;

@@ -21,32 +21,27 @@ class MockAgent {
 
 class MockPool {
   readonly __testStub = true;
-  public readonly origin: unknown;
-  public readonly options: unknown;
 
-  constructor(origin: unknown, options: unknown) {
-    this.origin = origin;
-    this.options = options;
+  constructor(
+    public readonly origin: unknown,
+    public readonly options: unknown,
+  ) {
     poolCtor(origin, options);
   }
 }
 
 class MockEnvHttpProxyAgent {
   readonly __testStub = true;
-  public readonly options: unknown;
 
-  constructor(options: unknown) {
-    this.options = options;
+  constructor(public readonly options: unknown) {
     envHttpProxyAgentCtor(options);
   }
 }
 
 class MockProxyAgent {
   readonly __testStub = true;
-  public readonly options: unknown;
 
-  constructor(options: unknown) {
-    this.options = options;
+  constructor(public readonly options: unknown) {
     proxyAgentCtor(options);
   }
 }

@@ -12,19 +12,14 @@ const DEFAULT_REST_CACHE_TTL_MS = 30_000;
 
 export class DiscordEntityCache {
   private readonly entries = new Map<string, CacheEntry<unknown>>();
-  private readonly params: {
-    client: StructureClient;
-    rest: RequestClient | (() => RequestClient);
-    ttlMs?: number;
-  };
 
-  constructor(params: {
-    client: StructureClient;
-    rest: RequestClient | (() => RequestClient);
-    ttlMs?: number;
-  }) {
-    this.params = params;
-  }
+  constructor(
+    private readonly params: {
+      client: StructureClient;
+      rest: RequestClient | (() => RequestClient);
+      ttlMs?: number;
+    },
+  ) {}
 
   async fetchUser(id: string): Promise<User> {
     return await this.fetchCached(`user:${id}`, async () => {

@@ -48,13 +48,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
-  private readonly sandbox: SandboxFsBridgeContext;
-  private readonly runtime: RemoteShellSandboxHandle;
 
-  constructor(sandbox: SandboxFsBridgeContext, runtime: RemoteShellSandboxHandle) {
-    this.sandbox = sandbox;
-    this.runtime = runtime;
-  }
+  constructor(
+    private readonly sandbox: SandboxFsBridgeContext,
+    private readonly runtime: RemoteShellSandboxHandle,
+  ) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);

@@ -55,30 +55,20 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       }
       return {};
     });
-    private opts: {
-      clientVersion?: string;
-      onHello?: (hello: GatewayHelloOk) => void;
-      onClose?: (info: {
-        code: number;
-        reason: string;
-        error?: { code: string; message: string; details?: unknown };
-      }) => void;
-      onGap?: (info: { expected: number; received: number }) => void;
-      onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
-    };
 
-    constructor(opts: {
-      clientVersion?: string;
-      onHello?: (hello: GatewayHelloOk) => void;
-      onClose?: (info: {
-        code: number;
-        reason: string;
-        error?: { code: string; message: string; details?: unknown };
-      }) => void;
-      onGap?: (info: { expected: number; received: number }) => void;
-      onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
-    }) {
-      this.opts = opts;
+    constructor(
+      private opts: {
+        clientVersion?: string;
+        onHello?: (hello: GatewayHelloOk) => void;
+        onClose?: (info: {
+          code: number;
+          reason: string;
+          error?: { code: string; message: string; details?: unknown };
+        }) => void;
+        onGap?: (info: { expected: number; received: number }) => void;
+        onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
+      },
+    ) {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,

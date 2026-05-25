@@ -66,11 +66,8 @@ export abstract class Label extends BaseModalComponent {
   abstract label: string;
   description?: string;
   customId = "";
-  public component?: TextInput | AnySelectMenu | CheckboxGroup | RadioGroup;
-
-  constructor(component?: TextInput | AnySelectMenu | CheckboxGroup | RadioGroup) {
+  constructor(public component?: TextInput | AnySelectMenu | CheckboxGroup | RadioGroup) {
     super();
-    this.component = component;
   }
   serialize() {
     return clean({
