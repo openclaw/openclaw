@@ -1169,7 +1169,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
     const { session, emit } = createStubSessionHarness();
     const onHeartbeatToolResponse = vi.fn();
-    const subscription = subscribeEmbeddedPiSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run-heartbeat-terminal",
       sessionKey: "agent:main:main",

@@ -1367,6 +1367,50 @@
       "types": "./dist/plugin-sdk/zod.d.ts",
       "default": "./dist/plugin-sdk/zod.js"
     },
+    "./plugin-sdk/agent-core": {
+      "types": "./dist/plugin-sdk/agent-core.d.ts",
+      "default": "./dist/plugin-sdk/agent-core.js"
+    },
+    "./plugin-sdk/agent-sessions": {
+      "types": "./dist/plugin-sdk/agent-sessions.d.ts",
+      "default": "./dist/plugin-sdk/agent-sessions.js"
+    },
+    "./plugin-sdk/llm": {
+      "types": "./dist/plugin-sdk/llm.d.ts",
+      "default": "./dist/plugin-sdk/llm.js"
+    },
+    "./plugin-sdk/llm-anthropic": {
+      "types": "./dist/plugin-sdk/llm-anthropic.d.ts",
+      "default": "./dist/plugin-sdk/llm-anthropic.js"
+    },
+    "./plugin-sdk/llm-bedrock": {
+      "types": "./dist/plugin-sdk/llm-bedrock.d.ts",
+      "default": "./dist/plugin-sdk/llm-bedrock.js"
+    },
+    "./plugin-sdk/llm-google-shared": {
+      "types": "./dist/plugin-sdk/llm-google-shared.d.ts",
+      "default": "./dist/plugin-sdk/llm-google-shared.js"
+    },
+    "./plugin-sdk/llm-provider-runtime": {
+      "types": "./dist/plugin-sdk/llm-provider-runtime.d.ts",
+      "default": "./dist/plugin-sdk/llm-provider-runtime.js"
+    },
+    "./plugin-sdk/llm-oauth": {
+      "types": "./dist/plugin-sdk/llm-oauth.d.ts",
+      "default": "./dist/plugin-sdk/llm-oauth.js"
+    },
+    "./plugin-sdk/llm-openai-codex-responses": {
+      "types": "./dist/plugin-sdk/llm-openai-codex-responses.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-codex-responses.js"
+    },
+    "./plugin-sdk/llm-openai-completions": {
+      "types": "./dist/plugin-sdk/llm-openai-completions.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-completions.js"
+    },
+    "./plugin-sdk/llm-openai-responses": {
+      "types": "./dist/plugin-sdk/llm-openai-responses.d.ts",
+      "default": "./dist/plugin-sdk/llm-openai-responses.js"
+    },
     "./extension-api": "./dist/extensionAPI.js",
     "./cli-entry": "./openclaw.mjs"
   },
