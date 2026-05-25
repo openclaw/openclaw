@@ -67,6 +67,18 @@ function createProviderWithStaticCatalog(id: string): ProviderPlugin {
   };
 }
 
+function createStaticOnlyProvider(id: string): ProviderPlugin {
+  return {
+    id,
+    label: id,
+    auth: [],
+    staticCatalog: {
+      order: "simple",
+      run: async () => null,
+    },
+  };
+}
+
 function createTextModel(id: string, name: string) {
   return {
     id,
@@ -166,6 +178,23 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       env: {} as NodeJS.ProcessEnv,
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+  });
+
+  it("uses static-only provider catalogs for scoped startup discovery", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createStaticOnlyProvider("openai"),
+    ]);
+
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryProviderIds: ["openai"],
     });
 
     expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
