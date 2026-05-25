@@ -86,11 +86,11 @@ type InlineUserTurnTranscriptSource =
     };
 
 export type PersistInlineUserTurnTranscriptParams = UserTurnTranscriptPersistenceTarget &
-  InlineUserTurnTranscriptSource & {
-    errorContext?: string;
-  };
+  InlineUserTurnTranscriptSource;
 
-export type TryPersistInlineUserTurnTranscriptParams = PersistInlineUserTurnTranscriptParams;
+export type TryPersistInlineUserTurnTranscriptParams = PersistInlineUserTurnTranscriptParams & {
+  errorContext?: string;
+};
 
 export type PersistedUserTurnTextFieldSource = {
   Transcript?: string | null;
