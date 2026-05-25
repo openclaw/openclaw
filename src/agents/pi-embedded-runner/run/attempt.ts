@@ -2619,9 +2619,7 @@ export async function runEmbeddedAttempt(
           return;
         }
         if (event.kind === "blockTypeCompatibility") {
-          log.debug(
-            `tool strictness replay: kind=${event.kind} from=${event.from}`,
-          );
+          log.debug(`tool strictness replay: kind=${event.kind} from=${event.from}`);
           return;
         }
         log.debug(
