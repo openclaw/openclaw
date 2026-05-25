@@ -247,8 +247,17 @@ if (
   }
 }
 
-const isModuleNotFoundError = (err) =>
-  err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
+const isModuleNotFoundError = (err) => {
+  if (err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND") {
+    return true;
+  }
+  // Bun uses ResolveMessage without the Node-specific error code.
+  const message =
+    err && typeof err === "object" && "message" in err && typeof err.message === "string"
+      ? err.message
+      : "";
+  return message.includes("Cannot find module") || message.includes("Cannot find package");
+};
 
 const isDirectModuleNotFoundError = (err, specifier) => {
   if (!isModuleNotFoundError(err)) {
