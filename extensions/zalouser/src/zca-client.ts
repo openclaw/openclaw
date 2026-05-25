@@ -165,9 +165,9 @@ export type API = {
       }
     >;
   }>;
-  enableGroupLink(groupId: string): Promise<{
-    link: string;
-    expiration_date: number;
+  getGroupLinkDetail(groupId: string): Promise<{
+    link?: string;
+    expiration_date?: number;
     enabled: number;
   }>;
   sendMessage(
