@@ -521,6 +521,122 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("omits card header when card.header.enabled is false", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        card: {
+          header: { enabled: false },
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        header: undefined,
+      }),
+    );
+  });
+
+  it("omits card footer when card.footer.enabled is false", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        card: {
+          footer: { enabled: false },
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        note: undefined,
+      }),
+    );
+  });
+
+  it("honors footer showModel/showProvider/showAgentId toggles", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        card: {
+          footer: {
+            showModel: false,
+            showProvider: false,
+            showAgentId: true,
+          },
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        note: "Agent: agent | Agent ID: agent",
+      }),
+    );
+  });
+
+  it("honors header showEmoji and template config", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+        card: {
+          header: {
+            showEmoji: false,
+            template: "green",
+          },
+        },
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      identity: {
+        name: "Demo Agent",
+        emoji: "🤖",
+        theme: "red",
+      } as never,
+    });
+    await options.deliver({ text: "card text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        header: {
+          title: "Demo Agent",
+          template: "green",
+        },
+      }),
+    );
+  });
+
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),

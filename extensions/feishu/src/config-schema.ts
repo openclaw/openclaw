@@ -45,6 +45,51 @@ const MarkdownConfigSchema = z
   .strict()
   .optional();
 
+// Keep in sync with FEISHU_CARD_TEMPLATES in send.ts.
+const FeishuCardTemplateSchema = z.enum([
+  "blue",
+  "green",
+  "red",
+  "orange",
+  "purple",
+  "indigo",
+  "wathet",
+  "turquoise",
+  "yellow",
+  "grey",
+  "carmine",
+  "violet",
+  "lime",
+]);
+
+const FeishuCardHeaderConfigSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    showEmoji: z.boolean().optional().default(true),
+    template: FeishuCardTemplateSchema.optional().default("blue"),
+  })
+  .strict()
+  .optional();
+
+const FeishuCardFooterConfigSchema = z
+  .object({
+    enabled: z.boolean().optional().default(true),
+    showModel: z.boolean().optional().default(true),
+    showProvider: z.boolean().optional().default(true),
+    showAgentId: z.boolean().optional().default(false),
+  })
+  .strict()
+  .optional();
+
+export const FeishuCardConfigSchema = z
+  .object({
+    header: FeishuCardHeaderConfigSchema,
+    footer: FeishuCardFooterConfigSchema,
+  })
+  .strict()
+  .optional();
+export type FeishuCardConfig = z.infer<typeof FeishuCardConfigSchema>;
+
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
@@ -157,6 +202,7 @@ const FeishuSharedConfigShape = {
   webhookPort: z.number().int().positive().optional(),
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
+  card: FeishuCardConfigSchema,
   configWrites: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),

@@ -220,6 +220,75 @@ describe("FeishuConfigSchema optimization flags", () => {
   });
 });
 
+describe("FeishuConfigSchema card config", () => {
+  it("applies defaults for card header/footer toggles", () => {
+    const result = FeishuConfigSchema.parse({
+      card: {
+        header: {},
+        footer: {},
+      },
+    });
+
+    expect(result.card?.header?.enabled).toBe(true);
+    expect(result.card?.header?.showEmoji).toBe(true);
+    expect(result.card?.header?.template).toBe("blue");
+    expect(result.card?.footer?.enabled).toBe(true);
+    expect(result.card?.footer?.showModel).toBe(true);
+    expect(result.card?.footer?.showProvider).toBe(true);
+    expect(result.card?.footer?.showAgentId).toBe(false);
+  });
+
+  it("accepts card header/footer configuration", () => {
+    const result = FeishuConfigSchema.safeParse({
+      card: {
+        header: {
+          enabled: false,
+          showEmoji: false,
+          template: "blue",
+        },
+        footer: {
+          enabled: false,
+          showModel: false,
+          showProvider: false,
+          showAgentId: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts non-default card header templates supported by send.ts", () => {
+    for (const template of ["green", "red", "orange", "purple", "grey"]) {
+      const result = FeishuConfigSchema.safeParse({
+        card: { header: { template } },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects unknown card header templates", () => {
+    const result = FeishuConfigSchema.safeParse({
+      card: { header: { template: "fuchsia" } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts card config at the account level", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        main: {
+          card: {
+            header: { enabled: false },
+            footer: { showAgentId: true },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("FeishuConfigSchema actions", () => {
   it("accepts top-level reactions action gate", () => {
     const result = FeishuConfigSchema.parse({

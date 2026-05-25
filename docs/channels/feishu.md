@@ -266,6 +266,51 @@ Reduce the number of Feishu/Lark API calls with two optional flags:
 }
 ```
 
+### Card header and footer
+
+Feishu/Lark card replies include a header bar and footer note by default. You can disable or customize both, either at the top level or per account:
+
+- `channels.feishu.card.header.enabled` (default: `true`)
+- `channels.feishu.card.header.showEmoji` (default: `true`) — prepend the agent's emoji to the title
+- `channels.feishu.card.header.template` (default: `"blue"`) — one of `blue`, `green`, `red`, `orange`, `purple`, `indigo`, `wathet`, `turquoise`, `yellow`, `grey`, `carmine`, `violet`, `lime`
+- `channels.feishu.card.footer.enabled` (default: `true`)
+- `channels.feishu.card.footer.showModel` (default: `true`)
+- `channels.feishu.card.footer.showProvider` (default: `true`)
+- `channels.feishu.card.footer.showAgentId` (default: `false`)
+
+Minimal content-only cards:
+
+```json5
+{
+  channels: {
+    feishu: {
+      card: {
+        header: { enabled: false },
+        footer: { enabled: false },
+      },
+    },
+  },
+}
+```
+
+Per-account override (e.g., a "support" account that always uses a green header without an emoji):
+
+```json5
+{
+  channels: {
+    feishu: {
+      accounts: {
+        support: {
+          card: {
+            header: { showEmoji: false, template: "green" },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ### ACP sessions
 
 Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is text-command driven — there are no native slash-command menus, so use `/acp ...` messages directly in the conversation.
@@ -395,6 +440,13 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.mediaMaxMb`                      | Media size limit                           | `30`             |
 | `channels.feishu.streaming`                       | Streaming card output                      | `true`           |
 | `channels.feishu.blockStreaming`                  | Block-level streaming                      | `true`           |
+| `channels.feishu.card.header.enabled`             | Show card header bar                       | `true`           |
+| `channels.feishu.card.header.showEmoji`           | Include agent emoji in header title        | `true`           |
+| `channels.feishu.card.header.template`            | Card header color template                 | `"blue"`         |
+| `channels.feishu.card.footer.enabled`             | Show card footer note                      | `true`           |
+| `channels.feishu.card.footer.showModel`           | Include model in footer                    | `true`           |
+| `channels.feishu.card.footer.showProvider`        | Include provider in footer                 | `true`           |
+| `channels.feishu.card.footer.showAgentId`         | Include agent ID in footer                 | `false`          |
 | `channels.feishu.typingIndicator`                 | Send typing reactions                      | `true`           |
 | `channels.feishu.resolveSenderNames`              | Resolve sender display names               | `true`           |
 

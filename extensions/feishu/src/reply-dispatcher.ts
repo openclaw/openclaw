@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { type FeishuCardConfig } from "./config-schema.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -42,31 +43,51 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
 }
 
-/** Build a card header from agent identity config. */
+/**
+ * `FeishuCardConfig` (imported from ./config-schema.js) is read from the
+ * per-account merged config so that account-level overrides win over top-level
+ * (consistent with renderMode, streaming, typingIndicator). The merge is
+ * performed by `resolveFeishuRuntimeAccount` upstream.
+ */
+
+/** Build a card header from agent identity and per-account card config. */
 function resolveCardHeader(
   agentId: string,
   identity: OutboundIdentity | undefined,
-): CardHeaderConfig {
+  cardConfig: FeishuCardConfig,
+): CardHeaderConfig | null {
+  const headerConfig = cardConfig?.header;
+  if (headerConfig?.enabled === false) {
+    return null;
+  }
   const name = identity?.name?.trim() || agentId;
-  const emoji = identity?.emoji?.trim();
+  const emoji = headerConfig?.showEmoji === false ? undefined : identity?.emoji?.trim();
   return {
     title: emoji ? `${emoji} ${name}` : name,
-    template: identity?.theme ?? "blue",
+    template: headerConfig?.template ?? identity?.theme ?? "blue",
   };
 }
 
-/** Build a card note footer from agent identity and model context. */
+/** Build a card note footer from agent identity, model context, and card config. */
 function resolveCardNote(
   agentId: string,
   identity: OutboundIdentity | undefined,
   prefixCtx: { model?: string; provider?: string },
-): string {
+  cardConfig: FeishuCardConfig,
+): string | null {
+  const footerConfig = cardConfig?.footer;
+  if (footerConfig?.enabled === false) {
+    return null;
+  }
   const name = identity?.name?.trim() || agentId;
   const parts: string[] = [`Agent: ${name}`];
-  if (prefixCtx.model) {
+  if (footerConfig?.showAgentId === true) {
+    parts.push(`Agent ID: ${agentId}`);
+  }
+  if ((footerConfig?.showModel ?? true) && prefixCtx.model) {
     parts.push(`Model: ${prefixCtx.model}`);
   }
-  if (prefixCtx.provider) {
+  if ((footerConfig?.showProvider ?? true) && prefixCtx.provider) {
     parts.push(`Provider: ${prefixCtx.provider}`);
   }
   return parts.join(" | ");
@@ -186,6 +207,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const cardConfig = account.config?.card;
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
   const streamingEnabled =
     !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
@@ -282,8 +304,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        const cardHeader = resolveCardHeader(agentId, identity);
-        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+        const cardHeader = resolveCardHeader(agentId, identity, cardConfig) ?? undefined;
+        const cardNote =
+          resolveCardNote(agentId, identity, prefixContext.prefixContext, cardConfig) ?? undefined;
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread: effectiveReplyInThread,
@@ -309,7 +332,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      const finalNote =
+        resolveCardNote(agentId, identity, prefixContext.prefixContext, cardConfig) ?? undefined;
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -426,8 +450,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (useCard) {
-            const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+            const cardHeader = resolveCardHeader(agentId, identity, cardConfig) ?? undefined;
+            const cardNote =
+              resolveCardNote(agentId, identity, prefixContext.prefixContext, cardConfig) ??
+              undefined;
             await sendChunkedTextReply({
               text,
               useCard: true,
