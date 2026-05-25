@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { inflateSync } from "node:zlib";
 import {
   createRastermill,
   isRastermillUnavailableError,
@@ -28,6 +29,8 @@ export type ResizeToPngParams = {
 
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
+const PHOTON_OWNED_FORMATS = new Set(["png", "gif", "webp", "jpeg"]);
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export class ImageProcessorUnavailableError extends Error {
   readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
@@ -44,8 +47,9 @@ export class ImageProcessorUnavailableError extends Error {
   }
 }
 
-function createOpenClawRastermill() {
+function createOpenClawRastermill(options: { backend?: "photon" } = {}) {
   return createRastermill({
+    ...(options.backend === undefined ? {} : { backend: options.backend }),
     limits: {
       inputPixels: MAX_IMAGE_INPUT_PIXELS,
       outputPixels: MAX_IMAGE_INPUT_PIXELS,
@@ -59,6 +63,25 @@ function createOpenClawRastermill() {
     },
     commandResolver: (command) =>
       resolveSystemBin(command, { trust: command === "powershell" ? "strict" : "standard" }),
+  });
+}
+
+function hasExplicitImageBackendPreference(): boolean {
+  const raw = process.env.OPENCLAW_IMAGE_BACKEND?.trim().toLowerCase();
+  return raw !== undefined && raw.length > 0 && raw !== "auto";
+}
+
+function shouldForcePhotonForInput(buffer: Buffer): boolean {
+  if (hasExplicitImageBackendPreference()) {
+    return false;
+  }
+  const format = readRastermillImageProbeFromHeader(buffer)?.format;
+  return format !== undefined && PHOTON_OWNED_FORMATS.has(format);
+}
+
+function createOpenClawRastermillForInput(buffer: Buffer) {
+  return createOpenClawRastermill({
+    backend: shouldForcePhotonForInput(buffer) ? "photon" : undefined,
   });
 }
 
@@ -110,6 +133,159 @@ function assertImageInputWithinPixelBudget(buffer: Buffer): void {
   }
 }
 
+function paethPredictor(left: number, up: number, upperLeft: number): number {
+  const prediction = left + up - upperLeft;
+  const distanceLeft = Math.abs(prediction - left);
+  const distanceUp = Math.abs(prediction - up);
+  const distanceUpperLeft = Math.abs(prediction - upperLeft);
+  if (distanceLeft <= distanceUp && distanceLeft <= distanceUpperLeft) {
+    return left;
+  }
+  return distanceUp <= distanceUpperLeft ? up : upperLeft;
+}
+
+function unfilterPngScanlines(
+  inflated: Buffer,
+  width: number,
+  height: number,
+  bytesPerPixel: number,
+): Buffer | null {
+  const stride = width * bytesPerPixel;
+  if (inflated.length !== (stride + 1) * height) {
+    return null;
+  }
+  const out = Buffer.alloc(stride * height);
+  for (let row = 0; row < height; row += 1) {
+    const filter = inflated[row * (stride + 1)];
+    const sourceOffset = row * (stride + 1) + 1;
+    const targetOffset = row * stride;
+    for (let column = 0; column < stride; column += 1) {
+      const raw = inflated[sourceOffset + column] ?? 0;
+      const left = column >= bytesPerPixel ? (out[targetOffset + column - bytesPerPixel] ?? 0) : 0;
+      const up = row > 0 ? (out[targetOffset + column - stride] ?? 0) : 0;
+      const upperLeft =
+        row > 0 && column >= bytesPerPixel
+          ? (out[targetOffset + column - stride - bytesPerPixel] ?? 0)
+          : 0;
+      let value: number;
+      switch (filter) {
+        case 0:
+          value = raw;
+          break;
+        case 1:
+          value = raw + left;
+          break;
+        case 2:
+          value = raw + up;
+          break;
+        case 3:
+          value = raw + Math.floor((left + up) / 2);
+          break;
+        case 4:
+          value = raw + paethPredictor(left, up, upperLeft);
+          break;
+        default:
+          return null;
+      }
+      out[targetOffset + column] = value & 0xff;
+    }
+  }
+  return out;
+}
+
+function decodedPngHasTransparentPixel(buffer: Buffer): boolean | null {
+  if (buffer.length < 33 || !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    return null;
+  }
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  let interlace = 0;
+  let transparency: Buffer | null = null;
+  const idatChunks: Buffer[] = [];
+  for (let offset = 8; offset + 12 <= buffer.length; ) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > buffer.length) {
+      return null;
+    }
+    const data = buffer.subarray(dataStart, dataEnd);
+    if (type === "IHDR") {
+      if (length !== 13 || data[10] !== 0 || data[11] !== 0) {
+        return null;
+      }
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8] ?? 0;
+      colorType = data[9] ?? 0;
+      interlace = data[12] ?? 0;
+    } else if (type === "tRNS") {
+      transparency = data;
+    } else if (type === "IDAT") {
+      idatChunks.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+
+  const bytesPerPixel =
+    colorType === 6
+      ? 4
+      : colorType === 4
+        ? 2
+        : colorType === 2
+          ? 3
+          : colorType === 0 || colorType === 3
+            ? 1
+            : null;
+  if (
+    width <= 0 ||
+    height <= 0 ||
+    bitDepth !== 8 ||
+    interlace !== 0 ||
+    bytesPerPixel === null ||
+    idatChunks.length === 0
+  ) {
+    return null;
+  }
+  if (colorType === 0 || colorType === 2) {
+    return transparency !== null && transparency.length > 0;
+  }
+
+  const stride = width * bytesPerPixel;
+  const inflated = inflateSync(Buffer.concat(idatChunks), {
+    maxOutputLength: (stride + 1) * height,
+  });
+  const pixels = unfilterPngScanlines(inflated, width, height, bytesPerPixel);
+  if (!pixels) {
+    return null;
+  }
+  if (colorType === 3) {
+    if (!transparency) {
+      return false;
+    }
+    for (const paletteIndex of pixels) {
+      if ((transparency[paletteIndex] ?? 255) < 255) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const alphaOffset = colorType === 6 ? 3 : 1;
+  for (let offset = alphaOffset; offset < pixels.length; offset += bytesPerPixel) {
+    if ((pixels[offset] ?? 255) < 255) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
   return readRastermillImageMetadataFromHeader(buffer);
 }
@@ -122,7 +298,7 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
   try {
     assertImageInputWithinPixelBudget(buffer);
-    const rastermill = createOpenClawRastermill();
+    const rastermill = createOpenClawRastermillForInput(buffer);
     const info = await rastermill.probe(buffer);
     if (!info?.orientation || info.orientation === 1) {
       return buffer;
@@ -139,7 +315,7 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   try {
     return (
-      await createOpenClawRastermill().encode(params.buffer, {
+      await createOpenClawRastermillForInput(params.buffer).encode(params.buffer, {
         format: "jpeg",
         resize: {
           maxSide: params.maxSide,
@@ -164,7 +340,7 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   try {
     assertImageInputWithinPixelBudget(buffer);
-    const rastermill = createOpenClawRastermill();
+    const rastermill = createOpenClawRastermillForInput(buffer);
     const info = await rastermill.probe(buffer);
     if (!info) {
       return false;
@@ -177,7 +353,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
         format: "png",
         autoOrient: false,
       });
-      return readRastermillImageProbeFromHeader(png.data)?.hasAlpha ?? false;
+      return decodedPngHasTransparentPixel(png.data) ?? false;
     } catch {
       return false;
     }
@@ -192,7 +368,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   try {
     return (
-      await createOpenClawRastermill().encode(params.buffer, {
+      await createOpenClawRastermillForInput(params.buffer).encode(params.buffer, {
         format: "png",
         resize: {
           maxSide: params.maxSide,
@@ -220,7 +396,7 @@ export async function optimizeImageToPng(
   compressionLevel: number;
 }> {
   try {
-    const out = await createOpenClawRastermill().encodeWithinBytes(buffer, {
+    const out = await createOpenClawRastermillForInput(buffer).encodeWithinBytes(buffer, {
       format: "png",
       maxBytes,
       search: options?.sides === undefined ? {} : { maxSide: options.sides },
