@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../../terminal/note.js";
 import { shortenHomePath } from "../../../utils.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
 const MAX_REPORTED = 6;
@@ -115,7 +116,7 @@ export async function noteStalePluginRuntimeSymlinks(
   if (stale.length > MAX_REPORTED) {
     lines.push(`  - ...and ${stale.length - MAX_REPORTED} more`);
   }
-  lines.push("- Repair: run `openclaw doctor --fix` to remove the dangling symlinks.");
+  lines.push(`- Repair: ${DOCTOR_FIX_HINT} to remove the dangling symlinks.`);
   (options.noteFn ?? note)(lines.join("\n"), "Plugin-runtime symlinks");
 }
 

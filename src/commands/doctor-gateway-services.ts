@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -384,7 +385,7 @@ export async function maybeRepairGatewayServiceConfig(
   const sourceCheckoutWarning = serviceLayout?.entrypointSourceCheckout
     ? [
         `Gateway service entrypoint resolves to a source checkout: ${serviceLayout.packageRootReal ?? serviceLayout.packageRoot ?? serviceLayout.entrypointReal ?? serviceLayout.entrypoint}.`,
-        "Run `openclaw doctor --fix` from the intended package install, or reinstall the gateway service with `openclaw gateway install --force`.",
+        `Run \`${formatCliCommand("openclaw doctor --fix")}\` from the intended package install, or reinstall the gateway service with \`${formatCliCommand("openclaw gateway install --force")}\`.`,
       ].join("\n")
     : null;
 
@@ -526,7 +527,7 @@ export async function maybeRepairGatewayServiceConfig(
 
   if (serviceRewriteBlocked) {
     note(
-      "Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use `openclaw gateway install --force` when you want to replace the active launcher.",
+      `Gateway service is running; leaving supervisor metadata unchanged. Stop the service first or use \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the active launcher.`,
       "Gateway service config",
     );
     return;
@@ -540,7 +541,7 @@ export async function maybeRepairGatewayServiceConfig(
     })
   ) {
     note(
-      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
+      `Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run \`${formatCliCommand("openclaw gateway install --force")}\` when you want OpenClaw to replace operator-owned systemd directives.`,
       "Gateway service config",
     );
     return;
@@ -567,7 +568,7 @@ export async function maybeRepairGatewayServiceConfig(
   if (!repair) {
     if (!emittedSourceCheckoutWarning) {
       note(
-        "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+        `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
         "Gateway service config",
       );
     }

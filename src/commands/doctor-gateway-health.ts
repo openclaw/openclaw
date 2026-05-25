@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
@@ -34,7 +35,7 @@ function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
   note(
     [
       `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
-      "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+      `Check \`${formatCliCommand("openclaw --version")}\`, \`which openclaw\`, and \`${formatCliCommand("openclaw gateway status --deep")}\`.`,
       "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
     ].join("\n"),
     "OpenClaw version mismatch",

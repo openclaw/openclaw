@@ -1,66 +1,241 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <title>ClaWorks Studio</title>
     <style>
       :root {
-        font-family: system-ui, -apple-system, sans-serif;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
         color: #0f172a;
         background: #f1f5f9;
       }
-      * { box-sizing: border-box; }
-      body { margin: 0; padding: 1rem 1.5rem 3rem; max-width: 1280px; margin-inline: auto; }
-      h1 { font-size: 1.3rem; margin: 0 0 0.15rem; font-weight: 700; letter-spacing: -0.01em; }
-      .sub { color: #64748b; font-size: 0.85rem; margin: 0 0 1rem; }
-      .topbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
-      .topbar-left { flex: 1; }
-      .topbar-right { display: flex; gap: 0.5rem; align-items: center; }
-      nav { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 1rem; }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 1rem 1.5rem 3rem;
+        max-width: 1280px;
+        margin-inline: auto;
+      }
+      h1 {
+        font-size: 1.3rem;
+        margin: 0 0 0.15rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .sub {
+        color: #64748b;
+        font-size: 0.85rem;
+        margin: 0 0 1rem;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+      }
+      .topbar-left {
+        flex: 1;
+      }
+      .topbar-right {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      nav {
+        display: flex;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+        margin-bottom: 1rem;
+      }
       nav button {
-        padding: 0.4rem 0.75rem; border-radius: 6px; border: 1px solid #cbd5e1;
-        background: #fff; cursor: pointer; font-size: 13px; white-space: nowrap;
-        transition: all .1s;
+        padding: 0.4rem 0.75rem;
+        border-radius: 6px;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        cursor: pointer;
+        font-size: 13px;
+        white-space: nowrap;
+        transition: all 0.1s;
       }
-      nav button:hover { background: #f8fafc; }
-      nav button.active { background: #0284c7; color: #fff; border-color: #0369a1; font-weight: 600; }
-      .panel { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; margin-bottom: 1rem; }
-      .panel-title { font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
-      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.5rem; }
-      input, select, textarea {
-        padding: 0.35rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;
+      nav button:hover {
+        background: #f8fafc;
       }
-      select { cursor: pointer; }
-      textarea { width: 100%; min-height: 80px; font-family: ui-monospace, monospace; font-size: 12px; }
+      nav button.active {
+        background: #0284c7;
+        color: #fff;
+        border-color: #0369a1;
+        font-weight: 600;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      .panel-title {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.5rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 0.5rem;
+      }
+      input,
+      select,
+      textarea {
+        padding: 0.35rem 0.5rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        font-size: 13px;
+      }
+      select {
+        cursor: pointer;
+      }
+      textarea {
+        width: 100%;
+        min-height: 80px;
+        font-family: ui-monospace, monospace;
+        font-size: 12px;
+      }
       button.btn {
-        padding: 0.4rem 0.9rem; border-radius: 6px; border: 1px solid #cbd5e1;
-        background: #fff; cursor: pointer; font-size: 13px;
+        padding: 0.4rem 0.9rem;
+        border-radius: 6px;
+        border: 1px solid #cbd5e1;
+        background: #fff;
+        cursor: pointer;
+        font-size: 13px;
       }
-      button.btn-primary { background: #0284c7; color: #fff; border-color: #0369a1; }
-      button.btn-primary:hover { background: #0369a1; }
-      button.btn-sm { padding: 0.25rem 0.55rem; font-size: 12px; }
+      button.btn-primary {
+        background: #0284c7;
+        color: #fff;
+        border-color: #0369a1;
+      }
+      button.btn-primary:hover {
+        background: #0369a1;
+      }
+      button.btn-sm {
+        padding: 0.25rem 0.55rem;
+        font-size: 12px;
+      }
       pre {
-        background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px;
-        overflow: auto; font-size: 11.5px; max-height: 500px; margin: 0;
-        font-family: ui-monospace, monospace; line-height: 1.5;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 1rem;
+        border-radius: 8px;
+        overflow: auto;
+        font-size: 11.5px;
+        max-height: 500px;
+        margin: 0;
+        font-family: ui-monospace, monospace;
+        line-height: 1.5;
       }
-      .badge { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 11px; font-weight: 600; }
-      .ok { background: #dcfce7; color: #166534; }
-      .warn { background: #fef9c3; color: #854d0e; }
-      .err { background: #fee2e2; color: #991b1b; }
-      .info { background: #dbeafe; color: #1e40af; }
-      table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      th { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 2px solid #e2e8f0; font-weight: 600; color: #475569; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-      td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
-      tr:hover td { background: #f8fafc; }
-      .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-      .stat-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 1rem; }
-      .stat-label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
-      .stat-val { font-size: 1.5rem; font-weight: 700; color: #0f172a; margin-top: 0.15rem; }
-      .rule-chip { display: inline-block; background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; border-radius: 4px; padding: 0.1rem 0.45rem; font-size: 11px; margin: 0.1rem; }
-      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-      @media (max-width: 720px) { .split { grid-template-columns: 1fr; } }
-      #output { margin-top: 0.5rem; }
+      .badge {
+        display: inline-block;
+        padding: 0.15rem 0.45rem;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .ok {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .warn {
+        background: #fef9c3;
+        color: #854d0e;
+      }
+      .err {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .info {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        text-align: left;
+        padding: 0.4rem 0.5rem;
+        border-bottom: 2px solid #e2e8f0;
+        font-weight: 600;
+        color: #475569;
+        font-size: 11.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      td {
+        padding: 0.4rem 0.5rem;
+        border-bottom: 1px solid #f1f5f9;
+        vertical-align: top;
+      }
+      tr:hover td {
+        background: #f8fafc;
+      }
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      .stat-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+      }
+      .stat-label {
+        font-size: 11px;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .stat-val {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #0f172a;
+        margin-top: 0.15rem;
+      }
+      .rule-chip {
+        display: inline-block;
+        background: #f0f9ff;
+        color: #0369a1;
+        border: 1px solid #bae6fd;
+        border-radius: 4px;
+        padding: 0.1rem 0.45rem;
+        font-size: 11px;
+        margin: 0.1rem;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+      }
+      @media (max-width: 720px) {
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+      #output {
+        margin-top: 0.5rem;
+      }
     </style>
   </head>
   <body>
@@ -70,13 +245,13 @@
         <p class="sub">运维与调试面板 · <code id="base"></code></p>
       </div>
       <div class="topbar-right">
-        <input id="apiKey" type="password" placeholder="API Key (可选)" style="width:180px" />
+        <input id="apiKey" type="password" placeholder="API Key (可选)" style="width: 180px" />
         <button class="btn btn-primary" id="refreshBtn">刷新</button>
       </div>
     </div>
 
     <nav id="nav"></nav>
-    <div id="actionBar" class="panel" style="display:none"></div>
+    <div id="actionBar" class="panel" style="display: none"></div>
     <div id="output"><pre>Loading…</pre></div>
 
     <script>
@@ -84,21 +259,21 @@
       document.getElementById("base").textContent = base;
 
       const VIEWS = [
-        { id: "dashboard",   label: "🏠 总览" },
-        { id: "identity",    label: "🤖 机器人身份" },
-        { id: "playbooks",   label: "📋 Playbooks" },
-        { id: "runs",        label: "▶️ 运行记录" },
-        { id: "memory",      label: "🧠 记忆" },
-        { id: "objects",     label: "🗂️ 数据对象" },
-        { id: "events",      label: "⚡ 事件流" },
+        { id: "dashboard", label: "🏠 总览" },
+        { id: "identity", label: "🤖 机器人身份" },
+        { id: "playbooks", label: "📋 Playbooks" },
+        { id: "runs", label: "▶️ 运行记录" },
+        { id: "memory", label: "🧠 记忆" },
+        { id: "objects", label: "🗂️ 数据对象" },
+        { id: "events", label: "⚡ 事件流" },
         { id: "decisionlog", label: "📝 决策日志" },
-        { id: "im_bridge",   label: "💬 IM 桥接" },
-        { id: "packs",       label: "📦 Packs" },
-        { id: "connectors",  label: "🔌 Connectors" },
-        { id: "rbac",        label: "🔒 权限策略" },
-        { id: "kb",          label: "📚 知识库" },
-        { id: "metrics",     label: "📈 Metrics" },
-        { id: "doctor",      label: "🩺 诊断" },
+        { id: "im_bridge", label: "💬 IM 桥接" },
+        { id: "packs", label: "📦 Packs" },
+        { id: "connectors", label: "🔌 Connectors" },
+        { id: "rbac", label: "🔒 权限策略" },
+        { id: "kb", label: "📚 知识库" },
+        { id: "metrics", label: "📈 Metrics" },
+        { id: "doctor", label: "🩺 诊断" },
       ];
 
       let view = "dashboard";
@@ -128,8 +303,11 @@
         try {
           const res = await fetch(base + path, { ...init, headers });
           const text = await res.text();
-          try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
-          catch { return { ok: res.ok, status: res.status, data: { raw: text } }; }
+          try {
+            return { ok: res.ok, status: res.status, data: JSON.parse(text) };
+          } catch {
+            return { ok: res.ok, status: res.status, data: { raw: text } };
+          }
         } catch (e) {
           return { ok: false, status: 0, data: { error: String(e) } };
         }
@@ -137,14 +315,26 @@
 
       function badge(status) {
         const s = String(status ?? "").toLowerCase();
-        const c = (s === "ok" || s === "completed" || s === "running" || s === "allow") ? "ok"
-          : (s === "waiting_hitl" || s === "warn" || s === "deny") ? "warn"
-          : (s === "failed" || s === "error") ? "err" : "info";
+        const c =
+          s === "ok" || s === "completed" || s === "running" || s === "allow"
+            ? "ok"
+            : s === "waiting_hitl" || s === "warn" || s === "deny"
+              ? "warn"
+              : s === "failed" || s === "error"
+                ? "err"
+                : "info";
         return `<span class="badge ${c}">${status ?? "—"}</span>`;
       }
 
-      function html(s) { return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-      function json(v) { return `<pre>${html(JSON.stringify(v, null, 2))}</pre>`; }
+      function html(s) {
+        return String(s ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+      function json(v) {
+        return `<pre>${html(JSON.stringify(v, null, 2))}</pre>`;
+      }
 
       // ─── Dashboard ────────────────────────────────────────────────────
       async function renderDashboard() {
@@ -162,15 +352,28 @@
           { label: "Packs", val: d.loaded_packs ?? "—" },
           { label: "事件总数", val: d.event_count ?? "—" },
         ];
-        let statHtml = `<div class="stat-grid">` + stats.map(s => `
-          <div class="stat-card"><div class="stat-label">${s.label}</div><div class="stat-val">${s.val}</div></div>`).join("") + `</div>`;
+        let statHtml =
+          `<div class="stat-grid">` +
+          stats
+            .map(
+              (s) => `
+          <div class="stat-card"><div class="stat-label">${s.label}</div><div class="stat-val">${s.val}</div></div>`,
+            )
+            .join("") +
+          `</div>`;
 
         let recHtml = "";
         const evs = obs.data?.events ?? [];
         if (evs.length) {
-          recHtml = `<div class="panel-title">最近观测事件</div><table>
+          recHtml =
+            `<div class="panel-title">最近观测事件</div><table>
             <tr><th>时间</th><th>来源</th><th>类型</th></tr>` +
-            evs.map(e => `<tr><td>${e.at?.slice(11,19) ?? ""}</td><td>${html(e.source)}</td><td>${html(e.type)}</td></tr>`).join("") +
+            evs
+              .map(
+                (e) =>
+                  `<tr><td>${e.at?.slice(11, 19) ?? ""}</td><td>${html(e.source)}</td><td>${html(e.type)}</td></tr>`,
+              )
+              .join("") +
             `</table>`;
         }
         out.innerHTML = `<div class="panel">${statHtml}${recHtml}</div>`;
@@ -180,10 +383,17 @@
       async function renderIdentity() {
         actionBar.style.display = "none";
         const r = await api("/v1/identity");
-        if (!r.ok) { out.innerHTML = json(r.data); return; }
+        if (!r.ok) {
+          out.innerHTML = json(r.data);
+          return;
+        }
         const d = r.data;
-        const rules = (d.rules ?? []).map(r => `<span class="rule-chip">${html(r)}</span>`).join("");
-        const packs = (d.robot?.loaded_packs ?? []).map(p => badge(`${p.id}@${p.version}`)).join(" ");
+        const rules = (d.rules ?? [])
+          .map((r) => `<span class="rule-chip">${html(r)}</span>`)
+          .join("");
+        const packs = (d.robot?.loaded_packs ?? [])
+          .map((p) => badge(`${p.id}@${p.version}`))
+          .join(" ");
         out.innerHTML = `<div class="panel">
           <div class="split">
             <div>
@@ -220,16 +430,26 @@
         document.getElementById("triggerPb").onclick = async () => {
           const id = document.getElementById("pbId").value.trim();
           let input = {};
-          try { input = JSON.parse(document.getElementById("pbInput").value || "{}"); } catch {}
-          const r = await api(`/v1/playbooks/${id}/runs`, { method: "POST", body: JSON.stringify({ input }) });
+          try {
+            input = JSON.parse(document.getElementById("pbInput").value || "{}");
+          } catch {}
+          const r = await api(`/v1/playbooks/${id}/runs`, {
+            method: "POST",
+            body: JSON.stringify({ input }),
+          });
           out.innerHTML = json(r.data);
         };
         const p = await api("/v1/playbooks");
         const pbs = p.data?.playbooks ?? [];
         let html_str = `<table><tr><th>ID</th><th>名称</th><th>Pack</th><th>触发</th><th>优先级</th></tr>`;
-        pbs.forEach(pb => {
+        pbs.forEach((pb) => {
           const t = pb.trigger ?? {};
-          const trigStr = t.kind === "schedule" ? `⏰ ${t.cron}` : t.kind === "event" ? `⚡ ${t.pattern}` : "手动";
+          const trigStr =
+            t.kind === "schedule"
+              ? `⏰ ${t.cron}`
+              : t.kind === "event"
+                ? `⚡ ${t.pattern}`
+                : "手动";
           html_str += `<tr><td><code>${html(pb.id)}</code></td><td>${html(pb.name)}</td><td>${badge(pb.pack)}</td><td>${html(trigStr)}</td><td>${pb.priority ?? 0}</td></tr>`;
         });
         html_str += "</table>";
@@ -240,24 +460,28 @@
       async function renderRuns() {
         actionBar.style.display = "none";
         const p = await api("/v1/playbooks");
-        const ids = (p.data?.playbooks ?? []).map(x => x.id);
+        const ids = (p.data?.playbooks ?? []).map((x) => x.id);
         let html_str = `<table><tr><th>Playbook</th><th>Run ID</th><th>状态</th><th>时间</th><th>操作</th></tr>`;
         for (const id of ids.slice(0, 12)) {
           const r = await api(`/v1/playbooks/${id}/runs?limit=3`);
-          for (const run of (r.data?.runs ?? r.data ?? [])) {
-            const hitlBtn = run.status === "waiting_hitl"
-              ? `<button class="btn btn-sm" data-run="${run.id}" data-pb="${id}">批准</button>`
-              : "";
+          for (const run of r.data?.runs ?? r.data ?? []) {
+            const hitlBtn =
+              run.status === "waiting_hitl"
+                ? `<button class="btn btn-sm" data-run="${run.id}" data-pb="${id}">批准</button>`
+                : "";
             const ts = run.startedAt ? new Date(run.startedAt).toLocaleTimeString("zh-CN") : "";
-            html_str += `<tr><td><code>${html(id)}</code></td><td><code>${html((run.id ?? "").slice(0,10))}…</code></td><td>${badge(run.status)}</td><td>${html(ts)}</td><td>${hitlBtn}</td></tr>`;
+            html_str += `<tr><td><code>${html(id)}</code></td><td><code>${html((run.id ?? "").slice(0, 10))}…</code></td><td>${badge(run.status)}</td><td>${html(ts)}</td><td>${hitlBtn}</td></tr>`;
           }
         }
         html_str += "</table>";
         out.innerHTML = `<div class="panel">${html_str}</div>`;
-        out.querySelectorAll("button[data-run]").forEach(btn => {
+        out.querySelectorAll("button[data-run]").forEach((btn) => {
           btn.onclick = async () => {
             const body = { step_id: "hitl", decision: "approve", comment: "studio" };
-            const r = await api(`/v1/playbooks/${btn.dataset.pb}/runs/${btn.dataset.run}/hitl`, { method: "POST", body: JSON.stringify(body) });
+            const r = await api(`/v1/playbooks/${btn.dataset.pb}/runs/${btn.dataset.run}/hitl`, {
+              method: "POST",
+              body: JSON.stringify(body),
+            });
             alert(JSON.stringify(r.data));
             render();
           };
@@ -282,13 +506,19 @@
 
         const doQuery = async () => {
           const subj = document.getElementById("memSubject").value.trim();
-          const filter = subj && subj !== "*" ? encodeURIComponent(JSON.stringify({ subject: subj })) : "";
-          const r = await api(`/v1/objects/RobotMemory?limit=100${filter ? "&filter=" + filter : ""}`);
+          const filter =
+            subj && subj !== "*" ? encodeURIComponent(JSON.stringify({ subject: subj })) : "";
+          const r = await api(
+            `/v1/objects/RobotMemory?limit=100${filter ? "&filter=" + filter : ""}`,
+          );
           const items = r.data?.items ?? [];
-          if (!items.length) { out.innerHTML = `<div class="panel"><em>暂无记忆（主体: ${html(subj)}）</em></div>`; return; }
+          if (!items.length) {
+            out.innerHTML = `<div class="panel"><em>暂无记忆（主体: ${html(subj)}）</em></div>`;
+            return;
+          }
           let h = `<table><tr><th>主体</th><th>键</th><th>值</th><th>置信度</th><th>类别</th><th>来源</th><th>更新时间</th></tr>`;
-          items.forEach(m => {
-            h += `<tr><td>${html(m.subject)}</td><td><strong>${html(m.key)}</strong></td><td><code>${html(m.value)}</code></td><td>${html(m.confidence ?? "—")}</td><td>${badge(m.category)}</td><td>${html(m.source ?? "—")}</td><td>${html((m.updatedAt ?? "").slice(0,19))}</td></tr>`;
+          items.forEach((m) => {
+            h += `<tr><td>${html(m.subject)}</td><td><strong>${html(m.key)}</strong></td><td><code>${html(m.value)}</code></td><td>${html(m.confidence ?? "—")}</td><td>${badge(m.category)}</td><td>${html(m.source ?? "—")}</td><td>${html((m.updatedAt ?? "").slice(0, 19))}</td></tr>`;
           });
           h += "</table>";
           out.innerHTML = `<div class="panel">${h}</div>`;
@@ -298,9 +528,23 @@
           const subj = document.getElementById("memWSubject").value.trim();
           const key = document.getElementById("memWKey").value.trim();
           const val = document.getElementById("memWValue").value.trim();
-          if (!subj || !key) { alert("主体和键不能为空"); return; }
+          if (!subj || !key) {
+            alert("主体和键不能为空");
+            return;
+          }
           const memId = `mem:${subj}:${key}`;
-          const r = await api("/v1/objects/RobotMemory", { method: "POST", body: JSON.stringify({ id: memId, subject: subj, key, value: val, category: "preference", confidence: 1.0, source: "studio" }) });
+          const r = await api("/v1/objects/RobotMemory", {
+            method: "POST",
+            body: JSON.stringify({
+              id: memId,
+              subject: subj,
+              key,
+              value: val,
+              category: "preference",
+              confidence: 1.0,
+              source: "studio",
+            }),
+          });
           alert(r.ok ? "写入成功" : JSON.stringify(r.data));
           doQuery();
         };
@@ -310,10 +554,19 @@
       // ─── Objects ──────────────────────────────────────────────────────
       async function renderObjects() {
         actionBar.style.display = "block";
-        const TYPES = ["WorkOrder", "Alarm", "Equipment", "Station", "SparePart", "RobotMemory", "RbacPolicy", "IngressPolicy"];
+        const TYPES = [
+          "WorkOrder",
+          "Alarm",
+          "Equipment",
+          "Station",
+          "SparePart",
+          "RobotMemory",
+          "RbacPolicy",
+          "IngressPolicy",
+        ];
         let selType = TYPES[0];
         actionBar.innerHTML = `<div class="row">
-          <select id="objType">${TYPES.map(t => `<option value="${t}">${t}</option>`).join("")}</select>
+          <select id="objType">${TYPES.map((t) => `<option value="${t}">${t}</option>`).join("")}</select>
           <input id="objFilter" placeholder='过滤 JSON {"status":"open"}' style="width:240px" />
           <button class="btn btn-primary btn-sm" id="queryObj">查询</button>
         </div>`;
@@ -323,11 +576,16 @@
           const filter = fv ? encodeURIComponent(fv) : "";
           const r = await api(`/v1/objects/${t}?limit=50${filter ? "&filter=" + filter : ""}`);
           const items = r.data?.items ?? [];
-          if (!items.length) { out.innerHTML = `<div class="panel"><em>暂无 ${t} 对象</em></div>`; return; }
-          const keys = [...new Set(items.flatMap(i => Object.keys(i)))].filter(k => !k.startsWith("_")).slice(0, 8);
-          let h = `<table><tr>${keys.map(k => `<th>${html(k)}</th>`).join("")}</tr>`;
-          items.forEach(item => {
-            h += `<tr>${keys.map(k => `<td>${html(typeof item[k] === "object" ? JSON.stringify(item[k]) : item[k])}</td>`).join("")}</tr>`;
+          if (!items.length) {
+            out.innerHTML = `<div class="panel"><em>暂无 ${t} 对象</em></div>`;
+            return;
+          }
+          const keys = [...new Set(items.flatMap((i) => Object.keys(i)))]
+            .filter((k) => !k.startsWith("_"))
+            .slice(0, 8);
+          let h = `<table><tr>${keys.map((k) => `<th>${html(k)}</th>`).join("")}</tr>`;
+          items.forEach((item) => {
+            h += `<tr>${keys.map((k) => `<td>${html(typeof item[k] === "object" ? JSON.stringify(item[k]) : item[k])}</td>`).join("")}</tr>`;
           });
           h += "</table>";
           out.innerHTML = `<div class="panel"><em>${items.length} 条记录</em>${h}</div>`;
@@ -347,10 +605,18 @@
         </div>`;
         document.getElementById("publishEv").onclick = async () => {
           const type = document.getElementById("evType").value.trim();
-          if (!type) { alert("请输入事件类型"); return; }
+          if (!type) {
+            alert("请输入事件类型");
+            return;
+          }
           let payload = {};
-          try { payload = JSON.parse(document.getElementById("evPayload").value || "{}"); } catch {}
-          const r = await api("/v1/events", { method: "POST", body: JSON.stringify({ type, source: "studio", payload }) });
+          try {
+            payload = JSON.parse(document.getElementById("evPayload").value || "{}");
+          } catch {}
+          const r = await api("/v1/events", {
+            method: "POST",
+            body: JSON.stringify({ type, source: "studio", payload }),
+          });
           const msg = r.data?.matched_playbooks?.length
             ? `已发布 → 触发 Playbooks: ${r.data.matched_playbooks.join(", ")}`
             : `已发布（无匹配 Playbook）`;
@@ -360,9 +626,12 @@
         const e = await api("/v1/observation-events?limit=50");
         const evs = e.data?.events ?? [];
         let h = `<table><tr><th>时间</th><th>来源</th><th>类型</th><th>payload 预览</th></tr>`;
-        evs.forEach(ev => {
-          const preview = Object.entries(ev.payload ?? {}).slice(0, 3).map(([k,v]) => `${k}=${JSON.stringify(v)}`).join(" ");
-          h += `<tr><td>${html(ev.at?.slice(11,19))}</td><td>${html(ev.source)}</td><td><code>${html(ev.type)}</code></td><td style="font-size:11px;color:#64748b">${html(preview)}</td></tr>`;
+        evs.forEach((ev) => {
+          const preview = Object.entries(ev.payload ?? {})
+            .slice(0, 3)
+            .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+            .join(" ");
+          h += `<tr><td>${html(ev.at?.slice(11, 19))}</td><td>${html(ev.source)}</td><td><code>${html(ev.type)}</code></td><td style="font-size:11px;color:#64748b">${html(preview)}</td></tr>`;
         });
         h += "</table>";
         out.innerHTML = `<div class="panel"><em>${evs.length} 条观测事件</em>${h}</div>`;
@@ -374,8 +643,8 @@
         const r = await api("/v1/decision-log?limit=100");
         const entries = r.data?.entries ?? [];
         let h = `<table><tr><th>时间</th><th>类型</th><th>Playbook</th><th>摘要</th></tr>`;
-        entries.forEach(e => {
-          h += `<tr><td>${html(e.at?.slice(11,19))}</td><td>${badge(e.kind)}</td><td>${html(e.playbookId ?? "—")}</td><td>${html(e.summary)}</td></tr>`;
+        entries.forEach((e) => {
+          h += `<tr><td>${html(e.at?.slice(11, 19))}</td><td>${badge(e.kind)}</td><td>${html(e.playbookId ?? "—")}</td><td>${html(e.summary)}</td></tr>`;
         });
         h += "</table>";
         out.innerHTML = `<div class="panel"><em>${entries.length} 条决策日志</em>${h}</div>`;
@@ -414,16 +683,25 @@
             group_id: document.getElementById("imGroupId").value || undefined,
           };
           const r = await api("/v1/bridge/im", { method: "POST", body: JSON.stringify(body) });
-          const color = r.data?.action === "published" ? "ok" : r.data?.action === "denied" ? "err" : "info";
+          const color =
+            r.data?.action === "published" ? "ok" : r.data?.action === "denied" ? "err" : "info";
           document.getElementById("imResult").innerHTML = `
             <div class="panel-title">响应 ${badge(r.data?.action)}</div>
-            ${r.data?.action === "published" ? `<p>事件类型: <code>${r.data.eventType}</code></p><p>触发 Playbooks: ${(r.data.matchedPlaybooks ?? []).map(p => badge(p)).join(" ") || "（无）"}</p>` : ""}
+            ${r.data?.action === "published" ? `<p>事件类型: <code>${r.data.eventType}</code></p><p>触发 Playbooks: ${(r.data.matchedPlaybooks ?? []).map((p) => badge(p)).join(" ") || "（无）"}</p>` : ""}
             ${r.data?.reason ? `<p>原因: ${html(r.data.reason)}</p>` : ""}
             ${json(r.data)}`;
         };
         document.getElementById("sendImMsg").onclick = () => sendMsg();
-        document.getElementById("sendImAlarm").onclick = () => { document.getElementById("imText").value = "紧急！压缩机 comp-002 压力超高，仪表显示 12.5 MPa，已超过安全上限！"; sendMsg(); };
-        document.getElementById("sendImQuery").onclick = () => { document.getElementById("imText").value = "帮我查一下泵站 pump-001 现在的运行状态和最近的检修工单"; sendMsg(); };
+        document.getElementById("sendImAlarm").onclick = () => {
+          document.getElementById("imText").value =
+            "紧急！压缩机 comp-002 压力超高，仪表显示 12.5 MPa，已超过安全上限！";
+          sendMsg();
+        };
+        document.getElementById("sendImQuery").onclick = () => {
+          document.getElementById("imText").value =
+            "帮我查一下泵站 pump-001 现在的运行状态和最近的检修工单";
+          sendMsg();
+        };
       }
 
       // ─── Packs ────────────────────────────────────────────────────────
@@ -437,19 +715,24 @@
         document.getElementById("installPack").onclick = async () => {
           const src = document.getElementById("packSrc").value.trim();
           if (!src) return;
-          const r = await api("/v1/packs/install", { method: "POST", body: JSON.stringify({ source: src }) });
+          const r = await api("/v1/packs/install", {
+            method: "POST",
+            body: JSON.stringify({ source: src }),
+          });
           alert(r.ok ? `已安装: ${r.data?.pack?.id ?? r.data?.installed}` : JSON.stringify(r.data));
           render();
         };
         document.getElementById("reloadPacks").onclick = async () => {
           const r = await api("/v1/packs/reload", { method: "POST" });
-          alert(r.ok ? `已加载 ${(r.data?.reloaded ?? []).length} 个 Pack` : JSON.stringify(r.data));
+          alert(
+            r.ok ? `已加载 ${(r.data?.reloaded ?? []).length} 个 Pack` : JSON.stringify(r.data),
+          );
           render();
         };
         const p = await api("/v1/packs");
         const packs = p.data?.packs ?? [];
         let h = `<table><tr><th>ID</th><th>名称</th><th>版本</th><th>Playbooks</th><th>ObjectTypes</th></tr>`;
-        packs.forEach(pk => {
+        packs.forEach((pk) => {
           h += `<tr><td><code>${html(pk.id)}</code></td><td>${html(pk.name)}</td><td>${badge(pk.version)}</td><td>${pk.playbooks ?? 0}</td><td>${pk.objectTypes ?? 0}</td></tr>`;
         });
         h += "</table>";
@@ -469,15 +752,23 @@
           const id = document.getElementById("connId").value.trim();
           if (!id) return;
           let params = {};
-          try { params = JSON.parse(document.getElementById("connParams").value || "{}"); } catch {}
-          const r = await api(`/v1/connectors/${id}/invoke`, { method: "POST", body: JSON.stringify({ method: document.getElementById("connMethod").value, params }) });
+          try {
+            params = JSON.parse(document.getElementById("connParams").value || "{}");
+          } catch {}
+          const r = await api(`/v1/connectors/${id}/invoke`, {
+            method: "POST",
+            body: JSON.stringify({ method: document.getElementById("connMethod").value, params }),
+          });
           out.innerHTML = json(r.data);
         };
         const c = await api("/v1/connectors");
         const conns = c.data?.connectors ?? [];
-        if (!conns.length) { out.innerHTML = `<div class="panel"><em>无 Connector</em></div>`; return; }
+        if (!conns.length) {
+          out.innerHTML = `<div class="panel"><em>无 Connector</em></div>`;
+          return;
+        }
         let h = `<table><tr><th>ID</th><th>运行</th><th>就绪</th><th>PID</th></tr>`;
-        conns.forEach(c => {
+        conns.forEach((c) => {
           const runLabel = c.running ? "running" : "stopped";
           const readyLabel = c.ready ? "ready" : "pending";
           h += `<tr><td><code>${html(c.id)}</code></td><td>${badge(runLabel)}</td><td>${badge(readyLabel)}</td><td>${html(c.pid ?? "—")}</td></tr>`;
@@ -521,7 +812,13 @@
         document.getElementById("kbRefreshStatus").onclick = showStatus;
         document.getElementById("kbFlush").onclick = async () => {
           const r = await api("/v1/kb/flush", { method: "POST", body: "{}" });
-          alert(r.ok ? (r.data?.flushed ? "索引已同步" : (r.data?.note ?? JSON.stringify(r.data))) : JSON.stringify(r.data));
+          alert(
+            r.ok
+              ? r.data?.flushed
+                ? "索引已同步"
+                : (r.data?.note ?? JSON.stringify(r.data))
+              : JSON.stringify(r.data),
+          );
           await showStatus();
         };
         document.getElementById("kbSearch").onclick = async () => {
@@ -580,8 +877,8 @@
           const r = await api("/v1/doctor", { method: "POST" });
           const checks = r.data?.checks ?? [];
           let h = `<table><tr><th>检查项</th><th>状态</th><th>说明</th></tr>`;
-          checks.forEach(c => {
-            const st = c.status ?? c.ok === true ? "ok" : c.ok === false ? "fail" : "info";
+          checks.forEach((c) => {
+            const st = (c.status ?? c.ok === true) ? "ok" : c.ok === false ? "fail" : "info";
             h += `<tr><td>${html(c.name ?? c.id ?? "—")}</td><td>${badge(st)}</td><td>${html(c.message ?? c.detail ?? "")}</td></tr>`;
           });
           h += "</table>";
@@ -606,7 +903,12 @@
         const policies = r.data?.items ?? [];
         let h = policies.length
           ? `<table><tr><th>ID</th><th>主体类型</th><th>主体</th><th>动作</th><th>资源</th><th>效果</th></tr>` +
-            policies.map(p => `<tr><td><code>${html(p.id)}</code></td><td>${html(p.subjectType)}</td><td>${html(p.subjectId)}</td><td>${html(p.action)}</td><td>${html(p.resource)}</td><td>${badge(p.effect)}</td></tr>`).join("") +
+            policies
+              .map(
+                (p) =>
+                  `<tr><td><code>${html(p.id)}</code></td><td>${html(p.subjectType)}</td><td>${html(p.subjectId)}</td><td>${html(p.action)}</td><td>${html(p.resource)}</td><td>${badge(p.effect)}</td></tr>`,
+              )
+              .join("") +
             "</table>"
           : `<em>暂无自定义 RbacPolicy（使用默认策略）</em>`;
         out.innerHTML = `<div class="panel"><div class="panel-title">RBAC 策略</div>${h}</div>`;
@@ -617,21 +919,21 @@
         actionBar.style.display = "none";
         out.innerHTML = `<pre>Loading…</pre>`;
         try {
-          if (view === "dashboard")   await renderDashboard();
-          else if (view === "identity")    await renderIdentity();
-          else if (view === "playbooks")   await renderPlaybooks();
-          else if (view === "runs")        await renderRuns();
-          else if (view === "memory")      await renderMemory();
-          else if (view === "objects")     await renderObjects();
-          else if (view === "events")      await renderEvents();
+          if (view === "dashboard") await renderDashboard();
+          else if (view === "identity") await renderIdentity();
+          else if (view === "playbooks") await renderPlaybooks();
+          else if (view === "runs") await renderRuns();
+          else if (view === "memory") await renderMemory();
+          else if (view === "objects") await renderObjects();
+          else if (view === "events") await renderEvents();
           else if (view === "decisionlog") await renderDecisionLog();
-          else if (view === "im_bridge")   await renderImBridge();
-          else if (view === "packs")       await renderPacks();
-          else if (view === "connectors")  await renderConnectors();
-          else if (view === "rbac")        await renderRbac();
-          else if (view === "kb")          await renderKb();
-          else if (view === "metrics")     await renderMetrics();
-          else if (view === "doctor")      await renderDoctor();
+          else if (view === "im_bridge") await renderImBridge();
+          else if (view === "packs") await renderPacks();
+          else if (view === "connectors") await renderConnectors();
+          else if (view === "rbac") await renderRbac();
+          else if (view === "kb") await renderKb();
+          else if (view === "metrics") await renderMetrics();
+          else if (view === "doctor") await renderDoctor();
         } catch (err) {
           out.innerHTML = `<pre>${html(String(err))}</pre>`;
         }
@@ -639,7 +941,9 @@
 
       document.getElementById("refreshBtn").onclick = render;
       // 自动刷新（Dashboard 30s）
-      setInterval(() => { if (view === "dashboard") render(); }, 30000);
+      setInterval(() => {
+        if (view === "dashboard") render();
+      }, 30000);
       render();
     </script>
   </body>

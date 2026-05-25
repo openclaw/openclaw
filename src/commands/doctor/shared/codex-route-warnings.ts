@@ -14,6 +14,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { DOCTOR_FIX_HINT } from "./doctor-fix-hint.js";
 
 type CodexRouteHit = {
   path: string;
@@ -2405,7 +2406,7 @@ function formatLegacyLosslessCompactionWarning(params: {
     "- Legacy Lossless compaction config should use the Lossless context-engine slot for Codex.",
     ...configLines,
     params.canAutoFix
-      ? "- Run `openclaw doctor --fix`: it migrates legacy Lossless compaction config to the Lossless context-engine slot."
+      ? `- ${DOCTOR_FIX_HINT} It migrates legacy Lossless compaction config to the Lossless context-engine slot.`
       : "- Move the Lossless config manually; doctor will not overwrite an existing non-Lossless context-engine slot or collapse conflicting per-agent summary models.",
   ].join("\n");
 }
@@ -2416,7 +2417,7 @@ function formatDisabledCodexPluginWarning(params: {
 }): string {
   const fixHint = params.blockedOutsideEntry
     ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to a PI runtime policy."
-    : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.";
+    : `- ${DOCTOR_FIX_HINT} It enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.`;
   return [
     "- Codex runtime is selected, but the Codex plugin is disabled.",
     ...params.hits.map(
@@ -2468,7 +2469,7 @@ export function collectCodexRouteWarnings(params: {
               hit.runtime ? `; current runtime is "${hit.runtime}"` : ""
             }.`,
         ),
-        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+        `- ${DOCTOR_FIX_HINT} It rewrites configured model refs and stale sessions to \`openai/*\`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.`,
       ].join("\n"),
     );
   }
@@ -2519,8 +2520,7 @@ export function collectCodexRouteWarnings(params: {
     warnings.push(
       formatUnsupportedCompactionWarning({
         hits: fixableHits,
-        fixHint:
-          "- Run `openclaw doctor --fix`: it removes unsupported Codex compaction overrides.",
+        fixHint: `- ${DOCTOR_FIX_HINT} It removes unsupported Codex compaction overrides.`,
       }),
     );
   }
@@ -2732,7 +2732,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
               [
                 "- Legacy `openai-codex/*` session route state detected.",
                 `- Affected sessions: ${stale.length}.`,
-                "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins across all agent session stores.",
+                `- ${DOCTOR_FIX_HINT} to rewrite stale session model/provider pins across all agent session stores.`,
               ].join("\n"),
             ]
           : [],

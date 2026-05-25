@@ -6,6 +6,7 @@ import {
   listPotentialConfiguredChannelIds,
 } from "../../../channels/config-presence.js";
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
@@ -1098,7 +1099,7 @@ async function repairMissingPluginInstalls(params: {
         continue;
       }
       changes.push(
-        `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`,
+        `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "${formatCliCommand("openclaw doctor --fix")}" after the update completes.`,
       );
     }
   }
