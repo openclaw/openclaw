@@ -630,6 +630,13 @@ export type EmbeddedAttemptSessionLockController = {
   ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  /**
+   * Force-release the eagerly-held session lock if it is still retained. Idempotent and safe
+   * to call from a run's outer `finally`: the happy path hands the lock to `acquireForCleanup`
+   * (so this is a no-op), but an exception on the post-prompt path can skip cleanup entirely,
+   * which would otherwise leak the lock to the live process until the watchdog reclaims it.
+   */
+  dispose(): Promise<void>;
 };
 
 export async function createEmbeddedAttemptSessionLockController(params: {
@@ -871,6 +878,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    async dispose(): Promise<void> {
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      await lock.release();
     },
   };
 }

@@ -1302,6 +1302,11 @@ export async function runEmbeddedAttempt(
     | undefined;
   let beforeAgentRunBlocked = false;
   let beforeAgentRunBlockedBy: string | undefined;
+  // Set once the session lock controller exists, so the outer finally can always release the
+  // eagerly-held session lock even when an exception on the post-prompt path skips the cleanup
+  // block below (#86014). The cleanup block hands the lock off on normal/aborted paths, so this
+  // is a no-op then.
+  let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
   try {
     const skillsSnapshotForRun =
       sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
@@ -2140,6 +2145,7 @@ export async function runEmbeddedAttempt(
         ...sessionWriteLockOptions,
       },
     });
+    releaseRetainedSessionLock = () => sessionLockController.dispose();
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -5070,6 +5076,17 @@ export async function runEmbeddedAttempt(
       }
     }
   } finally {
+    // Guarantee the eagerly-held session write lock is released on every exit path. The cleanup
+    // block above hands it to acquireForCleanup on normal/aborted/timed-out runs (so this is a
+    // no-op then), but an exception thrown in post-prompt processing skips that block and would
+    // otherwise leak the lock to the live gateway process until the watchdog reclaims it (#86014).
+    try {
+      await releaseRetainedSessionLock?.();
+    } catch (releaseErr) {
+      log.error(
+        `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
+      );
+    }
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),
