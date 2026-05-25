@@ -7,8 +7,9 @@ import { tryReadJson, writeJson } from "./json-files.js";
 import { movePathWithCopyFallback } from "./replace-file.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
-const PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS = "allow" as const;
-const DEFAULT_INSTALL_SOURCE_HARDLINKS = "reject" as const;
+type InstallSourceHardlinks = "package-manager" | "reject";
+
+const DEFAULT_INSTALL_SOURCE_HARDLINKS: InstallSourceHardlinks = "reject";
 const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
@@ -108,10 +109,8 @@ function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
 
-function resolveInstallSourceHardlinks(params: { hasDeps: boolean }): "allow" | "reject" {
-  return params.hasDeps
-    ? PACKAGE_MANAGER_INSTALL_SOURCE_HARDLINKS
-    : DEFAULT_INSTALL_SOURCE_HARDLINKS;
+function resolveMoveSourceHardlinks(policy: InstallSourceHardlinks): "allow" | "reject" {
+  return policy === "package-manager" ? "allow" : "reject";
 }
 
 async function assertInstallBaseStable(params: {
@@ -160,6 +159,7 @@ export async function installPackageDir(params: {
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
   copyErrorPrefix: string;
   hasDeps: boolean;
+  sourceHardlinks?: InstallSourceHardlinks;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (
@@ -198,7 +198,9 @@ export async function installPackageDir(params: {
 
   let stageDir: string | null = null;
   let backupDir: string | null = null;
-  const sourceHardlinks = resolveInstallSourceHardlinks({ hasDeps: params.hasDeps });
+  const sourceHardlinks = resolveMoveSourceHardlinks(
+    params.sourceHardlinks ?? DEFAULT_INSTALL_SOURCE_HARDLINKS,
+  );
   const fail = async (error: string, cause?: unknown) => {
     const installBaseChanged = isInstallBaseChangedError(cause);
     if (installBaseChanged) {
@@ -366,8 +368,10 @@ export async function installPackageDirWithManifestDeps(params: {
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir({
     ...params,
-    hasDeps: Object.keys(params.manifestDependencies ?? {}).length > 0,
+    hasDeps,
+    sourceHardlinks: hasDeps ? "package-manager" : "reject",
   });
 }
