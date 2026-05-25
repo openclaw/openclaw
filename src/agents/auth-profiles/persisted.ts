@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -46,10 +47,6 @@ const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "o
 const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
 const runtimeLegacyOAuthSidecarCredentials = new WeakSet<OAuthCredential>();
 const runtimeLegacyOAuthSidecarMaterialFingerprints = new Map<string, string>();
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeOptionalCredentialString(value: unknown): string | undefined {
   if (typeof value !== "string") {

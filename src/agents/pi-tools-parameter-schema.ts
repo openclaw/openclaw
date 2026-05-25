@@ -5,6 +5,7 @@ import {
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
+import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
@@ -77,10 +78,6 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 
 type FlattenableVariantKey = "anyOf" | "oneOf";
 type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
-
-function isSchemaRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function setOwnSchemaProperty(target: Record<string, unknown>, key: string, value: unknown): void {
   Object.defineProperty(target, key, {

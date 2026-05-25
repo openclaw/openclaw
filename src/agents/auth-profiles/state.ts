@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
@@ -31,10 +32,6 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeFiniteNumber(value: unknown): number | undefined {
   return asFiniteNumber(value);

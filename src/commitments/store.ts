@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -53,10 +54,6 @@ export function resolveCommitmentStorePath(storePath?: string): string {
 
 function emptyStore(): CommitmentStoreFile {
   return { version: STORE_VERSION, commitments: [] };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeRequiredString(value: unknown): string | undefined {

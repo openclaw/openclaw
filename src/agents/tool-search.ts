@@ -9,6 +9,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -369,10 +370,6 @@ const globalToolSearchState = globalThis as typeof globalThis & {
 const sessionCatalogs =
   globalToolSearchState[SESSION_CATALOGS_KEY] ??
   (globalToolSearchState[SESSION_CATALOGS_KEY] = new Map<string, ToolSearchCatalogSession>());
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;

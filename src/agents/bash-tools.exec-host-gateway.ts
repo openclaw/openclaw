@@ -16,6 +16,7 @@ import {
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -211,10 +212,6 @@ function commandRequiresSecurityAuditSuppressionApproval(params: {
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
   return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function formatBytes(value: unknown): string | null {

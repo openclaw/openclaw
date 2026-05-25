@@ -2,6 +2,7 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-patte
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -191,10 +192,6 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
     return true;
   }
   return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function readPluginToolName(tool: unknown): string {

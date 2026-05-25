@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -70,7 +71,7 @@ export type SubagentRunOutcome = {
 };
 
 function readFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 export function withSubagentOutcomeTiming(
