@@ -741,9 +741,8 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
   void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
-    // Only fetch usage data if the overview tab is still active. The user may
-    // have navigated away during the async primary load, in which case firing
-    // usage.cost is wasteful — especially expensive on 5.22 (pre-beta.2).
+    // The primary overview loaders can finish after the user has navigated away.
+    // Avoid starting the expensive usage RPC for stale overview refreshes.
     isCurrentOverviewRefresh() ? loadUsage(app) : Promise.resolve(),
     loadOverviewLogs(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
