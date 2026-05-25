@@ -250,6 +250,9 @@ export function createKilocodeWrapper(
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
+        if (typeof payload.stop === "string") {
+          payload.stop = [payload.stop];
+        }
       },
     );
   };
