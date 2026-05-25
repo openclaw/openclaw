@@ -183,6 +183,22 @@ function isTerminalToolEventPhase(phase: string): boolean {
   return TERMINAL_TOOL_EVENT_PHASES.has(phase);
 }
 
+function excludeConnIds(
+  connIds: ReadonlySet<string>,
+  excludedConnIds: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  if (!excludedConnIds || excludedConnIds.size === 0 || connIds.size === 0) {
+    return connIds;
+  }
+  const filtered = new Set<string>();
+  for (const connId of connIds) {
+    if (!excludedConnIds.has(connId)) {
+      filtered.add(connId);
+    }
+  }
+  return filtered;
+}
+
 type BroadcastDelta = { deltaText: string; replace?: true };
 
 function resolveBroadcastDelta(params: {
@@ -957,12 +973,17 @@ export function createAgentEventHandler({
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
       // messages to messaging surfaces (Telegram, Discord, etc.).
-      const recipients = toolEventRecipients.get(evt.runId);
-      if (isControlUiVisible && !suppressHeartbeatToolEvents && recipients && recipients.size > 0) {
+      const runToolRecipients = toolEventRecipients.get(evt.runId);
+      if (
+        isControlUiVisible &&
+        !suppressHeartbeatToolEvents &&
+        runToolRecipients &&
+        runToolRecipients.size > 0
+      ) {
         broadcastToConnIds(
           "agent",
           sessionKey ? { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
-          recipients,
+          runToolRecipients,
         );
       }
       if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
@@ -985,7 +1006,10 @@ export function createAgentEventHandler({
         !suppressHeartbeatToolEvents &&
         shouldMirrorSessionToolEvent
       ) {
-        const sessionSubscribers = sessionEventSubscribers.getAll();
+        const sessionSubscribers = excludeConnIds(
+          sessionEventSubscribers.getAll(),
+          runToolRecipients,
+        );
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
             "session.tool",

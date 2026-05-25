@@ -107,8 +107,7 @@ describe("agent event handler", () => {
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
-      shouldBackoffLowPrioritySessionToolEvents:
-        params?.shouldBackoffLowPrioritySessionToolEvents,
+      shouldBackoffLowPrioritySessionToolEvents: params?.shouldBackoffLowPrioritySessionToolEvents,
     });
 
     return {
@@ -1524,6 +1523,45 @@ describe("agent event handler", () => {
       dropIfSlow: true,
     });
     resetAgentRunContextForTest();
+  });
+
+  it("does not duplicate tool events to clients subscribed by run and session", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-dedupe",
+      });
+
+    registerAgentRunContext("run-session-dedupe-tool", {
+      sessionKey: "session-dedupe",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-overlap");
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-run-only");
+    sessionEventSubscribers.subscribe("conn-overlap");
+    sessionEventSubscribers.subscribe("conn-session-only");
+
+    handler({
+      runId: "run-session-dedupe-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-dedupe-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+      new Set(["conn-overlap", "conn-run-only"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+      new Set(["conn-session-only"]),
+    );
   });
 
   it("backs off session-scoped tool mirrors during queued gateway pressure", () => {
