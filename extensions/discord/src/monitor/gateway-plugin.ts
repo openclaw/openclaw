@@ -23,6 +23,7 @@ import {
   type DiscordGatewayFetch,
   type DiscordGatewayFetchInit,
 } from "./gateway-metadata.js";
+import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
 export {
   parseDiscordGatewayInfoBody,
@@ -244,6 +245,10 @@ function createDiscordGatewayMetadataFetch(debugCaptureEnabled: boolean): Discor
     );
 }
 
+function createDiscordGatewayMetadataProxyFetch(proxyFetch: typeof fetch): DiscordGatewayFetch {
+  return async (input, init) => await proxyFetch(input, init as RequestInit);
+}
+
 export function waitForDiscordGatewayPluginRegistration(
   plugin: unknown,
 ): Promise<void> | undefined {
@@ -279,6 +284,9 @@ export function createDiscordGatewayPlugin(params: {
       const HttpsProxyAgentCtor =
         params.testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
       wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+      fetchImpl = createDiscordGatewayMetadataProxyFetch(
+        resolveDiscordRestFetch(proxy, params.runtime),
+      );
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
