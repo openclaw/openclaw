@@ -199,7 +199,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
           const turn = await params.adapter.resolveTurn(input, {
@@ -219,7 +219,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(async (params) => ({
+        runPreparedReply: vi.fn(async (params) => ({
           dispatchResult: await params.runDispatch(),
         })),
       },

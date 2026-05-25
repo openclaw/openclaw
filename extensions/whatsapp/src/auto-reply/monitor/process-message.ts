@@ -3,7 +3,10 @@ import {
   removeAckReactionHandleAfterReply,
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
-import type { CommandTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  runChannelInboundEvent,
+  type CommandTurnContext,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -14,7 +17,6 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -505,7 +507,7 @@ export async function processMessage(params: {
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
 
-  const turnResult = await runInboundReplyTurn({
+  const turnResult = await runChannelInboundEvent({
     channel: "whatsapp",
     accountId: params.route.accountId,
     raw: params.msg,

@@ -1795,7 +1795,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
         let dispatchSettledBeforeStart = false;
         try {
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "mattermost",
             accountId: route.accountId,
             raw: post,

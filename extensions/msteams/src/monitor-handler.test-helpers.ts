@@ -26,7 +26,7 @@ type MSTeamsTestRuntimeOptions = {
 
 export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
   const runPrepared = vi.fn(
-    async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+    async (turn: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
       await turn.recordInboundSession({
         storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
@@ -46,7 +46,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       };
     },
   );
-  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+  const run = vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
     const input = await params.adapter.ingest(params.raw);
     if (!input) {
       return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
@@ -126,9 +126,10 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
         ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
       },
-      turn: {
-        run: run as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
+      inbound: {
+        run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
+        runPreparedReply:
+          runPrepared as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"],
       },
     },
   } as unknown as PluginRuntime);

@@ -577,7 +577,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     body: rawBody,
   });
 
-  const ctxPayload = await core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalo",
     accountId: route.accountId,
     messageId: message_id,
@@ -652,7 +652,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
   };
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,

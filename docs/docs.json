@@ -1744,7 +1744,7 @@
                   "plugins/sdk-migration",
                   "plugins/compatibility",
                   "plugins/sdk-channel-message",
-                  "plugins/sdk-channel-turn",
+                  "plugins/sdk-channel-inbound",
                   "plugins/sdk-channel-ingress",
                   "plugins/message-presentation"
                 ]

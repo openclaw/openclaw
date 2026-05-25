@@ -122,8 +122,8 @@ function installRuntime(params: {
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
   );
   type ResolvedTurn =
-    | Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]
-    | Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
+    | Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0]
+    | Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0];
   const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
     await turn.recordInboundSession({
       storePath: turn.storePath,
@@ -177,7 +177,7 @@ function installRuntime(params: {
     };
   });
   const buildContext = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+    (params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
         BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -200,7 +200,7 @@ function installRuntime(params: {
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
-      }) as Awaited<ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>>,
+      }) as Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>>,
   );
   const buildAgentSessionKey = vi.fn(
     (input: {
@@ -280,10 +280,11 @@ function installRuntime(params: {
         finalizeInboundContext: vi.fn((ctx) => ctx),
         dispatchReplyWithBufferedBlockDispatcher,
       },
-      turn: {
-        runAssembled:
-          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
-        buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+      inbound: {
+        dispatchReply:
+          dispatchAssembled as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
+        buildContext:
+          buildContext as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),

@@ -68,7 +68,7 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply/turn helpers such as `createChannelTurnReplyPipeline`,
+Legacy reply helpers such as `createChannelTurnReplyPipeline`,
 `dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
 remain available for compatibility dispatchers. Do not use those names for new
 channel code; new plugins should start with the `message` adapter, receipts, and
@@ -738,7 +738,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
   </Card>
-  <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
+  <Card title="Channel inbound API" icon="bolt" href="/plugins/sdk-channel-inbound">
     Shared inbound event lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelTurnContext, type BuildChannelTurnContextParams } from "./channel-inbound.js";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "./channel-inbound.js";
 
-function createLegacyTurnParams(
-  overrides: Partial<BuildChannelTurnContextParams> = {},
-): BuildChannelTurnContextParams {
+function createInboundParams(
+  overrides: Partial<BuildChannelInboundEventContextParams> = {},
+): BuildChannelInboundEventContextParams {
   return {
     channel: "test",
     messageId: "msg-1",
@@ -22,17 +25,16 @@ function createLegacyTurnParams(
     },
     message: {
       rawBody: "side chatter",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     },
     ...overrides,
   };
 }
 
-describe("channel-inbound public compatibility helpers", () => {
-  it("maps legacy buildChannelTurnContext inboundTurnKind into inbound event context", async () => {
-    const ctx = await buildChannelTurnContext(createLegacyTurnParams());
+describe("channel-inbound public helpers", () => {
+  it("builds inbound event kind into message context", async () => {
+    const ctx = buildChannelInboundEventContext(createInboundParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
-    expect(ctx.InboundTurnKind).toBe("room_event");
   });
 });

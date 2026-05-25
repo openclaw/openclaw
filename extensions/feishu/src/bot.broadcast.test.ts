@@ -115,8 +115,8 @@ describe("broadcast dispatch", () => {
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -149,8 +149,8 @@ describe("broadcast dispatch", () => {
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(
-          async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+        runPreparedReply: vi.fn(
+          async (turn: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
             await turn.recordInboundSession({
               storePath: turn.storePath,
               sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,

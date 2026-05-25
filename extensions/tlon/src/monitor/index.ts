@@ -510,7 +510,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const commandBody = isGroup ? stripBotMention(messageText, botShipName) : messageText;
     const tlonConversationId = isGroup ? (groupChannel ?? channelNest ?? senderShip) : senderShip;
-    const ctxPayload = await core.channel.turn.buildContext({
+    const ctxPayload = core.channel.inbound.buildContext({
       channel: "tlon",
       accountId: route.accountId,
       messageId,
@@ -595,7 +595,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
-    await core.channel.turn.runAssembled({
+    await core.channel.inbound.dispatchReply({
       channel: "tlon",
       accountId: route.accountId,
       cfg,

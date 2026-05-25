@@ -15,14 +15,9 @@ import {
 } from "./durable-delivery.js";
 export {
   buildChannelInboundEventContext,
-  buildChannelTurnContext,
   filterChannelInboundSupplementalContext,
 } from "../inbound-event/context.js";
-export type {
-  BuildChannelInboundEventContextParams,
-  BuildChannelTurnContextParams,
-  BuiltChannelTurnContext,
-} from "../inbound-event/context.js";
+export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
   listTrackedChannelBotPairsForTests,
@@ -231,6 +226,8 @@ export async function recordDroppedChannelTurnHistory(params: {
   });
 }
 
+export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistory;
+
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
@@ -432,6 +429,8 @@ export async function dispatchAssembledChannelTurn(
   );
 }
 
+export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
+
 function isPreparedChannelTurn<TDispatchResult>(
   value: ChannelTurnResolved<TDispatchResult>,
 ): value is PreparedChannelTurn<TDispatchResult> & {
@@ -598,6 +597,8 @@ export async function runPreparedChannelTurn<
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
 
+export const runPreparedInboundReply = runPreparedChannelTurn;
+
 export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
@@ -761,6 +762,8 @@ export async function runChannelTurn<
 
   return result;
 }
+
+export const runChannelInboundEvent = runChannelTurn;
 
 export async function runResolvedChannelTurn<
   TRaw,

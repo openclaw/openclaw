@@ -11,6 +11,7 @@ import {
   implicitMentionKindWhen,
   logInboundDrop,
   matchesMentionWithExplicit,
+  recordDroppedChannelInboundHistory,
   resolveEnvelopeFormatOptions,
   resolveUnmentionedGroupInboundPolicy,
   toInboundMediaFacts,
@@ -21,7 +22,6 @@ import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runti
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -971,7 +971,7 @@ export async function prepareSlackMessage(params: {
         : null;
     const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
     const senderName = pendingBody ? await resolveSenderName() : undefined;
-    await recordDroppedChannelTurnHistory({
+    await recordDroppedChannelInboundHistory({
       input: {
         id: message.ts ?? `${message.channel}:${Date.now()}`,
         timestamp,
@@ -1234,7 +1234,7 @@ export async function prepareSlackMessage(params: {
   const effectiveMessageThreadId =
     assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
 
-  const ctxPayload = (await buildChannelInboundEventContext({
+  const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
     accountId: route.accountId,
     messageId: message.ts,
@@ -1326,7 +1326,7 @@ export async function prepareSlackMessage(params: {
         mentionSource,
       }),
     },
-  })) satisfies FinalizedMsgContext;
+  }) satisfies FinalizedMsgContext;
 
   if (isRoomish && !shouldRequireMention) {
     channelHistory.record({

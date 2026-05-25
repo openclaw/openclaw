@@ -107,7 +107,7 @@ function createTestRuntime(overrides?: {
     );
   const recordInboundSession = vi.fn(async () => {});
   const runPrepared = vi.fn(
-    async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+    async (turn: Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0]) => {
       await turn.recordInboundSession({
         storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
@@ -153,8 +153,8 @@ function createTestRuntime(overrides?: {
         resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
         recordInboundSession,
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -171,10 +171,11 @@ function createTestRuntime(overrides?: {
             throw new Error("feishu comment test runtime only supports prepared turns");
           }
           return await runPrepared(
-            turn as Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0],
+            turn as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0],
           );
-        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
+        }) as unknown as PluginRuntime["channel"]["inbound"]["run"],
+        runPreparedReply:
+          runPrepared as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"],
       },
       pairing: {
         readAllowFromStore: vi.fn(overrides?.readAllowFromStore ?? (async () => [])),

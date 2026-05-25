@@ -101,7 +101,7 @@ describe("googlechat monitor bot loop protection", () => {
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
-        turn: { run: runTurn },
+        inbound: { run: runTurn },
       },
     } as unknown as GoogleChatCoreRuntime;
     const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
@@ -182,7 +182,7 @@ describe("googlechat monitor direct messages", () => {
           formatAgentEnvelope: ({ body }: { body: string }) => body,
           dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
         },
-        turn: { buildContext, run: runTurn },
+        inbound: { buildContext, run: runTurn },
       },
     } as unknown as GoogleChatCoreRuntime;
     const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;

@@ -1,17 +1,13 @@
 // Shared inbound parsing helpers for channel plugins.
 import {
   buildChannelInboundEventContext,
-  buildChannelTurnContext,
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
-  type BuildChannelTurnContextAsyncParams,
-  type BuildChannelTurnContextParams,
   type BuiltChannelInboundEventContext,
-  type BuiltChannelTurnContext,
   type ChannelInboundSupplementalResolutionOptions,
   type FinalizeChannelInboundContextAsyncParams,
   type FinalizeChannelInboundContextParams,
@@ -76,7 +72,6 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   buildChannelInboundEventContext,
-  buildChannelTurnContext,
   // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
@@ -87,43 +82,42 @@ export {
 export type {
   BuildChannelInboundEventContextAsyncParams,
   BuildChannelInboundEventContextParams,
-  BuildChannelTurnContextAsyncParams,
-  BuildChannelTurnContextParams,
   BuiltChannelInboundEventContext,
-  BuiltChannelTurnContext,
   ChannelInboundSupplementalResolutionOptions,
   FinalizeChannelInboundContextAsyncParams,
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };
-
-/**
- * @deprecated Prefer `filterChannelInboundSupplementalContext`, or
- * `filterChannelInboundQuoteContext` for quote-only checks.
- */
-export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
+export {
+  runChannelInboundEvent,
+  runPreparedInboundReply,
+  dispatchChannelInboundReply,
+  recordDroppedChannelInboundHistory,
+} from "./inbound-reply-dispatch.js";
+export type {
+  AssembledInboundReply,
+  ChannelInboundEventRunnerParams,
+  ChannelInboundDroppedHistoryOptions,
+  PreparedInboundReply,
+  InboundReplyDispatchResult,
+  InboundReplyRecordOptions,
+} from "./inbound-reply-dispatch.js";
 
 export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
   buildChannelInboundMediaPayload,
-  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,
-  ChannelInboundMediaInput as ChannelTurnMediaInput,
   ChannelInboundMediaPayload,
-  ChannelInboundMediaPayload as ChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   CommandFacts,
   InboundMediaFacts,
   SupplementalContextFacts,
 } from "../channels/turn/types.js";
-export type {
-  InboundEventKind,
-  InboundEventKind as InboundTurnKind,
-} from "../channels/inbound-event/kind.js";
+export type { InboundEventKind } from "../channels/inbound-event/kind.js";
 export {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,

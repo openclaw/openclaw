@@ -57,9 +57,10 @@ is empty.
 
 Compatibility dispatchers that still need the buffered reply dispatcher should
 build reply-prefix options with `createChannelMessageReplyPipeline(...)` from
-`openclaw/plugin-sdk/channel-message`, then call the runtime's
-`channel.turn.runPrepared(...)`. That keeps session recording and dispatch
-ordering on the shared turn lifecycle without adding another public turn wrapper.
+`openclaw/plugin-sdk/channel-message`, then call
+`runPreparedInboundReply(...)` from `openclaw/plugin-sdk/channel-inbound`. That
+keeps session recording and dispatch ordering shared without exposing the old
+turn vocabulary.
 
 ## Minimal adapter
 
@@ -422,21 +423,21 @@ surface.
 These APIs remain importable for third-party compatibility. Do not use them for
 new channel code.
 
-| Deprecated API                               | Replacement                                                                                                                |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/channel-reply-pipeline` | `openclaw/plugin-sdk/channel-message`                                                                                      |
-| `createChannelTurnReplyPipeline(...)`        | `createChannelMessageReplyPipeline(...)` for compatibility dispatchers, or a `message` adapter for new channel code        |
-| `buildChannelMessageReplyDispatchBase(...)`  | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `dispatchChannelMessageReplyWithBase(...)`   | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `recordChannelMessageReplyDispatch(...)`     | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `deliverOutboundPayloads(...)`               | `sendDurableMessageBatch(...)` or `deliverInboundReplyWithMessageSendContext(...)` from `channel-message-runtime`          |
-| `deliverDurableInboundReplyPayload(...)`     | `deliverInboundReplyWithMessageSendContext(...)` from `openclaw/plugin-sdk/channel-message-runtime`                        |
-| `dispatchInboundReplyWithBase(...)`          | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `recordInboundSessionAndDispatchReply(...)`  | `createChannelMessageReplyPipeline(...)` plus `channel.turn.runPrepared(...)`, or a `message` adapter for new channel code |
-| `resolveChannelSourceReplyDeliveryMode(...)` | `resolveChannelMessageSourceReplyDeliveryMode(...)`                                                                        |
-| `deliverFinalizableDraftPreview(...)`        | `defineFinalizableLivePreviewAdapter(...)` plus `deliverWithFinalizableLivePreviewAdapter(...)`                            |
-| `DraftPreviewFinalizerDraft`                 | `LivePreviewFinalizerDraft`                                                                                                |
-| `DraftPreviewFinalizerResult`                | `LivePreviewFinalizerResult`                                                                                               |
+| Deprecated API                               | Replacement                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/channel-reply-pipeline` | `openclaw/plugin-sdk/channel-message`                                                                                     |
+| `createChannelTurnReplyPipeline(...)`        | `createChannelMessageReplyPipeline(...)` for compatibility dispatchers, or a `message` adapter for new channel code       |
+| `buildChannelMessageReplyDispatchBase(...)`  | `createChannelMessageReplyPipeline(...)` plus `runPreparedInboundReply(...)`, or a `message` adapter for new channel code |
+| `dispatchChannelMessageReplyWithBase(...)`   | `createChannelMessageReplyPipeline(...)` plus `runPreparedInboundReply(...)`, or a `message` adapter for new channel code |
+| `recordChannelMessageReplyDispatch(...)`     | `createChannelMessageReplyPipeline(...)` plus `runPreparedInboundReply(...)`, or a `message` adapter for new channel code |
+| `deliverOutboundPayloads(...)`               | `sendDurableMessageBatch(...)` or `deliverInboundReplyWithMessageSendContext(...)` from `channel-message-runtime`         |
+| `deliverDurableInboundReplyPayload(...)`     | `deliverInboundReplyWithMessageSendContext(...)` from `openclaw/plugin-sdk/channel-message-runtime`                       |
+| `dispatchInboundReplyWithBase(...)`          | `createChannelMessageReplyPipeline(...)` plus `runPreparedInboundReply(...)`, or a `message` adapter for new channel code |
+| `recordInboundSessionAndDispatchReply(...)`  | `createChannelMessageReplyPipeline(...)` plus `runPreparedInboundReply(...)`, or a `message` adapter for new channel code |
+| `resolveChannelSourceReplyDeliveryMode(...)` | `resolveChannelMessageSourceReplyDeliveryMode(...)`                                                                       |
+| `deliverFinalizableDraftPreview(...)`        | `defineFinalizableLivePreviewAdapter(...)` plus `deliverWithFinalizableLivePreviewAdapter(...)`                           |
+| `DraftPreviewFinalizerDraft`                 | `LivePreviewFinalizerDraft`                                                                                               |
+| `DraftPreviewFinalizerResult`                | `LivePreviewFinalizerResult`                                                                                              |
 
 Compatibility dispatchers can still use `createReplyPrefixContext(...)`,
 `createReplyPrefixOptions(...)`, and `createTypingCallbacks(...)` through the

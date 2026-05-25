@@ -1344,7 +1344,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderAllowed: replySenderAllowed,
         }).include,
       );
-      const ctxPayload = await buildChannelInboundEventContext({
+      const ctxPayload = buildChannelInboundEventContext({
         channel: "matrix",
         finalize: core.channel.reply.finalizeInboundContext,
         contextVisibility: contextVisibilityMode,
@@ -2106,7 +2106,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         sessionKey: _route.sessionKey,
       });
 
-      const turnResult = await core.channel.turn.run({
+      const turnResult = await core.channel.inbound.run({
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,

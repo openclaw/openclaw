@@ -91,7 +91,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 
 vi.mock("openclaw/plugin-sdk/channel-message", () => ({
   createChannelMessageReplyPipeline: vi.fn(() => ({})),
-  hasFinalChannelTurnDispatch: vi.fn(() => false),
+  hasFinalChannelMessageReplyDispatch: vi.fn(() => false),
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {

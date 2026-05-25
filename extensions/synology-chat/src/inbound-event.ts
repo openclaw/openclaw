@@ -73,7 +73,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
     userId: params.msg.from,
   });
 
-  await resolved.rt.channel.turn.run({
+  await resolved.rt.channel.inbound.run({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
@@ -91,7 +91,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
           params.msg.chatType === "group" || params.msg.chatType === "channel"
             ? params.msg.chatType
             : "direct";
-        const msgCtx = await resolved.rt.channel.turn.buildContext({
+        const msgCtx = resolved.rt.channel.inbound.buildContext({
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           timestamp: input.timestamp,

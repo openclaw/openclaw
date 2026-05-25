@@ -1493,7 +1493,7 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1552,7 +1552,7 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1656,7 +1656,7 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.turn.run({
+      const turnResult = await core.channel.inbound.run({
         channel: "feishu",
         accountId: route.accountId,
         raw: ctx,

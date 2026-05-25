@@ -176,7 +176,7 @@ describe("handleClickClackInbound", () => {
       },
     });
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.runPreparedReply).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");

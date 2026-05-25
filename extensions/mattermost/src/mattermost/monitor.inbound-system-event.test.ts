@@ -321,9 +321,9 @@ function createRuntimeCore(
         ),
         updateLastRoute: vi.fn(async () => {}),
       },
-      turn: {
+      inbound: {
         run,
-        runPrepared,
+        runPreparedReply: runPrepared,
       },
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],

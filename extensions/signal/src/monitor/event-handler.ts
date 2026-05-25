@@ -9,6 +9,7 @@ import {
   matchesMentionPatterns,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
@@ -25,7 +26,6 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
@@ -202,7 +202,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : entry.mediaPath
           ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
           : undefined;
-    const ctxPayload = await buildChannelInboundEventContext({
+    const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {
         quote: entry.replyToBody
@@ -321,7 +321,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       sessionKey: route.sessionKey,
     });
 
-    await runInboundReplyTurn({
+    await runChannelInboundEvent({
       channel: "signal",
       accountId: route.accountId,
       raw: entry,

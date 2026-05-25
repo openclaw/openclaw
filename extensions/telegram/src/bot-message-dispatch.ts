@@ -13,6 +13,7 @@ import {
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import {
@@ -41,7 +42,6 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   createOutboundPayloadPlan,
@@ -1617,7 +1617,7 @@ export const dispatchTelegramMessage = async ({
     });
 
     try {
-      const turnResult = await runInboundReplyTurn({
+      const turnResult = await runChannelInboundEvent({
         channel: "telegram",
         accountId: route.accountId,
         raw: dispatchContext,

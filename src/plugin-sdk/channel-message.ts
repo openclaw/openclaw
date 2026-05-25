@@ -10,9 +10,9 @@ import type {
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
 import {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
+  hasFinalChannelTurnDispatch as hasFinalChannelMessageReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleChannelMessageReplyDispatch,
+  resolveChannelTurnDispatchCounts as resolveChannelMessageReplyDispatchCounts,
 } from "../channels/turn/dispatch-result.js";
 import {
   createChannelReplyPipeline,
@@ -148,26 +148,19 @@ export type {
   RenderedMessageBatchPlanKind,
 } from "../channels/message/index.js";
 
-export {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
-};
-
-type ChannelTurnKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
 type InboundReplyDispatchModule = typeof import("./inbound-reply-dispatch.js");
+
+export {
+  hasFinalChannelMessageReplyDispatch,
+  hasVisibleChannelMessageReplyDispatch,
+  resolveChannelMessageReplyDispatchCounts,
+};
 
 /** @deprecated Use `createChannelMessageReplyPipeline(...)` for compatibility dispatchers. */
 export function createChannelTurnReplyPipeline(params: CreateChannelReplyPipelineParams) {
   return createChannelReplyPipeline(params);
 }
-
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;
 
 /** @deprecated Compatibility helper for legacy reply dispatch bridges. */
 export const buildChannelMessageReplyDispatchBase: InboundReplyDispatchModule["buildChannelMessageReplyDispatchBase"] =
@@ -208,7 +201,7 @@ export const recordChannelMessageReplyDispatch: InboundReplyDispatchModule["reco
     return await mod.recordChannelMessageReplyDispatch(...args);
   };
 
-export const deliverInboundReplyWithMessageSendContext: ChannelTurnKernelModule["deliverInboundReplyWithMessageSendContext"] =
+export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
   async (...args) => {
     const mod = await import("../channels/turn/kernel.js");
     return await mod.deliverInboundReplyWithMessageSendContext(...args);

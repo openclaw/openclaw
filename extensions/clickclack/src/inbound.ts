@@ -170,7 +170,7 @@ export async function handleClickClackInbound(params: {
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
   });
-  await runtime.channel.turn.runPrepared({
+  await runtime.channel.inbound.runPreparedReply({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     routeSessionKey: route.sessionKey,

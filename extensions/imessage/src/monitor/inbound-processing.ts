@@ -924,7 +924,7 @@ export async function buildIMessageInboundContext(params: {
         ? [{ path: params.media.path, url: params.media.path, contentType: params.media.type }]
         : undefined;
   const media = toInboundMediaFacts(mediaInput);
-  const ctxPayload = await buildChannelInboundEventContext({
+  const ctxPayload = buildChannelInboundEventContext({
     channel: "imessage",
     supplemental: {
       quote: decision.replyContext

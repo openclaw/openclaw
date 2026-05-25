@@ -107,9 +107,9 @@ export type PluginRuntimeChannel = {
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
     /**
-     * @deprecated Prefer `buildChannelInboundEventContext` /
-     * `buildChannelTurnContext` from `openclaw/plugin-sdk/channel-inbound` so
-     * inbound event metadata is carried into reply dispatch.
+     * @deprecated Prefer `buildChannelInboundEventContext` from
+     * `openclaw/plugin-sdk/channel-inbound` so inbound event metadata is
+     * carried into reply dispatch.
      */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -177,15 +177,11 @@ export type PluginRuntimeChannel = {
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
-  turn: {
-    run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
-    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
-    /** @deprecated Prefer `run(...)`. */
-    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
-    buildContext: typeof import("../../channels/turn/kernel.js").buildChannelTurnContext;
-    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
-    /** @deprecated Prefer `runAssembled(...)`. */
-    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
+  inbound: {
+    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

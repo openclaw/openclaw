@@ -50,7 +50,7 @@ async function processTwitchMessage(params: {
   const { message, account, accountId, config, runtime, core, statusSink } = params;
   const cfg = config as OpenClawConfig;
 
-  await core.channel.turn.run({
+  await core.channel.inbound.run({
     channel: "twitch",
     accountId,
     raw: message,
@@ -82,7 +82,7 @@ async function processTwitchMessage(params: {
           envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
-        const ctxPayload = await core.channel.turn.buildContext({
+        const ctxPayload = core.channel.inbound.buildContext({
           channel: "twitch",
           accountId,
           messageId: input.id,

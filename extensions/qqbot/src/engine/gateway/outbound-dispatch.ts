@@ -236,7 +236,7 @@ export async function dispatchOutbound(
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
     agentId,
   });
-  const dispatchPromise = runtime.channel.turn.run({
+  const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
     raw: inbound,

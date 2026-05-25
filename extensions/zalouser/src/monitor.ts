@@ -621,7 +621,7 @@ async function processMessage(
     cliMsgId: message.cliMsgId,
   });
 
-  const ctxPayload = await core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,
@@ -681,7 +681,7 @@ async function processMessage(
     },
   };
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,
