@@ -133,8 +133,14 @@ const SENSITIVE_PROVIDER_HEADER_NAME_FRAGMENTS = [
   "credential",
 ];
 
-function shouldPersistProviderApiKey(value: unknown): value is string {
-  return typeof value === "string" && isNonSecretApiKeyMarker(value);
+function shouldPersistProviderApiKey(
+  value: unknown,
+  opts: { sourceManaged?: boolean } = {},
+): value is string {
+  return (
+    typeof value === "string" &&
+    (isNonSecretApiKeyMarker(value) || (opts.sourceManaged === true && value.trim() !== ""))
+  );
 }
 
 function isSensitiveProviderHeaderName(headerName: string): boolean {
@@ -178,7 +184,10 @@ function collectExistingAuthSurfaces(existingParsed: unknown): Map<string, Exist
 
 function stripPromptVisibleProviderSecrets(
   providers: Record<string, ProviderConfig>,
-  opts: { existingAuthSurfaces?: ReadonlyMap<string, ExistingAuthSurfaces> } = {},
+  opts: {
+    existingAuthSurfaces?: ReadonlyMap<string, ExistingAuthSurfaces>;
+    secretRefManagedProviders?: ReadonlySet<string>;
+  } = {},
 ): Record<string, ProviderConfig> {
   let nextProviders: Record<string, ProviderConfig> | undefined;
 
@@ -191,7 +200,9 @@ function stripPromptVisibleProviderSecrets(
     const apiKey = (provider as { apiKey?: unknown }).apiKey;
     if (
       apiKey !== undefined &&
-      !shouldPersistProviderApiKey(apiKey) &&
+      !shouldPersistProviderApiKey(apiKey, {
+        sourceManaged: opts.secretRefManagedProviders?.has(providerKey),
+      }) &&
       !(typeof apiKey === "string" && existingAuth?.apiKey === apiKey)
     ) {
       nextProvider = { ...provider };
@@ -327,6 +338,7 @@ export async function planOpenClawModelsJsonWithDeps(
   const persistedProviders = stripPromptVisibleProviderSecrets(finalProviders, {
     existingAuthSurfaces:
       mode === "merge" ? collectExistingAuthSurfaces(params.existingParsed) : undefined,
+    secretRefManagedProviders,
   });
   const nextContents = `${JSON.stringify({ providers: persistedProviders }, null, 2)}\n`;
 
