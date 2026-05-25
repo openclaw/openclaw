@@ -157,23 +157,20 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     );
   });
 
-  it("falls back to full provider plugins when discovery entries only expose static catalogs", () => {
-    const fullProvider = createProvider({ id: "deepseek", mode: "catalog" });
-    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "static" }));
-    mocks.resolvePluginProviders.mockReturnValue([fullProvider]);
+  it("uses static provider catalog entries without loading the full plugin", () => {
+    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(staticProvider);
 
-    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([fullProvider]);
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
-    const params = requireResolvePluginProvidersParams();
-    expect(params.onlyPluginIds).toEqual(["deepseek"]);
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
+      { ...staticProvider, pluginId: "deepseek" },
+    ]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
-    const fullProviders = [
-      createProvider({ id: "deepseek", mode: "catalog" }),
-      createProvider({ id: "kilocode", mode: "catalog" }),
-    ];
+    const deepseekEntryProvider = createProvider({ id: "deepseek", mode: "static" });
+    const fullProviders = [createProvider({ id: "kilocode", mode: "catalog" })];
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([
       "codex",
       "deepseek",
@@ -199,9 +196,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       },
     });
     mocks.loadSource.mockImplementation((modulePath: string) =>
-      modulePath.includes("/codex/")
-        ? codexEntryProvider
-        : createProvider({ id: "deepseek", mode: "static" }),
+      modulePath.includes("/codex/") ? codexEntryProvider : deepseekEntryProvider,
     );
     mocks.resolvePluginProviders.mockReturnValue(fullProviders);
 
@@ -209,10 +204,14 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       resolvePluginDiscoveryProvidersRuntime({
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    ).toEqual([
+      { ...codexEntryProvider, pluginId: "codex" },
+      { ...deepseekEntryProvider, pluginId: "deepseek" },
+      ...fullProviders,
+    ]);
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
-    expect(params.onlyPluginIds).toEqual(["deepseek", "kilocode"]);
+    expect(params.onlyPluginIds).toEqual(["kilocode"]);
   });
 
   it("falls back to full provider plugins when setup provider env vars are configured", () => {

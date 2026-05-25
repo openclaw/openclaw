@@ -1943,6 +1943,65 @@ function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry 
   };
 }
 
+function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
+  return {
+    id: model.id,
+    name: model.name,
+    api: model.api as ModelProviderConfig["api"],
+    baseUrl: model.baseUrl,
+    input: model.input ?? ["text"],
+    reasoning: model.reasoning,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    ...(model.compat ? { compat: model.compat } : {}),
+  };
+}
+
+function mergeLiveProviderConfig(params: {
+  base: ModelProviderConfig | undefined;
+  discovered: ModelProviderConfig;
+}): ModelProviderConfig {
+  const baseModels = params.base?.models ?? [];
+  const discoveredModels = params.discovered.models ?? [];
+  const mergedModels = new Map<string, NonNullable<ModelProviderConfig["models"]>[number]>();
+  for (const model of discoveredModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  for (const model of baseModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  return {
+    ...params.discovered,
+    ...params.base,
+    api: params.base?.api ?? params.discovered.api,
+    baseUrl: params.base?.baseUrl ?? params.discovered.baseUrl,
+    models: [...mergedModels.values()],
+  };
+}
+
+function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const model of candidates) {
+    const existing = providers[model.provider];
+    if (existing) {
+      existing.models ??= [];
+      existing.models.push(toLiveModelConfig(model));
+      continue;
+    }
+    providers[model.provider] = {
+      api: model.api as ModelProviderConfig["api"],
+      baseUrl: model.baseUrl,
+      models: [toLiveModelConfig(model)],
+    };
+  }
+  return providers;
+}
+
 function parseExplicitLiveModelRef(
   raw: string,
   providerFilter: Set<string> | null,
@@ -2045,8 +2104,16 @@ function buildLiveGatewayConfig(params: {
   const providerOverrides = params.providerOverrides ?? {};
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
+  const candidateProviders = buildLiveProviderConfigs(params.candidates);
+  const discoveredProviders = Object.fromEntries(
+    Object.entries(candidateProviders).map(([provider, discovered]) => [
+      provider,
+      mergeLiveProviderConfig({ base: baseProviders[provider], discovered }),
+    ]),
+  );
   const nextProviders = {
     ...baseProviders,
+    ...discoveredProviders,
     ...(lmstudioProvider
       ? {
           lmstudio: {
@@ -2954,15 +3021,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
         logProgress("[all-models] preparing models.json");
-        await withGatewayLiveSetupTimeout(
+        const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
           }),
           "[all-models] prepare models.json",
         );
+        const agentDir = modelsJsonResult.agentDir;
 
-        const agentDir = resolveDefaultAgentDir(cfg);
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;

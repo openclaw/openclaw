@@ -262,24 +262,13 @@ function resolveProviderDiscoveryEntryPlugins(params: {
 
 function resolveSelectiveFullPluginIds(params: {
   entryResult: ProviderDiscoveryEntryResult;
-  runtimeEntryProviders: ProviderPlugin[];
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const runtimeEntryProviderIds = new Set(
-    params.runtimeEntryProviders
-      .map((provider) => provider.pluginId)
-      .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
-  );
-  const staticOnlyEntryPluginIds = params.entryResult.providers
-    .filter((provider) => !runtimeEntryProviderIds.has(provider.pluginId ?? ""))
-    .filter((provider) => !hasLiveProviderDiscoveryHook(provider))
-    .map((provider) => provider.pluginId)
-    .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "");
   const missingEntryCredentialPluginIds = params.entryResult.pluginRecords
     .filter((plugin) => !params.entryResult.entryPluginIds.has(plugin.id))
     .filter((plugin) => hasProviderAuthEnvCredential(plugin, params.env))
     .map((plugin) => plugin.id);
-  return sortUniqueStrings([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
+  return sortUniqueStrings(missingEntryCredentialPluginIds);
 }
 
 function resolveMissingEntryPluginIds(entryResult: ProviderDiscoveryEntryResult): string[] {
@@ -295,7 +284,7 @@ function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult)
     }
     return Boolean(
       provider.pluginId &&
-      entryResult.manifestEntryPluginIds.has(provider.pluginId) &&
+      entryResult.entryPluginIds.has(provider.pluginId) &&
       typeof provider.staticCatalog?.run === "function",
     );
   });
@@ -324,7 +313,6 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   if (params.onlyPluginIds === undefined && runtimeEntryProviders.length > 0) {
     const fullPluginIds = resolveSelectiveFullPluginIds({
       entryResult,
-      runtimeEntryProviders,
       env,
     });
     const fullProviders =
