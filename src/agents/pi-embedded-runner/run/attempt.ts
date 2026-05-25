@@ -1302,10 +1302,7 @@ export async function runEmbeddedAttempt(
     | undefined;
   let beforeAgentRunBlocked = false;
   let beforeAgentRunBlockedBy: string | undefined;
-  // Set once the session lock controller exists, so the outer finally can always release the
-  // eagerly-held session lock even when an exception on the post-prompt path skips the cleanup
-  // block below (#86014). The cleanup block hands the lock off on normal/aborted paths, so this
-  // is a no-op then.
+  // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
   try {
     const skillsSnapshotForRun =
@@ -5076,10 +5073,6 @@ export async function runEmbeddedAttempt(
       }
     }
   } finally {
-    // Guarantee the eagerly-held session write lock is released on every exit path. The cleanup
-    // block above hands it to acquireForCleanup on normal/aborted/timed-out runs (so this is a
-    // no-op then), but an exception thrown in post-prompt processing skips that block and would
-    // otherwise leak the lock to the live gateway process until the watchdog reclaims it (#86014).
     try {
       await releaseRetainedSessionLock?.();
     } catch (releaseErr) {
