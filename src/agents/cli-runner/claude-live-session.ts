@@ -46,6 +46,8 @@ type ClaudeLiveSession = {
   cleanup: () => Promise<void>;
   cleanupDone: boolean;
   closing: boolean;
+  orphanedLineCount: number;
+  lastOrphanLogAtMs: number;
 };
 type ClaudeLiveRunResult = {
   output: CliOutput;
@@ -57,6 +59,7 @@ type ClaudeLiveOutputLimits = {
 };
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
+const CLAUDE_LIVE_ORPHAN_LOG_THROTTLE_MS = 30 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
@@ -397,6 +400,20 @@ function scheduleIdleClose(session: ClaudeLiveSession): void {
   }, CLAUDE_LIVE_IDLE_TIMEOUT_MS);
 }
 
+// Defers the idle-close timer when stream-json activity is observed outside a
+// turn (e.g., the CLI emits autonomously while no gateway-initiated turn is
+// open). Without this, a session that is genuinely producing output between
+// gateway turns is killed at the idle timeout even though the CLI is alive.
+function bumpIdleClose(session: ClaudeLiveSession): void {
+  if (session.currentTurn || session.drainingAbortedTurn || session.closing) {
+    return;
+  }
+  if (!session.idleTimer) {
+    return;
+  }
+  scheduleIdleClose(session);
+}
+
 function createTimeoutError(session: ClaudeLiveSession, message: string): FailoverError {
   return new FailoverError(message, {
     reason: "timeout",
@@ -544,6 +561,29 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
     return;
   }
   if (!turn) {
+    // Stream-json line arrived while no gateway-initiated turn is open. The
+    // CLI may be emitting from an internal flow (e.g., a long-running task
+    // notification injected inside the agent) that the gateway did not
+    // bracket with writeTurnInput. We cannot route the content through the
+    // normal turn pipeline here because there is no streaming parser nor
+    // onAssistantDelta sink bound, but we can:
+    //   1. defer the idle close so we do not kill an active CLI, and
+    //   2. surface the drop via a rate-limited warning so operators can
+    //      correlate missing user-visible output with this code path.
+    bumpIdleClose(session);
+    session.orphanedLineCount += 1;
+    const nowMs = Date.now();
+    // The throttle window also re-fires immediately if the wall clock jumps
+    // backwards (NTP step) so a malicious or unlucky time skew cannot silence
+    // this signal indefinitely.
+    const elapsed = nowMs - session.lastOrphanLogAtMs;
+    if (elapsed < 0 || elapsed >= CLAUDE_LIVE_ORPHAN_LOG_THROTTLE_MS) {
+      session.lastOrphanLogAtMs = nowMs;
+      const lineType = typeof parsed.type === "string" ? parsed.type : "unknown";
+      cliBackendLog.warn(
+        `claude live session orphan output: provider=${session.providerId} model=${session.modelId} type=${lineType} totalOrphanedLines=${session.orphanedLineCount}`,
+      );
+    }
     return;
   }
   turn.rawChars += trimmed.length + 1;
@@ -739,6 +779,8 @@ async function createClaudeLiveSession(params: {
     cleanup: params.cleanup,
     cleanupDone: false,
     closing: false,
+    orphanedLineCount: 0,
+    lastOrphanLogAtMs: 0,
   };
   void managedRun.wait().then(
     (exit) => handleClaudeExit(session, exit.exitCode),
