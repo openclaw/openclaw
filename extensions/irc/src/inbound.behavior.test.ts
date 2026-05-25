@@ -202,6 +202,7 @@ describe("irc inbound behavior", () => {
 
   it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
     setIrcRuntime(coreRuntime as never);
 
     await handleIrcInbound({
@@ -217,22 +218,28 @@ describe("irc inbound behavior", () => {
         config: {
           dmPolicy: "open",
           allowFrom: ["*"],
-          groupPolicy: "allowlist",
+          groupPolicy: "open",
           groupAllowFrom: [],
           groups: {
-            "#ops": { enabled: true },
+            "#ops": { enabled: true, requireMention: false },
           },
         },
       }),
-      config: { channels: { rc: {} } } as CoreConfig,
-      runtime: createRuntimeEnv(),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
       sendReply: vi.fn(async () => {}),
     });
 
-    const assembledRequest = (
-      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
-    ).mock.calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined;
-    const ctx = assembledRequest?.ctxPayload as Record<string, unknown> | undefined;
+    const ctx = (
+      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(
+      (coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls.length,
+    ).toBe(1);
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(ctx?.From).toBe("channel:#ops");
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
