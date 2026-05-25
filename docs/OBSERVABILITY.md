@@ -36,7 +36,18 @@ ClaWorks 在 **EventKernel → PlaybookRun → StepLog** 贯通 W3C `traceparent
 ```bash
 pnpm test packages/claworks-runtime/src/kernel/event-trace.test.ts
 pnpm test packages/claworks-runtime/src/planes/orch/trace-propagation.test.ts
+pnpm test packages/claworks-runtime/src/kernel/trace-diagnostics.test.ts
 ```
+
+### ClaWorks trace 诊断（REST）
+
+每次 EventKernel 发布会写入 observation 事件 `claworks.trace.event_published`：
+
+```bash
+curl -s "http://127.0.0.1:18800/v1/observation-events?type=claworks.trace.event_published&limit=10"
+```
+
+字段：`trace_id`、`traceparent`、`event_type`、`playbook_matches`。可与 Gateway 日志 / OTEL `openclaw.traceId` 手工关联。
 
 ---
 
@@ -115,8 +126,31 @@ CLAWORKS_PACKS_DIR=../claworks-packs pnpm claworks:weak-model-regression
 
 ---
 
-## 6. 路线图（P2）
+## 6. Feishu live E2E（可选）
 
-- [ ] EventKernel publish → diagnostics-otel span 桥接
+```bash
+export FEISHU_APP_ID=...
+export FEISHU_APP_SECRET=...
+export FEISHU_TEST_CHAT_ID=oc_xxx   # 或 FEISHU_TEST_OPEN_ID
+pnpm claworks:feishu:live-e2e
+```
+
+无凭证时脚本 **SKIP**（exit 0）。有凭证时验证 Gateway `/v1/events` IM 入站路径；完整飞书 API 回环需 OpenClaw feishu 渠道 + 公网 webhook。
+
+---
+
+## 7. Release preflight
+
+```bash
+pnpm claworks:release:preflight
+```
+
+串联：runtime 测试、smoke、docker compose config、npm pack dry-run、git clean。
+
+---
+
+## 8. 路线图（P2）
+
+- [ ] EventKernel span → diagnostics-otel 自动注入（当前 REST observation 已可关联）
 - [ ] Playbook step 耗时 histogram 导出 OTLP
 - [ ] 统一 Grafana dashboard（metrics + traces + playbook runs）
