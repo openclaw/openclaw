@@ -23,7 +23,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let audioTrackID = "openclaw-ios-audio"
     private static let dataChannelLabel = "oai-events"
     private static let toolCallTimeoutSeconds = 12
-    private static let toolResultTimeoutSeconds = 12
+    private static let toolResultTimeoutSeconds = 45
+    private static let agentWaitSliceSeconds = 3
+    private static let agentWaitRequestGraceSeconds = 15
+    private static let historyFallbackTimeoutSeconds = 5
     private static let stillWorkingDelaySeconds = 6
 
     private let gateway: GatewayNodeSession
@@ -47,6 +50,17 @@ final class TalkRealtimeWebRTCSession: NSObject {
         var name: String
         var callId: String
         var args: String
+    }
+
+    private struct AgentWaitResponse: Decodable {
+        let runId: String?
+        let status: String?
+        let startedAt: Double?
+        let endedAt: Double?
+        let error: String?
+        let stopReason: String?
+        let timeoutPhase: String?
+        let providerStarted: Bool?
     }
 
     init(gateway: GatewayNodeSession, sessionKey: String, delegate: TalkRealtimeWebRTCSessionDelegate) {
@@ -424,6 +438,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 "name": Self.toolName,
                 "args": args,
             ]
+            let historySince = Date().timeIntervalSince1970
             let data = try JSONSerialization.data(withJSONObject: params)
             guard let json = String(data: data, encoding: .utf8) else {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 7, userInfo: [
@@ -453,6 +468,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             let result = try await waitForChatResult(
                 runId: runId,
                 stream: stream,
+                since: historySince,
                 timeoutSeconds: Self.toolResultTimeoutSeconds)
             if Task.isCancelled || self.stopped { return }
             self.trace("tool call chat result ready callId=\(callId) runId=\(runId) chars=\(result.count)")
@@ -498,10 +514,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private func waitForChatResult(
         runId: String,
         stream: AsyncStream<EventFrame>,
+        since: Double,
         timeoutSeconds: Int = 120) async throws -> String
     {
-        try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask { [runId] in
+        let currentSessionKey = self.sessionKey
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask { [runId, currentSessionKey] in
                 for await evt in stream {
                     guard evt.event == "chat", let payload = evt.payload else { continue }
                     guard let chatEvent = try? GatewayPayloadDecoding.decode(
@@ -511,6 +529,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
                         continue
                     }
                     guard chatEvent.runId == runId else { continue }
+                    if let eventSessionKey = chatEvent.sessionKey,
+                       !Self.matchesSessionKey(eventSessionKey, currentSessionKey)
+                    {
+                        continue
+                    }
                     await MainActor.run {
                         self.trace("chat event runId=\(runId) state=\(chatEvent.state ?? "unknown")")
                     }
@@ -532,6 +555,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
                     NSLocalizedDescriptionKey: "OpenClaw realtime tool event stream ended",
                 ])
             }
+            group.addTask { [gateway, sessionKey] in
+                try await Self.waitForAgentResult(
+                    gateway: gateway,
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    since: since,
+                    timeoutSeconds: timeoutSeconds)
+            }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 12, userInfo: [
@@ -546,6 +577,143 @@ final class TalkRealtimeWebRTCSession: NSObject {
             group.cancelAll()
             return result
         }
+    }
+
+    private nonisolated static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
+        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if incoming == current { return true }
+        return (incoming == "agent:main:main" && current == "main") ||
+            (incoming == "main" && current == "agent:main:main")
+    }
+
+    private static func waitForAgentResult(
+        gateway: GatewayNodeSession,
+        sessionKey: String,
+        runId: String,
+        since: Double,
+        timeoutSeconds: Int) async throws -> String
+    {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var sawProviderStart = false
+        while Date() < deadline {
+            let remaining = max(1, Int(ceil(deadline.timeIntervalSinceNow)))
+            let waitSeconds = min(Self.agentWaitSliceSeconds, remaining)
+            let wait = try await Self.agentWait(
+                gateway: gateway,
+                runId: runId,
+                timeoutSeconds: waitSeconds)
+            let status = wait.status?.lowercased() ?? "unknown"
+            if wait.startedAt != nil || wait.providerStarted == true {
+                sawProviderStart = true
+            }
+            GatewayDiagnostics.log(
+                "talk.timeline realtime agent.wait runId=\(runId) status=\(status) "
+                    +
+                    "phase=\(wait.timeoutPhase ?? "unknown") "
+                    +
+                    "providerStarted=\(wait.providerStarted.map(String.init) ?? "unknown")")
+            switch status {
+            case "ok":
+                if let text = try await Self.waitForAssistantTextFromHistory(
+                    gateway: gateway,
+                    sessionKey: sessionKey,
+                    since: since,
+                    timeoutSeconds: Self.historyFallbackTimeoutSeconds)
+                {
+                    return text
+                }
+            case "error":
+                throw NSError(domain: "TalkRealtimeWebRTC", code: 14, userInfo: [
+                    NSLocalizedDescriptionKey: wait.error ?? "OpenClaw realtime tool call failed",
+                ])
+            case "aborted", "cancelled", "canceled":
+                throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
+                    NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
+                ])
+            case "timeout":
+                break
+            default:
+                break
+            }
+        }
+        let phase = sawProviderStart ? "provider" : "queue"
+        throw NSError(domain: "TalkRealtimeWebRTC", code: 16, userInfo: [
+            NSLocalizedDescriptionKey: "OpenClaw realtime tool call timed out in \(phase)",
+        ])
+    }
+
+    private static func agentWait(
+        gateway: GatewayNodeSession,
+        runId: String,
+        timeoutSeconds: Int) async throws -> AgentWaitResponse
+    {
+        let timeoutMs = max(1, timeoutSeconds) * 1000
+        let params: [String: Any] = [
+            "runId": runId,
+            "timeoutMs": timeoutMs,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: params)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 17, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode OpenClaw wait request",
+            ])
+        }
+        let response = try await gateway.request(
+            method: "agent.wait",
+            paramsJSON: json,
+            timeoutSeconds: timeoutSeconds + Self.agentWaitRequestGraceSeconds)
+        return try JSONDecoder().decode(AgentWaitResponse.self, from: response)
+    }
+
+    private static func waitForAssistantTextFromHistory(
+        gateway: GatewayNodeSession,
+        sessionKey: String,
+        since: Double,
+        timeoutSeconds: Int) async throws -> String?
+    {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline {
+            if let text = try await Self.latestAssistantTextFromHistory(
+                gateway: gateway,
+                sessionKey: sessionKey,
+                since: since)
+            {
+                return text
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return nil
+    }
+
+    private static func latestAssistantTextFromHistory(
+        gateway: GatewayNodeSession,
+        sessionKey: String,
+        since: Double) async throws -> String?
+    {
+        let params: [String: Any] = ["sessionKey": sessionKey]
+        let data = try JSONSerialization.data(withJSONObject: params)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "TalkRealtimeWebRTC", code: 18, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode OpenClaw history request",
+            ])
+        }
+        let response = try await gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
+        let history = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: response)
+        let messages = history.messages ?? []
+        let decoded: [OpenClawChatMessage] = messages.compactMap { item in
+            guard let data = try? JSONEncoder().encode(item) else { return nil }
+            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        }
+        let assistant = decoded.last { message in
+            guard message.role == "assistant" else { return false }
+            guard let timestamp = message.timestamp else { return false }
+            return TalkHistoryTimestamp.isAfter(timestamp, sinceSeconds: since)
+        }
+        guard let assistant else { return nil }
+        let text = assistant.content.compactMap(\.text).joined(separator: "\n")
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func submitToolResult(callId: String, result: [String: String]) {
