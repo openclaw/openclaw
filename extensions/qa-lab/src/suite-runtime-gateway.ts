@@ -1,7 +1,13 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+
+type QaGatewayMutationEnv = Pick<
+  QaSuiteRuntimeEnv,
+  "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
+>;
 
 async function fetchJson<T>(url: string): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
@@ -255,7 +261,7 @@ async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
 }
 
 async function runConfigMutation(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   action: "config.patch" | "config.apply";
   raw: string;
   sessionKey?: string;
@@ -269,6 +275,7 @@ async function runConfigMutation(params: {
   restartDelayMs?: number;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
+  const timeoutMs = liveTurnTimeoutMs(params.env, 90_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
@@ -298,9 +305,9 @@ async function runConfigMutation(params: {
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
         },
-        { timeoutMs: 45_000 },
+        { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs);
+      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -329,7 +336,7 @@ async function runConfigMutation(params: {
 }
 
 async function patchConfig(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   patch: Record<string, unknown>;
   sessionKey?: string;
   deliveryContext?: {
@@ -353,7 +360,7 @@ async function patchConfig(params: {
 }
 
 async function applyConfig(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   nextConfig: Record<string, unknown>;
   sessionKey?: string;
   deliveryContext?: {
