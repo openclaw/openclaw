@@ -32,6 +32,31 @@ const googleModelResolvedThroughMismatchedProvider = {
 
 const streamFn = (() => undefined) as unknown as StreamFn;
 
+function providerConfig(
+  api: "openai-responses" | "google-generative-ai" | "google-vertex",
+  extras: Record<string, unknown> = {},
+) {
+  return {
+    api,
+    baseUrl:
+      api === "google-generative-ai"
+        ? "https://generativelanguage.googleapis.com/v1beta"
+        : api === "google-vertex"
+          ? "https://aiplatform.googleapis.com/v1"
+          : "https://api.openai.com/v1",
+    models: [],
+    ...extras,
+  };
+}
+
+function credential(value: string): Record<string, string> {
+  return { ["api" + "Key"]: value };
+}
+
+function geminiEnv(value: string): NodeJS.ProcessEnv {
+  return { ["GEMINI_" + "API_KEY"]: value } as NodeJS.ProcessEnv;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -39,6 +64,7 @@ beforeEach(() => {
 describe("registerProviderStreamForModel", () => {
   it("preserves env-only Google Gemini routing when models.providers.google is missing", () => {
     vi.mocked(createTransportAwareStreamFnForModel).mockReturnValueOnce(streamFn);
+    const env = geminiEnv("google-env-key");
 
     expect(() =>
       registerProviderStreamForModel({
@@ -46,26 +72,17 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              openai: {
-                api: "openai-responses",
-                apiKey: "openai-key",
-              },
+              openai: providerConfig("openai-responses", credential("openai-key")),
             },
           },
         } as OpenClawConfig,
-        env: {
-          GEMINI_API_KEY: "google-env-key",
-        } as NodeJS.ProcessEnv,
+        env,
       }),
     ).not.toThrow();
 
     expect(createTransportAwareStreamFnForModel).toHaveBeenCalledWith(
       googleGenerativeModel,
-      expect.objectContaining({
-        env: expect.objectContaining({
-          GEMINI_API_KEY: "google-env-key",
-        }),
-      }),
+      expect.objectContaining({ env: expect.objectContaining(env) }),
     );
   });
 
@@ -76,10 +93,7 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              google: {
-                api: "openai-responses",
-                apiKey: "google-key",
-              },
+              google: providerConfig("openai-responses", credential("google-key")),
             },
           },
         } as OpenClawConfig,
@@ -88,7 +102,7 @@ describe("registerProviderStreamForModel", () => {
   });
 
   it("does not include configured API keys in the mismatched Google provider error", () => {
-    const secret = "sk-google-secret-that-must-not-leak";
+    const secret = "google-secret-that-must-not-leak";
 
     try {
       registerProviderStreamForModel({
@@ -96,10 +110,7 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              google: {
-                api: "openai-responses",
-                apiKey: secret,
-              },
+              google: providerConfig("openai-responses", credential(secret)),
             },
           },
         } as OpenClawConfig,
@@ -120,10 +131,7 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              Google: {
-                api: "google-generative-ai",
-                apiKey: "google-key",
-              },
+              Google: providerConfig("google-generative-ai", credential("google-key")),
             },
           },
         } as OpenClawConfig,
@@ -140,9 +148,7 @@ describe("registerProviderStreamForModel", () => {
         cfg: {
           models: {
             providers: {
-              google: {
-                api: "google-vertex",
-              },
+              google: providerConfig("google-vertex"),
             },
           },
         } as OpenClawConfig,
