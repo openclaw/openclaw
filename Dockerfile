@@ -290,9 +290,11 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 RUN install -d -m 0700 -o node -g node \
       /home/node/.openclaw \
       /home/node/.openclaw/workspace \
+      /home/node/.config \
       /home/node/.config/openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production

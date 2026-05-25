@@ -340,12 +340,16 @@ describe("Dockerfile", () => {
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expect(dockerfile).toContain("/home/node/.openclaw/workspace");
+    expect(dockerfile).toContain("/home/node/.config \\");
     expect(dockerfile).toContain("/home/node/.config/openclaw");
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 700'",
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
