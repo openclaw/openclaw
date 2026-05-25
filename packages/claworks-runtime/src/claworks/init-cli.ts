@@ -97,6 +97,26 @@ export function collectClaworksInitWarnings(
     string,
     { enabled?: boolean; simulate?: boolean; preset?: string }
   >;
+  const secureInit =
+    env.CLAWORKS_INIT_SECURE === "1" ||
+    env.CLAWORKS_INIT_SECURE === "true" ||
+    env.CLAWORKS_PRODUCTION === "1";
+  if (secureInit && !production) {
+    warnings.push(
+      "CLAWORKS_INIT_SECURE=1 已设置但 production_mode 未开启 — 请 CLAWORKS_INIT_SECURE=1 pnpm claworks:init --force 或 config 中设 production_mode: true",
+    );
+  }
+  const apiKey = (robot.api as { api_key?: string } | undefined)?.api_key?.trim();
+  if (secureInit && !apiKey) {
+    warnings.push(
+      "CLAWORKS_INIT_SECURE=1 已设置但 api.api_key 缺失 — secure init 会生成 Bearer token；请重新 init 或手动配置 api.api_key + gateway.auth.token",
+    );
+  }
+  if (!production && !secureInit && env.CLAWORKS_PRODUCT_PROFILE?.trim() !== "personal_work") {
+    warnings.push(
+      "当前为开发模式 — 生产签收前请 CLAWORKS_INIT_SECURE=1 pnpm claworks:init --force（写入 production_mode + api_key + gateway token）",
+    );
+  }
   if (connectors.echo?.enabled !== false && connectors.echo) {
     warnings.push(
       "connectors.echo 为演示 OT 事件（非真实产线数据）；生产环境请配置 MQTT/OPC UA 等真实连接器",
@@ -110,6 +130,11 @@ export function collectClaworksInitWarnings(
   const simulating = Object.entries(connectors).filter(
     ([, cfg]) => cfg && typeof cfg === "object" && cfg.simulate === true,
   );
+  if (production && simulating.length > 0) {
+    warnings.push(
+      `production_mode 已开启但 OT 连接器 simulate=true：${simulating.map(([id]) => id).join(", ")} — 运行 claworks doctor --fix`,
+    );
+  }
   if (simulating.length > 0 && !production) {
     warnings.push(
       `OT 连接器处于 simulate 开发模式：${simulating.map(([id]) => id).join(", ")}。生产前设 production_mode=true 并运行 claworks doctor --fix`,

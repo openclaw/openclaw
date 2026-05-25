@@ -13,6 +13,7 @@ import {
   seedPacksToStateDir,
   detectPackLayerSystemConflict,
   discoverPackSourceDir,
+  auditConnectorPresets,
   type ProductConfigRepairResult,
 } from "./product-config-repair.js";
 import { isClaworksProductionMode } from "./product-env.js";
@@ -238,6 +239,23 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
     ([, cfg]) =>
       cfg && typeof cfg === "object" && (cfg as { simulate?: boolean }).simulate === true,
   );
+  const presetAudit = auditConnectorPresets(
+    connectors as Record<string, { preset?: string; enabled?: boolean }>,
+  );
+  if (presetAudit.invalid.length > 0) {
+    checks.push({
+      id: "connectors_invalid_preset",
+      status: "error",
+      message: `Unknown connector preset(s): ${presetAudit.invalid.map(({ id, preset }) => `${id}=${preset}`).join(", ")} — run claworks doctor --fix or use: ${["mqtt", "opcua", "modbus", "filesystem-kb", "database-poll"].join(", ")}`,
+    });
+  }
+  if (isProduction && presetAudit.simulatePresets.length > 0) {
+    checks.push({
+      id: "connectors_simulate_preset",
+      status: "error",
+      message: `Simulate preset suffix in production: ${presetAudit.simulatePresets.map(({ id, preset }) => `${id}=${preset}`).join(", ")} — run claworks doctor --fix`,
+    });
+  }
   if (simulating.length > 0) {
     checks.push({
       id: "connectors_simulate",
@@ -245,6 +263,12 @@ export function runClaworksDoctor(runtime: ClaworksRuntime): DoctorCheck[] {
       message: isProduction
         ? `OT connectors in simulate mode: ${simulating.map(([id]) => id).join(", ")} — run claworks doctor --fix or set simulate: false`
         : `Dev simulate connectors: ${simulating.map(([id]) => id).join(", ")}`,
+    });
+  } else if (!isProduction && presetAudit.simulatePresets.length > 0) {
+    checks.push({
+      id: "connectors_simulate_preset",
+      status: "warn",
+      message: `Dev simulate preset suffix: ${presetAudit.simulatePresets.map(({ id, preset }) => `${id}=${preset}`).join(", ")}`,
     });
   }
 

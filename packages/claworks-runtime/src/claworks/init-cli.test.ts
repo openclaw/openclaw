@@ -103,6 +103,42 @@ describe("collectClaworksInitWarnings", () => {
     });
     expect(warnings.some((w) => w.includes("production_mode") && w.includes("echo"))).toBe(true);
   });
+
+  it("warns when CLAWORKS_INIT_SECURE is set but production_mode is off", () => {
+    const warnings = collectClaworksInitWarnings(
+      { plugins: { entries: { "claworks-robot": { config: {} } } } },
+      { CLAWORKS_INIT_SECURE: "1" },
+    );
+    expect(
+      warnings.some((w) => w.includes("CLAWORKS_INIT_SECURE") && w.includes("production_mode")),
+    ).toBe(true);
+  });
+
+  it("warns when production_mode and simulate OT connectors both enabled", () => {
+    const warnings = collectClaworksInitWarnings({
+      plugins: {
+        entries: {
+          "claworks-robot": {
+            config: {
+              production_mode: true,
+              connectors: { plant: { simulate: true, enabled: true, preset: "mqtt" } },
+            },
+          },
+        },
+      },
+    });
+    expect(warnings.some((w) => w.includes("production_mode") && w.includes("simulate=true"))).toBe(
+      true,
+    );
+  });
+
+  it("suggests secure init when not in production mode", () => {
+    const warnings = collectClaworksInitWarnings(
+      { plugins: { entries: { "claworks-robot": { config: {} } } } },
+      {},
+    );
+    expect(warnings.some((w) => w.includes("CLAWORKS_INIT_SECURE=1"))).toBe(true);
+  });
 });
 
 // loadPackProfileIds is not exported - test via re-export or inline

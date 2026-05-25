@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
   CLAWORKS_STANDARD_GATEWAY_PORT,
   OPENCLAW_RESERVED_GATEWAY_PORT,
+  auditConnectorPresets,
   detectPackLayerSystemConflict,
   hasPackSourcesAvailable,
   repairClaworksJsonConfig,
   repairClaworksRobotPluginConfig,
+  repairInvalidConnectorPresets,
   repairOtConnectorSimulateFlags,
   repairProductPluginsAllow,
   repairVectorKnowledgeBase,
@@ -230,5 +232,23 @@ describe("product-config-repair", () => {
     expect(result.changed).toBe(true);
     expect(result.connectors.plant.preset).toBe("opcua");
     expect(result.connectors.plant.simulate).toBe(false);
+  });
+
+  it("auditConnectorPresets flags unknown presets", () => {
+    const audit = auditConnectorPresets({
+      kb: { preset: "filesystem-kb", enabled: true },
+      bad: { preset: "not-a-preset", enabled: true },
+    });
+    expect(audit.invalid).toEqual([{ id: "bad", preset: "not-a-preset" }]);
+    expect(audit.simulatePresets).toEqual([]);
+  });
+
+  it("repairInvalidConnectorPresets normalizes filesystem_kb typo", () => {
+    const connectors = {
+      kb: { preset: "filesystem_kb", enabled: true },
+    };
+    const result = repairInvalidConnectorPresets(connectors);
+    expect(result.changed).toBe(true);
+    expect(result.connectors.kb.preset).toBe("filesystem-kb");
   });
 });

@@ -9,6 +9,11 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  getConnectorPreset,
+  KNOWN_CONNECTOR_PRESETS,
+  type KnownConnectorPreset,
+} from "../interfaces/connectors/presets.js";
 import type { ClaworksRobotConfig } from "./config-types.js";
 import { repairNotifyTargets } from "./notify-config-repair.js";
 import {
@@ -36,6 +41,71 @@ export type ProductConfigRepairResult = {
 };
 
 const OT_SIMULATE_PRESET_SUFFIX = "-simulate";
+
+export type ConnectorPresetAudit = {
+  invalid: Array<{ id: string; preset: string }>;
+  simulatePresets: Array<{ id: string; preset: string }>;
+};
+
+/** Audit connector preset names against built-in resolver (doctor + repair). */
+export function auditConnectorPresets(
+  connectors: Record<string, { preset?: string; enabled?: boolean }> | undefined,
+): ConnectorPresetAudit {
+  const invalid: ConnectorPresetAudit["invalid"] = [];
+  const simulatePresets: ConnectorPresetAudit["simulatePresets"] = [];
+  if (!connectors) {
+    return { invalid, simulatePresets };
+  }
+  for (const [id, raw] of Object.entries(connectors)) {
+    if (!raw || typeof raw !== "object" || raw.enabled === false) {
+      continue;
+    }
+    const preset = raw.preset?.trim();
+    if (!preset) {
+      continue;
+    }
+    if (preset.endsWith(OT_SIMULATE_PRESET_SUFFIX)) {
+      simulatePresets.push({ id, preset });
+    }
+    if (!getConnectorPreset(preset)) {
+      invalid.push({ id, preset });
+    }
+  }
+  return { invalid, simulatePresets };
+}
+
+/** Map stale/typo presets to canonical built-ins when safe. */
+export function repairInvalidConnectorPresets(
+  connectors: Record<string, { preset?: string; enabled?: boolean }> | undefined,
+): {
+  connectors: Record<string, { preset?: string; enabled?: boolean }>;
+  actions: string[];
+  changed: boolean;
+} {
+  if (!connectors) {
+    return { connectors: {}, actions: [], changed: false };
+  }
+  const next = { ...connectors };
+  let changed = false;
+  const actions: string[] = [];
+  const canonical = new Set<string>(KNOWN_CONNECTOR_PRESETS);
+  for (const [id, raw] of Object.entries(next)) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const preset = raw.preset?.trim();
+    if (!preset || canonical.has(preset)) {
+      continue;
+    }
+    const normalized = preset.replace(/_/g, "-").toLowerCase();
+    if (canonical.has(normalized)) {
+      next[id] = { ...raw, preset: normalized as KnownConnectorPreset };
+      actions.push(`connectors.${id}.preset → ${normalized} (normalized invalid preset)`);
+      changed = true;
+    }
+  }
+  return { connectors: next, actions, changed };
+}
 
 /** Normalize OT connector presets for production (no simulate / no *-simulate presets). */
 export function repairOtConnectorSimulateFlags(
@@ -535,6 +605,15 @@ export function repairClaworksRobotPluginConfig(
   if (otRepair.changed) {
     pluginConfig.connectors = otRepair.connectors;
     actions.push(...otRepair.actions);
+    changed = true;
+  }
+
+  const presetRepair = repairInvalidConnectorPresets(
+    pluginConfig.connectors as Record<string, { preset?: string; enabled?: boolean }> | undefined,
+  );
+  if (presetRepair.changed) {
+    pluginConfig.connectors = presetRepair.connectors;
+    actions.push(...presetRepair.actions);
     changed = true;
   }
 

@@ -2,8 +2,24 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ConnectorConfig } from "./types.js";
 
+/** Presets resolved by getConnectorPreset (includes *-simulate dev variants). */
+export const KNOWN_CONNECTOR_PRESETS = [
+  "echo",
+  "rest-poll",
+  "mqtt",
+  "mqtt-simulate",
+  "opcua",
+  "opcua-simulate",
+  "modbus",
+  "modbus-simulate",
+  "database-poll",
+  "filesystem-kb",
+] as const;
+
+export type KnownConnectorPreset = (typeof KNOWN_CONNECTOR_PRESETS)[number];
+
 export type ConnectorConfigInput = Omit<ConnectorConfig, "command"> & {
-  /** Built-in connector id: echo | rest-poll | mqtt | opcua | modbus | filesystem-kb */
+  /** Built-in connector id: echo | rest-poll | mqtt | opcua | modbus | filesystem-kb | database-poll */
   preset?: string;
   /**
    * 模拟模式（开发/测试用）。

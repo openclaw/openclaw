@@ -182,6 +182,7 @@
                                 "mqtt",
                                 "opcua",
                                 "modbus",
+                                "database-poll",
                                 "filesystem-kb"
                             ]
                         },
