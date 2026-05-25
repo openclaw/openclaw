@@ -45,5 +45,5 @@ Snapshots:
 
 Codex model prompt fixtures:
 
-- ../codex-model-catalog/gpt-5.5.pragmatic.instructions.md
-- ../codex-model-catalog/gpt-5.5.pragmatic.source.json
+- ..\codex-model-catalog\gpt-5.5.pragmatic.instructions.md
+- ..\codex-model-catalog\gpt-5.5.pragmatic.source.json
