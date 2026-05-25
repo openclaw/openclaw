@@ -7,6 +7,7 @@ import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -1187,7 +1188,7 @@ export async function recordDreamingPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = uniqueStrings(params.keys.map((key) => key.trim()).filter(Boolean));
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }
@@ -1240,7 +1241,7 @@ export async function recordRemConsideredPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = uniqueStrings(params.keys.map((key) => key.trim()).filter(Boolean));
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }

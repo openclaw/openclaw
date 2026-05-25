@@ -3,7 +3,7 @@ import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
 /** Shared policy warnings and DM/group policy helpers for channel plugins. */
@@ -63,7 +63,7 @@ export function normalizeAllowFromList(list: Array<string | number> | undefined 
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.map((value) => String(value).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 export function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
