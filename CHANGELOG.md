@@ -212,6 +212,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/update: allow package-manager-managed hardlinked package roots during global update swaps while keeping generic plugin, hook, and dependency-free install moves fail-closed. (#85569) Thanks @ai-hpc.
 - Gateway/update: avoid fetching unrelated tags during dev-channel git updates so moved release tags do not block branch-based updates. (#84737) Thanks @rubencu.
 - CLI/update: suppress the expected future-config warning while an old update parent hands off to the freshly installed post-core process.
 - MiniMax: store OAuth token expiry as an absolute millisecond timestamp so OAuth profiles no longer appear expired on every request. (#83480) Thanks @NianJiuZst.
