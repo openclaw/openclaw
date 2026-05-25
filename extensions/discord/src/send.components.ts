@@ -21,7 +21,7 @@ import {
   type MessagePayloadObject,
   type RequestClient,
 } from "./internal/discord.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -290,7 +290,7 @@ export async function sendDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channelType = await resolveDiscordChannelType(rest, channelId);
@@ -353,7 +353,7 @@ export async function editDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,
