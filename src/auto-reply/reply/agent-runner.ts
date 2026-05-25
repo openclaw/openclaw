@@ -9,6 +9,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import {
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcomeAsync,
@@ -37,7 +38,10 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -95,6 +99,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { getMatchingMessagingToolReplyTargets } from "./reply-payloads-dedupe.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
@@ -170,8 +175,18 @@ function isAcknowledgedLongworkMessagingText(value: string): boolean {
   }
   // Keep this guard conservative: a generic checkpoint is only helpful when the
   // earlier message looks like an ACK/progress commitment, not a final result.
+  if (
+    /\b(?:done|finished|completed|complete|ready|resolved|fixed|passed|success(?:fully)?|sent|delivered)\b/.test(
+      normalized,
+    ) &&
+    /\b(?:i(?:'|’)?m|i am|i(?:'|’)?ve|i have|tests?|checks?|patch|result|summary|report|final|reply|message)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
   return (
-    /\b(i(?:'|’)?ll|i will|i am|i'm|working|starting|checking|investigating|continue|handle|look into|going to|detaching)\b/.test(
+    /\b(i(?:'|’)?ll|i will|working|starting|checking|investigating|continu(?:e|ing)|handling|handle|look into|going to|detaching)\b/.test(
       normalized,
     ) || /收到|我会|我先|继续|处理|处理中|开始|稍后|马上|先.*[看查做]/.test(value)
   );
@@ -201,12 +216,42 @@ function hasAcknowledgedLongworkMessagingText(params: {
   });
 }
 
+function resolveAcknowledgedLongworkRouteTexts(params: {
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  messagingToolSentTargets?: MessagingToolSend[];
+}): string[] {
+  const sentTargets = params.messagingToolSentTargets ?? [];
+  const matchingTargets = getMatchingMessagingToolReplyTargets({
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: params.sessionCtx.OriginatingChannel,
+      provider: params.followupRun.run.messageProvider,
+    }),
+    messagingToolSentTargets: sentTargets,
+    originatingTo: resolveOriginMessageTo({
+      originatingTo: params.sessionCtx.OriginatingTo,
+      to: params.sessionCtx.To,
+    }),
+    accountId: params.sessionCtx.AccountId,
+  }).filter((target) => {
+    const originThreadId = normalizeOptionalStringifiedId(params.sessionCtx.MessageThreadId);
+    const targetThreadId = normalizeOptionalStringifiedId(target.threadId);
+    if (!originThreadId) {
+      return !targetThreadId;
+    }
+    return targetThreadId === originThreadId;
+  });
+  return matchingTargets.flatMap((target) =>
+    typeof target.text === "string" && target.text.trim() ? [target.text] : [],
+  );
+}
+
 function hasSuccessfulSideEffectDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
+  messagingToolSentTargets?: MessagingToolSend[];
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
@@ -248,7 +293,7 @@ function shouldSurfaceAcknowledgedLongworkCheckpoint(params: {
   toolActivityAfterMessagingToolDelivery?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
+  messagingToolSentTargets?: MessagingToolSend[];
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
@@ -263,9 +308,13 @@ function shouldSurfaceAcknowledgedLongworkCheckpoint(params: {
   ) {
     return false;
   }
-  return hasAcknowledgedLongworkMessagingText({
-    messagingToolSentTexts: params.messagingToolSentTexts,
+  const routeSentTexts = resolveAcknowledgedLongworkRouteTexts({
+    followupRun: params.followupRun,
+    sessionCtx: params.sessionCtx,
     messagingToolSentTargets: params.messagingToolSentTargets,
+  });
+  return hasAcknowledgedLongworkMessagingText({
+    messagingToolSentTexts: routeSentTexts,
   });
 }
 

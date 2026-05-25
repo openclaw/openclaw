@@ -1558,22 +1558,61 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await expect(run()).resolves.toBeUndefined();
   });
 
-  it("does not surface an acknowledged-longwork checkpoint for a final-looking message followed by cleanup tools", async () => {
+  it.each(["Done — tests passed and the patch is ready.", "I am done checking; tests passed."])(
+    "does not surface an acknowledged-longwork checkpoint for final-looking message %j followed by cleanup tools",
+    async (messageText) => {
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        messagingToolSentTexts: [messageText],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            text: messageText,
+          },
+        ],
+        toolActivityAfterMessagingToolDelivery: true,
+        meta: {
+          stopReason: "stop",
+          toolSummary: { calls: 4, tools: ["exec", "message", "read"] },
+        },
+      });
+
+      const { run } = createMinimalRun({
+        runOverrides: {
+          messageProvider: "discord",
+          allowEmptyAssistantReplyAsSilent: true,
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          ChatType: "channel",
+          MessageSid: "1506849058013184022",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    },
+  );
+
+  it("does not surface an acknowledged-longwork checkpoint for an ACK sent to a different Discord route", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
-      messagingToolSentTexts: ["Done — tests passed and the patch is ready."],
+      messagingToolSentTexts: ["I will handle the remaining checks."],
       messagingToolSentTargets: [
         {
           tool: "message",
           provider: "discord",
-          to: "channel:C1",
-          text: "Done — tests passed and the patch is ready.",
+          to: "channel:C2",
+          text: "I will handle the remaining checks.",
         },
       ],
       toolActivityAfterMessagingToolDelivery: true,
       meta: {
         stopReason: "stop",
-        toolSummary: { calls: 4, tools: ["exec", "message", "read"] },
+        toolSummary: { calls: 4, tools: ["message", "exec", "read"] },
       },
     });
 
@@ -1586,6 +1625,44 @@ describe("runReplyAgent typing (heartbeat)", () => {
         Provider: "discord",
         OriginatingChannel: "discord",
         OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        MessageSid: "1506849058013184022",
+      },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
+  it("does not surface an acknowledged-longwork checkpoint for an ACK sent to a different Discord thread", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      messagingToolSentTexts: ["I will handle the remaining checks."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          threadId: "T2",
+          text: "I will handle the remaining checks.",
+        },
+      ],
+      toolActivityAfterMessagingToolDelivery: true,
+      meta: {
+        stopReason: "stop",
+        toolSummary: { calls: 4, tools: ["message", "exec", "read"] },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        MessageThreadId: "T1",
         ChatType: "channel",
         MessageSid: "1506849058013184022",
       },
