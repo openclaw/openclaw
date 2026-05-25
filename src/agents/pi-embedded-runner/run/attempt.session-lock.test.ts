@@ -833,7 +833,11 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releaseForPrompt).toHaveBeenCalledTimes(1);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(1);
     expect(streamFn).toHaveBeenCalledWith("model", "context");
-    expect(events).toEqual(["drain", "release", "stream", "reacquire"]);
+    // Two drains: one before releaseForPrompt to clear pre-prompt events,
+    // one after streamFn to clear prompt-emitted events before the fence
+    // check inside reacquireAfterPrompt sees them as external mutation.
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["drain", "release", "stream", "drain", "reacquire"]);
   });
 
   it("rewraps provider stream submission after the stream function is rebuilt", async () => {
@@ -880,19 +884,95 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(firstStreamFn).toHaveBeenCalledTimes(1);
     expect(secondStreamFn).toHaveBeenCalledTimes(1);
-    expect(waitForSessionEvents).toHaveBeenCalledTimes(2);
+    // Two prompts × two drains each (pre-release + post-stream) = 4 drains.
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(4);
     expect(releaseForPrompt).toHaveBeenCalledTimes(2);
     expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
     expect(events).toEqual([
       "drain",
       "release",
       "first-stream",
+      "drain",
       "reacquire",
       "drain",
       "release",
       "second-stream",
+      "drain",
       "reacquire",
     ]);
+  });
+
+  it("drains prompt-emitted session events before reacquireAfterPrompt's fence check", async () => {
+    // Pins down the call-ordering invariant added by the kesslerio drain
+    // (#85913): the finally block must call waitForSessionEvents before
+    // reacquireAfterPrompt, symmetric with the pre-release drain at the
+    // top of wrappedStreamFn. In vanilla pi the drain is a no-op (the
+    // session manager doesn't populate `_agentEventQueue`); in deployments
+    // that wire the queue, this is where any provider-emitted side
+    // effects settle before the next lock cycle. The synthetic
+    // pendingPromptEvent below models that "side effect awaiting drain"
+    // shape — it is NOT a faithful reproduction of vanilla pi's stream
+    // listener path, just an ordering probe.
+    const events: string[] = [];
+    // Models a prompt-emitted session event that the streamFn enqueues
+    // during the provider response and that must drain before the fence
+    // check. Resolving the callback represents the event "settling" —
+    // i.e. its write to the session file completing.
+    let pendingPromptEvent: (() => void) | null = null;
+    const streamFn = vi.fn(async () => {
+      events.push("stream-start");
+      // Provider response queues a session event (e.g. an assistant
+      // delta, a tool-call result) but does not synchronously flush it.
+      pendingPromptEvent = () => events.push("event-resolved");
+      events.push("stream-end");
+    });
+    const waitForSessionEvents = vi.fn(async () => {
+      // The drain settles any queued event. Each call records "drain"
+      // for ordering assertions plus runs any pending event resolver.
+      if (pendingPromptEvent) {
+        pendingPromptEvent();
+        pendingPromptEvent = null;
+      }
+      events.push("drain");
+    });
+    const releaseForPrompt = vi.fn(async () => {
+      events.push("release");
+    });
+    const reacquireAfterPrompt = vi.fn(async () => {
+      // assertSessionFileFence() runs inside reacquireAfterPrompt in
+      // production. If the queued prompt event hasn't drained yet, the
+      // fence would see the new file fingerprint and trip — modelled
+      // here as an explicit "fence-trip-on-undrained-event" entry.
+      if (pendingPromptEvent) {
+        events.push("fence-trip-on-undrained-event");
+      }
+      events.push("reacquire");
+    });
+    const session = { agent: { streamFn } };
+
+    installPromptSubmissionLockRelease({
+      session,
+      waitForSessionEvents,
+      releaseForPrompt,
+      reacquireAfterPrompt,
+    });
+
+    await session.agent.streamFn();
+
+    // The ordering invariant the drain pins down: any drainable queued
+    // work is settled before reacquireAfterPrompt. Without the
+    // finally-drain, "event-resolved" would not appear before "reacquire",
+    // and "fence-trip-on-undrained-event" would appear instead.
+    expect(events).toEqual([
+      "drain", // pre-release drain (pre-existing — no event pending yet)
+      "release",
+      "stream-start",
+      "stream-end", // streamFn returns; pendingPromptEvent is now set
+      "event-resolved", // resolved by post-stream drain
+      "drain", // post-stream drain marker
+      "reacquire", // fence check sees a settled queue, no trip
+    ]);
+    expect(events).not.toContain("fence-trip-on-undrained-event");
   });
 
   it("treats transcript appends during prompt streaming as owned session writes", async () => {

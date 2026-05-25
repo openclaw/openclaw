@@ -921,6 +921,15 @@ export function installPromptSubmissionLockRelease(params: {
       }
       return await originalStreamFn(...args);
     } finally {
+      // Symmetric with the pre-release drain at the top of this function.
+      // In vanilla pi this is a no-op (the upstream session manager doesn't
+      // populate `_agentEventQueue`). In deployments that DO wire the queue
+      // — e.g. embedded runners that need to settle provider-emitted side
+      // effects before the next lock cycle — this gives those queued writes
+      // a chance to complete before reacquireAfterPrompt's fence check runs.
+      // Reported by @kesslerio against AlphaClaw production with a working
+      // mitigation on this code path; #85913 issue thread.
+      await params.waitForSessionEvents(params.session);
       await params.reacquireAfterPrompt();
     }
   };
