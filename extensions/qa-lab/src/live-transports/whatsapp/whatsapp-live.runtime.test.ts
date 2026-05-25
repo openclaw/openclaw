@@ -427,7 +427,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(testing.isLoggedOutWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(false);
   });
 
-  it("releases rejected Convex WhatsApp credentials before retrying", async () => {
+  it("releases repeated rejected Convex WhatsApp credential leases", async () => {
     const cleanupIssues: string[] = [];
     const release = vi.fn(async () => {});
     const stop = vi.fn(async () => {});
@@ -448,6 +448,26 @@ describe("WhatsApp QA live runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
     expect(heartbeats).toEqual([]);
     expect(leases).toEqual([]);
+    expect(cleanupIssues).toEqual([]);
+  });
+
+  it("quarantines first-time rejected Convex WhatsApp credential leases until final cleanup", async () => {
+    const cleanupIssues: string[] = [];
+    const stop = vi.fn(async () => {});
+    const lease = {} as never;
+    const heartbeat = { stop } as never;
+    const leases = [lease];
+    const heartbeats = [heartbeat];
+
+    await testing.quarantineRejectedWhatsAppCredentialLease({
+      cleanupIssues,
+      heartbeat,
+      heartbeats,
+    });
+
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(heartbeats).toEqual([]);
+    expect(leases).toEqual([lease]);
     expect(cleanupIssues).toEqual([]);
   });
 

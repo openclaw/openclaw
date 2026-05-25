@@ -229,6 +229,22 @@ async function discardRejectedWhatsAppCredentialLease(params: {
   }
 }
 
+async function quarantineRejectedWhatsAppCredentialLease(params: {
+  cleanupIssues: string[];
+  heartbeat: WhatsAppCredentialHeartbeat;
+  heartbeats: WhatsAppCredentialHeartbeat[];
+}) {
+  const heartbeatIndex = params.heartbeats.indexOf(params.heartbeat);
+  if (heartbeatIndex >= 0) {
+    params.heartbeats.splice(heartbeatIndex, 1);
+  }
+  try {
+    await params.heartbeat.stop();
+  } catch (error) {
+    appendLiveLaneIssue(params.cleanupIssues, "credential heartbeat stop failed", error);
+  }
+}
+
 function isPreviouslyRejectedWhatsAppCredentialLease(params: {
   lease: WhatsAppCredentialLease;
   rejectedCredentialIds: ReadonlySet<string>;
@@ -1316,7 +1332,11 @@ export async function runWhatsAppQaLive(params: {
     const rejectedCredentialIds = new Set<string>();
     const skippedRejectedCredentialIds = new Set<string>();
 
-    for (let credentialAttempt = 1; credentialAttempt <= credentialAttempts; credentialAttempt += 1) {
+    for (
+      let credentialAttempt = 1;
+      credentialAttempt <= credentialAttempts;
+      credentialAttempt += 1
+    ) {
       credentialLease = await acquireQaCredentialLease({
         kind: "whatsapp",
         source: params.credentialSource,
@@ -1396,12 +1416,10 @@ export async function runWhatsAppQaLive(params: {
         cleanupIssues.push(
           `WhatsApp driver auth for credential ${toCredentialFingerprint(credentialLease.credentialId) ?? "<unknown>"} was logged out; trying another Convex lease.`,
         );
-        await discardRejectedWhatsAppCredentialLease({
+        await quarantineRejectedWhatsAppCredentialLease({
           cleanupIssues,
           heartbeat,
           heartbeats: leaseHeartbeats,
-          lease: credentialLease,
-          leases: credentialLeases,
         });
         credentialLease = undefined;
       }
@@ -1675,6 +1693,7 @@ export const testing = {
   isLoggedOutWhatsAppQaDriverError,
   isTransientWhatsAppQaDriverError,
   parseWhatsAppQaCredentialPayload,
+  quarantineRejectedWhatsAppCredentialLease,
   resolveWhatsAppHeapCheckpointSettleMs,
   renderWhatsAppQaMarkdown,
   resolveWhatsAppQaRuntimeEnv,
