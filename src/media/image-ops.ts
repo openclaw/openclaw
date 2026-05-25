@@ -37,7 +37,7 @@ type ResizeToPngParams = {
 };
 
 type ImageBackend =
-  | "sharp"
+  | "photon"
   | "sips"
   | "windows-native"
   | "imagemagick"
@@ -93,11 +93,12 @@ export function isImageProcessorUnavailableError(err: unknown): boolean {
   const detail = messages.join("\n").toLowerCase();
   return (
     detail.includes("image processor unavailable") ||
-    detail.includes("optional dependency sharp is required") ||
-    detail.includes("cannot find package 'sharp'") ||
-    detail.includes('cannot find package "sharp"') ||
-    detail.includes("cannot find module 'sharp'") ||
-    detail.includes('cannot find module "sharp"')
+    detail.includes("photon did not expose") ||
+    detail.includes("photon backend skipped") ||
+    detail.includes("cannot find package '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find package "@silvia-odwyer/photon-node"') ||
+    detail.includes("cannot find module '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find module "@silvia-odwyer/photon-node"')
   );
 }
 
@@ -111,7 +112,7 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
 function getImageBackendPreference(): ImageBackendPreference {
   const raw = process.env.OPENCLAW_IMAGE_BACKEND?.trim().toLowerCase();
   switch (raw) {
-    case "sharp":
+    case "photon":
     case "sips":
     case "windows-native":
     case "imagemagick":
@@ -134,7 +135,7 @@ function getImageBackendPreference(): ImageBackendPreference {
 }
 
 function shouldFailClosedOnUnknownMetadata(): boolean {
-  return getImageBackendPreference() !== "auto";
+  return true;
 }
 
 function imageBackendsForOperation(operation: ImageOperation): ImageBackend[] {
@@ -145,32 +146,35 @@ function imageBackendsForOperation(operation: ImageOperation): ImageBackend[] {
 
   if (operation === "resizeToPng") {
     if (process.platform === "win32") {
-      return ["sharp", "windows-native", "imagemagick", "graphicsmagick"];
+      return ["photon", "windows-native", "imagemagick", "graphicsmagick"];
     }
-    return ["sharp", "imagemagick", "graphicsmagick"];
+    return ["photon", "imagemagick", "graphicsmagick"];
   }
 
   if (operation === "normalizeExifOrientation") {
     if (process.platform === "win32") {
-      return ["sharp", "imagemagick", "graphicsmagick"];
+      return ["photon", "imagemagick", "graphicsmagick"];
     }
     return process.platform === "darwin"
-      ? ["sharp", "sips", "imagemagick", "graphicsmagick"]
-      : ["sharp", "imagemagick", "graphicsmagick"];
+      ? ["photon", "sips", "imagemagick", "graphicsmagick"]
+      : ["photon", "imagemagick", "graphicsmagick"];
   }
 
   if (process.platform === "win32") {
     if (operation === "convertHeicToJpeg") {
-      return ["sharp", "imagemagick", "graphicsmagick", "ffmpeg"];
+      return ["imagemagick", "graphicsmagick", "ffmpeg"];
     }
-    return ["sharp", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"];
+    return ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"];
   }
 
   const fallbacks =
     process.platform === "darwin"
       ? (["sips", "imagemagick", "graphicsmagick", "ffmpeg"] as const)
       : (["imagemagick", "graphicsmagick", "ffmpeg"] as const);
-  return ["sharp", ...fallbacks];
+  if (operation === "convertHeicToJpeg") {
+    return [...fallbacks];
+  }
+  return ["photon", ...fallbacks];
 }
 
 function createImageProcessorUnavailableError(
@@ -180,10 +184,10 @@ function createImageProcessorUnavailableError(
   const backends = imageBackendsForOperation(operation).join(", ");
   const hint =
     process.platform === "win32"
-      ? "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg; Windows native image resizing is tried automatically when available."
+      ? "Install ImageMagick, GraphicsMagick, or ffmpeg; Windows native image resizing is tried automatically when available."
       : process.platform === "darwin"
-        ? "Install Sharp or a system image tool such as sips, ImageMagick, GraphicsMagick, or ffmpeg."
-        : "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg.";
+        ? "Install a system image tool such as sips, ImageMagick, GraphicsMagick, or ffmpeg."
+        : "Install ImageMagick, GraphicsMagick, or ffmpeg.";
   return new ImageProcessorUnavailableError(
     operation,
     `Image processor unavailable for ${operation}; tried: ${backends}. ${hint}`,
@@ -200,11 +204,12 @@ function isImageBackendUnavailableCause(error: unknown): boolean {
   }
   const detail = messages.join("\n").toLowerCase();
   return (
-    detail.includes("optional dependency sharp is required") ||
-    detail.includes("cannot find package 'sharp'") ||
-    detail.includes('cannot find package "sharp"') ||
-    detail.includes("cannot find module 'sharp'") ||
-    detail.includes('cannot find module "sharp"') ||
+    detail.includes("photon did not expose") ||
+    detail.includes("photon backend skipped") ||
+    detail.includes("cannot find package '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find package "@silvia-odwyer/photon-node"') ||
+    detail.includes("cannot find module '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find module "@silvia-odwyer/photon-node"') ||
     detail.includes("support for this compression format has not been built in") ||
     detail.includes("is not available") ||
     detail.includes("command not found") ||
@@ -374,6 +379,80 @@ function readWebpMetadata(buffer: Buffer): ImageMetadata | null {
   return null;
 }
 
+function readBmpMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 26 || buffer.toString("ascii", 0, 2) !== "BM") {
+    return null;
+  }
+
+  const dibHeaderSize = buffer.readUInt32LE(14);
+  if (dibHeaderSize === 12) {
+    return buildImageMetadata(buffer.readUInt16LE(18), buffer.readUInt16LE(20));
+  }
+  if (dibHeaderSize < 40 || buffer.length < 26) {
+    return null;
+  }
+
+  return buildImageMetadata(buffer.readInt32LE(18), Math.abs(buffer.readInt32LE(22)));
+}
+
+function readTiffUnsignedInteger(buffer: Buffer, offset: number, littleEndian: boolean): number {
+  return littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+}
+
+function readTiffUnsignedLong(buffer: Buffer, offset: number, littleEndian: boolean): number {
+  return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+}
+
+function readTiffMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 8) {
+    return null;
+  }
+  const byteOrder = buffer.toString("ascii", 0, 2);
+  const littleEndian = byteOrder === "II";
+  if (!littleEndian && byteOrder !== "MM") {
+    return null;
+  }
+  if (readTiffUnsignedInteger(buffer, 2, littleEndian) !== 42) {
+    return null;
+  }
+
+  const ifdOffset = readTiffUnsignedLong(buffer, 4, littleEndian);
+  if (ifdOffset + 2 > buffer.length) {
+    return null;
+  }
+  const entryCount = readTiffUnsignedInteger(buffer, ifdOffset, littleEndian);
+  let width: number | null = null;
+  let height: number | null = null;
+  for (let index = 0; index < entryCount; index += 1) {
+    const entryOffset = ifdOffset + 2 + index * 12;
+    if (entryOffset + 12 > buffer.length) {
+      return null;
+    }
+
+    const tag = readTiffUnsignedInteger(buffer, entryOffset, littleEndian);
+    if (tag !== 256 && tag !== 257) {
+      continue;
+    }
+    const type = readTiffUnsignedInteger(buffer, entryOffset + 2, littleEndian);
+    const count = readTiffUnsignedLong(buffer, entryOffset + 4, littleEndian);
+    if (count !== 1 || (type !== 3 && type !== 4)) {
+      continue;
+    }
+
+    const value =
+      type === 3
+        ? readTiffUnsignedInteger(buffer, entryOffset + 8, littleEndian)
+        : readTiffUnsignedLong(buffer, entryOffset + 8, littleEndian);
+    if (tag === 256) {
+      width = value;
+    } else {
+      height = value;
+    }
+  }
+
+  return width === null || height === null ? null : buildImageMetadata(width, height);
+}
+
 const ISO_BMFF_IMAGE_BRANDS = new Set([
   "avif",
   "avis",
@@ -541,9 +620,26 @@ export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | nul
     readPngMetadata(buffer) ??
     readGifMetadata(buffer) ??
     readWebpMetadata(buffer) ??
+    readBmpMetadata(buffer) ??
+    readTiffMetadata(buffer) ??
     readIsoBmffImageMetadata(buffer) ??
     readJpegMetadata(buffer)
   );
+}
+
+function hasPhotonDecodableHeader(buffer: Buffer): boolean {
+  return (
+    readPngMetadata(buffer) !== null ||
+    readGifMetadata(buffer) !== null ||
+    readWebpMetadata(buffer) !== null ||
+    readJpegMetadata(buffer) !== null
+  );
+}
+
+function assertPhotonDecodableHeader(buffer: Buffer): void {
+  if (!hasPhotonDecodableHeader(buffer)) {
+    throw new Error("Photon backend skipped for image format handled by external tools");
+  }
 }
 
 function countImagePixels(meta: ImageMetadata): number | null {
@@ -704,7 +800,7 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.round(value)));
 }
 
-function resolveImageTool(backend: Exclude<ImageBackend, "sharp">): ExternalImageTool | null {
+function resolveImageTool(backend: Exclude<ImageBackend, "photon">): ExternalImageTool | null {
   if (backend === "sips") {
     return process.platform === "darwin"
       ? { backend, flavor: "sips", command: "/usr/bin/sips" }
@@ -888,7 +984,7 @@ function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean):
 }
 
 async function externalResizeToJpeg(
-  backend: Exclude<ImageBackend, "sharp">,
+  backend: Exclude<ImageBackend, "photon">,
   params: ResizeToJpegParams,
 ): Promise<Buffer> {
   const tool = resolveImageTool(backend);
@@ -959,7 +1055,7 @@ async function externalResizeToJpeg(
 }
 
 async function externalConvertToJpeg(
-  backend: Exclude<ImageBackend, "sharp">,
+  backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
 ): Promise<Buffer> {
   const tool = resolveImageTool(backend);
@@ -988,7 +1084,7 @@ async function externalConvertToJpeg(
 }
 
 async function externalNormalizeExifOrientation(
-  backend: Exclude<ImageBackend, "sharp" | "ffmpeg">,
+  backend: Exclude<ImageBackend, "photon" | "ffmpeg">,
   buffer: Buffer,
 ): Promise<Buffer> {
   if (backend === "sips") {
@@ -1010,7 +1106,7 @@ async function externalNormalizeExifOrientation(
 }
 
 async function externalResizeToPng(
-  backend: Exclude<ImageBackend, "sharp" | "sips" | "ffmpeg">,
+  backend: Exclude<ImageBackend, "photon" | "sips" | "ffmpeg">,
   params: ResizeToPngParams,
 ): Promise<Buffer> {
   const tool = resolveImageTool(backend);
@@ -1091,7 +1187,7 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   }
 
   const preference = getImageBackendPreference();
-  if (preference !== "auto" && preference !== "sharp") {
+  if (preference !== "auto" && preference !== "photon") {
     return null;
   }
 
@@ -1156,7 +1252,8 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
 
   for (const backend of imageBackendsForOperation("normalizeExifOrientation")) {
     try {
-      if (backend === "sharp") {
+      if (backend === "photon") {
+        assertPhotonDecodableHeader(buffer);
         const ops = await loadMediaAttachmentImageOps();
         return await ops.normalizeExifOrientation(buffer);
       }
@@ -1175,7 +1272,8 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
   return await runWithImageBackends("resizeToJpeg", async (backend) => {
-    if (backend === "sharp") {
+    if (backend === "photon") {
+      assertPhotonDecodableHeader(params.buffer);
       return await (await loadMediaAttachmentImageOps()).resizeToJpeg(params);
     }
     assertKnownImagePixelLimitBeforeExternalFallback(params.buffer);
@@ -1186,8 +1284,8 @@ export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   await assertImagePixelLimit(buffer);
   return await runWithImageBackends("convertHeicToJpeg", async (backend) => {
-    if (backend === "sharp") {
-      return await (await loadMediaAttachmentImageOps()).convertHeicToJpeg(buffer);
+    if (backend === "photon") {
+      throw new Error("Photon does not support HEIC/AVIF conversion");
     }
     assertKnownImagePixelLimitBeforeExternalFallback(buffer);
     return await externalConvertToJpeg(backend, buffer);
@@ -1221,7 +1319,8 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
   return await runWithImageBackends("resizeToPng", async (backend) => {
-    if (backend === "sharp") {
+    if (backend === "photon") {
+      assertPhotonDecodableHeader(params.buffer);
       return await (await loadMediaAttachmentImageOps()).resizeToPng(params);
     }
     if (backend === "windows-native" || backend === "imagemagick" || backend === "graphicsmagick") {
@@ -1299,7 +1398,7 @@ export async function optimizeImageToPng(
 }
 
 /**
- * Internal sips-only EXIF normalization (no sharp fallback).
+ * Internal sips-only EXIF normalization (no Photon fallback).
  * Used by resizeToJpeg to normalize before sips resize.
  */
 async function normalizeExifOrientationSips(buffer: Buffer): Promise<Buffer> {

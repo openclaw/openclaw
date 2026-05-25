@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
-import sharp from "sharp";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createNoisyJpegBuffer,
+  createNoisyPngBuffer,
+  createNoisyWebpBuffer,
+  createSolidPngBuffer,
+} from "../../../test/helpers/image-fixtures.js";
 import {
   createMockWebListener,
   createAcceptedWhatsAppSendResult,
@@ -155,38 +160,25 @@ describe("web auto-reply", () => {
       {
         name: "png",
         mime: "image/png",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .png({ compressionLevel: 0 })
-            .toBuffer(),
+        make: (_buf: Buffer, opts: { width: number; height: number }) =>
+          Promise.resolve(createNoisyPngBuffer(opts.width, opts.height)),
       },
       {
         name: "jpeg",
         mime: "image/jpeg",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            // Keep source > cap with fewer pixels so the test runs faster.
-            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
-            .toBuffer(),
+        make: (_buf: Buffer, opts: { width: number; height: number }) =>
+          createNoisyJpegBuffer(opts.width, opts.height, 100),
       },
       {
         name: "webp",
         mime: "image/webp",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .webp({ quality: 100 })
-            .toBuffer(),
+        make: (_buf: Buffer, opts: { width: number; height: number }) =>
+          createNoisyWebpBuffer(opts.width, opts.height),
       },
     ] as const;
 
-    const width = 320;
-    const height = 320;
+    const width = 800;
+    const height = 800;
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(
@@ -244,16 +236,7 @@ describe("web auto-reply", () => {
   });
 
   it("honors channels.whatsapp.mediaMaxMb for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const bigPng = createNoisyPngBuffer(256, 256);
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
     await expectCompressedImageWithinCap({
       mediaUrl: "https://example.com/big.png",
@@ -265,16 +248,7 @@ describe("web auto-reply", () => {
   });
 
   it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const bigPng = createNoisyPngBuffer(256, 256);
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
 
     setLoadConfigMock(() => ({
@@ -345,16 +319,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const smallPng = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 255, b: 0 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const smallPng = createSolidPngBuffer(64, 64, { r: 0, g: 255, b: 0 });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       body: true,
@@ -410,16 +375,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const png = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

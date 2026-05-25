@@ -1,5 +1,9 @@
-import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import { getImageMetadata } from "../../../../src/media/image-ops.js";
+import {
+  createSolidJpegBuffer,
+  createSolidPngBuffer,
+} from "../../../../test/helpers/image-fixtures.js";
 import { normalizeBrowserScreenshot } from "./screenshot.js";
 
 describe("browser screenshot normalization", () => {
@@ -20,16 +24,7 @@ describe("browser screenshot normalization", () => {
   }
 
   it("shrinks oversized images to <=2000x2000 and <=5MB", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 2100,
-        height: 2100,
-        channels: 3,
-        background: { r: 12, g: 34, b: 56 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const bigPng = createSolidPngBuffer(2100, 2100, { r: 12, g: 34, b: 56 });
 
     const normalized = await normalizeBrowserScreenshot(bigPng, {
       maxSide: 2000,
@@ -37,24 +32,15 @@ describe("browser screenshot normalization", () => {
     });
 
     expect(normalized.buffer.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
-    const meta = await sharp(normalized.buffer).metadata();
-    expect(meta.width).toBeLessThanOrEqual(2000);
-    expect(meta.height).toBeLessThanOrEqual(2000);
+    const meta = await getImageMetadata(normalized.buffer);
+    expect(meta?.width).toBeLessThanOrEqual(2000);
+    expect(meta?.height).toBeLessThanOrEqual(2000);
     expect(normalized.buffer[0]).toBe(0xff);
     expect(normalized.buffer[1]).toBe(0xd8);
   }, 120_000);
 
   it("keeps already-small screenshots unchanged", async () => {
-    const jpeg = await sharp({
-      create: {
-        width: 800,
-        height: 600,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .jpeg({ quality: 80 })
-      .toBuffer();
+    const jpeg = await createSolidJpegBuffer(800, 600, { r: 255, g: 0, b: 0 }, 80);
 
     const normalized = await normalizeBrowserScreenshot(jpeg, {
       maxSide: 2000,
@@ -65,16 +51,7 @@ describe("browser screenshot normalization", () => {
   });
 
   it("rejects screenshots above max side when no image processor is available", async () => {
-    const png = await sharp({
-      create: {
-        width: 420,
-        height: 120,
-        channels: 3,
-        background: { r: 12, g: 34, b: 56 },
-      },
-    })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const png = createSolidPngBuffer(420, 120, { r: 12, g: 34, b: 56 });
     expect(png.byteLength).toBeLessThan(5 * 1024 * 1024);
 
     await withUnavailableImageBackend(async () => {
