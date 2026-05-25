@@ -196,34 +196,37 @@ Runtime 热修复：`POST /v1/doctor?fix=true`（与 `claworks doctor --fix` / `
 
 ### 8.5 用户可见文案产品化（2026-05-24）
 
-| 区域                                                                                                       | 状态 | 说明                                                              |
-| ---------------------------------------------------------------------------------------------------------- | ---- | ----------------------------------------------------------------- |
-| `formatHelpExamples` / help-format                                                                         | ✅   | `replaceCliName` 覆盖 help 示例命令                               |
-| `qr-cli` / `channels add` / `channels list`                                                                | ✅   | 命令字符串经 `formatCliCommand` / `replaceCliName` 产品化         |
-| Wizard i18n（en / zh-CN / zh-TW）                                                                          | ✅   | `wizardT` → `applyClaworksWizardCopy` → `replaceEmbeddedCliNames` |
-| `runtime-guard` Node 版本错误                                                                              | ✅   | `resolveProductCliName()` 动态 CLI 名                             |
-| IM abort 触发词                                                                                            | ✅   | 新增 `stop clawworks` / `claworks stop`（保留 openclaw 变体）     |
-| config issue / doctor --lint 输出                                                                          | ✅   | `issue-format` + `doctor-lint` 经 `productizeUserCopy`            |
-| `config/validation.ts` 校验消息                                                                            | ✅   | web_search / channel / plugins install 提示经 `formatCliCommand`  |
-| gateway 连接错误 / daemon 版本 mismatch                                                                    | ✅   | `formatCliCommand` / `productizeUserCopy`                         |
-| update 后 repair 指引 / onboard 提示                                                                       | ✅   | `formatCliCommand` 覆盖 doctor/update/configure                   |
-| 插件 discovery / binding / registry 诊断                                                                   | ✅   | `formatCliCommand` / `productizeUserCopy`                         |
-| channel 选择错误 / LaunchAgent actionHint                                                                  | ✅   | `formatCliCommand`                                                |
-| Extension doctor-contract（telegram/discord/matrix）                                                       | ✅   | `formatCliCommand` 覆盖 legacy 规则与 Matrix 诊断                 |
-| Extension doctor-contract（slack/zalouser/googlechat/voice-call/memory-wiki/elevenlabs/google-meet/codex） | ✅   | 第二批 bundled 插件 legacy 规则与 voice-call 运行时警告           |
-| `schema.help.ts` / configure UI hints 显示层                                                               | ✅   | `buildBaseHints()` 经 `productizeUserCopy` 产品化 help 文案       |
-| claworks-robot `cw_update_config` 描述                                                                     | ✅   | `claworks.json` 替代 openclaw.json                                |
-| update-runner progress / tui 内部日志                                                                      | ⏭️   | 纯内部，跳过                                                      |
+| 区域                                                                                                       | 状态 | 说明                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | ---- | -------------------------------------------------------------------------------------------------------- |
+| `formatHelpExamples` / help-format                                                                         | ✅   | `replaceCliName` 覆盖 help 示例命令                                                                      |
+| `qr-cli` / `channels add` / `channels list`                                                                | ✅   | 命令字符串经 `formatCliCommand` / `replaceCliName` 产品化                                                |
+| Wizard i18n（en / zh-CN / zh-TW）                                                                          | ✅   | `wizardT` → `applyClaworksWizardCopy` → `replaceEmbeddedCliNames`                                        |
+| `runtime-guard` Node 版本错误                                                                              | ✅   | `resolveProductCliName()` 动态 CLI 名                                                                    |
+| IM abort 触发词                                                                                            | ✅   | 新增 `stop clawworks` / `claworks stop`（保留 openclaw 变体）                                            |
+| config issue / doctor --lint 输出                                                                          | ✅   | `issue-format` + `doctor-lint` 经 `productizeUserCopy`                                                   |
+| `config/validation.ts` 校验消息                                                                            | ✅   | web_search / channel / plugins install 提示经 `formatCliCommand`                                         |
+| gateway 连接错误 / daemon 版本 mismatch                                                                    | ✅   | `formatCliCommand` / `productizeUserCopy`                                                                |
+| update 后 repair 指引 / onboard 提示                                                                       | ✅   | `formatCliCommand` 覆盖 doctor/update/configure                                                          |
+| 插件 discovery / binding / registry 诊断                                                                   | ✅   | `formatCliCommand` / `productizeUserCopy`                                                                |
+| channel 选择错误 / LaunchAgent actionHint                                                                  | ✅   | `formatCliCommand`                                                                                       |
+| Extension doctor-contract（telegram/discord/matrix）                                                       | ✅   | `formatCliCommand` 覆盖 legacy 规则与 Matrix 诊断                                                        |
+| Extension doctor-contract（slack/zalouser/googlechat/voice-call/memory-wiki/elevenlabs/google-meet/codex） | ✅   | 第二批 bundled 插件 legacy 规则与 voice-call 运行时警告                                                  |
+| `schema.help.ts` / configure UI hints 显示层                                                               | ✅   | `buildBaseHints()` 经 `productizeUserCopy` 产品化 help 文案                                              |
+| `config-cli`（set/patch/schema/validate）                                                                  | ✅   | `--dry-run` / `schema` 描述、invalid-config 错误、JSON path 回退、schema 加载失败经 `productizeUserCopy` |
+| claworks-robot `cw_update_config` 描述                                                                     | ✅   | `claworks.json` 替代 openclaw.json                                                                       |
+| update-runner progress / tui 内部日志                                                                      | ⏭️   | 纯内部，跳过                                                                                             |
 
 **遗留（下轮分批）**
 
-| 区域                                                        | 状态 | 说明                                                                     |
-| ----------------------------------------------------------- | ---- | ------------------------------------------------------------------------ |
-| Extension doctor-contract（ollama/vllm/plugin-sdk ssrf 等） | 🔲   | 少量 provider/index 与 SDK legacy 规则仍裸 `openclaw configure` / doctor |
-| `schema.help.ts` 静态源字符串                               | —    | 显示层已产品化；源文件仍保留 openclaw 真源供 upstream 合并               |
-| `doctor-core-checks` / gateway client 等 core 诊断          | ✅   | fixHint 经 `doctorFixHint` → `productizeUserCopy`                        |
-| `update-cli` progress 内部日志                              | ⏭️   | 审计已标跳过                                                             |
-| feishu / webhooks extension                                 | —    | 无 doctor-contract 或 onboarding 裸 `openclaw` 提示                      |
+| 区域                                                        | 状态 | 说明                                                                                           |
+| ----------------------------------------------------------- | ---- | ---------------------------------------------------------------------------------------------- |
+| Extension doctor-contract（ollama/vllm/plugin-sdk ssrf 等） | 🔲   | 少量 provider/index 与 SDK legacy 规则仍裸 `openclaw configure` / doctor                       |
+| `schema.help.ts` 静态源字符串                               | —    | 显示层已产品化；源文件仍保留 openclaw 真源供 upstream 合并                                     |
+| `OpenClawConfig` / `openclaw/plugin-sdk` 类型与 import      | —    | **有意保留** upstream 兼容层，ClaWorks 产品面经 `productizeUserCopy` / `formatCliCommand` 覆盖 |
+| `--dev` profile / `profile.ts` 状态目录                     | ✅   | `CLAWORKS_PRODUCT=1` → `~/.claworks-dev` + `claworks.json`（port 19001）                       |
+| `doctor-core-checks` / gateway client 等 core 诊断          | ✅   | fixHint 经 `doctorFixHint` → `productizeUserCopy`                                              |
+| `update-cli` progress 内部日志                              | ⏭️   | 审计已标跳过                                                                                   |
+| feishu / webhooks extension                                 | —    | 无 doctor-contract 或 onboarding 裸 `openclaw` 提示                                            |
 
 ---
 
