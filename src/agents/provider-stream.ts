@@ -15,10 +15,6 @@ function resolveConfiguredProvider(params: {
   return findNormalizedProviderValue(params.cfg?.models?.providers, params.provider);
 }
 
-function isGoogleGenerativeProviderConfig(providerConfig: ModelProviderConfig | undefined): boolean {
-  return normalizeOptionalString(providerConfig?.api) === "google-generative-ai";
-}
-
 function isGoogleGenerativeModel<TApi extends Api>(model: Model<TApi>): boolean {
   return model.api === "google-generative-ai" && normalizeProviderId(model.provider) === "google";
 }
@@ -31,11 +27,12 @@ function assertProviderConfigMatchesModel<TApi extends Api>(params: {
     return;
   }
   const googleProviderConfig = resolveConfiguredProvider({ cfg: params.cfg, provider: "google" });
-  if (isGoogleGenerativeProviderConfig(googleProviderConfig)) {
+  const configuredApi = normalizeOptionalString(googleProviderConfig?.api);
+  if (!configuredApi || configuredApi === "google-generative-ai") {
     return;
   }
   throw new Error(
-    `Google model "google/${params.model.id}" requires models.providers.google with api "google-generative-ai". Configure the Google provider or remove this model from the primary/fallback model list.`,
+    `Google model "google/${params.model.id}" cannot use models.providers.google api "${configuredApi}". Expected api "google-generative-ai". Configure the Google provider correctly or remove the mismatched provider config.`,
   );
 }
 
