@@ -5,14 +5,10 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  createNoisyPngBuffer,
-  createSolidJpegBuffer,
-  createSolidPngBuffer,
-} from "../../../test/helpers/image-fixtures.js";
 import {
   LocalMediaAccessError,
   loadWebMedia,
@@ -63,7 +59,7 @@ beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
-  largeJpegBuffer = await createSolidJpegBuffer(400, 400, { r: 255, g: 0, b: 0 }, 95);
+  largeJpegBuffer = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
   largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
   tinyPngBuffer = createSolidPngBuffer(10, 10, { r: 0, g: 255, b: 0 });
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");

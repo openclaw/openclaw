@@ -1,11 +1,6 @@
-import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  createNoisyJpegBuffer,
-  createNoisyPngBuffer,
-  createNoisyWebpBuffer,
-  createSolidPngBuffer,
-} from "../../../test/helpers/image-fixtures.js";
 import {
   createMockWebListener,
   createAcceptedWhatsAppSendResult,
@@ -156,34 +151,33 @@ describe("web auto-reply", () => {
   }
 
   it("compresses common formats to jpeg under the cap", async () => {
+    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+    const webp = await fs.readFile("extensions/whatsapp/src/__fixtures__/large-noisy.webp");
     const formats = [
       {
         name: "png",
         mime: "image/png",
-        make: (_buf: Buffer, opts: { width: number; height: number }) =>
+        make: (opts: { width: number; height: number }) =>
           Promise.resolve(createNoisyPngBuffer(opts.width, opts.height)),
       },
       {
         name: "jpeg",
         mime: "image/jpeg",
-        make: (_buf: Buffer, opts: { width: number; height: number }) =>
-          createNoisyJpegBuffer(opts.width, opts.height, 100),
+        make: () => Promise.resolve(jpeg),
       },
       {
         name: "webp",
         mime: "image/webp",
-        make: (_buf: Buffer, opts: { width: number; height: number }) =>
-          createNoisyWebpBuffer(opts.width, opts.height),
+        make: () => Promise.resolve(webp),
       },
     ] as const;
 
     const width = 800;
     const height = 800;
-    const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(
       formats.map(async (fmt) =>
-        Object.assign({}, fmt, { image: await fmt.make(sharedRaw, { width, height }) }),
+        Object.assign({}, fmt, { image: await fmt.make({ width, height }) }),
       ),
     );
 

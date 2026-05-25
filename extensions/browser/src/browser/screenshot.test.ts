@@ -1,9 +1,7 @@
+import fs from "node:fs/promises";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
+import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { getImageMetadata } from "../../../../src/media/image-ops.js";
-import {
-  createSolidJpegBuffer,
-  createSolidPngBuffer,
-} from "../../../../test/helpers/image-fixtures.js";
 import { normalizeBrowserScreenshot } from "./screenshot.js";
 
 describe("browser screenshot normalization", () => {
@@ -40,7 +38,7 @@ describe("browser screenshot normalization", () => {
   }, 120_000);
 
   it("keeps already-small screenshots unchanged", async () => {
-    const jpeg = await createSolidJpegBuffer(800, 600, { r: 255, g: 0, b: 0 }, 80);
+    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
 
     const normalized = await normalizeBrowserScreenshot(jpeg, {
       maxSide: 2000,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createNoisyPngBuffer,
-  createSolidJpegBuffer,
   createSolidPngBuffer,
+  createTinyJpegBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { getImageMetadata } from "../media/image-ops.js";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
@@ -119,7 +119,7 @@ describe("tool image sanitizing", () => {
   }, 20_000);
 
   it("corrects mismatched jpeg mimeType", async () => {
-    const jpeg = await createSolidJpegBuffer(10, 10, { r: 255, g: 0, b: 0 });
+    const jpeg = createTinyJpegBuffer();
 
     const blocks = [
       {

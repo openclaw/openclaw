@@ -85,6 +85,7 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
+
   </Step>
 </Steps>
 

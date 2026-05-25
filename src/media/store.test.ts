@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSolidJpegBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -644,7 +644,7 @@ describe("media store", () => {
     {
       name: "saves jpeg buffers with the detected extension",
       bufferFactory: async () => {
-        return await createSolidJpegBuffer(2, 2, { r: 0x12, g: 0x34, b: 0x56 }, 80);
+        return createTinyJpegBuffer();
       },
       contentType: "image/jpeg",
       expectedContentType: "image/jpeg",
