@@ -8,8 +8,6 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { KeyId } from "@earendil-works/pi-tui";
-import * as bundledTui from "@earendil-works/pi-tui";
 import { createJiti } from "jiti/static";
 import * as bundledLlm from "openclaw/plugin-sdk/llm";
 import * as bundledLlmAnthropic from "openclaw/plugin-sdk/llm-anthropic";
@@ -26,6 +24,10 @@ import * as bundledLlmProviderRuntime from "openclaw/plugin-sdk/llm-provider-run
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
 import * as bundledTypeboxValue from "typebox/value";
+import {
+  buildPluginLoaderAliasMap,
+  buildPluginLoaderJitiOptions,
+} from "../../../plugins/sdk-alias.js";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
 import * as bundledAgentCore from "../../runtime/index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
@@ -38,6 +40,7 @@ import type {
   ExtensionAPI,
   ExtensionFactory,
   ExtensionRuntime,
+  ExtensionShortcut,
   LoadExtensionsResult,
   MessageRenderer,
   ProviderConfig,
@@ -54,7 +57,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
   "@sinclair/typebox/compile": bundledTypeboxCompile,
   "@sinclair/typebox/value": bundledTypeboxValue,
   "openclaw/plugin-sdk/agent-core": bundledAgentCore,
-  "@earendil-works/pi-tui": bundledTui,
   "openclaw/plugin-sdk/llm": bundledLlm,
   "openclaw/plugin-sdk/llm-anthropic": bundledLlmAnthropic,
   "openclaw/plugin-sdk/llm-bedrock": bundledLlmBedrock,
@@ -65,93 +67,36 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
   "openclaw/plugin-sdk/llm-openai-responses": bundledLlmOpenAiResponses,
   "openclaw/plugin-sdk/llm-provider-runtime": bundledLlmProviderRuntime,
   "openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
+  "@openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
 };
 
 const require = createRequire(import.meta.url);
 
-/**
- * Get aliases for jiti (used in Node.js/development mode).
- * In Bun binary mode, virtualModules is used instead.
- */
 let aliases: Record<string, string> | null = null;
 
-const PLUGIN_SDK_SOURCE_ALIASES = {
-  "openclaw/plugin-sdk/agent-core": "src/plugin-sdk/agent-core.ts",
-  "openclaw/plugin-sdk/llm": "src/plugin-sdk/llm.ts",
-  "openclaw/plugin-sdk/llm-anthropic": "src/plugin-sdk/llm-anthropic.ts",
-  "openclaw/plugin-sdk/llm-bedrock": "src/plugin-sdk/llm-bedrock.ts",
-  "openclaw/plugin-sdk/llm-google-shared": "src/plugin-sdk/llm-google-shared.ts",
-  "openclaw/plugin-sdk/llm-oauth": "src/plugin-sdk/llm-oauth.ts",
-  "openclaw/plugin-sdk/llm-openai-codex-responses": "src/plugin-sdk/llm-openai-codex-responses.ts",
-  "openclaw/plugin-sdk/llm-openai-completions": "src/plugin-sdk/llm-openai-completions.ts",
-  "openclaw/plugin-sdk/llm-openai-responses": "src/plugin-sdk/llm-openai-responses.ts",
-  "openclaw/plugin-sdk/llm-provider-runtime": "src/plugin-sdk/llm-provider-runtime.ts",
-} as const;
-
-function findPackageRoot(startDir: string): string {
-  let current = startDir;
-  while (true) {
-    if (fs.existsSync(path.join(current, "package.json"))) {
-      return current;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return startDir;
-    }
-    current = parent;
-  }
+function resolveExtensionSafeAgentSessionsEntry(): string {
+  const currentDirname = path.dirname(fileURLToPath(import.meta.url));
+  const jsEntry = path.resolve(currentDirname, "..", "extension-sdk.js");
+  return fs.existsSync(jsEntry) ? jsEntry : path.resolve(currentDirname, "..", "extension-sdk.ts");
 }
 
-function resolveModuleEntryForJiti(params: { moduleId: string; sourcePath?: string }): string {
-  const currentModuleDir = path.dirname(fileURLToPath(import.meta.url));
-  const sourceEntry = params.sourcePath
-    ? path.join(findPackageRoot(currentModuleDir), params.sourcePath)
-    : undefined;
-  if (
-    sourceEntry &&
-    currentModuleDir.split(path.sep).includes("src") &&
-    fs.existsSync(sourceEntry)
-  ) {
-    return sourceEntry;
-  }
-
-  const resolved = fileURLToPath(import.meta.resolve(params.moduleId));
-  if (fs.existsSync(resolved) || !params.sourcePath) {
-    return resolved;
-  }
-
-  return sourceEntry && fs.existsSync(sourceEntry) ? sourceEntry : resolved;
-}
-
-function resolvePluginSdkAliasesForJiti(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(PLUGIN_SDK_SOURCE_ALIASES).map(([moduleId, sourcePath]) => [
-      moduleId,
-      resolveModuleEntryForJiti({ moduleId, sourcePath }),
-    ]),
-  );
-}
-
-function getAliases(): Record<string, string> {
+function getExtensionLoaderAliases(): Record<string, string> {
   if (aliases) {
     return aliases;
   }
 
-  const currentDirname = path.dirname(fileURLToPath(import.meta.url));
-  const agentSessionsEntry = fs.existsSync(path.resolve(currentDirname, "..", "extension-sdk.js"))
-    ? path.resolve(currentDirname, "..", "extension-sdk.js")
-    : path.resolve(currentDirname, "..", "extension-sdk.ts");
-
+  const agentSessionsEntry = resolveExtensionSafeAgentSessionsEntry();
   const typeboxEntry = require.resolve("typebox");
   const typeboxCompileEntry = require.resolve("typebox/compile");
   const typeboxValueEntry = require.resolve("typebox/value");
-
-  const tuiEntry = fileURLToPath(import.meta.resolve("@earendil-works/pi-tui"));
+  const loaderModulePath = fileURLToPath(import.meta.url);
 
   aliases = {
+    ...buildPluginLoaderAliasMap(loaderModulePath, process.argv[1], import.meta.url),
+    // The public agent-sessions export includes the resource loader. Extensions
+    // load through the resource loader, so use the cycle-safe SDK barrel here.
     "openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
-    ...resolvePluginSdkAliasesForJiti(),
-    "@earendil-works/pi-tui": tuiEntry,
+    "@openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
     typebox: typeboxEntry,
     "typebox/compile": typeboxCompileEntry,
     "typebox/value": typeboxValueEntry,
@@ -285,7 +230,7 @@ function createExtensionAPI(
     },
 
     registerShortcut(
-      shortcut: KeyId,
+      shortcut: ExtensionShortcut["shortcut"],
       options: {
         description?: string;
         handler: (ctx: import("./types.js").ExtensionContext) => Promise<void> | void;
@@ -409,13 +354,16 @@ function createExtensionAPI(
 
 async function loadExtensionModule(extensionPath: string) {
   const jiti = createJiti(import.meta.url, {
-    moduleCache: false,
-    // In Bun binary: use virtualModules for bundled packages (no filesystem resolution)
-    // Also disable tryNative so jiti handles ALL imports (not just the entry point)
-    // In Node.js/dev: use aliases to resolve to node_modules paths
     ...(isBunBinary
-      ? { virtualModules: VIRTUAL_MODULES, tryNative: false }
-      : { alias: getAliases() }),
+      ? {
+          ...buildPluginLoaderJitiOptions({}),
+          // Bun binaries need virtual modules because extension SDK files are
+          // bundled into the executable rather than present on disk.
+          tryNative: false,
+          virtualModules: VIRTUAL_MODULES,
+        }
+      : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
+    moduleCache: false,
   });
 
   const module = await jiti.import(extensionPath, { default: true });
