@@ -112,6 +112,18 @@ function spawnInvocation(command, commandArgs, env, platform) {
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
+const jsRuntimeEntrypoints = new Set(["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"]);
+const shellControlCommandPrefixes = new Set([
+  "if",
+  "while",
+  "until",
+  "then",
+  "do",
+  "else",
+  "elif",
+  "!",
+]);
+const shellCommandExecutionPrefixes = new Set(["exec"]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -512,13 +524,41 @@ function normalizedCommandWords(commandArgs) {
 }
 
 function commandRuntimeEntrypoint(commandArgs) {
+  if (commandArgs.length === 1) {
+    for (const candidateWords of shellCommandWordCandidates(commandArgs[0])) {
+      const shellRuntime = commandWordsRuntimeEntrypoint(candidateWords);
+      if (shellRuntime) {
+        return shellRuntime;
+      }
+    }
+    return "";
+  }
   const words = normalizedCommandWords(commandArgs);
+  const directRuntime = commandWordsRuntimeEntrypoint(words);
+  if (directRuntime) {
+    return directRuntime;
+  }
+  return "";
+}
+
+function commandWordsRuntimeEntrypoint(words) {
   const first = (words[0] ?? "").split("/").pop();
-  return ["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"].includes(first) ? first : "";
+  return jsRuntimeEntrypoints.has(first) ? first : "";
 }
 
 function isChangedGateCommand(commandArgs) {
+  if (commandArgs.length === 1) {
+    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateWords);
+  }
   const words = normalizedCommandWords(commandArgs);
+  if (isChangedGateWords(words)) {
+    return true;
+  }
+  return false;
+}
+
+function isChangedGateWords(words) {
+  words = [...words];
   if (words[0] === "corepack") {
     words.shift();
   }
@@ -527,6 +567,455 @@ function isChangedGateCommand(commandArgs) {
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
   );
+}
+
+function shellCommandWordCandidates(command) {
+  return shellCommandSegments(stripHeredocBodies(command.replace(/\\\r?\n/gu, " ")));
+}
+
+function pushShellCandidate(candidates, segment) {
+  const words = normalizedShellSegmentWords(segment);
+  if (words.length > 0) {
+    candidates.push(words);
+  }
+}
+
+function normalizedShellSegmentWords(segment) {
+  const trimmed = segment.trim().replace(/^[({]\s*/u, "");
+  if (!trimmed || trimmed.startsWith("#")) {
+    return [];
+  }
+  const words = normalizedCommandWords(splitShellWords(trimmed));
+  while (shellControlCommandPrefixes.has(words[0])) {
+    words.shift();
+  }
+  const normalizedWords = normalizedCommandWords(words);
+  return normalizedCommandWords(stripShellExecutionPrefixes(normalizedWords));
+}
+
+function stripShellExecutionPrefixes(words) {
+  words = [...words];
+  for (;;) {
+    if (shellCommandExecutionPrefixes.has(words[0])) {
+      words.shift();
+      continue;
+    }
+    if (words[0] === "command") {
+      words.shift();
+      if (!stripCommandBuiltinOptions(words)) {
+        return words;
+      }
+      continue;
+    }
+    if (words[0] === "time") {
+      words.shift();
+      stripTimeOptions(words);
+      continue;
+    }
+    return words;
+  }
+}
+
+function stripCommandBuiltinOptions(words) {
+  for (;;) {
+    if (words[0] === "--") {
+      words.shift();
+      return true;
+    }
+    if (words[0] === "-p") {
+      words.shift();
+      continue;
+    }
+    return words[0] !== "-v" && words[0] !== "-V";
+  }
+}
+
+function stripTimeOptions(words) {
+  while ((words[0] ?? "").startsWith("-")) {
+    if (words[0] === "--") {
+      words.shift();
+      return;
+    }
+    words.shift();
+  }
+}
+
+function splitShellWords(value) {
+  const words = [];
+  let word = "";
+  let quote = "";
+  let escaped = false;
+  for (const char of value) {
+    if (escaped) {
+      word += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        word += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      if (word) {
+        words.push(word);
+        word = "";
+      }
+      continue;
+    }
+    word += char;
+  }
+  if (word) {
+    words.push(word);
+  }
+  return words;
+}
+
+function stripHeredocBodies(command) {
+  const lines = command.split("\n");
+  const kept = [];
+  const pendingDelimiters = [];
+  for (const line of lines) {
+    if (pendingDelimiters.length > 0) {
+      const current = pendingDelimiters[0];
+      const candidate = current.stripTabs ? line.replace(/^\t+/u, "") : line;
+      if (candidate === current.delimiter) {
+        pendingDelimiters.shift();
+      } else if (current.expand) {
+        kept.push(...extractCommandSubstitutionBodies(line));
+      }
+      continue;
+    }
+    kept.push(line);
+    pendingDelimiters.push(...lineHeredocDelimiters(line));
+  }
+  return kept.join("\n");
+}
+
+function lineHeredocDelimiters(line) {
+  const delimiters = [];
+  let quote = "";
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char !== "<" || next !== "<" || line[index + 2] === "<") {
+      continue;
+    }
+    let delimiterStart = index + 2;
+    const stripTabs = line[delimiterStart] === "-";
+    if (stripTabs) {
+      delimiterStart += 1;
+    }
+    while (/\s/u.test(line[delimiterStart] ?? "")) {
+      delimiterStart += 1;
+    }
+    const parsed = readHeredocDelimiter(line, delimiterStart);
+    if (parsed.delimiter) {
+      delimiters.push({ delimiter: parsed.delimiter, stripTabs, expand: !parsed.quoted });
+      index = parsed.endIndex;
+    }
+  }
+  return delimiters;
+}
+
+function readHeredocDelimiter(line, startIndex) {
+  let delimiter = "";
+  let quote = "";
+  let escaped = false;
+  let quoted = false;
+  let index = startIndex;
+  for (; index < line.length; index += 1) {
+    const char = line[index];
+    if (escaped) {
+      delimiter += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      quoted = true;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      } else {
+        delimiter += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quoted = true;
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char) || /[;&|()<>]/u.test(char)) {
+      break;
+    }
+    delimiter += char;
+  }
+  return { delimiter, endIndex: Math.max(startIndex, index), quoted };
+}
+
+function extractCommandSubstitutionBodies(line) {
+  const substitutions = [];
+  let escaped = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "$" && next === "(" && line[index + 2] !== "(") {
+      const substitution = readCommandSubstitution(line, index + 2);
+      substitutions.push(substitution.content);
+      index = substitution.endIndex;
+    }
+  }
+  return substitutions;
+}
+
+function shellCommandSegments(command) {
+  const segments = [];
+  let segment = "";
+  let quote = "";
+  let escaped = false;
+  let inCase = false;
+  let readingCasePattern = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1] ?? "";
+    if (escaped) {
+      segment += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      segment += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (quote === '"' && char === "$" && next === "(" && command[index + 2] !== "(") {
+        const substitution = readCommandSubstitution(command, index + 2);
+        segments.push(...shellCommandWordCandidates(substitution.content));
+        index = substitution.endIndex;
+        segment += "$()";
+        continue;
+      }
+      if (char === quote) {
+        quote = "";
+      }
+      segment += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      segment += char;
+      continue;
+    }
+    if (char === "#" && (segment.trim() === "" || /\s$/u.test(segment))) {
+      index = skipUntilNewline(command, index);
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if (char === "$" && next === "(" && command[index + 2] !== "(") {
+      const substitution = readCommandSubstitution(command, index + 2);
+      segments.push(...shellCommandWordCandidates(substitution.content));
+      index = substitution.endIndex;
+      segment += "$()";
+      continue;
+    }
+    if (segment.trim() === "" && startsShellReservedWord(command, index, "case")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      inCase = true;
+      readingCasePattern = true;
+      index += "case".length - 1;
+      continue;
+    }
+    if (inCase && segment.trim() === "" && startsShellReservedWord(command, index, "esac")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      inCase = false;
+      readingCasePattern = false;
+      index += "esac".length - 1;
+      continue;
+    }
+    if (inCase && readingCasePattern) {
+      if (char === ")") {
+        segment = "";
+        readingCasePattern = false;
+        continue;
+      }
+      segment += char;
+      continue;
+    }
+    if (inCase && char === ";" && next === ";") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      readingCasePattern = true;
+      index += 1;
+      continue;
+    }
+    if (char === "\n" || char === ";" || char === ")") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      index += 1;
+      continue;
+    }
+    if (char === "&" && next !== ">" && command[index - 1] !== ">") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      continue;
+    }
+    if (char === "|") {
+      pushShellCandidate(segments, segment);
+      segment = "";
+      if (next === "&") {
+        index += 1;
+      }
+      continue;
+    }
+    segment += char;
+  }
+  pushShellCandidate(segments, segment);
+  return segments;
+}
+
+function readCommandSubstitution(command, startIndex) {
+  let depth = 1;
+  let quote = "";
+  let escaped = false;
+  let inCase = false;
+  let readingCasePattern = false;
+  let content = "";
+  for (let index = startIndex; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1] ?? "";
+    if (escaped) {
+      content += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      content += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = "";
+      }
+      content += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      content += char;
+      continue;
+    }
+    if (!inCase && startsShellToken(command, index, "case")) {
+      inCase = true;
+      readingCasePattern = true;
+    } else if (inCase && startsShellToken(command, index, "esac")) {
+      inCase = false;
+      readingCasePattern = false;
+    }
+    if (char === "$" && next === "(") {
+      depth += 1;
+      content += "$(";
+      index += 1;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      content += char;
+      continue;
+    }
+    if (inCase && char === ";" && next === ";") {
+      readingCasePattern = true;
+      content += ";;";
+      index += 1;
+      continue;
+    }
+    if (inCase && readingCasePattern && depth === 1 && char === ")") {
+      readingCasePattern = false;
+      content += char;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return { content, endIndex: index };
+      }
+    }
+    content += char;
+  }
+  return { content, endIndex: command.length - 1 };
+}
+
+function startsShellReservedWord(command, index, word) {
+  if (!command.startsWith(word, index)) {
+    return false;
+  }
+  const after = command[index + word.length] ?? "";
+  return !after || /\s|[;&|()<>]/u.test(after);
+}
+
+function startsShellToken(command, index, word) {
+  if (!command.startsWith(word, index)) {
+    return false;
+  }
+  const before = command[index - 1] ?? "";
+  const after = command[index + word.length] ?? "";
+  return (!before || /\s|[;&|()<>]/u.test(before)) && (!after || /\s|[;&|()<>]/u.test(after));
+}
+
+function skipUntilNewline(command, index) {
+  const newlineIndex = command.indexOf("\n", index);
+  return newlineIndex < 0 ? command.length - 1 : newlineIndex;
 }
 
 function mergeBaseForChangedGate() {
