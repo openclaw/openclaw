@@ -233,6 +233,14 @@ function resolveLocalAnchor(
 }
 
 function resolveLocalRef(resourceRoot: JsonSchemaValue, ref: string): LocalRefResolution {
+  if (isRecord(resourceRoot) && typeof resourceRoot.$id === "string" && resourceRoot.$id !== "") {
+    if (ref === resourceRoot.$id) {
+      return { found: true, schema: resourceRoot, resourceRoot };
+    }
+    if (ref.startsWith(`${resourceRoot.$id}#`)) {
+      return resolveLocalRef(resourceRoot, ref.slice(resourceRoot.$id.length));
+    }
+  }
   if (ref === "#") {
     return { found: true, schema: resourceRoot, resourceRoot };
   }
@@ -372,9 +380,6 @@ function findJsonSchemaNodeError(
   }
   const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   if (typeof schema.$ref === "string") {
-    if (!schema.$ref.startsWith("#")) {
-      return `${path}.$ref: only local refs are supported`;
-    }
     if (!resolveLocalRef(currentResourceRoot, schema.$ref).found) {
       return `${path}.$ref: unresolved local ref`;
     }

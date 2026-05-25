@@ -373,6 +373,32 @@ describe("session MCP runtime", () => {
     });
     expect(nestedAnchorValidator("ok").valid).toBe(true);
     expect(nestedAnchorValidator(1).valid).toBe(false);
+
+    const absoluteRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://example.com/schema",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "https://example.com/schema#/$defs/Value",
+    });
+    expect(absoluteRefValidator("ok").valid).toBe(true);
+    expect(absoluteRefValidator(1).valid).toBe(false);
+
+    const emptyIdRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "#/$defs/Value",
+    });
+    expect(emptyIdRefValidator("ok").valid).toBe(true);
+    expect(emptyIdRefValidator(1).valid).toBe(false);
   });
 
   it("accepts draft-2020-12 local refs into schema arrays", () => {

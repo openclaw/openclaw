@@ -365,6 +365,40 @@ describe("schema validator", () => {
       },
       expectedValue: "ok",
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.absolute-same-document-ref",
+        schema: {
+          $id: "https://example.com/schema",
+          $defs: {
+            Value: {
+              type: "string",
+            },
+          },
+          $ref: "https://example.com/schema#/$defs/Value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.empty-id-local-ref",
+        schema: {
+          $id: "",
+          $defs: {
+            Value: {
+              type: "string",
+            },
+          },
+          $ref: "#/$defs/Value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
   });
 
   it("accepts local refs into schema arrays", () => {
