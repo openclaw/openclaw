@@ -2,7 +2,8 @@
 
 **Enterprise robot runtime** — event-driven, ontology-native, playbook-powered, A2A-connected.
 
-> Built on the [OpenClaw](https://github.com/openclaw/openclaw) foundation, synced to upstream `main`.  
+> **ClaWorks fork** — enterprise robot runtime forked from [OpenClaw](https://github.com/openclaw/openclaw), synced to upstream `main`.  
+> **快速上手**：[QUICKSTART.md](QUICKSTART.md) · **安装与 npm 预检**：[docs/claworks/install.md](docs/claworks/install.md)  
 > Official OpenClaw users can connect via [@claworks/openclaw-extension](https://github.com/claworks/openclaw-claworks-extension).
 
 Runtime: **Node 24 (recommended) or Node 22.19+**

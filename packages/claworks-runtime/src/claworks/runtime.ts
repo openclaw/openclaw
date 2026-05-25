@@ -547,7 +547,9 @@ export async function createClaworksRuntime(
   runtime.structuredOutput = createStructuredOutputEngine(async (opts) => {
     const fn = runtime.llmComplete ?? runtime.bridges?.get("llm")?.complete;
     if (!fn) {
-      throw new Error("LLM 未配置：请设置 CLAWORKS_LLM_BASE_URL 或对接 OpenClaw 提供商");
+      throw new Error(
+        "LLM 未配置：请设置 CLAWORKS_LLM_BASE_URL 或在 claworks.json 配置 LLM provider",
+      );
     }
     return fn(opts);
   });

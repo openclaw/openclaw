@@ -134,7 +134,30 @@ pnpm test extensions/claworks/canonical-surface.contract.test.ts
 
 ---
 
-## 5. 已知非阻塞项（P2 / 后续版本）
+## 5. P2 生产交付（2026-05-25 批次）
+
+| #   | 检查项                   | 命令 / 证据                                                                                           | 状态         |
+| --- | ------------------------ | ----------------------------------------------------------------------------------------------------- | ------------ |
+| 1   | OTEL 桥接                | EventKernel → `diagnostics-otel` span（`b1c5d69d55`）                                                 | ✅           |
+| 2   | OT dry-run + 生产        | `pnpm claworks:ot-dry-run` + `ot-production.claworks.fragment.json`                                   | ✅           |
+| 3   | OT 实机 runbook          | [`docs/claworks/ot-live.md`](claworks/ot-live.md) + `pnpm claworks:ot-live-checklist`                 | ✅           |
+| 4   | GitHub branch protection | [`docs/GITHUB-BRANCH-PROTECTION.md`](GITHUB-BRANCH-PROTECTION.md) + `pnpm claworks:branch-protection` | ✅ 文档/脚本 |
+| 5   | npm publish 预检         | `pnpm claworks:npm-publish-checklist --verify`                                                        | ✅ 脚本      |
+| 6   | Feishu live E2E          | gate 单测 CI + [`docs/claworks/feishu-live-e2e.md`](claworks/feishu-live-e2e.md)                      | ✅ 文档/gate |
+| 7   | Studio React 编辑器      | —                                                                                                     | ⏭ 跳过      |
+
+### P2 仍须人工
+
+| 项                       | 阻塞原因                                         |
+| ------------------------ | ------------------------------------------------ |
+| GitHub branch protection | repo **admin** 执行 `--apply` 或 Settings UI     |
+| npm 公开发布             | `@claworks` org + publish token + 商业许可证签收 |
+| Feishu 完整回环          | 飞书凭证 + 公网 webhook + feishu 渠道配置        |
+| OT 实机签收              | 现场 MQTT/OPC UA/Modbus 硬件与网络               |
+
+---
+
+## 6. 已知非阻塞项（后续版本）
 
 | 项                        | 说明                                                                               |
 | ------------------------- | ---------------------------------------------------------------------------------- |
@@ -146,7 +169,7 @@ pnpm test extensions/claworks/canonical-surface.contract.test.ts
 
 ---
 
-## 6. 签收签字模板
+## 7. 签收签字模板
 
 ```
 交付版本：claworks v________ / commit ________________
