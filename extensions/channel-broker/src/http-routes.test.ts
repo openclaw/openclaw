@@ -23,7 +23,7 @@ type MockResponse = ServerResponse & {
   headers: Record<string, string>;
 };
 
-type OpenKeyedStoreMock = ReturnType<typeof createPluginRuntimeMock>["state"]["openKeyedStore"] & {
+type OpenKeyedStoreMock = PluginRuntime["state"]["openKeyedStore"] & {
   callCount(): number;
   ageRecords(ms: number): void;
 };
@@ -127,7 +127,7 @@ function createOpenKeyedStoreMock(): OpenKeyedStoreMock {
   const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
   const calls: string[] = [];
   const openKeyedStore = (<T>(
-    options: Parameters<ReturnType<typeof createPluginRuntimeMock>["state"]["openKeyedStore"]>[0],
+    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
   ) => {
     const namespace = options.namespace;
     calls.push(namespace);
@@ -145,52 +145,6 @@ function createOpenKeyedStoreMock(): OpenKeyedStoreMock {
     }
   };
   return openKeyedStore;
-}
-
-function createMemoryKeyedStore<T>() {
-  const values = new Map<string, { key: string; value: T; createdAt: number }>();
-  return {
-    async register(key: string, value: T): Promise<void> {
-      values.set(key, { key, value, createdAt: 1 });
-    },
-    async registerIfAbsent(key: string, value: T): Promise<boolean> {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, { key, value, createdAt: 1 });
-      return true;
-    },
-    async lookup(key: string): Promise<T | undefined> {
-      return values.get(key)?.value;
-    },
-    async consume(key: string): Promise<T | undefined> {
-      const value = values.get(key)?.value;
-      values.delete(key);
-      return value;
-    },
-    async delete(key: string): Promise<boolean> {
-      return values.delete(key);
-    },
-    async entries(): Promise<Array<{ key: string; value: T; createdAt: number }>> {
-      return Array.from(values.values());
-    },
-    async clear(): Promise<void> {
-      values.clear();
-    },
-  };
-}
-
-function createOpenKeyedStoreMock() {
-  const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
-  const openKeyedStore: PluginRuntime["state"]["openKeyedStore"] = <T>({ namespace }) => {
-    let store = stores.get(namespace);
-    if (!store) {
-      store = createMemoryKeyedStore();
-      stores.set(namespace, store);
-    }
-    return store as ReturnType<typeof createMemoryKeyedStore<T>>;
-  };
-  return vi.fn(openKeyedStore);
 }
 
 function brokerConfig(
@@ -607,7 +561,7 @@ describe("channel-broker HTTP routes", () => {
         }),
       }),
     );
-    expect(openKeyedStore).toHaveBeenCalledTimes(2);
+    expect(openKeyedStore.callCount()).toBe(2);
   });
 
   it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
