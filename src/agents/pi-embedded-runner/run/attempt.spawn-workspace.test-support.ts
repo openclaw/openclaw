@@ -565,7 +565,6 @@ vi.mock("../../pi-tools.js", () => ({
 }));
 
 vi.mock("../../pi-bundle-mcp-tools.js", () => ({
-  createBundleMcpToolRuntime: async () => undefined,
   getOrCreateSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
   retireSessionMcpRuntime: async () => true,

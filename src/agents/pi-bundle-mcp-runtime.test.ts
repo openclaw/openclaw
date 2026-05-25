@@ -149,6 +149,144 @@ async function waitForFileText(
   );
 }
 
+async function writeInitializeHangMcpServer(params: {
+  filePath: string;
+  logPath: string;
+}): Promise<void> {
+  await writeExecutable(
+    params.filePath,
+    `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(params.logPath)};
+let buffer = "";
+let keepAlive = setInterval(() => {}, 1000);
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+}
+function shutdown() {
+  clearInterval(keepAlive);
+  process.exit(0);
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+  );
+}
+
+async function writeFailingListToolsMcpServer(params: {
+  filePath: string;
+  logPath: string;
+  errorMessage: string;
+  failSecondPage?: boolean;
+}): Promise<void> {
+  await writeExecutable(
+    params.filePath,
+    `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(params.logPath)};
+const errorMessage = ${JSON.stringify(params.errorMessage)};
+const failSecondPage = ${params.failSecondPage === true};
+let buffer = "";
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-failing-list", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    const cursor = message.params?.cursor;
+    log("list cursor " + String(cursor ?? "<none>"));
+    if (failSecondPage && !cursor) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [
+            {
+              name: "page_one_tool",
+              description: "Must not leak when page two fails.",
+              inputSchema: { type: "object", properties: {} },
+            },
+          ],
+          nextCursor: "page-2",
+        },
+      });
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      error: { code: -32603, message: errorMessage },
+    });
+  }
+}
+function shutdown() {
+  process.exit(0);
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", shutdown);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);`,
+  );
+}
+
 function makeRuntime(
   tools: Array<{ toolName: string; description: string }>,
   serverName = "bundleProbe",
@@ -166,6 +304,7 @@ function makeRuntime(
     markUsed: () => {
       lastUsedAt = Date.now();
     },
+    getOmittedServers: () => [],
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -308,6 +447,156 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
+  it("records omitted diagnostics for unsupported transports and connect failures/timeouts", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-omitted-connect-"));
+    const serverPath = path.join(tempDir, "hang-initialize.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeInitializeHangMcpServer({ filePath: serverPath, logPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-omitted-connect",
+      sessionKey: "agent:test:session-omitted-connect",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            unsupportedTransport: {
+              // Deliberately invalid at runtime to exercise omitted diagnostics for unsupported transports.
+              transport: "websocket" as never,
+              url: "https://example.com/mcp",
+            },
+            hangingConnect: {
+              command: process.execPath,
+              args: [serverPath],
+              connectionTimeoutMs: 50,
+            },
+            exitingConnect: {
+              command: process.execPath,
+              args: ["-e", "process.exit(7)"],
+              connectionTimeoutMs: 500,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toEqual([]);
+      const omittedByServer = Object.fromEntries(
+        runtime.getOmittedServers().map((server) => [server.serverName, server]),
+      );
+      expect(omittedByServer.unsupportedTransport).toMatchObject({
+        reason: "transport-unsupported",
+      });
+      expect(omittedByServer.hangingConnect).toMatchObject({
+        safeServerName: "hangingConnect",
+        reason: "connect-timeout",
+      });
+      expect(omittedByServer.hangingConnect?.errorMessage).toContain("timed out");
+      expect(typeof omittedByServer.hangingConnect?.failedAt).toBe("number");
+      expect(omittedByServer.exitingConnect).toMatchObject({
+        safeServerName: "exitingConnect",
+        reason: "connect-failed",
+      });
+      expect(typeof omittedByServer.exitingConnect?.failedAt).toBe("number");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts URL secrets from list failure omitted diagnostics", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-omitted-redact-"));
+    const serverPath = path.join(tempDir, "failing-list.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeFailingListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      errorMessage: "failed https://user:pass@example.com/mcp?token=secret-token&ok=1",
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-omitted-redact",
+      sessionKey: "agent:test:session-omitted-redact",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            failingList: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      const omitted = runtime.getOmittedServers();
+      expect(omitted).toHaveLength(1);
+      expect(omitted[0]).toMatchObject({
+        serverName: "failingList",
+        reason: "list-tools-failed",
+      });
+      expect(omitted[0].errorMessage).not.toContain("user:pass");
+      expect(omitted[0].errorMessage).not.toContain("secret-token");
+      expect(omitted[0].errorMessage).toContain("https://***:***@example.com/mcp");
+      expect(omitted[0].errorMessage).toContain("token=***");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits a whole paginated server when a later tools/list page fails", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-omitted-page-"));
+    const serverPath = path.join(tempDir, "failing-page.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeFailingListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      errorMessage: "page two failed",
+      failSecondPage: true,
+    });
+
+    async function runCatalog(sessionId: string) {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId,
+        sessionKey: `agent:test:${sessionId}`,
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              paginatedFailure: { command: process.execPath, args: [serverPath] },
+            },
+          },
+        },
+      });
+      const catalog = await runtime.getCatalog();
+      const omitted = runtime.getOmittedServers();
+      await runtime.dispose();
+      return { catalog, omitted };
+    }
+
+    try {
+      const first = await runCatalog("session-omitted-page-a");
+      expect(first.catalog.tools).toEqual([]);
+      expect(first.catalog.servers).toEqual({});
+      expect(first.omitted).toHaveLength(1);
+      expect(first.omitted[0]).toMatchObject({
+        serverName: "paginatedFailure",
+        reason: "list-tools-failed",
+      });
+
+      const second = await runCatalog("session-omitted-page-b");
+      expect(second.catalog.tools).toEqual([]);
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText.match(/list cursor <none>/g)).toHaveLength(2);
+      expect(logText).toContain("list cursor page-2");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
@@ -389,6 +678,15 @@ describe("session MCP runtime", () => {
       if (result.status === "resolved") {
         expect(result.catalog.tools).toEqual([]);
         expect(result.catalog.servers).toEqual({});
+        const omitted = runtime.getOmittedServers();
+        expect(omitted).toHaveLength(1);
+        expect(omitted[0]).toMatchObject({
+          serverName: "hangingListTools",
+          safeServerName: "hangingListTools",
+          reason: "list-tools-timeout",
+        });
+        omitted[0].reason = "list-tools-failed";
+        expect(runtime.getOmittedServers()[0]?.reason).toBe("list-tools-timeout");
       }
     } finally {
       await runtime.dispose();
@@ -452,18 +750,69 @@ describe("session MCP runtime", () => {
     expect(runtimeC).not.toBe(runtimeA);
     expect(created).toHaveLength(2);
 
-    const materializedC = await materializeBundleMcpToolsForRun({
-      runtime: runtimeC,
-      disposeRuntime: async () => {
-        await manager.disposeSession("session-a");
-      },
-    });
+    const materializedC = await materializeBundleMcpToolsForRun({ runtime: runtimeC });
     expect(materializedC.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
 
     await materializedC.dispose();
 
-    expect(disposed).toEqual(["session-a", "session-a"]);
-    expect(manager.listSessionIds()).not.toContain("session-a");
+    expect(disposed).toEqual(["session-a"]);
+    expect(manager.listSessionIds()).toContain("session-a");
+  });
+
+  it("fails clearly instead of disposing a leased runtime when MCP config changes", async () => {
+    const disposed: string[] = [];
+    let activeLeases = 0;
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      get activeLeases() {
+        return activeLeases;
+      },
+      acquireLease: () => {
+        activeLeases += 1;
+        let released = false;
+        return () => {
+          if (released) {
+            return;
+          }
+          released = true;
+          activeLeases -= 1;
+        };
+      },
+      dispose: async () => {
+        disposed.push(params.sessionId);
+      },
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-busy",
+      sessionKey: "agent:test:session-busy",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: { servers: { configuredProbe: { command: "node", args: ["server-a.mjs"] } } },
+      },
+    });
+    const release = runtimeA.acquireLease?.();
+
+    await expect(
+      manager.getOrCreate({
+        sessionId: "session-busy",
+        sessionKey: "agent:test:session-busy",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: { servers: { configuredProbe: { command: "node", args: ["server-b.mjs"] } } },
+        },
+      }),
+    ).rejects.toThrow("bundle-mcp runtime busy");
+
+    expect(disposed).toEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-busy"]);
+    release?.();
+    await manager.disposeAll();
   });
 
   it("recreates the session runtime when MCP config changes", async () => {

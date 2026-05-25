@@ -10,6 +10,7 @@ import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
+  sandboxSessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
@@ -78,6 +79,7 @@ export function resolveEmbeddedCompactionTarget(params: {
 
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
+  sandboxSessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
   agentAccountId?: string | null;
@@ -108,7 +110,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
   });
-  const processScopeKey = params.sessionKey?.trim();
+  const processScopeKey = params.sandboxSessionKey?.trim() || params.sessionKey?.trim();
   const activeProcessSessions =
     params.activeProcessSessions ??
     listActiveProcessSessionReferences({
@@ -116,6 +118,9 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     });
   return {
     sessionKey: params.sessionKey ?? undefined,
+    // Non-compact callers may omit the sandbox key; avoid emitting a present
+    // empty/undefined value that could shadow queued compact params.
+    ...(params.sandboxSessionKey?.trim() ? { sandboxSessionKey: params.sandboxSessionKey } : {}),
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,

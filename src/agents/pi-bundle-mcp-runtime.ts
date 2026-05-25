@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
@@ -24,6 +24,8 @@ import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  OmittedMcpServer,
+  OmittedMcpServerReason,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./pi-bundle-mcp-types.js";
@@ -48,6 +50,16 @@ const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+
+class BundleMcpConnectTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`MCP server connection timed out after ${timeoutMs}ms`);
+    this.name = "BundleMcpConnectTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 type Ajv2020Like = {
   compile: (schema: JsonSchemaType) => ValidateFunction;
@@ -100,7 +112,7 @@ function connectWithTimeout(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
+      () => reject(new BundleMcpConnectTimeoutError(timeoutMs)),
       timeoutMs,
     );
     client.connect(transport).then(
@@ -118,6 +130,41 @@ function connectWithTimeout(
 
 function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
+}
+
+function hasErrorCode(error: unknown, code: number, seen = new Set<unknown>()): boolean {
+  if (!error || typeof error !== "object" || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  const record = error as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (record.code === code) {
+    return true;
+  }
+  if (hasErrorCode(record.cause, code, seen)) {
+    return true;
+  }
+  if (Array.isArray(record.errors)) {
+    return record.errors.some((item) => hasErrorCode(item, code, seen));
+  }
+  return false;
+}
+
+function isMcpRequestTimeoutError(error: unknown): boolean {
+  return (
+    hasErrorCode(error, ErrorCode.RequestTimeout) ||
+    String(error).includes("MCP error -32001: Request timed out")
+  );
+}
+
+function classifyConnectFailure(error: unknown): OmittedMcpServerReason {
+  return error instanceof BundleMcpConnectTimeoutError || isMcpRequestTimeoutError(error)
+    ? "connect-timeout"
+    : "connect-failed";
+}
+
+function classifyListToolsFailure(error: unknown): OmittedMcpServerReason {
+  return isMcpRequestTimeoutError(error) ? "list-tools-timeout" : "list-tools-failed";
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -198,10 +245,28 @@ export function createSessionMcpRuntime(params: {
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const sessions = new Map<string, BundleMcpSession>();
+  const omittedServers = new Map<string, OmittedMcpServer>();
   const failIfDisposed = () => {
     if (disposed) {
       throw createDisposedError(params.sessionId);
     }
+  };
+
+  const rememberOmittedServer = (params: {
+    serverName: string;
+    safeServerName?: string;
+    launchSummary?: string;
+    reason: OmittedMcpServerReason;
+    error: unknown;
+  }) => {
+    omittedServers.set(params.serverName, {
+      serverName: params.serverName,
+      ...(params.safeServerName ? { safeServerName: params.safeServerName } : {}),
+      ...(params.launchSummary ? { launchSummary: params.launchSummary } : {}),
+      reason: params.reason,
+      errorMessage: redactErrorUrls(params.error),
+      failedAt: Date.now(),
+    });
   };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
@@ -231,6 +296,11 @@ export function createSessionMcpRuntime(params: {
           failIfDisposed();
           const resolved = resolveMcpTransport(serverName, rawServer);
           if (!resolved) {
+            rememberOmittedServer({
+              serverName,
+              reason: "transport-unsupported",
+              error: "unsupported or invalid MCP transport",
+            });
             continue;
           }
           const safeServerName = sanitizeServerName(serverName, usedServerNames);
@@ -261,38 +331,62 @@ export function createSessionMcpRuntime(params: {
           try {
             failIfDisposed();
             await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
-            failIfDisposed();
-            const listedTools = await listAllTools(client, BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS);
-            failIfDisposed();
-            servers[serverName] = {
-              serverName,
-              launchSummary: resolved.description,
-              toolCount: listedTools.length,
-            };
-            for (const tool of listedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema: tool.inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
           } catch (error) {
             if (!disposed) {
-              logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
-              );
+              rememberOmittedServer({
+                serverName,
+                safeServerName,
+                launchSummary: resolved.description,
+                reason: classifyConnectFailure(error),
+                error,
+              });
             }
             await disposeSession(session);
             sessions.delete(serverName);
             failIfDisposed();
+            continue;
+          }
+
+          let listedTools: ListedTool[];
+          try {
+            failIfDisposed();
+            listedTools = await listAllTools(client, BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS);
+            failIfDisposed();
+          } catch (error) {
+            if (!disposed) {
+              rememberOmittedServer({
+                serverName,
+                safeServerName,
+                launchSummary: resolved.description,
+                reason: classifyListToolsFailure(error),
+                error,
+              });
+            }
+            await disposeSession(session);
+            sessions.delete(serverName);
+            failIfDisposed();
+            continue;
+          }
+
+          servers[serverName] = {
+            serverName,
+            launchSummary: resolved.description,
+            toolCount: listedTools.length,
+          };
+          for (const tool of listedTools) {
+            const toolName = tool.name.trim();
+            if (!toolName) {
+              continue;
+            }
+            tools.push({
+              serverName,
+              safeServerName,
+              toolName,
+              title: tool.title,
+              description: normalizeOptionalString(tool.description),
+              inputSchema: tool.inputSchema,
+              fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+            });
           }
         }
 
@@ -334,6 +428,9 @@ export function createSessionMcpRuntime(params: {
     get activeLeases() {
       return activeLeases;
     },
+    getOmittedServers() {
+      return Array.from(omittedServers.values(), (server) => ({ ...server }));
+    },
     acquireLease() {
       activeLeases += 1;
       let released = false;
@@ -369,6 +466,7 @@ export function createSessionMcpRuntime(params: {
       disposed = true;
       catalog = null;
       catalogInFlight = undefined;
+      omittedServers.clear();
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();
       await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
@@ -484,6 +582,11 @@ function createSessionMcpRuntimeManager(
           existing.workspaceDir !== params.workspaceDir ||
           existing.configFingerprint !== nextFingerprint
         ) {
+          if ((existing.activeLeases ?? 0) > 0) {
+            throw new Error(
+              "bundle-mcp runtime busy; cannot rebind workspace/config while active",
+            );
+          }
           runtimesBySessionId.delete(params.sessionId);
           await existing.dispose();
         } else {

@@ -79,6 +79,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.model).toBeUndefined();
   });
 
+  it("omits empty sandbox session keys from compaction routing", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:thread:1",
+      sandboxSessionKey: "",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(result).not.toHaveProperty("sandboxSessionKey");
+  });
+
   it("applies compaction.model override with provider/model format", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
@@ -172,6 +184,35 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses sandbox session key when defaulting active process references", () => {
+    const sandboxScoped = createProcessSessionFixture({
+      id: "sess-sandbox",
+      command: "sleep 600",
+      backgrounded: true,
+    });
+    sandboxScoped.scopeKey = "agent:main:telegram:default:direct:12345";
+    const runScoped = createProcessSessionFixture({
+      id: "sess-run",
+      command: "sleep 600",
+      backgrounded: true,
+    });
+    runScoped.scopeKey = "agent:main:main";
+    addSession(sandboxScoped);
+    addSession(runScoped);
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:main",
+      sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(result.activeProcessSessions?.map((session) => session.sessionId)).toEqual([
+      "sess-sandbox",
+    ]);
   });
 
   it("omits active process session references when no safe scope is available", () => {

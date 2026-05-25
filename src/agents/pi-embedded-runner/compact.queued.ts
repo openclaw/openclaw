@@ -393,6 +393,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     ...params.params,
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.params.sessionKey,
+      sandboxSessionKey: params.params.sandboxSessionKey,
       messageChannel: params.params.messageChannel,
       messageProvider: params.params.messageProvider,
       agentAccountId: params.params.agentAccountId,

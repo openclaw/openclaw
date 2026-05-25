@@ -1,7 +1,5 @@
-import crypto from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -10,9 +8,47 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
-import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import type {
+  BundleMcpToolRuntime,
+  OmittedMcpServer,
+  SessionMcpRuntime,
+} from "./pi-bundle-mcp-types.js";
 import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+const omittedServerWarningsByRuntime = new WeakMap<SessionMcpRuntime, Set<string>>();
+
+function formatOmittedServerWarning(server: OmittedMcpServer): string {
+  const launch = server.launchSummary ? ` (${server.launchSummary})` : "";
+  const safeName =
+    server.safeServerName && server.safeServerName !== server.serverName
+      ? ` as "${server.safeServerName}"`
+      : "";
+  return (
+    `bundle-mcp: omitted server "${server.serverName}"${safeName}${launch}: ` +
+    `${server.reason}: ${server.errorMessage}`
+  );
+}
+
+function warnForOmittedServers(runtime: SessionMcpRuntime) {
+  const omittedServers = runtime.getOmittedServers();
+  if (omittedServers.length === 0) {
+    return;
+  }
+  let warnedKeys = omittedServerWarningsByRuntime.get(runtime);
+  if (!warnedKeys) {
+    warnedKeys = new Set();
+    omittedServerWarningsByRuntime.set(runtime, warnedKeys);
+  }
+  for (const server of omittedServers) {
+    const key = `${server.serverName}\u0000${server.reason}`;
+    if (warnedKeys.has(key)) {
+      continue;
+    }
+    warnedKeys.add(key);
+    logWarn(formatOmittedServerWarning(server));
+  }
+}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -65,7 +101,6 @@ function toAgentToolResult(params: {
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
-  disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
   const releaseLease = params.runtime.acquireLease?.();
@@ -73,6 +108,7 @@ export async function materializeBundleMcpToolsForRun(params: {
   let catalog;
   try {
     catalog = await params.runtime.getCatalog();
+    warnForOmittedServers(params.runtime);
   } catch (error) {
     releaseLease?.();
     throw error;
@@ -142,34 +178,6 @@ export async function materializeBundleMcpToolsForRun(params: {
       }
       disposed = true;
       releaseLease?.();
-      await params.disposeRuntime?.();
     },
   };
-}
-
-export async function createBundleMcpToolRuntime(params: {
-  workspaceDir: string;
-  cfg?: OpenClawConfig;
-  reservedToolNames?: Iterable<string>;
-  createRuntime?: (params: {
-    sessionId: string;
-    workspaceDir: string;
-    cfg?: OpenClawConfig;
-  }) => SessionMcpRuntime;
-}): Promise<BundleMcpToolRuntime> {
-  const createRuntime =
-    params.createRuntime ?? (await import("./pi-bundle-mcp-runtime.js")).createSessionMcpRuntime;
-  const runtime = createRuntime({
-    sessionId: `bundle-mcp:${crypto.randomUUID()}`,
-    workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-  });
-  const materialized = await materializeBundleMcpToolsForRun({
-    runtime,
-    reservedToolNames: params.reservedToolNames,
-    disposeRuntime: async () => {
-      await runtime.dispose();
-    },
-  });
-  return materialized;
 }

@@ -1757,6 +1757,7 @@ export async function runEmbeddedPiAgent(
                 const timeoutCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
                     sessionKey: params.sessionKey,
+                    sandboxSessionKey: params.sandboxSessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
                     agentAccountId: params.agentAccountId,
@@ -1947,6 +1948,7 @@ export async function runEmbeddedPiAgent(
                 const overflowCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
                     sessionKey: params.sessionKey,
+                    sandboxSessionKey: params.sandboxSessionKey,
                     messageChannel: params.messageChannel,
                     messageProvider: params.messageProvider,
                     agentAccountId: params.agentAccountId,

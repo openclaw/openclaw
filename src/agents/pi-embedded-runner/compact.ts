@@ -74,7 +74,10 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+} from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import {
@@ -768,230 +771,245 @@ async function compactEmbeddedPiSessionDirectOnce(
       toolsEnabled ? toolsRaw : [],
       runtimePlanModelContext,
     );
-    const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
-          workspaceDir: effectiveWorkspace,
-          cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
-        })
-      : undefined;
-    const bundleLspRuntime = toolsEnabled
-      ? await createBundleLspToolRuntime({
-          workspaceDir: effectiveWorkspace,
-          cfg: params.config,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-          ],
-        })
-      : undefined;
-    const filteredBundledTools = applyFinalEffectiveToolPolicy({
-      bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
-      config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      // Intentionally omit explicit agentId: the core tools just built with
-      // createOpenClawCodingTools(...) also omit it, so both paths resolve
-      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
-      // Passing effectiveSkillAgentId here would diverge from the core-tool
-      // policy for legacy/non-agent session keys where the two sources fall
-      // back to different ids.
-      modelProvider: model.provider,
-      modelId,
-      messageProvider: resolvedMessageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      warn: (message) => log.warn(message),
-    });
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? runtimePlan.tools.normalize(filteredBundledTools, runtimePlanModelContext)
-        : filteredBundledTools;
-    const effectiveTools = [...tools, ...normalizedBundledTools];
-    const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
-    runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
-    const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = collectRuntimeChannelCapabilities({
-      cfg: params.config,
-      channel: runtimeChannel,
-      accountId: params.agentAccountId,
-    });
-    const reactionGuidance =
-      runtimeChannel && params.config
-        ? resolveChannelReactionGuidance({
+    let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+    let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
+    let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+    try {
+      const bundleMcpSessionRuntime = toolsEnabled
+        ? await getOrCreateSessionMcpRuntime({
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            workspaceDir: effectiveWorkspace,
+            cfg: params.config,
+          })
+        : undefined;
+      bundleMcpRuntime = bundleMcpSessionRuntime
+        ? await materializeBundleMcpToolsForRun({
+            runtime: bundleMcpSessionRuntime,
+            reservedToolNames: tools.map((tool) => tool.name),
+          })
+        : undefined;
+      // Compact reuses the session-scoped bundle MCP runtime. Standalone /compact
+      // releases its materialization lease here but may leave the shared runtime
+      // alive until the manager idle TTL closes it.
+      bundleLspRuntime = toolsEnabled
+        ? await createBundleLspToolRuntime({
+            workspaceDir: effectiveWorkspace,
+            cfg: params.config,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ],
+          })
+        : undefined;
+      const filteredBundledTools = applyFinalEffectiveToolPolicy({
+        bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
+        config: params.config,
+        sandboxToolPolicy: sandbox?.tools,
+        sessionKey: sandboxSessionKey,
+        // Intentionally omit explicit agentId: the core tools just built with
+        // createOpenClawCodingTools(...) also omit it, so both paths resolve
+        // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
+        // Passing effectiveSkillAgentId here would diverge from the core-tool
+        // policy for legacy/non-agent session keys where the two sources fall
+        // back to different ids.
+        modelProvider: model.provider,
+        modelId,
+        messageProvider: resolvedMessageProvider,
+        agentAccountId: params.agentAccountId,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        spawnedBy: params.spawnedBy,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        warn: (message) => log.warn(message),
+      });
+      const normalizedBundledTools =
+        filteredBundledTools.length > 0
+          ? runtimePlan.tools.normalize(filteredBundledTools, runtimePlanModelContext)
+          : filteredBundledTools;
+      const effectiveTools = [...tools, ...normalizedBundledTools];
+      const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
+      runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
+      const machineName = await getMachineDisplayName();
+      const runtimeChannel = normalizeMessageChannel(
+        params.messageChannel ?? params.messageProvider,
+      );
+      const runtimeCapabilities = collectRuntimeChannelCapabilities({
+        cfg: params.config,
+        channel: runtimeChannel,
+        accountId: params.agentAccountId,
+      });
+      const reactionGuidance =
+        runtimeChannel && params.config
+          ? resolveChannelReactionGuidance({
+              cfg: params.config,
+              channel: runtimeChannel,
+              accountId: params.agentAccountId,
+            })
+          : undefined;
+      const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+      });
+      // Resolve channel-specific message actions for system prompt
+      const channelActions = runtimeChannel
+        ? listChannelSupportedActions(
+            buildEmbeddedMessageActionDiscoveryInput({
+              cfg: params.config,
+              channel: runtimeChannel,
+              currentChannelId: params.currentChannelId,
+              currentThreadTs: params.currentThreadTs,
+              currentMessageId: params.currentMessageId,
+              accountId: params.agentAccountId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              agentId: sessionAgentId,
+              senderId: params.senderId,
+            }),
+          )
+        : undefined;
+      const messageToolHints = runtimeChannel
+        ? resolveChannelMessageToolHints({
             cfg: params.config,
             channel: runtimeChannel,
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-    });
-    // Resolve channel-specific message actions for system prompt
-    const channelActions = runtimeChannel
-      ? listChannelSupportedActions(
-          buildEmbeddedMessageActionDiscoveryInput({
-            cfg: params.config,
-            channel: runtimeChannel,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            accountId: params.agentAccountId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: sessionAgentId,
-            senderId: params.senderId,
-          }),
-        )
-      : undefined;
-    const messageToolHints = runtimeChannel
-      ? resolveChannelMessageToolHints({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        })
-      : undefined;
 
-    const runtimeInfo = {
-      host: machineName,
-      os: `${os.type()} ${os.release()}`,
-      arch: os.arch(),
-      node: process.version,
-      model: `${provider}/${modelId}`,
-      shell: detectRuntimeShell(),
-      channel: runtimeChannel,
-      capabilities: runtimeCapabilities,
-      channelActions,
-      activeProcessSessions: listActiveProcessSessionReferences({
-        scopeKey: resolveProcessToolScopeKey({
-          sessionKey: sandboxSessionKey,
-          agentId: sessionAgentId,
+      const runtimeInfo = {
+        host: machineName,
+        os: `${os.type()} ${os.release()}`,
+        arch: os.arch(),
+        node: process.version,
+        model: `${provider}/${modelId}`,
+        shell: detectRuntimeShell(),
+        channel: runtimeChannel,
+        capabilities: runtimeCapabilities,
+        channelActions,
+        activeProcessSessions: listActiveProcessSessionReferences({
+          scopeKey: resolveProcessToolScopeKey({
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+          }),
         }),
-      }),
-    };
-    const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
-    const reasoningTagHint = isReasoningTagProvider(provider, {
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      env: process.env,
-      modelId,
-      modelApi: model.api,
-      model,
-    });
-    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
-    const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
-    const promptMode =
-      isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
-        ? "minimal"
-        : "full";
-    const nativeCommandGuidanceLines = listRegisteredPluginAgentPromptGuidance({
-      surface: promptSurface,
-    });
-    const openClawReferences = await resolveOpenClawReferencePaths({
-      workspaceDir: effectiveWorkspace,
-      argv1: process.argv[1],
-      cwd: effectiveWorkspace,
-      moduleUrl: import.meta.url,
-    });
-    const promptContributionContext: Parameters<
-      AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
-    >[0] = {
-      config: params.config,
-      agentDir,
-      workspaceDir: effectiveWorkspace,
-      provider,
-      modelId,
-      promptMode,
-      runtimeChannel,
-      runtimeCapabilities,
-      agentId: sessionAgentId,
-    };
-    const promptContribution =
-      runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
-    const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
-      const builtSystemPrompt =
-        resolveSystemPromptOverride({
-          config: params.config,
-          agentId: sessionAgentId,
-        }) ??
-        buildEmbeddedSystemPrompt({
-          config: params.config,
-          agentId: sessionAgentId,
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          reasoningTagHint,
-          heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+      };
+      const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
+      const reasoningTagHint = isReasoningTagProvider(provider, {
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        modelId,
+        modelApi: model.api,
+        model,
+      });
+      const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+      const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+      const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+      const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
+      const promptMode =
+        isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
+          ? "minimal"
+          : "full";
+      const nativeCommandGuidanceLines = listRegisteredPluginAgentPromptGuidance({
+        surface: promptSurface,
+      });
+      const openClawReferences = await resolveOpenClawReferencePaths({
+        workspaceDir: effectiveWorkspace,
+        argv1: process.argv[1],
+        cwd: effectiveWorkspace,
+        moduleUrl: import.meta.url,
+      });
+      const promptContributionContext: Parameters<
+        AgentRuntimePlan["prompt"]["resolveSystemPromptContribution"]
+      >[0] = {
+        config: params.config,
+        agentDir,
+        workspaceDir: effectiveWorkspace,
+        provider,
+        modelId,
+        promptMode,
+        runtimeChannel,
+        runtimeCapabilities,
+        agentId: sessionAgentId,
+      };
+      const promptContribution =
+        runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
+      const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
+        const builtSystemPrompt =
+          resolveSystemPromptOverride({
             config: params.config,
             agentId: sessionAgentId,
-            defaultAgentId,
-          }),
-          skillsPrompt,
-          docsPath: openClawReferences.docsPath ?? undefined,
-          sourcePath: openClawReferences.sourcePath ?? undefined,
-          promptMode,
-          promptSurface,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          acpEnabled: isAcpRuntimeSpawnAvailable({
+          }) ??
+          buildEmbeddedSystemPrompt({
             config: params.config,
-            sandboxed: sandboxInfo?.enabled === true,
-          }),
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          promptContribution,
-          nativeCommandGuidanceLines,
-        });
-      return createSystemPromptOverride(
-        transformProviderSystemPrompt({
-          provider,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          context: {
-            config: params.config,
-            agentDir,
+            agentId: sessionAgentId,
             workspaceDir: effectiveWorkspace,
-            provider,
-            modelId,
+            defaultThinkLevel,
+            reasoningLevel: params.reasoningLevel ?? "off",
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+            reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+              config: params.config,
+              agentId: sessionAgentId,
+              defaultAgentId,
+            }),
+            skillsPrompt,
+            docsPath: openClawReferences.docsPath ?? undefined,
+            sourcePath: openClawReferences.sourcePath ?? undefined,
             promptMode,
-            runtimeChannel,
-            runtimeCapabilities,
-            agentId: sessionAgentId,
-            systemPrompt: builtSystemPrompt,
-          },
-        }),
-      );
-    };
+            promptSurface,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            acpEnabled: isAcpRuntimeSpawnAvailable({
+              config: params.config,
+              sandboxed: sandboxInfo?.enabled === true,
+            }),
+            runtimeInfo,
+            reactionGuidance,
+            messageToolHints,
+            sandboxInfo,
+            tools: effectiveTools,
+            userTimezone,
+            userTime,
+            userTimeFormat,
+            contextFiles,
+            promptContribution,
+            nativeCommandGuidanceLines,
+          });
+        return createSystemPromptOverride(
+          transformProviderSystemPrompt({
+            provider,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            context: {
+              config: params.config,
+              agentDir,
+              workspaceDir: effectiveWorkspace,
+              provider,
+              modelId,
+              promptMode,
+              runtimeChannel,
+              runtimeCapabilities,
+              agentId: sessionAgentId,
+              systemPrompt: builtSystemPrompt,
+            },
+          }),
+        );
+      };
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config, {
-        maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
-          timeoutMs: compactionTimeoutMs,
+      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+      sessionLock = await acquireSessionWriteLock({
+        sessionFile: params.sessionFile,
+        ...resolveSessionWriteLockOptions(params.config, {
+          maxHoldMsFallback: resolveSessionLockMaxHoldFromTimeout({
+            timeoutMs: compactionTimeoutMs,
+          }),
         }),
-      }),
-    });
-    try {
+      });
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
         debug: (message) => log.debug(message),
@@ -1447,7 +1465,9 @@ async function compactEmbeddedPiSessionDirectOnce(
       } catch {
         /* best-effort */
       }
-      await sessionLock.release();
+      if (sessionLock) {
+        await sessionLock.release();
+      }
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

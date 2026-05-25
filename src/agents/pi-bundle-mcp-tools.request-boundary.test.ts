@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createBundleMcpToolRuntime,
-  materializeBundleMcpToolsForRun,
-} from "./pi-bundle-mcp-materialize.js";
+import { materializeBundleMcpToolsForRun } from "./pi-bundle-mcp-materialize.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 import { applyFinalEffectiveToolPolicy } from "./pi-embedded-runner/effective-tool-policy.js";
 import { splitSdkTools } from "./pi-embedded-runner/tool-split.js";
@@ -43,6 +40,7 @@ function makeConfiguredRuntime(
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
+    getOmittedServers: () => [],
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -66,10 +64,8 @@ function makeConfiguredRuntime(
 async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
 }): Promise<string[]> {
-  const runtime = await createBundleMcpToolRuntime({
-    workspaceDir: "/workspace",
-    cfg: params.cfg,
-    createRuntime: () => makeConfiguredRuntime(),
+  const runtime = await materializeBundleMcpToolsForRun({
+    runtime: makeConfiguredRuntime(),
   });
   const filtered = applyFinalEffectiveToolPolicy({
     bundledTools: runtime.tools,

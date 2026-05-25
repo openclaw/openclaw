@@ -1,10 +1,10 @@
 import { validateToolArguments } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import {
-  createBundleMcpToolRuntime,
-  materializeBundleMcpToolsForRun,
-} from "./pi-bundle-mcp-materialize.js";
+
+vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
+import { materializeBundleMcpToolsForRun } from "./pi-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./pi-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
@@ -39,6 +39,7 @@ function makeToolRuntime(
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},
+    getOmittedServers: () => [],
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -59,7 +60,7 @@ function makeToolRuntime(
   };
 }
 
-describe("createBundleMcpToolRuntime", () => {
+describe("materializeBundleMcpToolsForRun", () => {
   it("materializes bundle MCP tools and executes them", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime(),
@@ -84,52 +85,28 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
   });
 
-  it("materializes configured MCP tools through the session runtime boundary", async () => {
-    const created: Parameters<
-      NonNullable<Parameters<typeof createBundleMcpToolRuntime>[0]["createRuntime"]>
-    >[0][] = [];
-    const runtime = await createBundleMcpToolRuntime({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            configuredProbe: {
-              command: "node",
-              args: ["configured-probe.mjs"],
-              env: {
-                BUNDLE_PROBE_TEXT: "FROM-CONFIG",
-              },
-            },
-          },
+  it("warns once per omitted server reason for a shared runtime", async () => {
+    vi.mocked(logWarn).mockClear();
+    const runtime = {
+      ...makeToolRuntime(),
+      getOmittedServers: () => [
+        {
+          serverName: "secretServer",
+          safeServerName: "secretServer",
+          launchSummary: "stdio: secret",
+          reason: "list-tools-failed" as const,
+          errorMessage: "failed https://example.com/path?token=[REDACTED]",
+          failedAt: 123,
         },
-      },
-      createRuntime: (params) => {
-        created.push(params);
-        return makeToolRuntime({
-          serverName: "configuredProbe",
-          resultText: "FROM-CONFIG",
-        });
-      },
-    });
+      ],
+    };
 
-    expect(created).toHaveLength(1);
-    expect(created[0].sessionId).toMatch(/^bundle-mcp:/);
-    expect(created[0].workspaceDir).toBe("/workspace");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.command).toBe("node");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.args).toEqual(["configured-probe.mjs"]);
+    await (await materializeBundleMcpToolsForRun({ runtime })).dispose();
+    await (await materializeBundleMcpToolsForRun({ runtime })).dispose();
 
-    expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
-    const result = await runtime.tools[0].execute(
-      "call-configured-probe",
-      {},
-      undefined,
-      undefined,
-    );
-    expectTextContentBlock(result.content[0], "FROM-CONFIG");
-    expect(result.details).toEqual({
-      mcpServer: "configuredProbe",
-      mcpTool: "bundle_probe",
-    });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logWarn).mock.calls[0]?.[0]).toContain("list-tools-failed");
+    expect(vi.mocked(logWarn).mock.calls[0]?.[0]).toContain("[REDACTED]");
   });
 
   it("returns tools sorted alphabetically for stable prompt-cache keys", async () => {

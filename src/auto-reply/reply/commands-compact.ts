@@ -1,4 +1,5 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import {
@@ -16,6 +17,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
@@ -239,9 +241,20 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
+  const sandboxSessionKey = resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+  });
+  const workspaceDir =
+    resolveIngressWorkspaceOverrideForSpawnedRun({
+      spawnedBy: targetSessionEntry.spawnedBy,
+      workspaceDir: targetSessionEntry.spawnedWorkspaceDir,
+    }) ?? params.workspaceDir;
   const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
+    ...(sandboxSessionKey ? { sandboxSessionKey } : {}),
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: targetSessionEntry.groupId,
@@ -260,7 +273,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         storePath: params.storePath,
       }),
     ),
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,
     skillsSnapshot: targetSessionEntry.skillsSnapshot,

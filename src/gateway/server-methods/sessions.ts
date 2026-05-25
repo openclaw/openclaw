@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -74,6 +75,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
+import { resolveDisplayRuntimePolicySessionKey } from "../../sessions/runtime-policy-session-key-display.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   forkCompactionCheckpointTranscriptAsync,
@@ -2278,8 +2280,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
       const resolvedModel = resolveSessionModelRef(cfg, entry, target.agentId);
       const workspaceDir =
-        normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
-        resolveAgentWorkspaceDir(cfg, target.agentId);
+        resolveIngressWorkspaceOverrideForSpawnedRun({
+          spawnedBy: entry?.spawnedBy,
+          workspaceDir: entry?.spawnedWorkspaceDir,
+        }) ?? resolveAgentWorkspaceDir(cfg, target.agentId);
+      const sandboxSessionKey = resolveDisplayRuntimePolicySessionKey({
+        cfg,
+        key: target.canonicalKey,
+        entry,
+      });
       const operationId = randomUUID();
       emitSessionOperation(context, {
         operationId,
@@ -2292,6 +2301,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         result = await compactEmbeddedPiSession({
           sessionId,
           sessionKey: target.canonicalKey,
+          ...(sandboxSessionKey ? { sandboxSessionKey } : {}),
           allowGatewaySubagentBinding: true,
           sessionFile: filePath,
           workspaceDir,

@@ -262,6 +262,30 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("releases materialized bundle MCP tools when later compact setup fails", async () => {
+    const mcpTools = await import("../pi-bundle-mcp-tools.js");
+    const lspRuntime = await import("../pi-bundle-lsp-runtime.js");
+    const mcpDispose = vi.fn(async () => {});
+    vi.mocked(mcpTools.materializeBundleMcpToolsForRun).mockResolvedValueOnce({
+      tools: [],
+      dispose: mcpDispose,
+    });
+    vi.mocked(lspRuntime.createBundleLspToolRuntime).mockRejectedValueOnce(
+      new Error("lsp setup failed"),
+    );
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("lsp setup failed");
+    expect(mcpDispose).toHaveBeenCalledOnce();
+  });
+
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
     await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",

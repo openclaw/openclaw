@@ -548,7 +548,20 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
     retireSessionMcpRuntime: vi.fn(async () => true),
-    createBundleMcpToolRuntime: vi.fn(async () => ({
+    getOrCreateSessionMcpRuntime: vi.fn(async () => ({
+      sessionId: "session-1",
+      sessionKey: "test-session-key",
+      workspaceDir: "/tmp/workspace",
+      configFingerprint: "test-config-fingerprint",
+      activeLeases: 0,
+      markUsed: vi.fn(),
+      acquireLease: vi.fn(() => vi.fn()),
+      getCatalog: vi.fn(async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] })),
+      getOmittedServers: vi.fn(() => []),
+      callTool: vi.fn(),
+      dispose: vi.fn(async () => {}),
+    })),
+    materializeBundleMcpToolsForRun: vi.fn(async () => ({
       tools: [],
       dispose: vi.fn(async () => {}),
     })),

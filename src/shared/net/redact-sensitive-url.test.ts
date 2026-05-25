@@ -43,6 +43,24 @@ describe("redactSensitiveUrlLikeString", () => {
     ).toBe("fatal https://***:***@github.com/one.git and https://***:***@github.com/two.git");
   });
 
+  it("redacts embedded valid URLs that mix userinfo and sensitive query params", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "failed https://user:pass@example.com/mcp?token=secret-token&ok=1",
+      ),
+    ).toBe("failed https://***:***@example.com/mcp?token=***&ok=1");
+  });
+
+  it("redacts embedded URL userinfo without lowercasing arbitrary error prefixes", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "McpError: MCP error -32603: failed https://user:pass@example.com/mcp?token=secret-token&ok=1",
+      ),
+    ).toBe(
+      "McpError: MCP error -32603: failed https://***:***@example.com/mcp?token=***&ok=1",
+    );
+  });
+
   it("redacts protocol URLs that are too malformed to parse", () => {
     expect(
       redactSensitiveUrlLikeString(

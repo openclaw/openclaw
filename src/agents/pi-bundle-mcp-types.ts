@@ -31,6 +31,22 @@ export type McpToolCatalog = {
   tools: McpCatalogTool[];
 };
 
+export type OmittedMcpServerReason =
+  | "transport-unsupported"
+  | "connect-timeout"
+  | "connect-failed"
+  | "list-tools-timeout"
+  | "list-tools-failed";
+
+export type OmittedMcpServer = {
+  serverName: string;
+  safeServerName?: string;
+  launchSummary?: string;
+  reason: OmittedMcpServerReason;
+  errorMessage: string;
+  failedAt: number;
+};
+
 export type SessionMcpRuntime = {
   sessionId: string;
   sessionKey?: string;
@@ -40,6 +56,7 @@ export type SessionMcpRuntime = {
   lastUsedAt: number;
   activeLeases?: number;
   acquireLease?: () => () => void;
+  getOmittedServers: () => OmittedMcpServer[];
   getCatalog: () => Promise<McpToolCatalog>;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;

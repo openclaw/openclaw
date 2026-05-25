@@ -65,11 +65,10 @@ export function redactSensitiveUrl(value: string): string {
 }
 
 export function redactSensitiveUrlLikeString(value: string): string {
-  const redactedUrl = redactSensitiveUrl(value);
-  if (redactedUrl !== value) {
-    return redactedUrl;
-  }
-  return value
+  const redactedUrl = /^[a-z][a-z\d+.-]*:\/\//i.test(value)
+    ? redactSensitiveUrl(value)
+    : value;
+  return redactedUrl
     .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
