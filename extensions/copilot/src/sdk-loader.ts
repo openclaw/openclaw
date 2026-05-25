@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -56,7 +57,14 @@ async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
 
   const fallbackImport =
     options.fallbackImport ??
-    (async (abs: string) => (await import(pathToFileURL(abs).href)) as typeof Sdk);
+    (async () => {
+      // Node ESM rejects directory imports (ERR_UNSUPPORTED_DIR_IMPORT), so
+      // resolve the package's real entry through Node's module resolver
+      // anchored at fallbackDir before importing.
+      const requireFromFallback = createRequire(path.join(fallbackDir, "package.json"));
+      const entry = requireFromFallback.resolve("@github/copilot-sdk");
+      return (await import(pathToFileURL(entry).href)) as typeof Sdk;
+    });
 
   try {
     return await fallbackImport(fallbackPath);

@@ -358,6 +358,18 @@ describe("copilot-sdk install manifest (contract)", () => {
     expect(sdkEntry?.integrity).toMatch(/^sha512-/);
     // The Copilot CLI is what gives the runtime its native shell/write tools;
     // its presence here proves the lockfile resolves the transitive graph.
-    expect(parsed.packages?.["node_modules/@github/copilot"]).toBeDefined();
+    const cliEntry = parsed.packages?.["node_modules/@github/copilot"];
+    expect(cliEntry).toBeDefined();
+    // Pin to the exact @github/copilot version that the repository pnpm-lock
+    // also resolves (and that CI tests exercise). Drift here means users would
+    // install a different Copilot CLI graph than the one reviewed/tested.
+    expect(cliEntry?.version).toBe("1.0.48");
+    // Every platform-specific @github/copilot-* optional dependency must
+    // resolve to the same version as the parent CLI package.
+    for (const [key, entry] of Object.entries(parsed.packages ?? {})) {
+      if (/^node_modules\/@github\/copilot-(?:darwin|linux|linuxmusl|win32)-/.test(key)) {
+        expect(entry?.version).toBe("1.0.48");
+      }
+    }
   });
 });

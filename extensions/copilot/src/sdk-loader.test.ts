@@ -73,6 +73,49 @@ describe("sdk-loader", () => {
     }
   });
 
+  it("default fallback importer resolves and imports the installed SDK entry", async () => {
+    // Exercise the real default fallback importer (no fallbackImport injection)
+    // to prove it imports a concrete entry file rather than the package
+    // directory, which Node ESM would reject with ERR_UNSUPPORTED_DIR_IMPORT.
+    const tmp = mkdtempSync(path.join(tmpdir(), "copilot-sdk-loader-default-"));
+    try {
+      const pkgDir = path.join(tmp, "node_modules", "@github", "copilot-sdk");
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(
+        path.join(pkgDir, "package.json"),
+        JSON.stringify({
+          name: "@github/copilot-sdk",
+          version: "0.0.0-test",
+          main: "./index.cjs",
+        }),
+      );
+      writeFileSync(
+        path.join(pkgDir, "index.cjs"),
+        "module.exports = { openclawDefaultImporterSentinel: true };",
+      );
+
+      const primaryImport = vi.fn(async () => {
+        const err = new Error("Cannot find module '@github/copilot-sdk'") as Error & {
+          code: string;
+        };
+        err.code = "ERR_MODULE_NOT_FOUND";
+        throw err;
+      });
+
+      const sdk = (await loadCopilotSdk({
+        cache: false,
+        fallbackDir: tmp,
+        primaryImport,
+        // Intentionally NOT injecting fallbackImport; exercise the default.
+      })) as unknown as { openclawDefaultImporterSentinel?: boolean };
+
+      expect(sdk.openclawDefaultImporterSentinel).toBe(true);
+      expect(primaryImport).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("throws an actionable error with install instructions when both probes fail", async () => {
     const primaryImport = vi.fn(async () => {
       throw new Error("Cannot find module '@github/copilot-sdk'");
