@@ -17,12 +17,14 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24-beta.1", beta: true },
     { tag: "v2026.2.24.beta.1", beta: true },
     { tag: "v2026.2.24-BETA-1", beta: true },
+    { tag: "v2026.2.24-alpha.1", beta: false, stable: false },
+    { tag: "v2026.2.24-rc.1", beta: false, stable: false },
     { tag: "v2026.2.24-1", beta: false },
     { tag: "v2026.2.24-alphabeta.1", beta: false },
     { tag: "v2026.2.24", beta: false },
-  ])("classifies $tag", ({ tag, beta }) => {
+  ])("classifies $tag", ({ tag, beta, stable = !beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
-    expect(isStableTag(tag)).toBe(!beta);
+    expect(isStableTag(tag)).toBe(stable);
   });
 });
 

@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Updater: exclude alpha and release-candidate tags from stable git channel resolution so stable installs do not checkout prerelease builds.
+
 ## 2026.5.25
 
 ### Fixes
