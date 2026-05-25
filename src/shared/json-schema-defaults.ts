@@ -302,7 +302,6 @@ function validateSchemaKeywordShapes(
 function findJsonSchemaNodeError(
   schema: unknown,
   path: string,
-  root: JsonSchemaValue,
   resourceRoot: JsonSchemaValue,
 ): string | undefined {
   if (typeof schema === "boolean") {
@@ -342,7 +341,6 @@ function findJsonSchemaNodeError(
       const error = findJsonSchemaNodeError(
         entry,
         `${path}.${key}.${entryKey}`,
-        root,
         currentResourceRoot,
       );
       if (error) {
@@ -363,7 +361,6 @@ function findJsonSchemaNodeError(
         const error = findJsonSchemaNodeError(
           entry,
           `${path}.${key}.${index}`,
-          root,
           currentResourceRoot,
         );
         if (error) {
@@ -372,7 +369,7 @@ function findJsonSchemaNodeError(
       }
       continue;
     }
-    const error = findJsonSchemaNodeError(value, `${path}.${key}`, root, currentResourceRoot);
+    const error = findJsonSchemaNodeError(value, `${path}.${key}`, currentResourceRoot);
     if (error) {
       return error;
     }
@@ -386,12 +383,7 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: expected schema array`;
     }
     for (const [index, entry] of value.entries()) {
-      const error = findJsonSchemaNodeError(
-        entry,
-        `${path}.${key}.${index}`,
-        root,
-        currentResourceRoot,
-      );
+      const error = findJsonSchemaNodeError(entry, `${path}.${key}.${index}`, currentResourceRoot);
       if (error) {
         return error;
       }
@@ -401,7 +393,7 @@ function findJsonSchemaNodeError(
 }
 
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
-  return findJsonSchemaNodeError(schema, "<schema>", schema, schema);
+  return findJsonSchemaNodeError(schema, "<schema>", schema);
 }
 
 function cloneDefault<T>(value: T): T {
