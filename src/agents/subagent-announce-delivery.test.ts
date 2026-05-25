@@ -2460,6 +2460,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("directly delivers stale isolated cron run media failure completions", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "Image generation failed. Provider timed out." }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "stale-cron-run-session",
+      isActive: false,
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-stale-cron-media-failure",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "daily media",
+          status: "error",
+          statusLabel: "failed",
+          result: "Provider timed out.",
+          replyInstruction: "Tell the user image generation failed.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "legacy Discord channel",
