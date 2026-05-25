@@ -14,6 +14,7 @@ import {
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
+  getExecApprovalReplyMetadata,
   resolveExecApprovalCommandDisplay,
   resolveExecApprovalRequestAllowedDecisions,
 } from "openclaw/plugin-sdk/approval-runtime";
@@ -22,10 +23,14 @@ import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
-import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelApprovalCapability,
+  ChannelOutboundPayloadHint,
+} from "openclaw/plugin-sdk/channel-contract";
 import { channelRouteTargetsMatchExact } from "openclaw/plugin-sdk/channel-route";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeAccountId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -383,6 +388,62 @@ function shouldHandleSignalApprovalRequest(params: {
   return isSignalSessionApprovalEligible({
     ...params,
     approvalKind: resolveApprovalKind(params.request, params.approvalKind),
+  });
+}
+
+function resolveSignalSessionTargetFromSessionKey(sessionKey?: string | null): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = parsed?.rest ?? normalizeOptionalString(sessionKey);
+  if (!rest || !normalizeLowercaseStringOrEmpty(rest).startsWith("signal:")) {
+    return null;
+  }
+  return normalizeSignalMessagingTarget(rest.slice("signal:".length)) ?? null;
+}
+
+export function shouldSuppressLocalSignalExecApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
+}): boolean {
+  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+    return false;
+  }
+  if (params.hint.nativeRouteActive !== true) {
+    return false;
+  }
+  const metadata = getExecApprovalReplyMetadata(params.payload);
+  if (!metadata || metadata.approvalKind !== "exec") {
+    return false;
+  }
+  if (!isSignalApprovalTransportEnabled(params)) {
+    return false;
+  }
+  const config = resolveApprovalForwardingConfig({
+    cfg: params.cfg,
+    approvalKind: "exec",
+  });
+  if (!config?.enabled) {
+    return false;
+  }
+  const mode = normalizeApprovalForwardingMode(config.mode);
+  if (!approvalModeIncludesSession(mode)) {
+    return false;
+  }
+  if (getSignalApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0) {
+    const sessionTarget = resolveSignalSessionTargetFromSessionKey(metadata.sessionKey);
+    if (!sessionTarget || isSignalGroupTarget(sessionTarget)) {
+      return false;
+    }
+  }
+  return matchesApprovalRequestFilters({
+    request: {
+      agentId: metadata.agentId,
+      sessionKey: metadata.sessionKey,
+    },
+    agentFilter: config.agentFilter,
+    sessionFilter: config.sessionFilter,
+    fallbackAgentIdFromSessionKey: true,
   });
 }
 

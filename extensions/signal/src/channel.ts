@@ -21,7 +21,10 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
-import { signalApprovalCapability } from "./approval-native.js";
+import {
+  shouldSuppressLocalSignalExecApprovalPrompt,
+  signalApprovalCapability,
+} from "./approval-native.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
@@ -393,6 +396,13 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
+        shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+          shouldSuppressLocalSignalExecApprovalPrompt({
+            cfg,
+            accountId,
+            payload,
+            hint,
+          }),
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
           await sendFormattedSignalText({
             cfg,
