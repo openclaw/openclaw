@@ -15,7 +15,7 @@
 {
   "channel": "telegram",
   "chatType": "direct",
-  "codexModelInstructionsFixture": "test\\fixtures\\agents\\prompt-snapshots\\codex-model-catalog\\gpt-5.5.pragmatic.instructions.md",
+  "codexModelInstructionsFixture": "test/fixtures/agents/prompt-snapshots/codex-model-catalog/gpt-5.5.pragmatic.instructions.md",
   "harness": "codex",
   "model": "gpt-5.5",
   "modelProvider": "openai",
@@ -167,7 +167,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "codexModelInstructions": {
-    "fixture": "test\\fixtures\\agents\\prompt-snapshots\\codex-model-catalog\\gpt-5.5.pragmatic.instructions.md",
+    "fixture": "test/fixtures/agents/prompt-snapshots/codex-model-catalog/gpt-5.5.pragmatic.instructions.md",
     "source": {
       "model": "gpt-5.5",
       "personality": "pragmatic",
