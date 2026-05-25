@@ -476,5 +476,16 @@ class GatewayConfigResolverTest {
     assertEquals(true, resolved?.tls)
   }
 
+  @Test
+  fun gatewayEndpointManualPreservesTlsSetting() {
+    val tlsEndpoint = GatewayEndpoint.manual(host = "gateway.example", port = 443, tlsEnabled = true)
+    val nonTlsEndpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789, tlsEnabled = false)
+    val defaultEndpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+
+    assertEquals(true, tlsEndpoint.tlsEnabled)
+    assertEquals(false, nonTlsEndpoint.tlsEnabled)
+    assertEquals(false, defaultEndpoint.tlsEnabled)
+  }
+
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

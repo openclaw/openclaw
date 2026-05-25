@@ -754,7 +754,7 @@ private fun GatewaySettingsScreen(
             viewModel.setGatewayToken(token)
             viewModel.setGatewayPassword(password)
             viewModel.connect(
-              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port),
+              GatewayEndpoint.manual(host = endpointConfig.host, port = endpointConfig.port, tlsEnabled = endpointConfig.tls),
               token = token.ifEmpty { null },
               bootstrapToken = bootstrapToken.ifEmpty { null },
               password = password.ifEmpty { null },

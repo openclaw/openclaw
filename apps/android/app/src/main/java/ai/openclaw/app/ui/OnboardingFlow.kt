@@ -282,7 +282,7 @@ fun OnboardingFlow(
             viewModel.setGatewayToken(config.token)
             viewModel.setGatewayPassword(config.password)
             viewModel.connect(
-              GatewayEndpoint.manual(host = config.host, port = config.port),
+              GatewayEndpoint.manual(host = config.host, port = config.port, tlsEnabled = config.tls),
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
               password = config.password.ifEmpty { null },
@@ -314,7 +314,7 @@ fun OnboardingFlow(
                 password = password,
               ) ?: return@GatewayRecoveryScreen
             viewModel.connect(
-              GatewayEndpoint.manual(host = config.host, port = config.port),
+              GatewayEndpoint.manual(host = config.host, port = config.port, tlsEnabled = config.tls),
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
               password = config.password.ifEmpty { null },
