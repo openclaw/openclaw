@@ -2477,6 +2477,7 @@ export async function runEmbeddedAttempt(
         }
         return Promise.allSettled(promises).then(() => undefined);
       };
+      let heartbeatResponseTerminated = false;
       abortSessionForYield = () => {
         yieldAbortSettled = abortActiveSession();
       };
@@ -3279,6 +3280,16 @@ export async function runEmbeddedAttempt(
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          onHeartbeatToolResponse:
+            params.trigger === "heartbeat"
+              ? () => {
+                  if (heartbeatResponseTerminated) {
+                    return;
+                  }
+                  heartbeatResponseTerminated = true;
+                  void abortActiveSession();
+                }
+              : undefined,
           terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           onBeforeLifecycleTerminal: () => {
             // Clear embedded-run activity before emitting terminal lifecycle events so
@@ -4242,6 +4253,9 @@ export async function runEmbeddedAttempt(
                 await persistSessionsYieldContextMessage(activeSession, yieldMessage);
               }
             });
+          } else if (heartbeatResponseTerminated && isRunnerAbortError(err)) {
+            aborted = false;
+            await sessionLockController.waitForSessionEvents(activeSession);
           } else if (isMidTurnPrecheckSignal(err)) {
             await sessionLockController.waitForSessionEvents(activeSession);
             await sessionLockController.withSessionWriteLock(() => {

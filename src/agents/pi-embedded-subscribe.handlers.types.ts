@@ -198,6 +198,7 @@ type ToolHandlerParams = Pick<
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onExecutionPhase"
+  | "onHeartbeatToolResponse"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"

@@ -36,6 +36,7 @@ function readRequiredBoolean(params: Record<string, unknown>, key: string): bool
 }
 
 export function createHeartbeatResponseTool(): AnyAgentTool {
+  let recorded = false;
   return {
     label: "Heartbeat",
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -54,6 +55,10 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
           "Invalid heartbeat response. Provide outcome, notify, and non-empty summary.",
         );
       }
+      if (recorded) {
+        throw new ToolInputError("heartbeat_respond already recorded for this turn");
+      }
+      recorded = true;
       return jsonResult({
         status: "recorded",
         ...response,
