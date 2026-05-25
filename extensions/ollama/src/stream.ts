@@ -1367,7 +1367,7 @@ export function createOllamaStreamFn(
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,
-            sanitizeVisibleContent: visibleContentSanitizer.shouldSanitizeFinalMessage(),
+            sanitizeVisibleContent: false,
           });
           closeThinkingBlock();
           closeTextBlock();

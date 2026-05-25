@@ -11,9 +11,6 @@ const noopVisibleContentSanitizer: OllamaVisibleContentSanitizer = {
   sanitizeFinalText(text) {
     return text;
   },
-  shouldSanitizeFinalMessage() {
-    return true;
-  },
 };
 
 export function createOllamaVisibleContentSanitizer(
