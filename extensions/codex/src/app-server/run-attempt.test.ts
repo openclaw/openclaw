@@ -2097,6 +2097,35 @@ describe("runCodexAppServerAttempt", () => {
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
+  it("enables Codex native tool surfaces when toolsAllow lists native tools", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    // Explicit native tool names should enable the native surface
+    params.toolsAllow = ["read"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["write"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["edit"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["exec"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    params.toolsAllow = ["read", "write", "edit"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    // Non-native tools should NOT enable the native surface
+    params.toolsAllow = ["message"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    params.toolsAllow = ["web_search"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
   it("disables Codex native tool surfaces when the effective exec target is node", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

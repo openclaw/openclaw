@@ -102,6 +102,7 @@ import {
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
   resolveCodexDynamicToolsLoading,
+  CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -3982,8 +3983,14 @@ function shouldEnableCodexAppServerNativeToolSurface(
   // Codex native code mode exposes its shell/file surface as one app-server
   // capability, so narrow OpenClaw allowlists must fail closed rather than
   // widening `message` or `web_search` into shell access.
+  // However, if the user explicitly lists native tools (read/write/edit) in
+  // toolsAllow, the native surface must be enabled for those tools to work.
+  const nativeExcludeSet = new Set(CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES);
+  const requestsNativeTool = toolsAllow.some(
+    (name) => nativeExcludeSet.has(normalizeCodexDynamicToolName(name)),
+  );
   return (
-    hasWildcardCodexToolsAllow(toolsAllow) &&
+    (hasWildcardCodexToolsAllow(toolsAllow) || requestsNativeTool) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
   );
 }
