@@ -9,8 +9,12 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
+  makeCronSessionEntry,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCronSessionMock,
   restoreFastTestEnv,
+  runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -125,5 +129,56 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     }
 
     expect(events).toEqual([]);
+  });
+
+  it("emits final lifecycle events under the adopted run session id", async () => {
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: makeCronSessionEntry({
+          sessionId: "fallback-run-session",
+          sessionFile: "/tmp/fallback-run-session.jsonl",
+        }),
+      }),
+    );
+    runWithModelFallbackMock.mockResolvedValue({
+      result: {
+        payloads: [{ text: "test output" }],
+        meta: {
+          agentMeta: {
+            sessionId: "persisted-run-session",
+            sessionFile: "/tmp/persisted-run-session.jsonl",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    const events: EventRecord[] = [];
+    const unsubscribe = onDiagnosticEvent((evt) => {
+      const e = evt as EventRecord;
+      if (
+        e.type === "message.queued" ||
+        e.type === "session.state" ||
+        e.type === "message.processed"
+      ) {
+        events.push(e);
+      }
+    });
+
+    try {
+      const result = await runCronIsolatedAgentTurn(makeParams());
+      expect(result.status).toBe("ok");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toMatchObject([
+      { type: "message.queued", sessionId: "fallback-run-session" },
+      { type: "session.state", state: "processing", sessionId: "fallback-run-session" },
+      { type: "session.state", state: "idle", sessionId: "persisted-run-session" },
+      { type: "message.processed", sessionId: "persisted-run-session" },
+    ]);
   });
 });
