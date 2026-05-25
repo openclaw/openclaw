@@ -72,6 +72,9 @@ function makeEvolveRuntime(
       list: () => [],
       listRuns: async () => [],
       loadFromPacks: vi.fn(async () => undefined),
+      load: vi.fn(),
+      unload: vi.fn(),
+      trigger: vi.fn(async () => ({ steps: [], status: "completed" as const })),
     },
     loadedPacks: [],
     packLoader: { load: vi.fn() },
@@ -102,6 +105,22 @@ function makeEvolveRuntime(
   };
 
   return runtime;
+}
+
+async function waitForPublished(
+  published: Array<{ type: string; payload: Record<string, unknown> }>,
+  type: string,
+  timeoutMs = 500,
+): Promise<{ type: string; payload: Record<string, unknown> } | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const hit = published.find((e) => e.type === type);
+    if (hit) {
+      return hit;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return published.find((e) => e.type === type);
 }
 
 describe("EvolveEngine", () => {
@@ -236,17 +255,71 @@ describe("EvolveEngine", () => {
       confidence: proposal.confidence,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await waitForPublished(runtime._published, "evolve.suggestions_ready");
 
     const ready = runtime._published.find((e) => e.type === "evolve.suggestions_ready");
     expect(ready).toBeTruthy();
     expect(ready?.payload.draft_id).toBe(proposal.id);
     expect(ready?.payload.hitl_required).toBe(true);
     expect(ready?.payload.simulation).toEqual(
-      expect.objectContaining({ skipped: true, yaml_valid: true }),
+      expect.objectContaining({ yaml_valid: true, passed: true, status: "ok" }),
     );
     expect(ready?.payload.suggestions).toEqual(
       expect.arrayContaining([expect.stringMatching(/evolve\.promote_draft/)]),
+    );
+  });
+
+  it("startDraftReviewPipeline 模拟失败仍发布 evolve.suggestions_ready", async () => {
+    const runtime = makeEvolveRuntime();
+    runtime.playbookEngine.trigger = vi.fn(async () => ({
+      steps: [{ stepId: "s1", status: "failed" as const, error: "boom" }],
+      status: "failed" as const,
+      error: "boom",
+    }));
+    const engine = createEvolveEngine(runtime as never);
+
+    const proposal = await engine.proposeDraft({ description: "broken playbook" });
+    runtime._published.length = 0;
+
+    engine.startDraftReviewPipeline();
+    runtime.kernel.emit("evolve.playbook_drafted", {
+      id: proposal.id,
+      title: proposal.title,
+      status: "pending_review",
+    });
+
+    await waitForPublished(runtime._published, "evolve.suggestions_ready");
+
+    const ready = runtime._published.find((e) => e.type === "evolve.suggestions_ready");
+    expect(ready).toBeTruthy();
+    expect(ready?.payload.simulation).toEqual(
+      expect.objectContaining({ yaml_valid: true, passed: false }),
+    );
+    expect(runtime.playbookEngine.unload).toHaveBeenCalled();
+  });
+
+  it("startDraftReviewPipeline 沙盒 load/unload 后跑 PlaybookSimulator 冒烟", async () => {
+    const runtime = makeEvolveRuntime();
+    const engine = createEvolveEngine(runtime as never);
+
+    const proposal = await engine.proposeDraft({ description: "sandbox smoke" });
+    runtime._published.length = 0;
+
+    engine.startDraftReviewPipeline();
+    runtime.kernel.emit("evolve.playbook_drafted", {
+      id: proposal.id,
+      title: proposal.title,
+      status: "pending_review",
+    });
+
+    await waitForPublished(runtime._published, "evolve.suggestions_ready");
+
+    expect(runtime.playbookEngine.load).toHaveBeenCalled();
+    expect(runtime.playbookEngine.trigger).toHaveBeenCalled();
+    expect(runtime.playbookEngine.unload).toHaveBeenCalled();
+    const ready = runtime._published.find((e) => e.type === "evolve.suggestions_ready");
+    expect(ready?.payload.simulation).toEqual(
+      expect.objectContaining({ yaml_valid: true, status: "ok", passed: true }),
     );
   });
 });

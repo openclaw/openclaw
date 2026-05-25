@@ -90,6 +90,7 @@ import type { ClaworksRuntime } from "../claworks/runtime-types.js";
 import { parsePlaybookYaml } from "../pack-loader/yaml-parsers.js";
 import { isDocumentKnowledgeBase } from "../planes/data/kb-types.js";
 import { BRIDGE_LLM } from "./bridge-registry.js";
+import { simulateDraftPlaybook } from "./draft-sandbox-simulator.js";
 import { CW_EVENTS } from "./event-names.js";
 import type { OutputSchema } from "./structured-output.js";
 
@@ -321,6 +322,7 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
     let playbookId: string | undefined;
     let triggerPattern: string | undefined;
     let draftConfidence: number | undefined;
+    let playbookYaml: string | undefined;
     let yamlValid = false;
     let yamlError: string | undefined;
 
@@ -332,6 +334,7 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       const draftDoc = hits.find((h) => h.text.includes(`proposal_id: ${proposalId}`));
       const parsed = draftDoc ? parseEvolutionDraftText(draftDoc.text) : null;
       if (parsed?.playbookYaml) {
+        playbookYaml = parsed.playbookYaml;
         draftConfidence = parsed.confidence;
         playbookId = parsed.playbookYaml.match(/^id:\s*(.+)$/m)?.[1]?.trim();
         triggerPattern = parsed.playbookYaml.match(/^ {2}pattern:\s*(.+)$/m)?.[1]?.trim();
@@ -346,6 +349,39 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       yamlError = err instanceof Error ? err.message : String(err);
     }
 
+    let simulation: Record<string, unknown>;
+    if (!yamlValid) {
+      simulation = {
+        yaml_valid: false,
+        passed: false,
+        status: "skipped",
+        reason: yamlError ?? "yaml_invalid",
+        error: yamlError,
+      };
+    } else if (playbookId && playbookYaml) {
+      try {
+        simulation = await simulateDraftPlaybook(runtime, {
+          playbookYaml,
+          playbookId,
+          proposalId,
+        });
+      } catch (err) {
+        simulation = {
+          yaml_valid: true,
+          passed: false,
+          status: "error",
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
+    } else {
+      simulation = {
+        yaml_valid: yamlValid,
+        passed: false,
+        status: "skipped",
+        reason: "missing_playbook_yaml",
+      };
+    }
+
     const title = typeof payload.title === "string" ? payload.title : proposalId;
     await runtime.kernel.publish(CW_EVENTS.EVOLVE_SUGGESTIONS_READY, "evolve.draft_review", {
       draft_id: proposalId,
@@ -357,11 +393,7 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
       playbook_id: playbookId,
       trigger_pattern: triggerPattern,
       confidence: typeof payload.confidence === "number" ? payload.confidence : draftConfidence,
-      simulation: {
-        skipped: true,
-        yaml_valid: yamlValid,
-        error: yamlError,
-      },
+      simulation,
       hitl_required: true,
       suggestions: [
         `Playbook 草稿「${title}」已写入 KB（${EVOLUTION_DRAFTS_NAMESPACE}），待人工审核。`,
