@@ -41,6 +41,21 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
+  const preparedUserMessage = params.userMessageForPersistence;
+  if (preparedUserMessage) {
+    return {
+      role: "user",
+      timestamp: Date.now(),
+      ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
+      ...(sourceChannel ? { sourceChannel } : {}),
+      ...(senderId ? { senderId } : {}),
+      ...(senderName ? { senderName } : {}),
+      ...(senderUsername ? { senderUsername } : {}),
+      ...(senderE164 ? { senderE164 } : {}),
+      ...(senderLabel ? { senderLabel } : {}),
+      ...(preparedUserMessage as unknown as Record<string, unknown>),
+    } as AgentMessage;
+  }
   return {
     role: "user",
     content: params.prompt,

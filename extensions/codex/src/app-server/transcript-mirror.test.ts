@@ -14,7 +14,11 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import {
+  attachCodexMirrorIdentity,
+  buildCodexUserPromptMessage,
+  mirrorCodexAppServerTranscript,
+} from "./transcript-mirror.js";
 
 const emitSessionTranscriptUpdateMock = vi.hoisted(() => vi.fn());
 
@@ -56,6 +60,35 @@ async function makeRoot(prefix: string): Promise<string> {
   tempDirs.push(root);
   return root;
 }
+
+describe("buildCodexUserPromptMessage", () => {
+  it("uses the prepared user transcript message for app-server prompt mirrors", () => {
+    const message = buildCodexUserPromptMessage({
+      prompt: "[Mon 2026-05-25 19:14 GMT+1] What is in this image?",
+      messageChannel: "webchat",
+      userMessageForPersistence: {
+        role: "user",
+        content: "What is in this image?",
+        timestamp: 1779732875151,
+        MediaPath: "/tmp/image.png",
+        MediaPaths: ["/tmp/image.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      },
+    } as Parameters<typeof buildCodexUserPromptMessage>[0]);
+
+    expect(message).toMatchObject({
+      role: "user",
+      content: "What is in this image?",
+      timestamp: 1779732875151,
+      sourceChannel: "webchat",
+      MediaPath: "/tmp/image.png",
+      MediaPaths: ["/tmp/image.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+  });
+});
 
 function parseJsonLines<T>(raw: string): T[] {
   const records: T[] = [];
