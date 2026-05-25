@@ -22,15 +22,17 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
   );
 }
 
-function registryContainsPluginIds(
+export function registryContainsRuntimePluginIds(
   registry: PluginRegistry,
   pluginIds: readonly string[] | undefined,
 ): boolean {
   if (pluginIds === undefined) {
     return true;
   }
+  const present = new Set<string>();
   const loaded = new Set<string>();
   for (const plugin of registry.plugins ?? []) {
+    present.add(plugin.id);
     if (plugin.status === undefined || plugin.status === "loaded") {
       loaded.add(plugin.id);
     }
@@ -43,13 +45,13 @@ function registryContainsPluginIds(
       if (entry && typeof entry === "object" && "pluginId" in entry) {
         const pluginId = entry.pluginId;
         if (typeof pluginId === "string" && pluginId.length > 0) {
-          loaded.add(pluginId);
+          present.add(pluginId);
         }
       }
     }
   }
   if (pluginIds.length === 0) {
-    return loaded.size === 0;
+    return present.size === 0;
   }
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
@@ -83,7 +85,7 @@ export function getLoadedRuntimePluginRegistry(
   );
   if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (!compatible || !registryContainsPluginIds(compatible, requiredPluginIds)) {
+    if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;
     }
     return compatible;
@@ -98,7 +100,7 @@ export function getLoadedRuntimePluginRegistry(
   if (!registry) {
     return undefined;
   }
-  if (!registryContainsPluginIds(registry, requiredPluginIds)) {
+  if (!registryContainsRuntimePluginIds(registry, requiredPluginIds)) {
     return undefined;
   }
   return registry;

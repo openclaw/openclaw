@@ -5,7 +5,7 @@ description: Prepare or verify OpenClaw stable/beta releases, changelogs, releas
 
 # OpenClaw Release Maintainer
 
-Use this skill for release and publish-time workflow. Keep ordinary development changes and GHSA-specific advisory work outside this skill.
+Use this skill for release and publish-time workflow. Load `$release-private` if it exists before resolving Peter-owned credential locators or private host topology. Keep ordinary development changes and GHSA-specific advisory work outside this skill.
 
 ## Respect release guardrails
 
@@ -421,7 +421,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - Hard rule: never run `op` directly in the main agent shell during release
     work. Any 1Password CLI use must happen inside that tmux session so prompts
     and alerts are contained and observable.
-  - Use the 1Password item `op://Private/Npmjs` for npm credentials and OTP.
+  - Use `$release-private` for the npm credentials and OTP item.
     Do not print passwords, tokens, or OTPs to the transcript; send them through
     tmux buffers, env vars scoped to the tmux command, or `expect` with
     `log_user 0`.

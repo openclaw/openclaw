@@ -1,27 +1,40 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   assertResourceCeiling,
+  cleanupKitchenSinkEnv,
   extractPluginCommandNames,
   fetchJson,
   findDistCallGatewayModuleFiles,
+  makeEnv,
   sampleProcess,
   sampleWindowsProcessByPort,
   summarizeProcessSamples,
   usesBuiltOpenClawEntry,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
 
+describe("kitchen-sink RPC isolated state", () => {
+  it("cleans up the generated temporary home tree", async () => {
+    const { root, env } = makeEnv();
+
+    expect(root).toContain("openclaw-kitchen-sink-rpc-");
+    expect(existsSync(env.OPENCLAW_HOME)).toBe(true);
+
+    await expect(cleanupKitchenSinkEnv(root)).resolves.toBe(true);
+
+    expect(existsSync(root)).toBe(false);
+  });
+});
+
 describe("kitchen-sink RPC caller loading", () => {
   it("uses built callGateway chunks for dist and packaged entries", () => {
     expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["dist/index.js"] })).toBe(true);
     expect(
-      usesBuiltOpenClawEntry(
-        { command: "node", baseArgs: ["/app/openclaw.mjs"] },
-        "/repo",
-        { OPENCLAW_ENTRY: "/app/openclaw.mjs" },
-      ),
+      usesBuiltOpenClawEntry({ command: "node", baseArgs: ["/app/openclaw.mjs"] }, "/repo", {
+        OPENCLAW_ENTRY: "/app/openclaw.mjs",
+      }),
     ).toBe(true);
   });
 

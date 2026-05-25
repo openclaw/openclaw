@@ -70,9 +70,6 @@ const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 const DISCORD_REALTIME_TRAILING_SILENCE_MIN_MS = 700;
 const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
-const DISCORD_REALTIME_WAKE_NAME_CONFUSIONS = new Map<string, ReadonlySet<string>>([
-  ["openclaw", new Set(["openclub", "opencloud"])],
-]);
 const DISCORD_REALTIME_FORCED_CONSULT_TRAILING_FRAGMENT_WORDS = new Set([
   "a",
   "about",
@@ -478,6 +475,36 @@ function levenshteinDistance(left: string, right: string): number {
   return previous[right.length] ?? Math.max(left.length, right.length);
 }
 
+function hasOnlyVowelLikeSubstitutions(left: string, right: string): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const vowels = new Set(["a", "e", "i", "o", "u", "y"]);
+  let substitutions = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftChar = left[index];
+    const rightChar = right[index];
+    if (leftChar === rightChar) {
+      continue;
+    }
+    if (!vowels.has(leftChar ?? "") || !vowels.has(rightChar ?? "")) {
+      return false;
+    }
+    substitutions += 1;
+  }
+  return substitutions > 0;
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  for (let index = 0; index < limit; index += 1) {
+    if (left[index] !== right[index]) {
+      return index;
+    }
+  }
+  return limit;
+}
+
 function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: string): boolean {
   const normalizedWakeName = normalizeWakeNameCandidate(wakeName);
   if (!normalizedWakeName) {
@@ -491,14 +518,33 @@ function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: str
   if (!candidate.strongBoundary) {
     return false;
   }
+  if (heardCompact[0] !== wakeCompact[0]) {
+    return false;
+  }
   const distance = levenshteinDistance(heardCompact, wakeCompact);
   if (distance <= 1) {
     return true;
   }
-  if (distance === 2 && wakeCompact.length >= 5 && heardCompact.length !== wakeCompact.length) {
+  if (
+    distance === 2 &&
+    heardCompact.length >= 4 &&
+    wakeCompact.length >= 5 &&
+    (heardCompact.length !== wakeCompact.length ||
+      hasOnlyVowelLikeSubstitutions(heardCompact, wakeCompact) ||
+      commonPrefixLength(heardCompact, wakeCompact) >= 6)
+  ) {
     return true;
   }
-  return DISCORD_REALTIME_WAKE_NAME_CONFUSIONS.get(wakeCompact)?.has(heardCompact) === true;
+  if (
+    distance === 3 &&
+    heardCompact.length >= 7 &&
+    wakeCompact.length >= 7 &&
+    heardCompact.length !== wakeCompact.length &&
+    commonPrefixLength(heardCompact, wakeCompact) >= 5
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function stripLeadingWakeNameCandidate(text: string, candidate: LeadingWakeNameCandidate): string {

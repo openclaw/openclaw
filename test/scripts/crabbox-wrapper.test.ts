@@ -63,7 +63,11 @@ function makeFakeGit(
     "process.exit(response.status ?? 0);",
   ].join("\n");
   writeFileSync(gitPath, `${script}\n`, "utf8");
-  writeFileSync(`${gitPath}.cmd`, `@echo off\r\n"${process.execPath}" "%~dp0git" %*\r\n`, "utf8");
+  writeFileSync(
+    `${gitPath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0git" %*\r\n`,
+    "utf8",
+  );
   chmodSync(gitPath, 0o755);
   return binDir;
 }
@@ -98,6 +102,17 @@ function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): {
   cwd: string;
 } {
   return JSON.parse(result.stdout.trim()) as { args: string[]; cwd: string };
+}
+
+function normalizeShellLineEndings(value: string): string {
+  return value.replace(/\r\n/g, "\n");
+}
+
+function expectGroupedShellCommand(remoteCommand: string, command: string): void {
+  expect(remoteCommand).toContain(`&& { ${command}`);
+  if (process.platform !== "win32") {
+    expect(remoteCommand).toContain(`${command}\n}`);
+  }
 }
 
 afterEach(() => {
@@ -211,7 +226,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain(
@@ -224,7 +239,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toContain('return "$status"');
     expect(remoteCommand).toContain("node --version >&2");
     expect(remoteCommand).toContain("pnpm --version >&2");
-    expect(remoteCommand).toContain("&& { pnpm --version\n}");
+    expectGroupedShellCommand(remoteCommand, "pnpm --version");
   });
 
   it("preserves shell commands when bootstrapping raw AWS macOS JavaScript commands", () => {
@@ -234,11 +249,11 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("&& { pnpm check:changed\n}");
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
   });
 
   it("groups shell commands so fallbacks cannot mask AWS macOS bootstrap failures", () => {
@@ -257,10 +272,10 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
-    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js && {");
-    expect(remoteCommand).toContain("pnpm check:changed || true\n}");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed || true");
   });
 
   it("does not bootstrap non-macOS AWS JavaScript commands", () => {
@@ -283,35 +298,40 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
-  it("finds a Crabbox checkout next to the Git common dir in linked worktrees", () => {
-    const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
-    tempDirs.push(fakeWorkspaceParent);
-    const gitCommonDir = path.join(fakeWorkspaceParent, "openclaw", ".git");
-    const crabboxBinDir = path.join(fakeWorkspaceParent, "crabbox", "bin");
-    mkdirSync(gitCommonDir, { recursive: true });
-    writeFakeCrabbox(crabboxBinDir, "provider: aws\n");
-    const gitResponses = {
-      ["rev-parse\u0000--git-common-dir"]: { stdout: `${gitCommonDir}\n` },
-    };
-    const gitBinDir = makeFakeGit(gitResponses);
+  const itWithPosixLinkedWorktreeFixture = process.platform === "win32" ? it.skip : it;
 
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
-      {
-        cwd: repoRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
-          PATH: [gitBinDir, path.dirname(process.execPath)].join(path.delimiter),
+  itWithPosixLinkedWorktreeFixture(
+    "finds a Crabbox checkout next to the Git common dir in linked worktrees",
+    () => {
+      const fakeWorkspaceParent = mkdtempSync(path.join(tmpdir(), "openclaw-linked-worktree-"));
+      tempDirs.push(fakeWorkspaceParent);
+      const gitCommonDir = path.join(fakeWorkspaceParent, "openclaw", ".git");
+      const crabboxBinDir = path.join(fakeWorkspaceParent, "crabbox", "bin");
+      mkdirSync(gitCommonDir, { recursive: true });
+      writeFakeCrabbox(crabboxBinDir, "provider: aws\n");
+      const gitResponses = {
+        ["rev-parse\u0000--git-common-dir"]: { stdout: `${gitCommonDir}\n` },
+      };
+      const gitBinDir = makeFakeGit(gitResponses);
+
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+        {
+          cwd: repoRoot,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(gitResponses),
+            PATH: [gitBinDir, path.dirname(process.execPath)].join(path.delimiter),
+          },
         },
-      },
-    );
+      );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toContain("aws");
-  });
+      expect(result.status).toBe(0);
+      expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+    },
+  );
 
   it("accepts advertised providers from wrapped Crabbox help", () => {
     const result = runWrapper(
@@ -355,18 +375,14 @@ describe("scripts/crabbox-wrapper", () => {
   }
 
   it("falls back to normal sync decisions when git is missing from PATH", () => {
-    const binDir = makeFakeCrabbox(
+    const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-    );
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+      ["run", "--provider", "aws", "--", "echo ok"],
       {
-        cwd: repoRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: [binDir, path.dirname(process.execPath)].join(path.delimiter),
+        gitResponses: {
+          ["rev-parse\u0000--git-common-dir"]: { status: 1 },
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { status: 1 },
+          ["sparse-checkout\u0000list"]: { status: 1 },
         },
       },
     );
@@ -493,6 +509,35 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 
+  it("uses a temporary full checkout when clean sparse AWS syncs reuse a lease", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--target",
+        "windows",
+        "--id",
+        "cbx_existing",
+        "--",
+        "corepack",
+        "pnpm",
+        "build",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+  });
+
   it("bootstraps Git metadata for sparse changed gates on remote raw syncs", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -507,7 +552,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
@@ -535,16 +580,14 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(
       "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
     );
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain(
-      "openclaw_crabbox_bootstrap_macos_js && { pnpm check:changed\n}",
-    );
+    expectGroupedShellCommand(remoteCommand, "pnpm check:changed");
   });
 
   it("preserves existing shell changed-gate commands after remote Git bootstrap", () => {
@@ -561,7 +604,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = output.args.at(-1) ?? "";
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
     expect(result.status).toBe(0);
     expect(output.args.filter((arg) => arg === "--shell")).toHaveLength(1);
     expect(remoteCommand).toContain(
@@ -626,7 +669,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
   });
 
-  it("keeps existing AWS leases on the original sparse checkout", () => {
+  it("uses a temporary full checkout when existing AWS leases sync clean sparse worktrees", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--id", "cbx_existing", "--", "echo ok"],
@@ -639,8 +682,8 @@ describe("scripts/crabbox-wrapper", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).not.toContain("syncing from temporary full checkout");
-    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 
   it("uses a temporary full checkout when clean sparse branches differ from the Blacksmith ref", () => {

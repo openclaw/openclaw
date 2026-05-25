@@ -679,7 +679,7 @@ function shouldUseFullCheckoutForCleanSparseRemoteSync(commandArgs, providerName
   if (commandArgs[0] !== "run" || isLocalContainerProvider(providerName)) {
     return false;
   }
-  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--id")) {
+  if (hasOption(commandArgs, "--no-sync")) {
     return false;
   }
 

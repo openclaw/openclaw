@@ -100,6 +100,8 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
+  protected resetProviderInitializationForRetry(): void {}
+
   protected async indexFile(
     _entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
