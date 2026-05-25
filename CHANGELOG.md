@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway: keep session-only Control UI tool-start mirrors flowing during diagnostic queue pressure instead of silently dropping non-terminal tool updates.
 - Agents/memory: return optional not-found context for missing date-only daily memory reads instead of logging benign first-run `ENOENT` failures. Fixes #82928. Thanks @galiniliev.
+- Discord: merge streamed text captions into following media block replies so captions and attachments send as one message. (#86487) Thanks @neeravmakwana.
 - Gateway: avoid sending duplicate tool-event frames to Control UI connections that are subscribed by both run and session.
 - Discord/OpenAI voice: accept longer leading wake-name mistranscripts such as "Open Club" for OpenClaw.
 - Agents/OpenAI-compatible: stop ModelStudio-compatible chat requests before sending system/tool-only payloads that have no usable user or assistant turn. (#86177) Thanks @TurboTheTurtle.
