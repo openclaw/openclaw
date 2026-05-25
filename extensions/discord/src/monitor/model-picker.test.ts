@@ -13,6 +13,7 @@ import {
   getDiscordModelPickerModelPage,
   getDiscordModelPickerProviderPage,
   findProviderBucketId,
+  findProviderBucketLocation,
   loadDiscordModelPickerData,
   parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
@@ -745,6 +746,7 @@ describe("Discord model picker rendering", () => {
     expect(firstBucket.pageSize).toBe(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
     expect(firstBucket.items).toHaveLength(DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE);
     expect(firstBucket.totalPages).toBe(2);
+    expect(findProviderBucketLocation(data, "p-30")).toEqual({ bucket: "p", page: 2 });
   });
 
   it("sorts mixed-case model ids by the same key used for bucket labels", () => {

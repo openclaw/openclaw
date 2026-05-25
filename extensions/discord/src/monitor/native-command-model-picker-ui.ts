@@ -25,7 +25,7 @@ import {
   type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
-  findProviderBucketId,
+  findProviderBucketLocation,
   loadDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
   resolveDiscordModelPickerPageForModel,
@@ -328,7 +328,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
       : { page: 1 };
   const initialPage = initialResolved.page;
   const initialModelBucket = initialResolved.bucket;
-  const initialProviderBucket = findProviderBucketId(data, initialProvider);
+  const initialProviderLocation = findProviderBucketLocation(data, initialProvider);
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
@@ -336,8 +336,8 @@ export async function replyWithDiscordModelPickerProviders(params: {
     data,
     provider: initialProvider,
     page: initialPage,
-    providerPage: 1,
-    providerBucket: initialProviderBucket,
+    providerPage: initialProviderLocation?.page ?? 1,
+    providerBucket: initialProviderLocation?.bucket,
     modelBucket: initialModelBucket,
     currentModel,
     currentRuntime,

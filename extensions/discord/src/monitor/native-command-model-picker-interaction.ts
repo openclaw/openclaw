@@ -391,7 +391,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider,
       page: parsed.page ?? 1,
       providerPage: parsed.providerPage ?? 1,
-      providerBucket: parsed.providerBucket,
+      providerBucket: parsed.providerBucket ?? findProviderBucketId(pickerData, provider),
       modelBucket: parsed.modelBucket,
       currentModel: currentModelRef,
       currentRuntime,

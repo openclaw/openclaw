@@ -488,6 +488,13 @@ export function findProviderBucketId(
   data: ModelsProviderData,
   provider: string,
 ): string | undefined {
+  return findProviderBucketLocation(data, provider)?.bucket;
+}
+
+export function findProviderBucketLocation(
+  data: ModelsProviderData,
+  provider: string,
+): { bucket?: string; page: number } | undefined {
   const normalized = normalizeProviderId(provider);
   const sorted = [...data.providers].toSorted();
   const idx = sorted.indexOf(normalized);
@@ -496,7 +503,14 @@ export function findProviderBucketId(
   }
   const buckets = computeAlphaBuckets(sorted);
   const containing = buckets.find((bucket) => idx >= bucket.start && idx < bucket.end);
-  return containing && containing.id !== "all" ? containing.id : undefined;
+  if (!containing) {
+    return undefined;
+  }
+  const page = Math.floor((idx - containing.start) / DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE) + 1;
+  return {
+    ...(containing.id !== "all" ? { bucket: containing.id } : {}),
+    page,
+  };
 }
 
 /**
