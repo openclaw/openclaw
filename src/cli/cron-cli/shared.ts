@@ -177,7 +177,10 @@ export function parseAt(input: string, tz?: string): string | null {
   if (absolute !== null) {
     return new Date(absolute).toISOString();
   }
-  const dur = parseDurationMs(raw);
+  // Accept both bare ("30m") and leading-plus ("+30m") relative durations.
+  // The leading-plus form mirrors the `--at` help text and `at(1)`-style tools.
+  const durationCandidate = /^\+\d/.test(raw) ? raw.slice(1) : raw;
+  const dur = parseDurationMs(durationCandidate);
   if (dur !== null) {
     return new Date(Date.now() + dur).toISOString();
   }

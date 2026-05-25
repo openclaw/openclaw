@@ -104,7 +104,9 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new Error("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+      throw new Error(
+        'Invalid --at. Use an ISO timestamp or a duration like "20m" (also accepts "+20m").',
+      );
     }
     return { kind: "at", at: atIso };
   }

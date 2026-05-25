@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  parseAt,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -278,5 +279,31 @@ describe("coerceCronDeliveryPreviews", () => {
         },
       }).size,
     ).toBe(0);
+  });
+});
+
+describe("parseAt", () => {
+  it("accepts bare relative durations (\"30m\")", () => {
+    const before = Date.now();
+    const iso = parseAt("30m");
+    expect(iso).not.toBeNull();
+    const ms = new Date(iso as string).getTime();
+    expect(ms - before).toBeGreaterThanOrEqual(30 * 60_000 - 5);
+    expect(ms - before).toBeLessThan(30 * 60_000 + 5_000);
+  });
+
+  it("accepts leading-plus relative durations (\"+30m\") to match --at help text", () => {
+    const before = Date.now();
+    const iso = parseAt("+30m");
+    expect(iso).not.toBeNull();
+    const ms = new Date(iso as string).getTime();
+    expect(ms - before).toBeGreaterThanOrEqual(30 * 60_000 - 5);
+    expect(ms - before).toBeLessThan(30 * 60_000 + 5_000);
+  });
+
+  it("rejects garbage input", () => {
+    expect(parseAt("not-a-time")).toBeNull();
+    expect(parseAt("+")).toBeNull();
+    expect(parseAt("")).toBeNull();
   });
 });
