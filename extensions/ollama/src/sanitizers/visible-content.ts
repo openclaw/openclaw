@@ -2,16 +2,7 @@ import {
   createKimiInlineReasoningSanitizer,
   isOllamaCloudKimiModelRef,
 } from "./kimi-inline-reasoning.js";
-
-export type OllamaVisibleContentStreamResolution =
-  | { kind: "visible"; text: string }
-  | { kind: "pending" };
-
-export type OllamaVisibleContentSanitizer = {
-  resolveStreamText(params: { text: string; final: boolean }): OllamaVisibleContentStreamResolution;
-  sanitizeFinalText(text: string): string;
-  shouldSanitizeFinalMessage(): boolean;
-};
+import type { OllamaVisibleContentSanitizer } from "./visible-content-contract.js";
 
 const noopVisibleContentSanitizer: OllamaVisibleContentSanitizer = {
   resolveStreamText(params) {
