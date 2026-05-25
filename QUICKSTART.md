@@ -316,17 +316,17 @@ curl -X POST http://127.0.0.1:18800/v1/packs/reload
 
 ## 环境变量参考
 
-| 变量                       | 默认值                     | 说明                                                |
-| -------------------------- | -------------------------- | --------------------------------------------------- |
-| `CLAWORKS_STATE_DIR`       | `~/.claworks`              | 状态目录（配置/数据/packs）                         |
-| `CLAWORKS_CONFIG`          | `$STATE_DIR/claworks.json` | 配置文件路径                                        |
-| `CLAWORKS_GATEWAY_PORT`    | `18800`                    | 网关监听端口                                        |
-| `CLAWORKS_PACKS_DIR`       | `../claworks-packs`        | Pack YAML 源目录                                    |
-| `CLAWORKS_PRODUCT_PROFILE` | `extended`                 | 插件集合 (`core`/`extended`/`personal_work`/`full`) |
-| `CLAWORKS_INIT_PROFILE`    | `enterprise`               | Pack 预置 (`core`/`enterprise`)                     |
-| `CLAWORKS_OPENCLAW_KB_ROOT`| —                          | OpenClaw `knowledge_base` 挂载路径（personal_work） |
-| `CLAWORKS_KB_WATCH_DIRS`   | —                          | filesystem-kb 监视目录（通常 `…/content`）          |
-| `CLAWORKS_ORIOSEARCH_URL`  | —                          | 自托管 OrioSearch（Tavily 兼容联网搜索）            |
+| 变量                        | 默认值                     | 说明                                                |
+| --------------------------- | -------------------------- | --------------------------------------------------- |
+| `CLAWORKS_STATE_DIR`        | `~/.claworks`              | 状态目录（配置/数据/packs）                         |
+| `CLAWORKS_CONFIG`           | `$STATE_DIR/claworks.json` | 配置文件路径                                        |
+| `CLAWORKS_GATEWAY_PORT`     | `18800`                    | 网关监听端口                                        |
+| `CLAWORKS_PACKS_DIR`        | `../claworks-packs`        | Pack YAML 源目录                                    |
+| `CLAWORKS_PRODUCT_PROFILE`  | `extended`                 | 插件集合 (`core`/`extended`/`personal_work`/`full`) |
+| `CLAWORKS_INIT_PROFILE`     | `enterprise`               | Pack 预置 (`core`/`enterprise`)                     |
+| `CLAWORKS_OPENCLAW_KB_ROOT` | —                          | OpenClaw `knowledge_base` 挂载路径（personal_work） |
+| `CLAWORKS_KB_WATCH_DIRS`    | —                          | filesystem-kb 监视目录（通常 `…/content`）          |
+| `CLAWORKS_ORIOSEARCH_URL`   | —                          | 自托管 OrioSearch（Tavily 兼容联网搜索）            |
 
 OpenClaw 知识库 SMB 挂载与七类 Markdown 批量入库见 [`docs/claworks/oriosearch-kb-setup.md`](docs/claworks/oriosearch-kb-setup.md)。
 
@@ -359,15 +359,29 @@ CLAWORKS_INIT_REPAIR=1 pnpm claworks:init
 
 ## OT 连接器实机验证（预生产）
 
-签收前在现场或 Testbox 完成（与 `docs/RELEASE-CHECKLIST.md` P1 #2 对应）：
+完整 runbook：[docs/claworks/ot-live.md](docs/claworks/ot-live.md)（env 清单链到 `contrib/examples/*.env.example`）。
 
-1. 设 `production_mode=true`，运行 `claworks doctor --fix`，确认无 `connectors_simulate` / `connectors_echo_demo` 错误。
-2. 编辑 `plugins.entries.claworks-robot.config.connectors.*`：`simulate: false`，填写 mqtt / opcua / modbus 真实 endpoint 与凭证。
+**模拟基线（无实机，与实机对比用）：**
+
+```bash
+pnpm claworks:ot-dry-run
+```
+
+**实机步骤摘要**（与 `docs/RELEASE-CHECKLIST.md` P1 #2 对应）：
+
+1. `CLAWORKS_PRODUCTION=1 pnpm claworks:doctor --fix` — 无 `connectors_simulate` / `connectors_echo_demo` 错误。
+2. 编辑 `plugins.entries.claworks-robot.config.connectors.*`：`simulate: false`；对照 `contrib/examples/mqtt.env.example`、`opcua.env.example`、`modbus.env.example` 填 endpoint 与凭证。
 3. 重启 Gateway（`pnpm claworks:gateway` 或 macOS `ai.claworks.gateway` LaunchAgent）。
 4. `curl -s http://127.0.0.1:18800/v1/connectors` — 连接器状态为 healthy。
 5. 触发 OT 事件或等待 poll，确认 `process-industry` Playbook 匹配与工单创建。
 
-**模板**：`contrib/examples/ot-production.claworks.fragment.json` · **Feishu E2E**：`contrib/examples/feishu-live-e2e.env.example`
+**模板**：`contrib/examples/ot-production.claworks.fragment.json` · **Feishu E2E**：[`docs/claworks/feishu-live-e2e.md`](docs/claworks/feishu-live-e2e.md) · `contrib/examples/feishu-live-e2e.env.example`
+
+**只读检查清单（不连真机）：**
+
+```bash
+pnpm claworks:ot-live-checklist
+```
 
 **全量健康自检：**
 
@@ -381,6 +395,7 @@ curl -X POST http://127.0.0.1:18800/v1/doctor/run?fix=true
 
 - 📖 [设计文档](docs/design/ARCHITECTURE.md) — 三平面架构（Twin / Ops / Nexus）
 - 📦 [安装与共存](docs/claworks/install.md) — fork 安装、npm 准备、与 OpenClaw 并存
+- 🔧 [OT 实机联调](docs/claworks/ot-live.md) — mqtt/opcua/modbus 生产 env 与签收步骤
 - 🧩 [Pack 开发指南](../claworks-packs/HOW-TO-CREATE-A-PACK.md) — 创建自定义 Pack
 - 🔌 [桥接插件](../openclaw-claworks-extension/README.md) — 从 OpenClaw 连接 ClaWorks
 - 📊 [日报系统](../daily-report-system/README.md) — Excel 日报→飞书卡片
