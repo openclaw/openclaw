@@ -455,6 +455,30 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   const variants = record[unionKey] as unknown[];
   const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+
+  const allConstStrings =
+    nonNullVariants.length > 0 &&
+    nonNullVariants.every(
+      (v) =>
+        v &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        "const" in v &&
+        typeof (v as Record<string, unknown>).const === "string",
+    );
+  if (allConstStrings) {
+    const enumValues = nonNullVariants.map((v) => (v as Record<string, unknown>).const as string);
+    const merged: Record<string, unknown> = {
+      type: "string",
+      enum: enumValues,
+      ...normalized,
+    };
+    if (nonNullVariants.length < normalizedVariants.length) {
+      merged.nullable = true;
+    }
+    return merged;
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
