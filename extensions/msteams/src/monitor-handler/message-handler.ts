@@ -1,6 +1,6 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
-  filterChannelInboundQuoteContext,
+  finalizeChannelInboundContext,
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContext,
@@ -753,19 +753,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               allowNameMatching,
             }).allowed
         : true;
-    const visibleQuote = filterChannelInboundQuoteContext(
-      contextVisibilityMode,
-      quoteInfo
-        ? {
-            id: activity.replyToId ?? undefined,
-            body: quoteInfo.body,
-            sender: quoteInfo.sender,
-            senderAllowed: quoteSenderAllowed,
-            isQuote: true,
-          }
-        : undefined,
-    );
-
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
@@ -777,36 +764,50 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
     const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
-    const ctxPayload = core.channel.reply.finalizeInboundContext({
-      Body: combinedBody,
-      BodyForAgent: bodyForAgent,
-      InboundHistory: inboundHistory,
-      RawBody: rawBody,
-      CommandBody: commandBody,
-      BodyForCommands: commandBody,
-      From: teamsFrom,
-      To: teamsTo,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
-      ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
-      ConversationLabel: envelopeFrom,
-      GroupSubject: !isDirectMessage ? conversationType : undefined,
-      GroupSpace: teamId,
-      SenderName: senderName,
-      SenderId: senderId,
-      Provider: "msteams" as const,
-      Surface: "msteams" as const,
-      MessageSid: activity.id,
-      Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
-      CommandAuthorized: commandAuthorized,
-      OriginatingChannel: "msteams" as const,
-      OriginatingTo: teamsTo,
-      NativeChannelId: nativeChannelId,
-      SupplementalContext: { quote: visibleQuote },
-      ReplyToId: activity.replyToId ?? undefined,
-      ReplyToIsQuote: quoteInfo ? true : undefined,
-      ...mediaPayload,
+    const { context: ctxPayload } = finalizeChannelInboundContext({
+      finalize: core.channel.reply.finalizeInboundContext,
+      contextVisibility: contextVisibilityMode,
+      supplemental: {
+        quote: quoteInfo
+          ? {
+              id: activity.replyToId ?? undefined,
+              body: quoteInfo.body,
+              sender: quoteInfo.sender,
+              senderAllowed: quoteSenderAllowed,
+              isQuote: true,
+            }
+          : undefined,
+      },
+      context: {
+        Body: combinedBody,
+        BodyForAgent: bodyForAgent,
+        InboundHistory: inboundHistory,
+        RawBody: rawBody,
+        CommandBody: commandBody,
+        BodyForCommands: commandBody,
+        From: teamsFrom,
+        To: teamsTo,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
+        ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+        ConversationLabel: envelopeFrom,
+        GroupSubject: !isDirectMessage ? conversationType : undefined,
+        GroupSpace: teamId,
+        SenderName: senderName,
+        SenderId: senderId,
+        Provider: "msteams" as const,
+        Surface: "msteams" as const,
+        MessageSid: activity.id,
+        Timestamp: timestamp?.getTime() ?? Date.now(),
+        WasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
+        CommandAuthorized: commandAuthorized,
+        OriginatingChannel: "msteams" as const,
+        OriginatingTo: teamsTo,
+        NativeChannelId: nativeChannelId,
+        ReplyToId: activity.replyToId ?? undefined,
+        ReplyToIsQuote: quoteInfo ? true : undefined,
+        ...mediaPayload,
+      },
     });
 
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);

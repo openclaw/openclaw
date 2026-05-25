@@ -49,76 +49,73 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
   };
 });
 
-vi.mock("./runtime-api.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
-  finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ({
-    ...ctx,
-    BodyForCommands:
-      typeof ctx.CommandBody === "string"
-        ? ctx.CommandBody
-        : typeof ctx.BodyForAgent === "string"
-          ? ctx.BodyForAgent
-          : "",
-  }),
-  getAgentScopedMediaLocalRoots: () => [],
-  jidToE164: (value: string) => {
-    const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
-    return phone ? `+${phone}` : null;
-  },
-  logVerbose: () => {},
-  resolveChannelMessageSourceReplyDeliveryMode: ({
-    cfg,
-    ctx,
-  }: {
-    cfg: {
-      messages?: {
-        visibleReplies?: "automatic" | "message_tool";
-        groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+vi.mock("./runtime-api.js", async () => {
+  const { finalizeInboundContext } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/reply-runtime")
+  >("openclaw/plugin-sdk/reply-runtime");
+  return {
+    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherMock,
+    finalizeInboundContext,
+    getAgentScopedMediaLocalRoots: () => [],
+    jidToE164: (value: string) => {
+      const phone = value.split("@")[0]?.replace(/[^\d]/g, "");
+      return phone ? `+${phone}` : null;
+    },
+    logVerbose: () => {},
+    resolveChannelMessageSourceReplyDeliveryMode: ({
+      cfg,
+      ctx,
+    }: {
+      cfg: {
+        messages?: {
+          visibleReplies?: "automatic" | "message_tool";
+          groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+        };
       };
-    };
-    ctx: { ChatType?: string; CommandSource?: "native" | "text"; CommandAuthorized?: boolean };
-  }) => {
-    if (
-      ctx.CommandSource === "native" ||
-      (ctx.CommandSource === "text" && ctx.CommandAuthorized === true)
-    ) {
-      return "automatic";
-    }
-    if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
-      const configuredMode =
-        cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies;
-      return configuredMode === "automatic" ? "automatic" : "message_tool_only";
-    }
-    return cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
-  },
-  resolveChunkMode: () => "length",
-  resolveIdentityNamePrefix: (cfg: {
-    agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
-  }) => {
-    const agent = cfg.agents?.list?.find((entry) => entry.default) ?? cfg.agents?.list?.[0];
-    const name = agent?.identity?.name?.trim();
-    return name ? `[${name}]` : undefined;
-  },
-  resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
-  resolveMarkdownTableMode: () => undefined,
-  resolveSendableOutboundReplyParts: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    mediaUrl?: string;
-  }) => {
-    const urls = [
-      ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-      ...(payload.mediaUrl ? [payload.mediaUrl] : []),
-    ];
-    return {
-      text: payload.text ?? "",
-      hasMedia: urls.length > 0,
-    };
-  },
-  resolveTextChunkLimit: () => 4000,
-  shouldLogVerbose: () => false,
-  toLocationContext: () => ({}),
-}));
+      ctx: { ChatType?: string; CommandSource?: "native" | "text"; CommandAuthorized?: boolean };
+    }) => {
+      if (
+        ctx.CommandSource === "native" ||
+        (ctx.CommandSource === "text" && ctx.CommandAuthorized === true)
+      ) {
+        return "automatic";
+      }
+      if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
+        const configuredMode =
+          cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies;
+        return configuredMode === "automatic" ? "automatic" : "message_tool_only";
+      }
+      return cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    },
+    resolveChunkMode: () => "length",
+    resolveIdentityNamePrefix: (cfg: {
+      agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
+    }) => {
+      const agent = cfg.agents?.list?.find((entry) => entry.default) ?? cfg.agents?.list?.[0];
+      const name = agent?.identity?.name?.trim();
+      return name ? `[${name}]` : undefined;
+    },
+    resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
+    resolveMarkdownTableMode: () => undefined,
+    resolveSendableOutboundReplyParts: (payload: {
+      text?: string;
+      mediaUrls?: string[];
+      mediaUrl?: string;
+    }) => {
+      const urls = [
+        ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+        ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+      ];
+      return {
+        text: payload.text ?? "",
+        hasMedia: urls.length > 0,
+      };
+    },
+    resolveTextChunkLimit: () => 4000,
+    shouldLogVerbose: () => false,
+    toLocationContext: () => ({}),
+  };
+});
 
 import {
   buildWhatsAppInboundContext,
@@ -415,6 +412,7 @@ describe("whatsapp inbound dispatch", () => {
         kind: "text-slash",
         source: "text",
         authorized: true,
+        commandName: "status",
         body: "/status",
       },
       Provider: "whatsapp",

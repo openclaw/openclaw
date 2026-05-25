@@ -1,6 +1,7 @@
 import {
   buildMentionRegexes,
   type EnvelopeFormatOptions,
+  finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -22,7 +23,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
@@ -820,7 +821,7 @@ export function buildIMessageInboundContext(params: {
   groupHistories: Map<string, HistoryEntry[]>;
   dmHistory?: IMessageDmHistoryContext;
 }): {
-  ctxPayload: ReturnType<typeof finalizeInboundContext>;
+  ctxPayload: FinalizedMsgContext;
   fromLabel: string;
   chatTarget?: string;
   imessageTo: string;
@@ -911,57 +912,59 @@ export function buildIMessageInboundContext(params: {
           })
         : undefined;
 
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: decision.bodyText,
-    InboundHistory: inboundHistory,
-    RawBody: decision.bodyText,
-    CommandBody: decision.bodyText,
-    From: decision.isGroup
-      ? `imessage:group:${chatId ?? "unknown"}`
-      : `imessage:${decision.sender}`,
-    To: imessageTo,
-    SessionKey: decision.route.sessionKey,
-    AccountId: decision.route.accountId,
-    ChatType: decision.isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
-    GroupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
-    GroupMembers: decision.isGroup
-      ? (params.message.participants ?? []).filter(Boolean).join(", ")
-      : undefined,
-    SenderName: decision.senderNormalized,
-    SenderId: decision.sender,
-    Provider: "imessage",
-    Surface: "imessage",
-    MessageSid: messageSid,
-    MessageSidFull: messageGuid,
-    SupplementalContext: decision.replyContext
-      ? {
-          quote: {
+  const { context: ctxPayload } = finalizeChannelInboundContext({
+    supplemental: {
+      quote: decision.replyContext
+        ? {
             id: decision.replyContext.id,
             body: decision.replyContext.body,
             sender: decision.replyContext.sender,
-          },
-        }
-      : undefined,
-    Timestamp: decision.createdAt,
-    MediaPath: params.media?.path,
-    MediaType: params.media?.type,
-    MediaUrl: params.media?.path,
-    MediaPaths:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaTypes:
-      params.media?.types && params.media.types.length > 0 ? params.media.types : undefined,
-    MediaUrls:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaRemoteHost: params.remoteHost,
-    WasMentioned: decision.effectiveWasMentioned,
-    CommandAuthorized: decision.commandAuthorized,
-    CommandSource:
-      decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
-    OriginatingChannel: "imessage" as const,
-    OriginatingTo: imessageTo,
+          }
+        : undefined,
+      groupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
+    },
+    context: {
+      Body: combinedBody,
+      BodyForAgent: decision.bodyText,
+      InboundHistory: inboundHistory,
+      RawBody: decision.bodyText,
+      CommandBody: decision.bodyText,
+      From: decision.isGroup
+        ? `imessage:group:${chatId ?? "unknown"}`
+        : `imessage:${decision.sender}`,
+      To: imessageTo,
+      SessionKey: decision.route.sessionKey,
+      AccountId: decision.route.accountId,
+      ChatType: decision.isGroup ? "group" : "direct",
+      ConversationLabel: fromLabel,
+      GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+      GroupMembers: decision.isGroup
+        ? (params.message.participants ?? []).filter(Boolean).join(", ")
+        : undefined,
+      SenderName: decision.senderNormalized,
+      SenderId: decision.sender,
+      Provider: "imessage",
+      Surface: "imessage",
+      MessageSid: messageSid,
+      MessageSidFull: messageGuid,
+      Timestamp: decision.createdAt,
+      MediaPath: params.media?.path,
+      MediaType: params.media?.type,
+      MediaUrl: params.media?.path,
+      MediaPaths:
+        params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
+      MediaTypes:
+        params.media?.types && params.media.types.length > 0 ? params.media.types : undefined,
+      MediaUrls:
+        params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
+      MediaRemoteHost: params.remoteHost,
+      WasMentioned: decision.effectiveWasMentioned,
+      CommandAuthorized: decision.commandAuthorized,
+      CommandSource:
+        decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
+      OriginatingChannel: "imessage" as const,
+      OriginatingTo: imessageTo,
+    },
   });
 
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };

@@ -2,7 +2,10 @@ import {
   DEFAULT_TIMING,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
-import type { CommandTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  finalizeChannelInboundContext,
+  type CommandTurnContext,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
@@ -305,59 +308,62 @@ export function buildWhatsAppInboundContext(params: {
         })
       : undefined;
 
-  const result = finalizeInboundContext({
-    Body: params.combinedBody,
-    BodyForAgent: params.bodyForAgent ?? params.msg.body,
-    InboundHistory: inboundHistory,
-    RawBody: params.rawBody ?? params.msg.body,
-    CommandBody: params.commandBody ?? params.msg.body,
-    Transcript: params.transcript,
-    From: params.msg.from,
-    To: params.msg.to,
-    SessionKey: params.route.sessionKey,
-    AccountId: params.route.accountId,
-    MessageSid: params.msg.id,
-    SupplementalContext: params.visibleReplyTo
-      ? {
-          quote: {
+  const { context: result } = finalizeChannelInboundContext({
+    finalize: finalizeInboundContext,
+    supplemental: {
+      quote: params.visibleReplyTo
+        ? {
             id: params.visibleReplyTo.id,
             body: params.visibleReplyTo.body,
             sender: params.visibleReplyTo.sender?.label ?? undefined,
-          },
-        }
-      : undefined,
-    MediaPath: params.msg.mediaPath,
-    MediaUrl: params.msg.mediaUrl,
-    MediaType: params.msg.mediaType,
-    MediaTranscribedIndexes: params.mediaTranscribedIndexes,
-    ChatType: params.msg.chatType,
-    Timestamp: params.msg.timestamp,
-    ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
-    GroupSubject: params.msg.groupSubject,
-    GroupMembers: formatGroupMembers({
-      participants: params.msg.groupParticipants,
-      roster: params.groupMemberRoster,
-      fallbackE164: params.sender.e164,
-    }),
-    SenderName: params.sender.name,
-    SenderId: params.sender.id ?? params.sender.e164,
-    SenderE164: params.sender.e164,
-    CommandAuthorized: params.commandAuthorized,
-    CommandTurn: params.commandTurn,
-    CommandSource:
-      params.commandSource ??
-      (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
-        ? params.commandTurn.source
-        : undefined),
-    ReplyThreading: params.replyThreading,
-    WasMentioned: params.msg.wasMentioned,
-    GroupSystemPrompt: params.groupSystemPrompt,
-    UntrustedStructuredContext: params.msg.untrustedStructuredContext,
-    ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
-    Provider: "whatsapp",
-    Surface: "whatsapp",
-    OriginatingChannel: "whatsapp",
-    OriginatingTo: params.msg.from,
+          }
+        : undefined,
+      groupSystemPrompt: params.groupSystemPrompt,
+      untrustedContext: params.msg.untrustedStructuredContext,
+    },
+    context: {
+      Body: params.combinedBody,
+      BodyForAgent: params.bodyForAgent ?? params.msg.body,
+      InboundHistory: inboundHistory,
+      RawBody: params.rawBody ?? params.msg.body,
+      CommandBody: params.commandBody ?? params.msg.body,
+      Transcript: params.transcript,
+      From: params.msg.from,
+      To: params.msg.to,
+      SessionKey: params.route.sessionKey,
+      AccountId: params.route.accountId,
+      MessageSid: params.msg.id,
+      MediaPath: params.msg.mediaPath,
+      MediaUrl: params.msg.mediaUrl,
+      MediaType: params.msg.mediaType,
+      MediaTranscribedIndexes: params.mediaTranscribedIndexes,
+      ChatType: params.msg.chatType,
+      Timestamp: params.msg.timestamp,
+      ConversationLabel: params.msg.chatType === "group" ? params.conversationId : params.msg.from,
+      GroupSubject: params.msg.groupSubject,
+      GroupMembers: formatGroupMembers({
+        participants: params.msg.groupParticipants,
+        roster: params.groupMemberRoster,
+        fallbackE164: params.sender.e164,
+      }),
+      SenderName: params.sender.name,
+      SenderId: params.sender.id ?? params.sender.e164,
+      SenderE164: params.sender.e164,
+      CommandAuthorized: params.commandAuthorized,
+      CommandTurn: params.commandTurn,
+      CommandSource:
+        params.commandSource ??
+        (params.commandTurn?.source === "native" || params.commandTurn?.source === "text"
+          ? params.commandTurn.source
+          : undefined),
+      ReplyThreading: params.replyThreading,
+      WasMentioned: params.msg.wasMentioned,
+      ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: params.msg.from,
+    },
   });
   return result;
 }

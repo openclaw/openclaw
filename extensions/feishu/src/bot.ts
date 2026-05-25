@@ -1,4 +1,5 @@
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
@@ -1269,27 +1270,9 @@ export async function handleFeishuMessage(params: {
     ) => {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
-      return core.channel.reply.finalizeInboundContext({
-        Body: combinedBody,
-        BodyForAgent: messageBody,
-        InboundHistory: inboundHistory,
-        RootMessageId: ctx.rootId,
-        RawBody: agentFacingContent,
-        CommandBody: agentFacingContent,
-        Transcript: audioTranscript,
-        From: feishuFrom,
-        To: feishuTo,
-        SessionKey: agentSessionKey,
-        AccountId: agentAccountId,
-        ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
-        ConversationLabel: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
-        SenderName: ctx.senderName ?? ctx.senderOpenId,
-        SenderId: ctx.senderOpenId,
-        Provider: "feishu" as const,
-        Surface: "feishu" as const,
-        MessageSid: ctx.messageId,
-        SupplementalContext: {
+      const { context } = finalizeChannelInboundContext({
+        finalize: core.channel.reply.finalizeInboundContext,
+        supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
           thread: {
             starterBody: threadContext.threadStarterBody,
@@ -1300,18 +1283,41 @@ export async function handleFeishuMessage(params: {
             ? normalizeOptionalString(groupConfig?.systemPrompt)
             : undefined,
         },
-        ReplyToId: ctx.parentId,
-        // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
-        // ID and would produce invalid reply targets downstream.
-        MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
-        Timestamp: messageCreateTimeMs,
-        WasMentioned: wasMentioned,
-        CommandAuthorized: commandAuthorized,
-        OriginatingChannel: "feishu" as const,
-        OriginatingTo: feishuTo,
-        ...mediaPayload,
-        ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
+        context: {
+          Body: combinedBody,
+          BodyForAgent: messageBody,
+          InboundHistory: inboundHistory,
+          RootMessageId: ctx.rootId,
+          RawBody: agentFacingContent,
+          CommandBody: agentFacingContent,
+          Transcript: audioTranscript,
+          From: feishuFrom,
+          To: feishuTo,
+          SessionKey: agentSessionKey,
+          AccountId: agentAccountId,
+          ChatType: isGroup ? "group" : "direct",
+          GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
+          ConversationLabel:
+            isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
+          SenderName: ctx.senderName ?? ctx.senderOpenId,
+          SenderId: ctx.senderOpenId,
+          Provider: "feishu" as const,
+          Surface: "feishu" as const,
+          MessageSid: ctx.messageId,
+          ReplyToId: ctx.parentId,
+          // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
+          // ID and would produce invalid reply targets downstream.
+          MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+          Timestamp: messageCreateTimeMs,
+          WasMentioned: wasMentioned,
+          CommandAuthorized: commandAuthorized,
+          OriginatingChannel: "feishu" as const,
+          OriginatingTo: feishuTo,
+          ...mediaPayload,
+          ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
+        },
       });
+      return context;
     };
 
     // Determine reply target based on group session mode:

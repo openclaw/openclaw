@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
+  finalizeChannelInboundContext,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
 import { resolveChannelInboundSupplementalContext } from "./supplemental-context.js";
@@ -487,6 +488,75 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.ForwardedFrom).toBeUndefined();
     expect(ctx.ThreadStarterBody).toBeUndefined();
     expect(ctx.ThreadHistoryBody).toBeUndefined();
+  });
+});
+
+describe("finalizeChannelInboundContext", () => {
+  it("filters supplemental facts and finalizes through the injected finalizer", () => {
+    const finalize = vi.fn((ctx: Record<string, unknown>) => ({ ...ctx, Finalized: true }));
+    const result = finalizeChannelInboundContext({
+      finalize,
+      contextVisibility: "allowlist",
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+      },
+      supplemental: {
+        quote: {
+          id: "quote-1",
+          body: "hidden quote",
+          senderAllowed: false,
+        },
+        thread: {
+          starterBody: "allowed thread",
+          senderAllowed: true,
+        },
+      },
+    });
+
+    expect(result.quoteHidden).toBe(true);
+    expect(result.threadHidden).toBe(false);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize.mock.calls[0]?.[0]).toMatchObject({
+      SupplementalContext: {
+        quote: undefined,
+        thread: {
+          starterBody: "allowed thread",
+          senderAllowed: true,
+        },
+      },
+    });
+    expect((result.context as Record<string, unknown>).Finalized).toBe(true);
+  });
+
+  it("can finalize context-provided supplemental facts and media facts", () => {
+    const result = finalizeChannelInboundContext({
+      context: {
+        Body: "hello",
+        RawBody: "hello",
+        From: "test:u1",
+        To: "test:room",
+        SessionKey: "session",
+        ChatType: "group",
+        SupplementalContext: {
+          quote: {
+            body: "quoted",
+            sender: "Alice",
+          },
+        },
+      },
+      media: [{ path: "/tmp/a.png", contentType: "image/png" }],
+    });
+
+    expect(result.context.ReplyToBody).toBe("quoted");
+    expect(result.context.ReplyToSender).toBe("Alice");
+    expect(result.context.MediaPath).toBe("/tmp/a.png");
+    expect(result.context.MediaType).toBe("image/png");
+    expect(Object.hasOwn(result.context, "SupplementalContext")).toBe(false);
   });
 });
 

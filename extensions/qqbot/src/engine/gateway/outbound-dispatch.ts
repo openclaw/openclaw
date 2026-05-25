@@ -10,6 +10,7 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
@@ -541,62 +542,66 @@ function buildCtxPayload(
 ): FinalizedMsgContext {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  return runtime.channel.reply.finalizeInboundContext({
-    Body: inbound.body,
-    BodyForAgent: inbound.agentBody,
-    RawBody: event.content,
-    CommandBody: event.content,
-    From: inbound.fromAddress,
-    To: inbound.fromAddress,
-    SessionKey: inbound.route.sessionKey,
-    AccountId: inbound.route.accountId,
-    ChatType: inbound.isGroupChat ? "group" : "direct",
-    GroupSystemPrompt: inbound.groupSystemPrompt,
-    SenderId: event.senderId,
-    SenderName: event.senderName,
-    Provider: "qqbot",
-    Surface: "qqbot",
-    MessageSid: event.messageId,
-    Timestamp: new Date(event.timestamp).getTime(),
-    OriginatingChannel: "qqbot",
-    OriginatingTo: inbound.fromAddress,
-    QQChannelId: event.channelId,
-    QQGuildId: event.guildId,
-    QQGroupOpenid: event.groupOpenid,
-    QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
-    QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
-    QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
-    QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
-    QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
-    QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
-    CommandAuthorized: inbound.commandAuthorized,
-    ...(commandSource ? { CommandSource: commandSource } : {}),
-    ...(inbound.voiceMediaTypes.length > 0
-      ? {
-          MediaTypes: inbound.voiceMediaTypes,
-          MediaType: inbound.voiceMediaTypes[0],
-        }
-      : {}),
-    ...(inbound.localMediaPaths.length > 0
-      ? {
-          MediaPaths: inbound.localMediaPaths,
-          MediaPath: inbound.localMediaPaths[0],
-          MediaTypes: inbound.localMediaTypes,
-          MediaType: inbound.localMediaTypes[0],
-        }
-      : {}),
-    ...(inbound.remoteMediaUrls.length > 0
-      ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-      : {}),
-    SupplementalContext: inbound.replyTo
-      ? {
-          quote: {
+  const { context } = finalizeChannelInboundContext({
+    finalize: runtime.channel.reply.finalizeInboundContext,
+    supplemental: {
+      quote: inbound.replyTo
+        ? {
             id: inbound.replyTo.id,
             body: inbound.replyTo.body,
             sender: inbound.replyTo.sender,
             isQuote: inbound.replyTo.isQuote,
-          },
-        }
-      : undefined,
-  }) as FinalizedMsgContext;
+          }
+        : undefined,
+      groupSystemPrompt: inbound.groupSystemPrompt,
+    },
+    context: {
+      Body: inbound.body,
+      BodyForAgent: inbound.agentBody,
+      RawBody: event.content,
+      CommandBody: event.content,
+      From: inbound.fromAddress,
+      To: inbound.fromAddress,
+      SessionKey: inbound.route.sessionKey,
+      AccountId: inbound.route.accountId,
+      ChatType: inbound.isGroupChat ? "group" : "direct",
+      SenderId: event.senderId,
+      SenderName: event.senderName,
+      Provider: "qqbot",
+      Surface: "qqbot",
+      MessageSid: event.messageId,
+      Timestamp: new Date(event.timestamp).getTime(),
+      OriginatingChannel: "qqbot",
+      OriginatingTo: inbound.fromAddress,
+      QQChannelId: event.channelId,
+      QQGuildId: event.guildId,
+      QQGroupOpenid: event.groupOpenid,
+      QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
+      QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
+      QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
+      QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
+      QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
+      QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
+      CommandAuthorized: inbound.commandAuthorized,
+      ...(commandSource ? { CommandSource: commandSource } : {}),
+      ...(inbound.voiceMediaTypes.length > 0
+        ? {
+            MediaTypes: inbound.voiceMediaTypes,
+            MediaType: inbound.voiceMediaTypes[0],
+          }
+        : {}),
+      ...(inbound.localMediaPaths.length > 0
+        ? {
+            MediaPaths: inbound.localMediaPaths,
+            MediaPath: inbound.localMediaPaths[0],
+            MediaTypes: inbound.localMediaTypes,
+            MediaType: inbound.localMediaTypes[0],
+          }
+        : {}),
+      ...(inbound.remoteMediaUrls.length > 0
+        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
+        : {}),
+    },
+  });
+  return context as FinalizedMsgContext;
 }

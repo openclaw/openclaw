@@ -3,7 +3,10 @@ import {
   createCommandTurnContext,
   type CommandTurnContext,
 } from "../../auto-reply/command-turn-context.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import {
+  finalizeInboundContext as finalizeCoreInboundContext,
+  type FinalizeInboundContextOptions,
+} from "../../auto-reply/reply/inbound-context.js";
 import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
@@ -64,6 +67,28 @@ export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   SessionKey: string;
   To: string;
   InboundEventKind: InboundEventKind;
+};
+
+type FinalizeInboundContextFn = <T extends Record<string, unknown>>(
+  ctx: T,
+  opts?: FinalizeInboundContextOptions,
+) => unknown;
+
+export type FinalizeChannelInboundContextParams<T extends Record<string, unknown>> = {
+  context: T;
+  supplemental?: SupplementalContextFacts;
+  contextVisibility?: ContextVisibilityMode;
+  media?: readonly InboundMediaFacts[];
+  finalize?: FinalizeInboundContextFn;
+  finalizeOptions?: FinalizeInboundContextOptions;
+};
+
+export type FinalizeChannelInboundContextResult<T extends Record<string, unknown>> = {
+  context: T & FinalizedMsgContext;
+  supplemental?: SupplementalContextFacts;
+  quoteHidden: boolean;
+  forwardedHidden: boolean;
+  threadHidden: boolean;
 };
 
 function keepSupplementalContext(params: {
@@ -130,6 +155,43 @@ export function filterChannelInboundQuoteContext(
     contextVisibility,
     supplemental: quote ? { quote } : undefined,
   })?.quote;
+}
+
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextParams<T>,
+): FinalizeChannelInboundContextResult<T> {
+  const contextSupplemental = (params.context as { SupplementalContext?: SupplementalContextFacts })
+    .SupplementalContext;
+  const rawSupplemental = params.supplemental ?? contextSupplemental;
+  const supplemental = filterChannelInboundSupplementalContext({
+    supplemental: rawSupplemental,
+    contextVisibility: params.contextVisibility,
+  });
+  const mediaPayload = params.media ? buildChannelInboundMediaPayload([...params.media]) : {};
+  const baseContext = {
+    ...params.context,
+    SupplementalContext: supplemental,
+    ...mediaPayload,
+  };
+  const untrustedStructuredContext = resolveUntrustedStructuredContext({
+    supplemental,
+    extra: baseContext,
+  });
+  const finalize = params.finalize ?? finalizeCoreInboundContext;
+  const context = finalize(
+    {
+      ...baseContext,
+      UntrustedStructuredContext: untrustedStructuredContext,
+    },
+    params.finalizeOptions,
+  ) as T & FinalizedMsgContext;
+  return {
+    context,
+    supplemental,
+    quoteHidden: Boolean(rawSupplemental?.quote && !supplemental?.quote),
+    forwardedHidden: Boolean(rawSupplemental?.forwarded && !supplemental?.forwarded),
+    threadHidden: Boolean(rawSupplemental?.thread && !supplemental?.thread),
+  };
 }
 
 function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): boolean | undefined {
@@ -201,16 +263,6 @@ function resolveChannelCommandContext(params: {
 export function buildChannelInboundEventContext(
   params: BuildChannelInboundEventContextParams,
 ): BuiltChannelInboundEventContext {
-  const media = params.media ?? [];
-  const mediaPayload = buildChannelInboundMediaPayload(media);
-  const supplemental = filterChannelInboundSupplementalContext({
-    supplemental: params.supplemental,
-    contextVisibility: params.contextVisibility,
-  });
-  const untrustedStructuredContext = resolveUntrustedStructuredContext({
-    supplemental,
-    extra: params.extra,
-  });
   const body = params.message.body ?? params.message.rawBody;
   const commandTurn = resolveChannelCommandContext({
     command: params.command,
@@ -219,48 +271,50 @@ export function buildChannelInboundEventContext(
     access: params.access,
   });
 
-  return finalizeInboundContext({
-    Body: body,
-    InboundEventKind: params.message.inboundEventKind ?? "user_request",
-    BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
-    InboundHistory: params.message.inboundHistory,
-    RawBody: params.message.rawBody,
-    CommandBody: params.message.commandBody ?? params.message.rawBody,
-    BodyForCommands: params.message.commandBody ?? params.message.rawBody,
-    From: params.from,
-    To: params.reply.to,
-    SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
-    AccountId: params.route.accountId ?? params.accountId,
-    ParentSessionKey: params.route.parentSessionKey,
-    ModelParentSessionKey: params.route.modelParentSessionKey,
-    MessageSid: params.messageId,
-    MessageSidFull: params.messageIdFull,
-    SupplementalContext: supplemental,
-    ReplyToId: params.reply.replyToId ?? supplemental?.quote?.id,
-    ReplyToIdFull: params.reply.replyToIdFull ?? supplemental?.quote?.fullId,
-    ...mediaPayload,
-    ChatType: params.conversation.kind,
-    ConversationLabel: params.conversation.label,
-    GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
-    GroupSpace: params.conversation.spaceId,
-    GroupSystemPrompt: supplemental?.groupSystemPrompt,
-    SenderName: params.sender.name ?? params.sender.displayLabel,
-    SenderId: params.sender.id,
-    SenderUsername: params.sender.username,
-    SenderTag: params.sender.tag,
-    MemberRoleIds: params.sender.roles,
-    Timestamp: params.timestamp,
-    Provider: params.provider ?? params.channel,
-    Surface: params.surface ?? params.provider ?? params.channel,
-    WasMentioned: params.access?.mentions?.wasMentioned,
-    CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
-    CommandTurn: commandTurn,
-    MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
-    NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
-    OriginatingChannel: params.channel,
-    OriginatingTo: params.reply.originatingTo,
-    ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
-    ...params.extra,
-    UntrustedStructuredContext: untrustedStructuredContext,
+  const result = finalizeChannelInboundContext({
+    supplemental: params.supplemental,
+    contextVisibility: params.contextVisibility,
+    media: params.media,
+    context: {
+      Body: body,
+      InboundEventKind: params.message.inboundEventKind ?? "user_request",
+      BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+      InboundHistory: params.message.inboundHistory,
+      RawBody: params.message.rawBody,
+      CommandBody: params.message.commandBody ?? params.message.rawBody,
+      BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+      From: params.from,
+      To: params.reply.to,
+      SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+      AccountId: params.route.accountId ?? params.accountId,
+      ParentSessionKey: params.route.parentSessionKey,
+      ModelParentSessionKey: params.route.modelParentSessionKey,
+      MessageSid: params.messageId,
+      MessageSidFull: params.messageIdFull,
+      ReplyToId: params.reply.replyToId,
+      ReplyToIdFull: params.reply.replyToIdFull,
+      ChatType: params.conversation.kind,
+      ConversationLabel: params.conversation.label,
+      GroupSubject: params.conversation.kind !== "direct" ? params.conversation.label : undefined,
+      GroupSpace: params.conversation.spaceId,
+      SenderName: params.sender.name ?? params.sender.displayLabel,
+      SenderId: params.sender.id,
+      SenderUsername: params.sender.username,
+      SenderTag: params.sender.tag,
+      MemberRoleIds: params.sender.roles,
+      Timestamp: params.timestamp,
+      Provider: params.provider ?? params.channel,
+      Surface: params.surface ?? params.provider ?? params.channel,
+      WasMentioned: params.access?.mentions?.wasMentioned,
+      CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
+      CommandTurn: commandTurn,
+      MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
+      NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
+      OriginatingChannel: params.channel,
+      OriginatingTo: params.reply.originatingTo,
+      ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
+      ...params.extra,
+    },
   });
+  return result.context as BuiltChannelInboundEventContext;
 }

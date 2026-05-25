@@ -1,4 +1,4 @@
-import { filterChannelInboundQuoteContext } from "openclaw/plugin-sdk/channel-inbound";
+import { finalizeChannelInboundContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
@@ -1296,20 +1296,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       const replySenderAllowed =
         !replyContext?.replyToSenderId || isRoomContextSenderAllowed(replyContext.replyToSenderId);
-      const visibleReply = filterChannelInboundQuoteContext(
-        contextVisibilityMode,
-        replyContext
-          ? {
-              id: threadTarget ? undefined : (replyToEventId ?? undefined),
-              body: replyContext.replyToBody,
-              sender: replyContext.replyToSender,
-              senderAllowed: replySenderAllowed,
-            }
-          : undefined,
-      );
-      if (replyContext && !visibleReply) {
-        logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
-      }
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
       const roomName = roomInfo?.name;
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
@@ -1347,48 +1333,65 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         body: textWithId,
       });
       const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
-      const ctxPayload = core.channel.reply.finalizeInboundContext({
-        Body: body,
-        RawBody: bodyText,
-        CommandBody: commandBodyText,
-        BodyForAgent: bodyText,
-        BodyForCommands: commandBodyText,
-        InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
-        From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
-        To: `room:${roomId}`,
-        SessionKey: _route.sessionKey,
-        AccountId: _route.accountId,
-        ChatType: isDirectMessage ? "direct" : "channel",
-        ConversationLabel: envelopeFrom,
-        SenderName: senderName,
-        SenderId: senderId,
-        SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
-        GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
-        GroupId: isRoom ? roomId : undefined,
-        GroupChannel: isRoom ? roomId : undefined,
-        SupplementalContext: {
-          quote: visibleReply,
-          thread: { starterBody: threadContext?.threadStarterBody },
+      const { context: ctxPayload, quoteHidden } = finalizeChannelInboundContext({
+        finalize: core.channel.reply.finalizeInboundContext,
+        contextVisibility: contextVisibilityMode,
+        supplemental: {
+          quote: replyContext
+            ? {
+                id: threadTarget ? undefined : (replyToEventId ?? undefined),
+                body: replyContext.replyToBody,
+                sender: replyContext.replyToSender,
+                senderAllowed: replySenderAllowed,
+              }
+            : undefined,
+          thread: {
+            starterBody: threadContext?.threadStarterBody,
+            senderAllowed: threadContext ? true : undefined,
+          },
           groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         },
-        Provider: "matrix" as const,
-        Surface: "matrix" as const,
-        WasMentioned: isRoom ? wasMentioned : undefined,
-        MessageSid: messageId,
-        ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
-        MessageThreadId: threadTarget,
-        Timestamp: eventTs ?? undefined,
-        MediaPath: media?.path,
-        MediaType: media?.contentType,
-        MediaUrl: media?.path,
-        ...locationPayload?.context,
-        CommandAuthorized: commandAuthorized,
-        CommandSource: "text" as const,
-        NativeChannelId: roomId,
-        NativeDirectUserId: isDirectMessage ? senderId : undefined,
-        OriginatingChannel: "matrix" as const,
-        OriginatingTo: `room:${roomId}`,
+        context: {
+          Body: body,
+          RawBody: bodyText,
+          CommandBody: commandBodyText,
+          BodyForAgent: bodyText,
+          BodyForCommands: commandBodyText,
+          InboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
+          From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
+          To: `room:${roomId}`,
+          SessionKey: _route.sessionKey,
+          AccountId: _route.accountId,
+          ChatType: isDirectMessage ? "direct" : "channel",
+          ConversationLabel: envelopeFrom,
+          SenderName: senderName,
+          SenderId: senderId,
+          SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+          GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
+          GroupId: isRoom ? roomId : undefined,
+          GroupChannel: isRoom ? roomId : undefined,
+          Provider: "matrix" as const,
+          Surface: "matrix" as const,
+          WasMentioned: isRoom ? wasMentioned : undefined,
+          MessageSid: messageId,
+          ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+          MessageThreadId: threadTarget,
+          Timestamp: eventTs ?? undefined,
+          MediaPath: media?.path,
+          MediaType: media?.contentType,
+          MediaUrl: media?.path,
+          ...locationPayload?.context,
+          CommandAuthorized: commandAuthorized,
+          CommandSource: "text" as const,
+          NativeChannelId: roomId,
+          NativeDirectUserId: isDirectMessage ? senderId : undefined,
+          OriginatingChannel: "matrix" as const,
+          OriginatingTo: `room:${roomId}`,
+        },
       });
+      if (quoteHidden) {
+        logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
+      }
 
       const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);

@@ -1,10 +1,13 @@
 // Shared inbound parsing helpers for channel plugins.
 import {
   buildChannelInboundEventContext,
+  finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
+  type FinalizeChannelInboundContextParams,
+  type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 export { resolveChannelInboundSupplementalContext } from "../channels/inbound-event/supplemental-context.js";
@@ -67,10 +70,16 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   buildChannelInboundEventContext,
+  finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
 };
-export type { BuildChannelInboundEventContextParams, BuiltChannelInboundEventContext };
+export type {
+  BuildChannelInboundEventContextParams,
+  BuiltChannelInboundEventContext,
+  FinalizeChannelInboundContextParams,
+  FinalizeChannelInboundContextResult,
+};
 
 export type BuildChannelTurnContextParams = Omit<
   BuildChannelInboundEventContextParams,

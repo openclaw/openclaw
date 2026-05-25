@@ -3,6 +3,7 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
   createChannelInboundDebouncer,
+  finalizeChannelInboundContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
   matchesMentionPatterns,
@@ -28,7 +29,6 @@ import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch"
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -192,47 +192,49 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
-    const ctxPayload = finalizeInboundContext({
-      Body: combinedBody,
-      BodyForAgent: entry.bodyText,
-      InboundHistory: inboundHistory,
-      RawBody: entry.bodyText,
-      CommandBody: entry.commandBody,
-      BodyForCommands: entry.commandBody,
-      From: entry.isGroup
-        ? `group:${entry.groupId ?? "unknown"}`
-        : `signal:${entry.senderRecipient}`,
-      To: signalTo,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
-      ChatType: entry.isGroup ? "group" : "direct",
-      ConversationLabel: fromLabel,
-      GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
-      SenderName: entry.senderName,
-      SenderId: entry.senderDisplay,
-      Provider: "signal" as const,
-      Surface: "signal" as const,
-      MessageSid: entry.messageId,
-      SupplementalContext: entry.replyToBody
-        ? {
-            quote: {
+    const { context: ctxPayload } = finalizeChannelInboundContext({
+      supplemental: {
+        quote: entry.replyToBody
+          ? {
               body: entry.replyToBody,
               sender: entry.replyToSender,
               isQuote: entry.replyToIsQuote,
-            },
-          }
-        : undefined,
-      Timestamp: entry.timestamp ?? undefined,
-      MediaPath: entry.mediaPath,
-      MediaType: entry.mediaType,
-      MediaUrl: entry.mediaPath,
-      MediaPaths: entry.mediaPaths,
-      MediaUrls: entry.mediaPaths,
-      MediaTypes: entry.mediaTypes,
-      WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
-      CommandAuthorized: entry.commandAuthorized,
-      OriginatingChannel: "signal" as const,
-      OriginatingTo: signalTo,
+            }
+          : undefined,
+      },
+      context: {
+        Body: combinedBody,
+        BodyForAgent: entry.bodyText,
+        InboundHistory: inboundHistory,
+        RawBody: entry.bodyText,
+        CommandBody: entry.commandBody,
+        BodyForCommands: entry.commandBody,
+        From: entry.isGroup
+          ? `group:${entry.groupId ?? "unknown"}`
+          : `signal:${entry.senderRecipient}`,
+        To: signalTo,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
+        ChatType: entry.isGroup ? "group" : "direct",
+        ConversationLabel: fromLabel,
+        GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
+        SenderName: entry.senderName,
+        SenderId: entry.senderDisplay,
+        Provider: "signal" as const,
+        Surface: "signal" as const,
+        MessageSid: entry.messageId,
+        Timestamp: entry.timestamp ?? undefined,
+        MediaPath: entry.mediaPath,
+        MediaType: entry.mediaType,
+        MediaUrl: entry.mediaPath,
+        MediaPaths: entry.mediaPaths,
+        MediaUrls: entry.mediaPaths,
+        MediaTypes: entry.mediaTypes,
+        WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
+        CommandAuthorized: entry.commandAuthorized,
+        OriginatingChannel: "signal" as const,
+        OriginatingTo: signalTo,
+      },
     });
 
     if (shouldLogVerbose()) {
