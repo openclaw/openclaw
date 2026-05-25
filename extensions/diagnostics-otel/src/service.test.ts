@@ -267,6 +267,12 @@ function firstSpanAttributes(name: string): Record<string, unknown> {
   return mockCallArg(spanByName(name).setAttributes, 0) as Record<string, unknown>;
 }
 
+function stringAttribute(attrs: Record<string, unknown> | undefined, key: string): string {
+  const value = attrs?.[key];
+  expect(value).toEqual(expect.any(String));
+  return value as string;
+}
+
 function firstSpanEndTime(name: string): unknown {
   return mockCallArg(spanByName(name).end, 0);
 }
@@ -3139,6 +3145,46 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("omits absent model content fields when capture fields are opted in", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        systemPrompt: true,
+        toolDefinitions: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: ["user prompt"],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs =
+      (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)?.attributes ?? {};
+    expect(attrs["openclaw.content.input_messages"]).toBe("user prompt");
+    expect(Object.hasOwn(attrs, "openclaw.content.output_messages")).toBe(false);
+    expect(Object.hasOwn(attrs, "openclaw.content.system_prompt")).toBe(false);
+    expect(Object.hasOwn(attrs, "openclaw.content.tool_definitions")).toBe(false);
+    expect(Object.hasOwn(attrs, "gen_ai.output.messages")).toBe(false);
+    expect(Object.hasOwn(attrs, "gen_ai.system_instructions")).toBe(false);
+    expect(Object.hasOwn(attrs, "gen_ai.tool.definitions")).toBe(false);
+    await service.stop?.(ctx);
+  });
+
   test("exports Phoenix-readable GenAI prompt, output, and tool definition attributes", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
@@ -3190,7 +3236,7 @@ describe("diagnostics-otel service", () => {
     expect(attrs?.["gen_ai.system_instructions"]).toBe(
       JSON.stringify([{ type: "text", content: "be exact" }]),
     );
-    expect(JSON.parse(String(attrs?.["gen_ai.input.messages"]))).toEqual([
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
       { role: "user", parts: [{ type: "text", content: "what changed?" }] },
       {
         role: "assistant",
@@ -3208,14 +3254,14 @@ describe("diagnostics-otel service", () => {
         parts: [{ type: "tool_call_response", id: "call-1", result: { rows: 1 } }],
       },
     ]);
-    expect(JSON.parse(String(attrs?.["gen_ai.output.messages"]))).toEqual([
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))).toEqual([
       {
         role: "assistant",
         parts: [{ type: "text", content: "the trace changed" }],
         finish_reason: "stop",
       },
     ]);
-    expect(JSON.parse(String(attrs?.["gen_ai.tool.definitions"]))).toEqual([
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.tool.definitions"))).toEqual([
       {
         type: "function",
         name: "lookup",
@@ -3269,7 +3315,7 @@ describe("diagnostics-otel service", () => {
     );
     const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
       ?.attributes;
-    const parsed = JSON.parse(String(attrs?.["gen_ai.input.messages"]));
+    const parsed = JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"));
     expect(parsed[0].parts[0]).toEqual({
       type: "tool_call",
       id: "tc-1",
@@ -3314,13 +3360,91 @@ describe("diagnostics-otel service", () => {
     );
     const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
       ?.attributes;
-    const genAiInput = String(attrs?.["gen_ai.input.messages"] ?? "");
+    const genAiInput = stringAttribute(attrs, "gen_ai.input.messages");
     // Must not be empty — a truncated subset should appear.
     expect(genAiInput.length).toBeGreaterThan(0);
     // Must fit within the attribute size limit.
     expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + 50);
     // The first message should still be present.
     expect(genAiInput).toContain("message-0-");
+    expect(JSON.parse(genAiInput)[0]).toMatchObject({
+      role: "user",
+      parts: [{ type: "text" }],
+    });
+    await service.stop?.(ctx);
+  });
+
+  test("keeps single oversized GenAI messages and tool definitions parseable", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+        toolDefinitions: true,
+      },
+    });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      durationMs: 80,
+      inputMessages: [
+        {
+          role: "user",
+          content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+        },
+      ],
+      toolDefinitions: [
+        {
+          name: "huge_schema",
+          description: "Huge schema",
+          parameters: {
+            type: "object",
+            properties: {
+              payload: {
+                type: "string",
+                description: "x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS),
+              },
+            },
+          },
+        },
+      ],
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    const genAiInput = stringAttribute(attrs, "gen_ai.input.messages");
+    const toolDefinitions = stringAttribute(attrs, "gen_ai.tool.definitions");
+    expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(toolDefinitions.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(JSON.parse(genAiInput)).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            type: "text",
+            content: expect.stringContaining("single-message-"),
+          },
+        ],
+      },
+    ]);
+    expect(JSON.parse(toolDefinitions)[0]).toMatchObject({
+      type: "function",
+      name: "huge_schema",
+      parameters: {
+        type: "object",
+      },
+    });
     await service.stop?.(ctx);
   });
 
@@ -3358,7 +3482,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(attrs ?? {}, "gen_ai.input.messages")).toBe(false);
     expect(Object.hasOwn(attrs ?? {}, "input.value")).toBe(false);
     expect(Object.hasOwn(attrs ?? {}, "openclaw.content.input_messages")).toBe(false);
-    expect(JSON.parse(String(attrs?.["gen_ai.tool.definitions"]))).toEqual([
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.tool.definitions"))).toEqual([
       {
         type: "function",
         name: "lookup",
