@@ -6469,4 +6469,117 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
   });
+
+  it("delivers TTS media tool results in message-tool-only mode", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.maybeApplyTtsToPayload.mockImplementationOnce(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload: ReplyPayload };
+      return {
+        ...params.payload,
+        mediaUrl: "https://example.com/tts-message-tool.opus",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      };
+    });
+    const cfg = {
+      messages: {
+        groupChat: { visibleReplies: "message_tool" },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:G1",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "NO_REPLY" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    const sent = firstToolResultPayload(dispatcher);
+    expect(sent?.mediaUrl).toBe("https://example.com/tts-message-tool.opus");
+    expect(sent?.audioAsVoice).toBe(true);
+  });
+
+  it("blocks sendPolicy-denied tool results before TTS processing", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    const cfg = {
+      messages: {
+        groupChat: { visibleReplies: "message_tool" },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:G2",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({
+        text: "NO_REPLY",
+        mediaUrls: ["https://example.com/tts-denied.opus"],
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("suppresses text-only tool results in message-tool-only mode even without sendPolicy deny", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
+    const cfg = {
+      messages: {
+        groupChat: { visibleReplies: "message_tool" },
+      },
+    } satisfies OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:G3",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      const onToolResult = requireToolResultHandler(opts?.onToolResult);
+      await onToolResult({ text: "plain text tool output" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
 });

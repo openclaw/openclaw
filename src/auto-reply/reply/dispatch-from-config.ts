@@ -1918,6 +1918,9 @@ export async function dispatchReplyFromConfig(
                 if (!suppressAutomaticSourceDelivery) {
                   await onToolResultFromReplyOptions?.(payload);
                 }
+                if (sendPolicyDenied) {
+                  return;
+                }
                 if (isDispatchOperationAborted()) {
                   return;
                 }
@@ -1936,11 +1939,7 @@ export async function dispatchReplyFromConfig(
                 if (!deliveryPayload) {
                   return;
                 }
-                if (sendPolicyDenied) {
-                  return;
-                }
-                const ttsMediaExempt =
-                  !!deliveryPayload && resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
+                const ttsMediaExempt = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
                 if (!ttsMediaExempt && shouldSuppressProgressDelivery()) {
                   return;
                 }
