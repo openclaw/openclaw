@@ -50,9 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
-   - Large pre-compaction debug checkpoints are skipped once the active
-     transcript exceeds the checkpoint size cap, avoiding a second giant
-     `.checkpoint.*.jsonl` copy.
+   - Compaction checkpoints are metadata over the compacted successor
+     transcript. New compactions do not write a second `.checkpoint.*.jsonl`
+     copy.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
@@ -357,8 +357,8 @@ OpenClaw also enforces a safety floor for embedded runs:
   disable.
 - When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
   OpenClaw rotates the active transcript to a compacted successor JSONL after
-  compaction. The old full transcript remains archived and linked from the
-  compaction checkpoint instead of being rewritten in place.
+  compaction. Branch/restore checkpoint actions use that compacted successor;
+  legacy pre-compaction checkpoint files remain readable while referenced.
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
