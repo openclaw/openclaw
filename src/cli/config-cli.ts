@@ -45,7 +45,7 @@ import {
 } from "../secrets/target-registry.js";
 import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -1976,7 +1976,7 @@ async function runConfigOperations(params: {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
       configPath: shortenHomePath(snapshot.path),
-      inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+      inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,

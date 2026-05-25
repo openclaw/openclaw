@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -331,9 +332,9 @@ const TrimmedOptionalConfigStringSchema = z
 const CodexAllowedDomainsSchema = z
   .array(z.string())
   .transform((values) => {
-    const deduped = [
-      ...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)),
-    ];
+    const deduped = uniqueStrings(
+      values.map((value) => value.trim()).filter((value) => value.length > 0),
+    );
     return deduped.length > 0 ? deduped : undefined;
   })
   .optional();

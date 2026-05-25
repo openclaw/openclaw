@@ -16,6 +16,7 @@ import {
 } from "../secrets/target-registry.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 
 const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
 const STATIC_MODEL_TARGET_IDS = [
@@ -135,26 +136,22 @@ function isPluginWebFetchCredentialTargetId(id: string): boolean {
 }
 
 function getCapabilityWebSearchTargetIds(): string[] {
-  cachedCapabilityWebSearchTargetIds ??= [
-    ...new Set([
-      ...STATIC_CAPABILITY_WEB_SEARCH_TARGET_IDS,
-      ...listSecretTargetRegistryEntries()
-        .map((entry) => entry.id)
-        .filter(isPluginWebSearchCredentialTargetId),
-    ]),
-  ].toSorted();
+  cachedCapabilityWebSearchTargetIds ??= sortUniqueStrings([
+    ...STATIC_CAPABILITY_WEB_SEARCH_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebSearchCredentialTargetId),
+  ]);
   return cachedCapabilityWebSearchTargetIds;
 }
 
 function getCapabilityWebFetchTargetIds(): string[] {
-  cachedCapabilityWebFetchTargetIds ??= [
-    ...new Set([
-      ...STATIC_CAPABILITY_WEB_FETCH_TARGET_IDS,
-      ...listSecretTargetRegistryEntries()
-        .map((entry) => entry.id)
-        .filter(isPluginWebFetchCredentialTargetId),
-    ]),
-  ].toSorted();
+  cachedCapabilityWebFetchTargetIds ??= sortUniqueStrings([
+    ...STATIC_CAPABILITY_WEB_FETCH_TARGET_IDS,
+    ...listSecretTargetRegistryEntries()
+      .map((entry) => entry.id)
+      .filter(isPluginWebFetchCredentialTargetId),
+  ]);
   return cachedCapabilityWebFetchTargetIds;
 }
 
