@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- MCP/openclaw-tools: bridge the Slack channel-plugin actions through the OpenClaw-tools MCP server so Claude Code and other harnesses with `mcp__openclaw__*` allowed tools can react, send/edit/delete messages, read history, manage pins, fetch member info, and upload/download files instead of seeing Slack guidance in `skills/slack/SKILL.md` with no callable surface. Admin operations like channel/app creation remain out of scope. Refs #74757. Thanks @Tiger0710.
+
 ### Fixes
 
 - Codex: log when implicit app-server `never` approvals are promoted for OpenClaw tool policy, including whether the trigger was a `before_tool_call` hook or trusted tool policy.

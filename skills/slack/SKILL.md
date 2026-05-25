@@ -8,6 +8,8 @@ metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.sl
 
 Use the `slack` tool. Reuse `channelId` and Slack timestamp message IDs from context when present.
 
+Harnesses that only see `mcp__openclaw__*` tools (Claude Code, etc.) reach the same surface as `mcp__openclaw__slack` via the OpenClaw-tools MCP bridge; the tool name stays `slack` and the `action` parameter selects the operation. The bridge routes through the Slack channel plugin and uses the configured bot token; admin operations such as channel creation or app-manifest mutation are out of scope and not exposed here.
+
 ## Inputs
 
 - `channelId`: Slack channel ID.
