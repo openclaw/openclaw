@@ -114,6 +114,24 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("keeps routine health refreshes on the non-probing path", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const refreshGatewayHealthSnapshot = vi.fn(async () => ({ ok: true }) as HealthSummary);
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      refreshGatewayHealthSnapshot,
+    });
+
+    expect(refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+    refreshGatewayHealthSnapshot.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("broadcasts tick keepalives without dropIfSlow", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));

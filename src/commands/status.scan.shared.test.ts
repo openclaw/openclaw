@@ -19,6 +19,7 @@ type GatewayCall = {
   deviceIdentity?: unknown;
   method?: string;
   mode?: string;
+  params?: unknown;
   password?: string;
   timeoutMs?: number;
   token?: string;
@@ -263,6 +264,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     const gatewayCall = readGatewayCall();
     expect(gatewayCall.config).toEqual({});
     expect(gatewayCall.method).toBe("status");
+    expect(gatewayCall.params).toEqual({ includeChannelSummary: false });
     expect(gatewayCall.token).toBe("tok");
     expect(gatewayCall.password).toBe("pw");
     expect(gatewayCall.timeoutMs).toBe(2000);

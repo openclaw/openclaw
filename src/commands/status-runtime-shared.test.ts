@@ -147,7 +147,7 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("resolves gateway health with the shared probe call shape", async () => {
+  it("resolves gateway health without forcing live channel probes", async () => {
     await resolveStatusGatewayHealth({
       config: { gateway: {} },
       timeoutMs: 5000,
@@ -155,7 +155,7 @@ describe("status-runtime-shared", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "health",
-      params: { probe: true },
+      params: { probe: false },
       timeoutMs: 5000,
       config: { gateway: {} },
     });
@@ -185,7 +185,7 @@ describe("status-runtime-shared", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "health",
-      params: { probe: true },
+      params: { probe: false },
       timeoutMs: 4321,
       config: { gateway: {} },
       url: "ws://127.0.0.1:18789",
@@ -251,7 +251,7 @@ describe("status-runtime-shared", () => {
     expect(usageCall.agentDir).toContain("main");
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
-      params: { probe: true },
+      params: { probe: false },
       timeoutMs: 1234,
       config: { gateway: {} },
     });

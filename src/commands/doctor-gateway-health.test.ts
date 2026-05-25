@@ -45,7 +45,7 @@ describe("checkGatewayHealth", () => {
     });
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "channels.status",
-      params: { probe: true, timeoutMs: 5000 },
+      params: { probe: false, timeoutMs: 5000 },
       timeoutMs: 6000,
     });
     expect(runtime.error).not.toHaveBeenCalled();

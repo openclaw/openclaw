@@ -72,7 +72,7 @@ export async function resolveStatusGatewayHealth(params: {
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<HealthSummary>({
     method: "health",
-    params: { probe: true },
+    params: { probe: false },
     timeoutMs: params.timeoutMs,
     config: params.config,
   });
@@ -95,7 +95,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<HealthSummary>({
     method: "health",
-    params: { probe: true },
+    params: { probe: false },
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,

@@ -543,6 +543,20 @@ describe("model-selection", () => {
       });
     });
 
+    it("can preserve literal override model ids by skipping manifest normalization", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "openrouter",
+          overrideModel: "free",
+          allowManifestNormalization: false,
+        }),
+      ).toEqual({
+        provider: "openrouter",
+        model: "free",
+      });
+    });
+
     it("ignores malformed persisted override fields", () => {
       expect(
         resolvePersistedOverrideModelRef({
@@ -582,6 +596,22 @@ describe("model-selection", () => {
       ).toEqual({
         provider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
+      });
+    });
+
+    it("can preserve literal selected model ids by skipping manifest normalization", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "openrouter",
+          overrideModel: "free",
+          runtimeProvider: "openai",
+          runtimeModel: "gpt-5.4",
+          allowManifestNormalization: false,
+        }),
+      ).toEqual({
+        provider: "openrouter",
+        model: "free",
       });
     });
 

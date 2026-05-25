@@ -1775,7 +1775,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-        void refreshHealthSnapshot({ probe: true }).catch((err) =>
+        void refreshHealthSnapshot({ probe: false }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
