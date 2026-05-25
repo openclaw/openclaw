@@ -5,7 +5,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeTrimmedStringList, uniqueStrings } from "../shared/string-normalization.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
@@ -851,7 +851,7 @@ function collectPackageExecutableScanEntries(params: {
   } else if (setupEntry) {
     entries.push(...listBuiltRuntimeEntryCandidates(setupEntry));
   }
-  return [...new Set(entries)];
+  return uniqueStrings(entries);
 }
 
 async function resolveRuntimeGraphFileCandidate(filePath: string): Promise<string | undefined> {

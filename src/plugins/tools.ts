@@ -3,6 +3,7 @@ import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agen
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -381,7 +382,7 @@ function listManifestToolNamesForAllowlist(params: {
   const defaultToolNames = params.toolNames.filter(
     (name) => !isManifestToolOptional(params.plugin, name),
   );
-  return [...new Set([...defaultToolNames, ...matchedToolNames])];
+  return uniqueStrings([...defaultToolNames, ...matchedToolNames]);
 }
 
 function listManifestToolNamesForAvailability(params: {

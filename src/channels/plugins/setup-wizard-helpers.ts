@@ -4,7 +4,7 @@ import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { resolveChannelDmAllowFrom, resolveChannelDmPolicy } from "./dm-access.js";
 import {
@@ -75,7 +75,7 @@ export function mergeAllowFromEntries(
   additions: Array<string | number>,
 ): string[] {
   const merged = normalizeStringEntries([...(current ?? []), ...additions]);
-  return [...new Set(merged)];
+  return uniqueStrings(merged);
 }
 
 export function splitSetupEntries(raw: string): string[] {
@@ -155,7 +155,7 @@ export function normalizeAllowFromEntries(
       return normalizeOptionalString(normalizeEntry(entry)) ?? "";
     })
     .filter(Boolean);
-  return [...new Set(normalized)];
+  return uniqueStrings(normalized);
 }
 
 export function createStandardChannelSetupStatus(params: {
