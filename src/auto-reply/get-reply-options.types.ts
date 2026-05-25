@@ -88,6 +88,12 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /**
+   * If true, dispatch suppresses default text-only tool/progress messages even
+   * when session verbose progress is enabled. Channels use this when explicit
+   * off/tool-progress-disabled config must remain authoritative.
+   */
+  forceSuppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */

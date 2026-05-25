@@ -899,8 +899,8 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  const streamToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const configuredToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  const streamToolProgressEnabled = Boolean(answerLane.stream) && configuredToolProgressEnabled;
   const nativeToolProgressDraft =
     streamToolProgressEnabled &&
     !isRoomEvent &&
@@ -1950,6 +1950,8 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
+                  forceSuppressDefaultToolProgressMessages:
+                    !streamDeliveryEnabled || configuredToolProgressEnabled === false,
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {

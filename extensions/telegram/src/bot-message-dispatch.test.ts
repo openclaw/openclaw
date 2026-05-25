@@ -556,6 +556,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("forces default progress suppression when Telegram streaming is off", async () => {
+    let capturedReplyOptions:
+      | DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"]
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      capturedReplyOptions = replyOptions;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload: createDirectSessionPayload() }),
+      streamMode: "off",
+      telegramCfg: { streaming: { mode: "off" } },
+    });
+
+    expect(capturedReplyOptions).toEqual(
+      expect.objectContaining({
+        suppressDefaultToolProgressMessages: true,
+        forceSuppressDefaultToolProgressMessages: true,
+      }),
+    );
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("forces default progress suppression when Telegram tool progress is disabled", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    let capturedReplyOptions:
+      | DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"]
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      capturedReplyOptions = replyOptions;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload: createDirectSessionPayload() }),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: {
+          preview: {
+            toolProgress: false,
+          },
+        },
+      },
+    });
+
+    expect(capturedReplyOptions).toEqual(
+      expect.objectContaining({
+        suppressDefaultToolProgressMessages: true,
+        forceSuppressDefaultToolProgressMessages: true,
+      }),
+    );
+  });
+
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const oldHistoryKey = "-1003774691294:topic:1";
