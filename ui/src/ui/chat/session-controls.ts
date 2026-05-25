@@ -107,8 +107,10 @@ function resolveNextChatSessionOffset(
 }
 
 async function refreshSessionOptions(state: AppViewState) {
+  const chatAgentId = resolveChatAgentFilterId(state, state.sessionKey);
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    ...(chatAgentId ? { agentId: chatAgentId } : {}),
   });
 }
 
@@ -232,11 +234,13 @@ function createChatSessionPickerRequestParams(
     search: options.query,
     offset: options.offset,
   });
+  const chatAgentId = resolveChatAgentFilterId(state, state.sessionKey);
   const params: Record<string, unknown> = {
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
     limit: overrides.limit,
+    ...(chatAgentId ? { agentId: chatAgentId } : {}),
   };
   const offset =
     typeof overrides.offset === "number" && Number.isFinite(overrides.offset)
@@ -1059,7 +1063,7 @@ type ChatAgentFilterOption = {
   label: string;
 };
 
-function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
+export function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
 }

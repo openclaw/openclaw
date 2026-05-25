@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { createChatSessionsLoadOverrides, refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import { resolveChatAgentFilterId } from "./chat/session-controls.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
@@ -727,8 +728,10 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
 }
 
 async function refreshSessionOptions(state: AppViewState) {
+  const chatAgentId = resolveChatAgentFilterId(state, state.sessionKey);
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    ...(chatAgentId ? { agentId: chatAgentId } : {}),
   });
 }
 
