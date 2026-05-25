@@ -2107,7 +2107,11 @@ extension NodeAppModel {
         sessionBox: WebSocketSessionBox?) async
     {
         self.clearPersistedGatewayBootstrapTokenIfNeeded()
-        if self.operatorGatewayTask == nil, self.shouldStartOperatorGatewayLoop(
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+
+        if self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: nil,
             password: password,

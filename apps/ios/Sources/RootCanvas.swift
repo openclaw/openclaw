@@ -669,6 +669,13 @@ private struct CanvasContent: View {
         if self.talkPermissionBlocksStart {
             self.stopTalk()
             self.showTalkPermissionTray = true
+            Task {
+                await self.appModel.pollTalkPermissionUpgrade()
+                if !self.talkPermissionBlocksStart {
+                    self.showTalkPermissionTray = false
+                    self.startTalk()
+                }
+            }
             return
         }
 

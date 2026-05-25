@@ -2251,7 +2251,7 @@ extension TalkModeManager {
     }
 
     private func ensureTalkConfigLoadedForStart() async {
-        if self.gatewayTalkConfigLoaded || self.gatewayTalkPermissionState.requiresTalkPermissionAction {
+        if self.gatewayTalkConfigLoaded || self.gatewayTalkPermissionState.isApprovalRequestInProgress {
             GatewayDiagnostics.log(
                 "talk.timeline config cached permission=\(self.gatewayTalkPermissionState.statusLabel) "
                     + "loadedAt=\(self.talkConfigLoadedAt?.timeIntervalSince1970 ?? 0)")
