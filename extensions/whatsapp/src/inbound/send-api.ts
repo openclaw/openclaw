@@ -5,8 +5,8 @@ import type {
   WAPresence,
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { getImageMetadata, resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
+import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
@@ -21,9 +21,6 @@ import {
 } from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
 
-const WHATSAPP_IMAGE_THUMBNAIL_SIDE = 32;
-const WHATSAPP_IMAGE_THUMBNAIL_QUALITY = 50;
-
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
     channel: "whatsapp",
@@ -34,30 +31,6 @@ function recordWhatsAppOutbound(accountId: string) {
 
 function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
-}
-
-async function resolveWhatsAppImagePreviewFields(mediaBuffer: Buffer): Promise<{
-  jpegThumbnail?: string;
-  width?: number;
-  height?: number;
-}> {
-  const metadata = await getImageMetadata(mediaBuffer).catch(() => null);
-  if (!metadata) {
-    return {};
-  }
-
-  const thumbnail = await resizeToJpeg({
-    buffer: mediaBuffer,
-    maxSide: WHATSAPP_IMAGE_THUMBNAIL_SIDE,
-    quality: WHATSAPP_IMAGE_THUMBNAIL_QUALITY,
-    withoutEnlargement: true,
-  }).catch(() => null);
-
-  return {
-    width: metadata.width,
-    height: metadata.height,
-    ...(thumbnail ? { jpegThumbnail: thumbnail.toString("base64") } : {}),
-  };
 }
 
 export function createWebSendApi(params: {
@@ -124,13 +97,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("image/")) {
-          const imagePreview = await resolveWhatsAppImagePreviewFields(mediaBuffer);
-          payload = {
+          payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
             caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
-            ...imagePreview,
-          };
+          });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {
