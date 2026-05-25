@@ -338,6 +338,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
+    <Warning>
+      **Android composer lock**: Telegram Android locks the composer while a `sendMessageDraft` preview is active. The send button becomes a loading indicator, blocking user input including interrupt commands like `/steer`. This is Telegram client behavior, not an OpenClaw bug. For interactive workflows requiring mid-turn intervention, set `nativeToolProgress: false` and rely on editable preview streaming instead. See issue #86195.
+    </Warning>
+
     To keep the edited preview for answer text but hide tool-progress lines, set:
 
     ```json
