@@ -229,6 +229,44 @@ describe("openclaw launcher", () => {
     expect(result.stderr).not.toContain("warning-filter");
   });
 
+  it("surfaces Bun-shaped direct warning filter failures that are not module misses", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const loaderPath = path.join(fixtureRoot, "bun-direct-policy-loader.mjs");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      loaderPath,
+      [
+        "export async function resolve(specifier, context, nextResolve) {",
+        "  if (specifier === './dist/warning-filter.js') {",
+        "    const err = new Error('Import denied by loader policy');",
+        "    err.specifier = specifier;",
+        "    throw err;",
+        "  }",
+        "  return nextResolve(specifier, context);",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-loader", loaderPath, path.join(fixtureRoot, "openclaw.mjs"), "--version"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Import denied by loader policy");
+    expect(result.stdout).not.toContain("ENTRY");
+  });
+
   it("surfaces Bun-shaped transitive entry import failures", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const loaderPath = path.join(fixtureRoot, "bun-transitive-miss-loader.mjs");
