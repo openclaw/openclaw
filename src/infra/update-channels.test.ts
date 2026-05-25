@@ -3,6 +3,7 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
+  isPrereleaseTag,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -14,15 +15,40 @@ import {
 
 describe("update-channels tag detection", () => {
   it.each([
-    { tag: "v2026.2.24-beta.1", beta: true },
-    { tag: "v2026.2.24.beta.1", beta: true },
-    { tag: "v2026.2.24-BETA-1", beta: true },
-    { tag: "v2026.2.24-1", beta: false },
-    { tag: "v2026.2.24-alphabeta.1", beta: false },
-    { tag: "v2026.2.24", beta: false },
-  ])("classifies $tag", ({ tag, beta }) => {
+    { tag: "v2026.2.24-beta.1", beta: true, stable: false },
+    { tag: "v2026.2.24.beta.1", beta: true, stable: false },
+    { tag: "v2026.2.24-BETA-1", beta: true, stable: false },
+    { tag: "v2026.2.24-alpha.1", beta: false, stable: false },
+    { tag: "v2026.2.24-rc.1", beta: false, stable: false },
+    { tag: "v2026.2.24-canary.1", beta: false, stable: false },
+    { tag: "v2026.2.24-preview.1", beta: false, stable: false },
+    { tag: "v2026.5.24-alpha.1", beta: false, stable: false },
+    { tag: "v2026.2.24-1", beta: false, stable: true },
+    { tag: "v2026.2.24", beta: false, stable: true },
+  ])("classifies $tag", ({ tag, beta, stable }) => {
     expect(isBetaTag(tag)).toBe(beta);
-    expect(isStableTag(tag)).toBe(!beta);
+    expect(isStableTag(tag)).toBe(stable);
+  });
+  it("excludes prerelease tags from stable", () => {
+    const prereleaseTags = [
+      "v2026.5.24-alpha.1",
+      "v2026.5.24-beta.1",
+      "v2026.5.24-rc.1",
+      "v2026.5.24-canary.3",
+      "v2026.5.24.dev.2",
+      "v2026.5.24-nightly.1",
+      "v2026.5.24-preview.1",
+    ];
+    for (const tag of prereleaseTags) {
+      expect(isPrereleaseTag(tag)).toBe(true);
+      expect(isStableTag(tag)).toBe(false);
+    }
+
+    const stableTags = ["v2026.5.22", "v2026.5.24-1", "v2026.5.24"];
+    for (const tag of stableTags) {
+      expect(isPrereleaseTag(tag)).toBe(false);
+      expect(isStableTag(tag)).toBe(true);
+    }
   });
 });
 
