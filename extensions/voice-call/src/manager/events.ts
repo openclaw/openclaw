@@ -27,7 +27,10 @@ type EventContext = Pick<
   | "onCallAnswered"
 >;
 
-function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
+function shouldAcceptInbound(
+  config: EventContext["config"],
+  from: string | undefined,
+): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {
@@ -82,7 +85,8 @@ function createWebhookCall(params: {
     metadata: {
       initialMessage:
         params.direction === "inbound"
-          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          ? params.ctx.config.inboundGreeting ||
+            "Hello! How can I help you today?"
           : undefined,
     },
   };
@@ -112,7 +116,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
 
   const providerCallId = event.providerCallId;
   const eventDirection =
-    event.direction === "inbound" || event.direction === "outbound" ? event.direction : undefined;
+    event.direction === "inbound" || event.direction === "outbound"
+      ? event.direction
+      : undefined;
 
   // Auto-register untracked calls arriving via webhook. This covers both
   // true inbound calls and externally-initiated outbound-api calls (e.g. calls
@@ -120,7 +126,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   if (!call && providerCallId && eventDirection) {
     // Apply inbound policy for true inbound calls; external outbound-api calls
     // are implicitly trusted because the caller controls the webhook URL.
-    if (eventDirection === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
+    if (
+      eventDirection === "inbound" &&
+      !shouldAcceptInbound(ctx.config, event.from)
+    ) {
       const pid = providerCallId;
       if (!ctx.provider) {
         console.warn(
@@ -142,7 +151,10 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         })
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
-          console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
+          console.warn(
+            `[voice-call] Failed to reject inbound call ${pid}:`,
+            message,
+          );
         });
       return;
     }
