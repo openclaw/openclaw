@@ -40,6 +40,7 @@ import {
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
+import { updateTopicName } from "./topic-name-cache.js";
 
 export const telegramActionRuntime = {
   createForumTopicTelegram,
@@ -726,6 +727,13 @@ export async function handleTelegramAction(
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
     });
+    if (result.topicId != null && chatId) {
+      await updateTopicName(chatId, result.topicId, {
+        name,
+        ...(iconColor != null ? { iconColor } : {}),
+        ...(iconCustomEmojiId ? { iconCustomEmojiId } : {}),
+      }).catch(() => {});
+    }
     return jsonResult({
       ok: true,
       topicId: result.topicId,
@@ -763,6 +771,18 @@ export async function handleTelegramAction(
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
+    if (chatId) {
+      const patch: { name?: string; iconCustomEmojiId?: string } = {};
+      if (name) {
+        patch.name = name;
+      }
+      if (iconCustomEmojiId) {
+        patch.iconCustomEmojiId = iconCustomEmojiId;
+      }
+      if (Object.keys(patch).length > 0) {
+        await updateTopicName(chatId, messageThreadId, patch).catch(() => {});
+      }
+    }
     return jsonResult(result);
   }
 
