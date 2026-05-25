@@ -1,6 +1,12 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
+type DocsConfig = {
+  redirects?: Array<{ source?: string }>;
+};
+
+const LEGACY_DOCS_MCP_SERVER_PATH = "/mcp";
 const fetchMock = vi.fn<typeof fetch>();
 
 vi.mock("../terminal/theme.js", () => ({
@@ -56,6 +62,14 @@ describe("docsSearchCommand", () => {
     expect(url).toBeInstanceOf(URL);
     expect(url.href).toBe("https://docs.openclaw.ai/api/search?q=plugin+allowlist");
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
+  });
+
+  it("does not redirect the legacy docs MCP server path", async () => {
+    const docsConfig = JSON.parse(
+      await fs.readFile(new URL("../../docs/docs.json", import.meta.url), "utf8"),
+    ) as DocsConfig;
+    const redirectSources = (docsConfig.redirects ?? []).map(({ source }) => source);
+    expect(redirectSources).not.toContain(LEGACY_DOCS_MCP_SERVER_PATH);
   });
 
   it("fails loudly when the Cloudflare docs search API fails", async () => {

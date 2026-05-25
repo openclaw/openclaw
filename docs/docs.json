@@ -69,10 +69,6 @@
       "destination": "/help/gpt55-codex-agentic-parity-maintainers"
     },
     {
-      "source": "/mcp",
-      "destination": "/cli/mcp"
-    },
-    {
       "source": "/providers/modelstudio",
       "destination": "/providers/qwen"
     },
