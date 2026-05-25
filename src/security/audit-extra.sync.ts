@@ -11,6 +11,10 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
+  findGatewayAuthLabelMatchingHooksToken,
+  type GatewayAuthSharedSecretLabel,
+} from "../gateway/hooks-token-auth-reuse.js";
+import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
@@ -64,6 +68,20 @@ function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   }
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   return tailscaleMode === "serve" || tailscaleMode === "funnel";
+}
+
+function formatGatewayAuthDisplayLabel(label: GatewayAuthSharedSecretLabel): string {
+  if (label === "gateway auth password") {
+    return "Gateway password";
+  }
+  return "Gateway token";
+}
+
+function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSecretLabel): string {
+  if (reusedGatewayAuthLabel === "gateway auth password") {
+    return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
+  }
+  return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
 }
 
 const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
@@ -518,24 +536,16 @@ export function collectHooksHardeningFindings(
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
-  const gatewaySharedSecret =
-    gatewayAuth.mode === "token"
-      ? (normalizeOptionalString(gatewayAuth.token) ?? "")
-      : gatewayAuth.mode === "password"
-        ? (normalizeOptionalString(gatewayAuth.password) ?? "")
-        : "";
-  if (token && gatewaySharedSecret && token === gatewaySharedSecret) {
-    const reusedGatewayAuthLabel =
-      gatewayAuth.mode === "password" ? "Gateway password" : "Gateway token";
-    const reusedGatewayAuthDetail =
-      gatewayAuth.mode === "password"
-        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to password-mode Gateway operator auth."
-        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
+  const reusedGatewayAuthLabel = findGatewayAuthLabelMatchingHooksToken({
+    hooksToken: token,
+    auth: gatewayAuth,
+  });
+  if (reusedGatewayAuthLabel) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: `Hooks token reuses the ${reusedGatewayAuthLabel}`,
-      detail: reusedGatewayAuthDetail,
+      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuthLabel)}`,
+      detail: formatHooksTokenReuseDetail(reusedGatewayAuthLabel),
       remediation:
         "Use a separate hooks.token dedicated to hook ingress and keep it distinct from Gateway token/password shared-secret auth.",
     });
