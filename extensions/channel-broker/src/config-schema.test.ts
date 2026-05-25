@@ -89,7 +89,6 @@ describe("channel-broker config schema", () => {
       thread: true,
     });
     expect(account.capabilities.qqbot?.native).toEqual({ botApi: true });
-<<<<<<< HEAD
     expect(account.capabilities["constructor"]).toEqual({
       platform: "constructor",
       delivery: { payload: true },
