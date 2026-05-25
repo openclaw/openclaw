@@ -2320,7 +2320,15 @@ export function createConfigIO(
       if (isVitest && !shouldLogInVitest) {
         return;
       }
-      deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
+      const shouldLogBenignMissingMeta =
+        isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || shouldLogInVitest;
+      const visibleReasons = shouldLogBenignMissingMeta
+        ? suspiciousReasons
+        : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
+      if (visibleReasons.length === 0) {
+        return;
+      }
+      deps.logger.warn(`Config write anomaly: ${configPath} (${visibleReasons.join(", ")})`);
     };
     const previousMetadata = resolveConfigStatMetadata(previousStat);
     const auditRecordBase = createConfigWriteAuditRecordBase({
