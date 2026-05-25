@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -1434,11 +1435,11 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
       }
       duplicate.totalScore = Math.max(duplicate.totalScore, entry.totalScore);
       duplicate.maxScore = Math.max(duplicate.maxScore, entry.maxScore);
-      duplicate.queryHashes = [...new Set([...duplicate.queryHashes, ...entry.queryHashes])];
+      duplicate.queryHashes = uniqueStrings([...duplicate.queryHashes, ...entry.queryHashes]);
       duplicate.recallDays = [
         ...new Set([...duplicate.recallDays, ...entry.recallDays]),
       ].toSorted();
-      duplicate.conceptTags = [...new Set([...duplicate.conceptTags, ...entry.conceptTags])];
+      duplicate.conceptTags = uniqueStrings([...duplicate.conceptTags, ...entry.conceptTags]);
       duplicate.lastRecalledAt =
         Date.parse(entry.lastRecalledAt) > Date.parse(duplicate.lastRecalledAt)
           ? entry.lastRecalledAt
@@ -1578,7 +1579,7 @@ export function previewRemDreaming(params: {
     confidence: entry.confidence,
     evidence: entry.evidence,
   }));
-  const candidateKeys = [...new Set(candidateSelections.map((entry) => entry.key))];
+  const candidateKeys = uniqueStrings(candidateSelections.map((entry) => entry.key));
   const bodyLines = [
     "### Reflections",
     ...reflections,
@@ -1669,7 +1670,7 @@ async function runLightDreaming(params: {
   }
   // Generate dream diary narrative from the staged entries.
   if (params.subagent && capped.length > 0) {
-    const themes = [...new Set(capped.flatMap((e) => e.conceptTags).filter(Boolean))];
+    const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     const data: NarrativePhaseData = {
       phase: "light",
       snippets: capped.map((e) => e.snippet).filter(Boolean),

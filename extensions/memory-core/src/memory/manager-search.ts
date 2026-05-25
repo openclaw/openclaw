@@ -4,6 +4,7 @@ import {
   cosineSimilarity,
   parseEmbedding,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
@@ -50,7 +51,7 @@ function scoreFallbackKeywordResult(params: {
   text: string;
   ftsScore: number;
 }): number {
-  const queryTokens = [...new Set(normalizeSearchTokens(params.query))];
+  const queryTokens = uniqueStrings(normalizeSearchTokens(params.query));
   if (queryTokens.length === 0) {
     return params.ftsScore;
   }
@@ -380,7 +381,7 @@ export async function searchKeyword(params: {
           .match(FTS_QUERY_TOKEN_RE)
           ?.map((t) => t.trim())
           .filter(Boolean) ?? [];
-      const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
+      const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
       const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
       const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
       rows = params.db
