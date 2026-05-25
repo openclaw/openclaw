@@ -69,6 +69,7 @@ const CLI_PROXY_ENV_KEYS = [
 const LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS = 30;
 const AGENT_CLI_TIMEOUT_EXIT_CODE = 124;
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+const DEFAULT_LOCAL_AGENT_CLI_TIMEOUT_SECONDS = 600;
 
 function readFlagValue(argv: string[], flag: string): string | undefined {
   for (let index = 2; index < argv.length; index += 1) {
@@ -107,13 +108,52 @@ function parseNonNegativeInteger(value: string | undefined): number | undefined 
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-export function resolveLocalAgentCliStartupHardTimeoutMs(argv: string[]): number | undefined {
+function normalizeConfigTimeoutSeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function isLocalAgentCliStartupHardTimeoutCandidate(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
-  if (invocation.hasHelpOrVersion || invocation.primary !== "agent" || !hasFlag(argv, "--local")) {
+  return !invocation.hasHelpOrVersion && invocation.primary === "agent" && hasFlag(argv, "--local");
+}
+
+function shouldReadConfigForLocalAgentCliStartupHardTimeout(argv: string[]): boolean {
+  return (
+    isLocalAgentCliStartupHardTimeoutCandidate(argv) &&
+    readFlagValue(argv, "--timeout") === undefined
+  );
+}
+
+function resolveLocalAgentCliStartupHardTimeoutSeconds(
+  argv: string[],
+  config?: OpenClawConfig,
+): number | undefined {
+  if (!isLocalAgentCliStartupHardTimeoutCandidate(argv)) {
     return undefined;
   }
-  const timeoutSeconds = parseNonNegativeInteger(readFlagValue(argv, "--timeout")) ?? 600;
+  const timeoutArg = readFlagValue(argv, "--timeout");
+  const timeoutSeconds =
+    timeoutArg !== undefined
+      ? parseNonNegativeInteger(timeoutArg)
+      : (normalizeConfigTimeoutSeconds(config?.agents?.defaults?.timeoutSeconds) ??
+        DEFAULT_LOCAL_AGENT_CLI_TIMEOUT_SECONDS);
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
   if (timeoutSeconds === 0) {
+    return undefined;
+  }
+  return timeoutSeconds;
+}
+
+export function resolveLocalAgentCliStartupHardTimeoutMs(
+  argv: string[],
+  config?: OpenClawConfig,
+): number | undefined {
+  const timeoutSeconds = resolveLocalAgentCliStartupHardTimeoutSeconds(argv, config);
+  if (timeoutSeconds === undefined) {
     return undefined;
   }
   return Math.min(
@@ -122,12 +162,18 @@ export function resolveLocalAgentCliStartupHardTimeoutMs(argv: string[]): number
   );
 }
 
-function armLocalAgentCliStartupHardTimeout(argv: string[]): { dispose: () => void } | undefined {
-  const timeoutMs = resolveLocalAgentCliStartupHardTimeoutMs(argv);
+function armLocalAgentCliStartupHardTimeout(
+  argv: string[],
+  config?: OpenClawConfig,
+): { dispose: () => void } | undefined {
+  const timeoutSeconds = resolveLocalAgentCliStartupHardTimeoutSeconds(argv, config);
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
+  const timeoutMs = resolveLocalAgentCliStartupHardTimeoutMs(argv, config);
   if (timeoutMs === undefined) {
     return undefined;
   }
-  const timeoutSeconds = timeoutMs / 1000 - LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS;
   const timeout = setTimeout(() => {
     process.stderr.write(
       `local agent command timed out after ${timeoutSeconds}s plus ${LOCAL_AGENT_CLI_TIMEOUT_GRACE_SECONDS}s grace\n`,
@@ -554,8 +600,16 @@ export async function runCli(argv: string[] = process.argv) {
   let normalizedArgv = parsedProfile.argv;
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
-  const localAgentCliHardTimeout = armLocalAgentCliStartupHardTimeout(normalizedArgv);
   startupTrace.mark("argv");
+  let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
+    if (!bestEffortConfigPromise) {
+      bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
+        readBestEffortConfig(),
+      );
+    }
+    return await bestEffortConfigPromise;
+  };
 
   if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
     await startupTrace.measure("dotenv", async () => {
@@ -571,19 +625,22 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
+  const localAgentCliHardTimeoutConfig = shouldReadConfigForLocalAgentCliStartupHardTimeout(
+    normalizedArgv,
+  )
+    ? await startupTrace.measure("local-agent-startup-timeout-config", () =>
+        readBestEffortCliConfig(),
+      )
+    : undefined;
+  const localAgentCliHardTimeout = armLocalAgentCliStartupHardTimeout(
+    normalizedArgv,
+    localAgentCliHardTimeoutConfig,
+  );
+
   // Activate operator-managed proxy routing for network-capable commands.
   // Local Gateway/control-plane commands keep direct loopback access while
   // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
   let proxyHandle: ProxyHandle | null = null;
-  let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
-  const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
-    if (!bestEffortConfigPromise) {
-      bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig(),
-      );
-    }
-    return await bestEffortConfigPromise;
-  };
   const stopStartedProxy = async () => {
     const handle = proxyHandle;
     proxyHandle = null;

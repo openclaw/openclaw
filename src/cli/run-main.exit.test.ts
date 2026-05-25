@@ -298,6 +298,16 @@ async function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
   }
 }
 
+async function waitForMockCall(mock: { mock: { calls: unknown[] } }): Promise<void> {
+  for (let index = 0; index < 200; index += 1) {
+    if (mock.mock.calls.length > 0) {
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+  }
+}
+
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -390,19 +400,60 @@ describe("runCli exit behavior", () => {
 
     try {
       const runPromise = runCli(["node", "openclaw", "agent", "--local", "--timeout", "1"]);
-      for (
-        let index = 0;
-        index < 20 && registerCoreCliByNameMock.mock.calls.length === 0;
-        index += 1
-      ) {
-        await Promise.resolve();
-      }
+      await waitForMockCall(registerCoreCliByNameMock);
       expect(registerCoreCliByNameMock).toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(31_000);
 
       expect(stderrSpy).toHaveBeenCalledWith(
         "local agent command timed out after 1s plus 30s grace\n",
+      );
+      expect(exitSpy).toHaveBeenCalledWith(124);
+
+      resolveCoreRegistration();
+      await runPromise;
+    } finally {
+      stderrSpy.mockRestore();
+      exitSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses configured local agent timeout before command registration when --timeout is omitted", async () => {
+    vi.useFakeTimers();
+    let resolveCoreRegistration!: () => void;
+    loadConfigMock.mockReturnValueOnce({
+      agents: { defaults: { timeoutSeconds: 2 } },
+    });
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    getProgramContextMock.mockReturnValueOnce({});
+    registerCoreCliByNameMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCoreRegistration = resolve;
+        }),
+    );
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation(
+        ((_code?: string | number | null | undefined) => undefined as never) as typeof process.exit,
+      );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    try {
+      const runPromise = runCli(["node", "openclaw", "agent", "--local"]);
+      await waitForMockCall(registerCoreCliByNameMock);
+      expect(registerCoreCliByNameMock).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(32_000);
+
+      expect(stderrSpy).toHaveBeenCalledWith(
+        "local agent command timed out after 2s plus 30s grace\n",
       );
       expect(exitSpy).toHaveBeenCalledWith(124);
 

@@ -99,6 +99,25 @@ describe("resolveLocalAgentCliStartupHardTimeoutMs", () => {
     ).toBe(32_000);
   });
 
+  it("uses the configured local agent timeout when --timeout is omitted", () => {
+    expect(
+      resolveLocalAgentCliStartupHardTimeoutMs(["node", "openclaw", "agent", "--local"], {
+        agents: { defaults: { timeoutSeconds: 7 } },
+      }),
+    ).toBe(37_000);
+    expect(
+      resolveLocalAgentCliStartupHardTimeoutMs(
+        ["node", "openclaw", "agent", "--local", "--timeout", "1"],
+        { agents: { defaults: { timeoutSeconds: 7 } } },
+      ),
+    ).toBe(31_000);
+    expect(
+      resolveLocalAgentCliStartupHardTimeoutMs(["node", "openclaw", "agent", "--local"], {
+        agents: { defaults: { timeoutSeconds: 0 } },
+      }),
+    ).toBeUndefined();
+  });
+
   it("skips help, gateway dispatch, and disabled timeouts", () => {
     expect(
       resolveLocalAgentCliStartupHardTimeoutMs(["node", "openclaw", "agent", "--local", "--help"]),
