@@ -87,6 +87,9 @@ vi.mock("@opentelemetry/api", () => ({
   SpanStatusCode: {
     ERROR: 2,
   },
+  SpanKind: {
+    CLIENT: 2,
+  },
 }));
 
 vi.mock("@opentelemetry/sdk-node", () => ({
@@ -226,7 +229,11 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
 
 function startedSpanCall(name: string) {
   const calls = telemetryState.tracer.startSpan.mock.calls as unknown as Array<
-    [string, { attributes?: Record<string, unknown>; startTime?: unknown }?, unknown?]
+    [
+      string,
+      { attributes?: Record<string, unknown>; kind?: unknown; startTime?: unknown }?,
+      unknown?,
+    ]
   >;
   return calls.find(([spanName]) => spanName === name);
 }
@@ -1854,6 +1861,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.runId")).toBe(false);
     expect(Object.hasOwn(modelOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(modelOptions?.startTime).toBeTypeOf("number");
+    expect(Object.hasOwn(modelOptions ?? {}, "kind")).toBe(false);
     expect(modelCall?.[2]).toBeUndefined();
 
     const harnessCall = startedSpanCall("openclaw.harness.run");
@@ -2094,7 +2102,7 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("uses latest GenAI provider attribute only when semconv opt-in is set", async () => {
+  test("uses latest GenAI inference span shape only when semconv opt-in is set", async () => {
     process.env.OTEL_SEMCONV_STABILITY_OPT_IN = "http,gen_ai_latest_experimental";
 
     const service = createDiagnosticsOtelService();
@@ -2119,12 +2127,14 @@ describe("diagnostics-otel service", () => {
     });
     await flushDiagnosticEvents();
 
-    const modelCallOptions = startedSpanOptions("openclaw.model.call");
+    expect(startedSpanOptions("openclaw.model.call")).toBeUndefined();
+    const modelCallOptions = startedSpanOptions("text_completion gpt-5.4");
     expect(modelCallOptions?.attributes?.["gen_ai.provider.name"]).toBe("openai");
     expect(modelCallOptions?.attributes?.["gen_ai.request.model"]).toBe("gpt-5.4");
     expect(modelCallOptions?.attributes?.["gen_ai.operation.name"]).toBe("text_completion");
     expect(Object.hasOwn(modelCallOptions?.attributes ?? {}, "gen_ai.system")).toBe(false);
     expect(modelCallOptions?.startTime).toBeTypeOf("number");
+    expect(modelCallOptions?.kind).toBe(2);
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.provider.name"]).toBe("openai");
     expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("gpt-5.4");
