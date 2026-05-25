@@ -453,6 +453,10 @@ function buildModelCatalogMetadata(
   const aliasByKey = new Map<string, string>();
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
+    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    if (!alias) {
+      continue;
+    }
     const key = resolveAllowlistModelKey({
       cfg: params.cfg,
       raw: rawKey,
@@ -460,10 +464,6 @@ function buildModelCatalogMetadata(
       manifestPlugins: params.manifestPlugins,
     });
     if (!key) {
-      continue;
-    }
-    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
       continue;
     }
     aliasByKey.set(key, alias);

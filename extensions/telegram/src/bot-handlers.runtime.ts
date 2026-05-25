@@ -69,10 +69,8 @@ import type {
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
-import {
-  parseTelegramNativeCommandCallbackData,
-  RegisterTelegramHandlerParams,
-} from "./bot-native-commands.js";
+import { parseTelegramNativeCommandCallbackData } from "./bot-native-commands.js";
+import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
@@ -1315,8 +1313,11 @@ export const registerTelegramHandlers = ({
   };
 
   class TelegramRetryableCallbackError extends Error {
-    constructor(public override readonly cause: unknown) {
+    public override readonly cause: unknown;
+
+    constructor(cause: unknown) {
       super(String(cause));
+      this.cause = cause;
       this.name = "TelegramRetryableCallbackError";
     }
   }

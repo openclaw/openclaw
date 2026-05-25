@@ -1401,6 +1401,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         qmd: {
           collections: this.qmd.collections.length,
           lastUpdateAt: this.lastUpdateAt,
+          embedFailures: this.embedFailureCount,
+          embedBackoffUntil: this.embedBackoffUntil,
         },
       },
     };

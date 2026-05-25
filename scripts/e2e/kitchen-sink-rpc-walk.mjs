@@ -54,7 +54,7 @@ function resolveOpenClawRunner() {
   return { pnpm: true, baseArgs: ["openclaw"], label: "pnpm openclaw" };
 }
 
-function makeEnv() {
+export function makeEnv() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-kitchen-sink-rpc-"));
   const home = path.join(root, "home");
   const stateDir = path.join(home, ".openclaw");
@@ -73,6 +73,31 @@ function makeEnv() {
         process.env.OPENCLAW_KITCHEN_SINK_PERSONALITY || "conformance",
     },
   };
+}
+
+export async function cleanupKitchenSinkEnv(root, options = {}) {
+  if (root) {
+    const attempts = Math.max(1, options.attempts ?? 5);
+    const delayMs = Math.max(0, options.delayMs ?? 250);
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        fs.rmSync(root, { recursive: true, force: true });
+        return true;
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) {
+          await delay(delayMs);
+        }
+      }
+    }
+    if (options.warn !== false) {
+      const message = lastError instanceof Error ? lastError.message : String(lastError);
+      console.error(`Kitchen Sink RPC temp root cleanup failed; preserved ${root}: ${message}`);
+    }
+    return false;
+  }
+  return true;
 }
 
 function writeJson(file, value) {
@@ -227,36 +252,33 @@ function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
-  const { callGateway } = await loadCallGatewayModule(options.runner);
-  const payload = await callGateway({
-    config: readJson(options.env.OPENCLAW_CONFIG_PATH),
-    configPath: options.env.OPENCLAW_CONFIG_PATH,
-    url: `ws://127.0.0.1:${options.port}`,
-    token: TOKEN,
-    method,
-    params: params ?? {},
-    timeoutMs: RPC_TIMEOUT_MS,
-    requiredMethods: [method],
-  });
+  const module = await loadCallGatewayModule(options.runner);
+  const payload = module
+    ? await module.callGateway({
+        config: readJson(options.env.OPENCLAW_CONFIG_PATH),
+        configPath: options.env.OPENCLAW_CONFIG_PATH,
+        url: `ws://127.0.0.1:${options.port}`,
+        token: TOKEN,
+        method,
+        params: params ?? {},
+        timeoutMs: RPC_TIMEOUT_MS,
+        requiredMethods: [method],
+      })
+    : await rpcCallViaCli(method, params, options);
   return unwrapRpcPayload(payload);
 }
 
 async function loadCallGatewayModule(runner) {
-  callGatewayModulePromise ??= importCallGatewayModule(runner);
+  if (!usesBuiltOpenClawEntry(runner)) {
+    return null;
+  }
+  callGatewayModulePromise ??= importCallGatewayModule();
   return callGatewayModulePromise;
 }
 
-async function importCallGatewayModule(runner) {
-  if (!usesPackagedOpenClawEntry(runner)) {
-    return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
-  }
+async function importCallGatewayModule() {
   const distDir = path.join(process.cwd(), "dist");
-  const candidates = fs.existsSync(distDir)
-    ? fs
-        .readdirSync(distDir)
-        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
-        .toSorted((left, right) => left.localeCompare(right))
-    : [];
+  const candidates = findDistCallGatewayModuleFiles();
   for (const name of candidates) {
     const module = await import(pathToFileURL(path.join(distDir, name)).href);
     if (typeof module.callGateway === "function") {
@@ -266,10 +288,49 @@ async function importCallGatewayModule(runner) {
   throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
 }
 
-function usesPackagedOpenClawEntry(runner) {
-  return Boolean(
-    process.env.OPENCLAW_ENTRY && runner?.baseArgs?.[0] === process.env.OPENCLAW_ENTRY,
+async function rpcCallViaCli(method, params, options) {
+  const { stdout } = await runOpenClaw(
+    options.runner,
+    [
+      "gateway",
+      "call",
+      method,
+      "--url",
+      `ws://127.0.0.1:${options.port}`,
+      "--token",
+      TOKEN,
+      "--timeout",
+      String(RPC_TIMEOUT_MS),
+      "--json",
+      "--params",
+      JSON.stringify(params ?? {}),
+    ],
+    options.env,
+    { timeoutMs: RPC_TIMEOUT_MS + 30000 },
   );
+  return parseJsonOutput(stdout);
+}
+
+export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
+  const distDir = path.join(cwd, "dist");
+  return fs.existsSync(distDir)
+    ? fs
+        .readdirSync(distDir)
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .toSorted((left, right) => left.localeCompare(right))
+    : [];
+}
+
+export function usesBuiltOpenClawEntry(runner, cwd = process.cwd(), env = process.env) {
+  if (runner?.pnpm || !runner?.baseArgs?.[0]) {
+    return false;
+  }
+  const entry = runner.baseArgs[0];
+  if (env.OPENCLAW_ENTRY && entry === env.OPENCLAW_ENTRY) {
+    return true;
+  }
+  const relative = path.relative(path.resolve(cwd, "dist"), path.resolve(cwd, entry));
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 async function retryRpcCall(method, params, options) {
@@ -488,11 +549,11 @@ function valuesForKey(value, key) {
   return values;
 }
 
-function extractPluginCommandNames(payload) {
+export function extractPluginCommandNames(payload) {
   const commands = Array.isArray(payload?.commands) ? payload.commands : [];
   const names = [];
   for (const entry of commands) {
-    if (entry?.source !== "plugin" && entry?.pluginId !== PLUGIN_ID) {
+    if (entry?.source !== "plugin") {
       continue;
     }
     names.push(entry?.name, entry?.nativeName);
@@ -503,6 +564,7 @@ function extractPluginCommandNames(payload) {
   return names
     .filter(isNonEmptyString)
     .map((name) => name.replace(/^\//u, ""))
+    .filter((name, index, all) => all.indexOf(name) === index)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -804,53 +866,57 @@ export async function main() {
   const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, DEFAULT_PORT);
   const { root, env } = makeEnv();
   const logPath = path.join(root, "gateway.log");
+  const keepTmp = process.env.OPENCLAW_KITCHEN_SINK_KEEP_TMP === "1";
+  let failed = false;
+  let child;
 
-  console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
-  await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
-    timeoutMs: INSTALL_TIMEOUT_MS,
-  });
-  runner = resolveOpenClawRunner();
-  console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
-  configureKitchenSink(env, port);
-  await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
-  const inspect = parseJsonOutput(
-    (await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env))
-      .stdout,
-  );
-  if (inspect?.plugin?.status !== "loaded") {
-    throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
-  }
-  const inspectPlugin = inspect.plugin ?? {};
-  const inspectProviders = [
-    ...(Array.isArray(inspectPlugin.providerIds) ? inspectPlugin.providerIds : []),
-    ...(Array.isArray(inspectPlugin.providers) ? inspectPlugin.providers : []),
-  ];
-  assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
-
-  const child = await startGateway(runner, port, env, logPath);
   const processSamples = [];
-  const sampleGateway = async () => {
-    const windowsSampleOptions = runner.pnpm
-      ? { windowsCommandLineNeedles: ["gateway", "--port", String(port)] }
-      : {};
-    let sample = await sampleProcess(child.pid, windowsSampleOptions);
-    if (!sample && process.platform === "win32") {
-      sample = await sampleWindowsProcessByPort(port);
-    }
-    if (sample) {
-      processSamples.push(sample);
-    }
-    return sample;
-  };
   let sampleInFlight = null;
-  const collectTimedSample = () => {
-    sampleInFlight ??= sampleGateway().finally(() => {
-      sampleInFlight = null;
-    });
-    return sampleInFlight;
-  };
   let sampleTimer;
   try {
+    console.log(`Kitchen Sink RPC walk using ${PLUGIN_SPEC} via ${runner.label}`);
+    await runOpenClaw(runner, ["plugins", "install", PLUGIN_SPEC], env, {
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    runner = resolveOpenClawRunner();
+    console.log(`Kitchen Sink RPC runtime runner: ${runner.label}`);
+    configureKitchenSink(env, port);
+    await runOpenClaw(runner, ["plugins", "enable", PLUGIN_ID], env, { timeoutMs: 60000 });
+    const inspect = parseJsonOutput(
+      (await runOpenClaw(runner, ["plugins", "inspect", PLUGIN_ID, "--runtime", "--json"], env))
+        .stdout,
+    );
+    if (inspect?.plugin?.status !== "loaded") {
+      throw new Error(`Kitchen Sink plugin did not inspect as loaded: ${JSON.stringify(inspect)}`);
+    }
+    const inspectPlugin = inspect.plugin ?? {};
+    const inspectProviders = [
+      ...(Array.isArray(inspectPlugin.providerIds) ? inspectPlugin.providerIds : []),
+      ...(Array.isArray(inspectPlugin.providers) ? inspectPlugin.providers : []),
+    ];
+    assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
+
+    child = await startGateway(runner, port, env, logPath);
+    const sampleGateway = async () => {
+      const windowsSampleOptions = runner.pnpm
+        ? { windowsCommandLineNeedles: ["gateway", "--port", String(port)] }
+        : {};
+      let sample = await sampleProcess(child.pid, windowsSampleOptions);
+      if (!sample && process.platform === "win32") {
+        sample = await sampleWindowsProcessByPort(port);
+      }
+      if (sample) {
+        processSamples.push(sample);
+      }
+      return sample;
+    };
+    const collectTimedSample = () => {
+      sampleInFlight ??= sampleGateway().finally(() => {
+        sampleInFlight = null;
+      });
+      return sampleInFlight;
+    };
+
     await waitForGatewayReady(child, port, logPath);
     const initialSample = await sampleGateway();
     sampleTimer = setInterval(() => {
@@ -959,6 +1025,7 @@ export async function main() {
     );
     console.log("Kitchen Sink RPC walk passed");
   } catch (error) {
+    failed = true;
     console.error(tailFile(logPath));
     throw error;
   } finally {
@@ -966,6 +1033,11 @@ export async function main() {
       clearInterval(sampleTimer);
     }
     await stopGateway(child);
+    if (!failed && !keepTmp) {
+      await cleanupKitchenSinkEnv(root);
+    } else if (failed || keepTmp) {
+      console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
+    }
   }
 }
 

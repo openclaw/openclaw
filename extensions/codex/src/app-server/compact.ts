@@ -10,7 +10,7 @@ import {
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { clearCodexAppServerBinding, readCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding } from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
@@ -170,7 +170,6 @@ async function compactCodexNativeThread(
     });
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
-      await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
       return failedCodexThreadBindingCompactionResult(params, {
         threadId: binding.threadId,
         reason: formatCompactionError(error),

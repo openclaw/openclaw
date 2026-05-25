@@ -28,8 +28,10 @@ import {
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
+  readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
+  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
@@ -1723,7 +1725,7 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const entries = await filterLiveShortTermRecallEntries({
+  const allEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
     entries: filterRecallEntriesWithinLookback({
       entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
@@ -1731,6 +1733,15 @@ async function runRemDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
+  // Prefer entries staged by light sleep so REM synthesises from the
+  // sequential light→REM pipeline instead of rescanning the full store.
+  const lightKeys = await readLightStagedKeys({
+    workspaceDir: params.workspaceDir,
+    nowMs,
+  });
+  const stagedEntries =
+    lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : [];
+  const entries = stagedEntries.length > 0 ? stagedEntries : allEntries;
   const preview = previewRemDreaming({
     entries,
     limit: params.config.limit,
@@ -1744,6 +1755,13 @@ async function runRemDreaming(params: {
     timezone: params.config.timezone,
     storage: params.config.storage,
   });
+  if (stagedEntries.length > 0) {
+    await recordRemConsideredPhaseSignals({
+      workspaceDir: params.workspaceDir,
+      keys: stagedEntries.map((entry) => entry.key),
+      nowMs,
+    });
+  }
   await recordDreamingPhaseSignals({
     workspaceDir: params.workspaceDir,
     phase: "rem",

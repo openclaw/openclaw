@@ -630,6 +630,7 @@ export type EmbeddedAttemptSessionLockController = {
   ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  dispose(): Promise<void>;
 };
 
 export async function createEmbeddedAttemptSessionLockController(params: {
@@ -871,6 +872,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    async dispose(): Promise<void> {
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      await lock.release();
     },
   };
 }
