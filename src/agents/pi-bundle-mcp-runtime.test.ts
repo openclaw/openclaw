@@ -244,6 +244,23 @@ describe("session MCP runtime", () => {
       errorMessage: undefined,
     });
     expect(validator({ url: 42 }).valid).toBe(false);
+
+    const dependencyValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        url: {
+          properties: {
+            url: {
+              type: "string",
+              format: "uri",
+            },
+          },
+          required: ["url"],
+        },
+      },
+    });
+    expect(dependencyValidator({ url: "not a uri" }).valid).toBe(true);
   });
 
   it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
@@ -266,6 +283,18 @@ describe("session MCP runtime", () => {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         additionalProperties: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        allOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        anyOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        oneOf: [],
       },
       {
         $schema: "https://json-schema.org/draft/2020-12/schema",

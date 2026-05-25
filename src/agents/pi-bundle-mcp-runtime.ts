@@ -119,6 +119,9 @@ function stripJsonSchemaFormats(schema: unknown): unknown {
         if (schemaMapKeywords.has(key)) {
           return [key, stripSchemaMapFormats(value)];
         }
+        if (key === "dependencies") {
+          return [key, stripSchemaMapFormats(value)];
+        }
         if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
           return [key, stripJsonSchemaFormats(value)];
         }

@@ -27,6 +27,7 @@ const schemaValueKeywords = new Set([
   "unevaluatedProperties",
 ]);
 const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+const schemaCombinatorKeywords = new Set(["allOf", "anyOf", "oneOf"]);
 const jsonSchemaTypes = new Set([
   "array",
   "boolean",
@@ -318,6 +319,12 @@ function validateSchemaKeywordShapes(
   }
   if (schema.enum !== undefined && !Array.isArray(schema.enum)) {
     return `${path}.enum: expected array`;
+  }
+  for (const key of schemaCombinatorKeywords) {
+    const value = schema[key];
+    if (Array.isArray(value) && value.length === 0) {
+      return `${path}.${key}: expected non-empty schema array`;
+    }
   }
   if (schema.dependentRequired !== undefined) {
     if (!isRecord(schema.dependentRequired)) {

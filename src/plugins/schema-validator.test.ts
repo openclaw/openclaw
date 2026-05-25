@@ -248,6 +248,24 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-empty-allof",
+        {
+          allOf: [],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-empty-anyof",
+        {
+          anyOf: [],
+        },
+      ],
+      [
+        "schema-validator.test.invalid-empty-oneof",
+        {
+          oneOf: [],
+        },
+      ],
+      [
         "schema-validator.test.invalid-ref",
         {
           $ref: "#/$defs/Missing",
