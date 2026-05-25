@@ -912,6 +912,73 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBe(347_000);
   });
 
+  it.each([
+    "no real conversation messages",
+    "Already compacted",
+    "nothing to compact",
+    "below threshold",
+  ])(
+    "Layer 2: benign compaction skip %j does not wedge a claude-cli-runtime session (provider=anthropic)",
+    async (reason) => {
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      // claude-cli session: OpenClaw transcript is empty -> compaction returns a skip reason.
+      compactEmbeddedPiSessionMock.mockReset().mockResolvedValue({
+        ok: false,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 1_207_416, // inflated cache-read sum, over the 1M window
+        totalTokensFresh: true,
+      };
+
+      const run = runPreflightCompactionIfNeeded({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: { models: [{ id: "claude-opus-4-7", contextWindow: 1_048_576 }] },
+            },
+          },
+          agents: {
+            defaults: {
+              // user's setup: claude-cli backend + per-MODEL runtime pin (provider stays "anthropic")
+              cliBackends: { "claude-cli": { command: "/usr/bin/claude" } },
+              models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+              compaction: { memoryFlush: {} },
+            },
+          },
+        } as never,
+        followupRun: createTestFollowupRun({
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          sessionId: "session",
+          sessionKey: "main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-7",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      // The over-threshold session must NOT wedge: a benign skip returns the entry so the
+      // turn proceeds. (Pre-fix this threw "Preflight compaction required but failed: <reason>".)
+      await expect(run).resolves.toBeDefined();
+      expect(compactEmbeddedPiSessionMock).toHaveBeenCalled();
+    },
+  );
+
   it("keeps the OpenAI API context window for persisted PI runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

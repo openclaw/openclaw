@@ -45,6 +45,7 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
+import { isCompactionSkipReason } from "./commands-compact.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
@@ -768,6 +769,14 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (!result?.ok || !result.compacted) {
     const reason = result?.reason ?? "not_compacted";
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    // A benign compaction *skip* (nothing to compact / below threshold / already
+    // compacted / no real conversation messages) is not a failure — it routinely
+    // happens for provider-owned CLI-runtime sessions, whose OpenClaw-side transcript
+    // is empty. Throwing here wedges every subsequent dispatch on the session. Defer
+    // to the same classifier used by the manual /compact path and proceed.
+    if (isCompactionSkipReason(reason)) {
+      return entry ?? params.sessionEntry;
+    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
   }
 

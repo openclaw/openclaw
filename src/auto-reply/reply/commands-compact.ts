@@ -51,7 +51,7 @@ function extractCompactInstructions(params: {
   return rest.length ? rest : undefined;
 }
 
-function isCompactionSkipReason(reason?: string): boolean {
+export function isCompactionSkipReason(reason?: string): boolean {
   const text = normalizeOptionalLowercaseString(reason) ?? "";
   return (
     text.includes("nothing to compact") ||
