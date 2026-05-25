@@ -376,6 +376,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     {
       limit: DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT,
       ignoredContextTtlMs: DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS,
+      deferUntilAudio: true,
     },
   );
   private readonly outputActivity: RealtimeVoiceOutputActivityTracker =
@@ -624,9 +625,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         interruptedPlayback: false,
       },
     );
-    logger.info(
-      `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} pendingTurns=${this.speakerTurns.size()}`,
-    );
     return {
       sendInputAudio: (discordPcm48kStereo) =>
         this.sendInputAudioForTurn(turn, discordPcm48kStereo),
@@ -642,9 +640,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (!this.bridge || this.stopped) {
       return;
     }
-    this.speakerTurns.markAudio(turn);
     const realtimePcm = convertDiscordPcm48kStereoToRealtimePcm24kMono(discordPcm48kStereo);
     if (realtimePcm.length > 0) {
+      this.registerSpeakerTurnAudioStarted(turn);
       turn.inputDiscordBytes += discordPcm48kStereo.length;
       turn.inputRealtimeBytes += realtimePcm.length;
       turn.inputChunks += 1;
@@ -666,6 +664,16 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       }
       this.bridge.sendAudio(realtimePcm);
     }
+  }
+
+  private registerSpeakerTurnAudioStarted(turn: PendingSpeakerTurn): void {
+    if (turn.hasAudio) {
+      return;
+    }
+    this.speakerTurns.markAudio(turn);
+    logger.info(
+      `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} owner=${turn.context.senderIsOwner} pendingTurns=${this.speakerTurns.size()}`,
+    );
   }
 
   handleBargeIn(reason = "barge-in"): void {
@@ -1017,7 +1025,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   private logSpeakerTurnClosed(turn: PendingSpeakerTurn): void {
-    if (turn.closed) {
+    if (turn.closed || !turn.hasAudio) {
       return;
     }
     const elapsedMs = Date.now() - turn.startedAt;

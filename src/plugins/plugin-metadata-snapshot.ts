@@ -124,56 +124,49 @@ function pickMemoRelevantEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   );
 }
 
-function cloneOwnerMaps(owners: PluginMetadataSnapshotOwnerMaps): PluginMetadataSnapshotOwnerMaps {
-  return {
-    channels: new Map(owners.channels),
-    channelConfigs: new Map(owners.channelConfigs),
-    providers: new Map(owners.providers),
-    modelCatalogProviders: new Map(owners.modelCatalogProviders),
-    cliBackends: new Map(owners.cliBackends),
-    setupProviders: new Map(owners.setupProviders),
-    commandAliases: new Map(owners.commandAliases),
-    contracts: new Map(owners.contracts),
-  };
+function throwReadonlyPluginMetadataMutation(): never {
+  throw new TypeError("Plugin metadata snapshots are immutable");
 }
 
-function cloneSnapshotValue<T>(value: T): T {
-  return value && typeof value === "object" ? structuredClone(value) : value;
+function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  if (value instanceof Map) {
+    for (const [key, entry] of value) {
+      freezeSnapshotValue(key, seen);
+      freezeSnapshotValue(entry, seen);
+    }
+    Object.defineProperties(value, {
+      clear: { value: throwReadonlyPluginMetadataMutation },
+      delete: { value: throwReadonlyPluginMetadataMutation },
+      set: { value: throwReadonlyPluginMetadataMutation },
+    });
+    return Object.freeze(value);
+  }
+  if (value instanceof Set) {
+    for (const entry of value) {
+      freezeSnapshotValue(entry, seen);
+    }
+    Object.defineProperties(value, {
+      add: { value: throwReadonlyPluginMetadataMutation },
+      clear: { value: throwReadonlyPluginMetadataMutation },
+      delete: { value: throwReadonlyPluginMetadataMutation },
+    });
+    return Object.freeze(value);
+  }
+  for (const entry of Object.values(value)) {
+    freezeSnapshotValue(entry, seen);
+  }
+  return Object.freeze(value);
 }
 
-function clonePluginManifestRecord(plugin: PluginManifestRecord): PluginManifestRecord {
-  return cloneSnapshotValue(plugin);
-}
-
-function clonePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
-  const plugins = snapshot.plugins.map(clonePluginManifestRecord);
-  const pluginsById = new Map(plugins.map((plugin) => [plugin.id, plugin]));
-  const diagnostics = snapshot.diagnostics.map(cloneSnapshotValue);
-  return {
-    ...snapshot,
-    index: {
-      ...snapshot.index,
-      installRecords: cloneSnapshotValue(snapshot.index.installRecords ?? {}),
-      plugins: snapshot.index.plugins.map(cloneSnapshotValue),
-      diagnostics: snapshot.index.diagnostics.map(cloneSnapshotValue),
-    },
-    registryDiagnostics: snapshot.registryDiagnostics.map(cloneSnapshotValue),
-    manifestRegistry: {
-      ...snapshot.manifestRegistry,
-      plugins,
-      diagnostics,
-    },
-    plugins,
-    diagnostics,
-    byPluginId: new Map(
-      [...snapshot.byPluginId.entries()].map(([pluginId, plugin]) => [
-        pluginId,
-        pluginsById.get(plugin.id) ?? clonePluginManifestRecord(plugin),
-      ]),
-    ),
-    owners: cloneOwnerMaps(snapshot.owners),
-    metrics: { ...snapshot.metrics },
-  };
+function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
+  return freezeSnapshotValue(snapshot);
 }
 
 function resolvePersistedRegistryFastMemoFingerprint(params: {
@@ -366,6 +359,10 @@ function indexesMatch(
   );
 }
 
+function cloneSnapshotInput<T>(value: T): T {
+  return value && typeof value === "object" ? structuredClone(value) : value;
+}
+
 function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
   return {
     version: index.version ?? 1,
@@ -374,9 +371,9 @@ function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPl
     migrationVersion: index.migrationVersion ?? 1,
     policyHash: index.policyHash ?? "",
     generatedAtMs: index.generatedAtMs ?? 0,
-    installRecords: index.installRecords ?? {},
-    plugins: index.plugins ?? [],
-    diagnostics: index.diagnostics ?? [],
+    installRecords: cloneSnapshotInput(index.installRecords ?? {}),
+    plugins: (index.plugins ?? []).map(cloneSnapshotInput),
+    diagnostics: (index.diagnostics ?? []).map(cloneSnapshotInput),
     ...(index.warning ? { warning: index.warning } : {}),
     ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
   } as InstalledPluginIndex;
@@ -511,20 +508,16 @@ export function loadPluginMetadataSnapshot(
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = findPluginMetadataSnapshotMemo(memoKey);
   if (memo?.key === memoKey) {
-    return measureDiagnosticsTimelineSpanSync(
-      "plugins.metadata.scan",
-      () => clonePluginMetadataSnapshot(memo.snapshot),
-      {
-        phase: activeTimelineSpan?.phase ?? "startup",
-        config: params.config,
-        env: params.env,
-        attributes: {
-          cacheHit: true,
-          hasWorkspaceDir: params.workspaceDir !== undefined,
-          hasInstalledIndex: params.index !== undefined,
-        },
+    return measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => memo.snapshot, {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        cacheHit: true,
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
       },
-    );
+    });
   }
 
   const result = measureDiagnosticsTimelineSpanSync(
@@ -540,12 +533,13 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
+  const snapshot = freezePluginMetadataSnapshot(result.snapshot);
   if (canMemoizePluginMetadataSnapshotResult(result)) {
     const cachedRegistryState =
       result.registrySource === "derived"
         ? resolvePersistedRegistryMemoState({
             env,
-            index: result.snapshot.index,
+            index: snapshot.index,
             ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
             ...(params.preferPersisted !== undefined
               ? { preferPersisted: params.preferPersisted }
@@ -555,10 +549,10 @@ export function loadPluginMetadataSnapshot(
     rememberPluginMetadataSnapshotMemo({
       key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
       registryState: cachedRegistryState,
-      snapshot: clonePluginMetadataSnapshot(result.snapshot),
+      snapshot,
     });
   }
-  return result.snapshot;
+  return snapshot;
 }
 
 function canMemoizePluginMetadataSnapshotResult(result: {

@@ -5,6 +5,7 @@ export type RealtimeVoiceTurnContextTrackerOptions = {
   limit?: number;
   ignoredContextTtlMs?: number;
   now?: () => number;
+  deferUntilAudio?: boolean;
 };
 
 export type RealtimeVoiceTurnContextHandle<
@@ -73,6 +74,7 @@ export function createRealtimeVoiceTurnContextTracker<
     options.ignoredContextTtlMs,
     DEFAULT_REALTIME_VOICE_IGNORED_CONTEXT_TTL_MS,
   );
+  const deferUntilAudio = options.deferUntilAudio === true;
 
   const prune = () => {
     for (let index = turns.length - 1; index >= 0; index -= 1) {
@@ -126,8 +128,10 @@ export function createRealtimeVoiceTurnContextTracker<
         closed: false,
         startedAt,
       };
-      turns.push(handle);
-      prune();
+      if (!deferUntilAudio) {
+        turns.push(handle);
+        prune();
+      }
       return handle;
     },
     markAudio(handle) {
@@ -137,6 +141,8 @@ export function createRealtimeVoiceTurnContextTracker<
       handle.hasAudio = true;
       handle.lastAudioAt = now();
       if (!turns.includes(handle)) {
+        turns.push(handle);
+        prune();
         return;
       }
     },
