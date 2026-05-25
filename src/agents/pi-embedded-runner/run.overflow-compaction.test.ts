@@ -48,7 +48,6 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     runId: "forward-attempt-params",
     params: {
       toolsAllow: ["exec", "read"],
-      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -58,7 +57,6 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
     },
     expected: {
       toolsAllow: ["exec", "read"],
-      ownerOnlyToolAllowlist: ["cron"],
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "cron",
       disableMessageTool: true,
@@ -1676,6 +1674,26 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedGlobalHookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("threads a composed run abort signal into engine-owned overflow compaction", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    const abortController = new AbortController();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({ summary: "engine-owned compaction", tokensAfter: 50 }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      abortSignal: abortController.signal,
+    });
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    const compactArg = mockCallArg(mockedCompactDirect) as { abortSignal?: AbortSignal };
+    expect(compactArg.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {

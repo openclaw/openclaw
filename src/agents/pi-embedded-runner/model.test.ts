@@ -146,7 +146,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
@@ -498,6 +498,9 @@ describe("resolveModel", () => {
       input: ["text", "image"],
       contextWindow: 262144,
       maxTokens: 8192,
+      mediaInput: {
+        image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+      },
     });
     const cfg = {
       models: {
@@ -537,6 +540,101 @@ describe("resolveModel", () => {
     });
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("merges bundled static media input into resolved models when opted in", async () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      templateModel: {
+        id: "gpt-5.5-pro",
+        name: "GPT-5.5 Pro",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 272_000,
+        maxTokens: 128_000,
+      },
+    });
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+      },
+    });
+
+    const result = await resolveModelAsync("openai", "gpt-5.5-pro", "/tmp/agent", undefined, {
+      allowBundledStaticCatalogFallback: true,
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+      skipPiDiscovery: true,
+    });
+
+    expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({
+      image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+  });
+
+  it("merges configured media input with discovered model metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "vision-model",
+      templateModel: {
+        id: "vision-model",
+        name: "Vision Model",
+        provider: "custom",
+        api: "openai-responses",
+        baseUrl: "https://models.example.com/v1",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+        mediaInput: {
+          image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+        },
+      },
+    });
+
+    const result = resolveModelForTest("custom", "vision-model", "/tmp/agent", {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example.com/v1",
+            models: [
+              {
+                id: "vision-model",
+                name: "Vision Model",
+                mediaInput: { image: { maxBytes: 1 } },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect((expectResolvedModel(result) as { mediaInput?: unknown }).mediaInput).toEqual({
+      image: { maxBytes: 1, maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
+    });
   });
 
   it("does not use bundled static catalog rows unless the caller opts in", async () => {
@@ -593,10 +691,11 @@ describe("resolveModel", () => {
   });
 
   it("defaults missing model cost before handing models to PI", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           openai: {
+            baseUrl: "",
             api: "openai-responses",
             models: [
               {
@@ -605,6 +704,7 @@ describe("resolveModel", () => {
                 api: "openai-responses",
                 reasoning: true,
                 input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 400_000,
                 maxTokens: 128_000,
               },
@@ -612,7 +712,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
@@ -661,6 +761,90 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
+  it("does not create fallback models from provider overlays alone", () => {
+    const cfg = {
+      models: {
+        providers: {
+          typoProvider: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "typoProvider",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: typoProvider/typoed-model");
+  });
+
+  it("does not create fallback models from built-in provider api overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "openai",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typoed-model");
+  });
+
+  it("resolves per-model api and baseUrl override in fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-router": {
+            baseUrl: "http://localhost:8080",
+            api: "ollama",
+            models: [
+              {
+                id: "my-router/claude",
+                name: "Claude via Router",
+                api: "anthropic-messages",
+                input: ["text", "image"],
+                contextWindow: 200_000,
+              },
+              {
+                id: "my-router/gpt",
+                name: "GPT via Router",
+                api: "openai-completions",
+                baseUrl: "http://localhost:8080/v1",
+                input: ["text"],
+                contextWindow: 400_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const claude = resolveModelForTest("my-router", "my-router/claude", "/tmp/agent", cfg);
+    const claudeModel = expectResolvedModel(claude);
+    expect(claudeModel.api).toBe("anthropic-messages");
+    expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+
+    const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
+    const gptModel = expectResolvedModel(gpt);
+    expect(gptModel.api).toBe("openai-completions");
+    expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -1174,9 +1358,14 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfigInput;
 
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+    const result = resolveModelForTest(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
 
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(

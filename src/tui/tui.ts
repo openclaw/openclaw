@@ -28,8 +28,8 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
+import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -366,6 +366,36 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   stopTuiSafely(() => tui.stop());
 }
 
+export function canSubmitTuiChatMessage(params: {
+  local?: boolean;
+  activityStatus: string;
+  activeChatRunId?: string | null;
+  pendingChatRunId?: string | null;
+  pendingOptimisticUserMessage?: boolean;
+}): boolean {
+  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
+  if (params.activeChatRunId) {
+    return params.local === true && params.activityStatus === "finishing context" && !pending;
+  }
+  return !pending;
+}
+
+const TUI_BUSY_ACTIVITY_STATUSES = new Set([
+  "sending",
+  "waiting",
+  "streaming",
+  "running",
+  "finishing context",
+]);
+
+export function isTuiBusyActivityStatus(status: string): boolean {
+  return TUI_BUSY_ACTIVITY_STATUSES.has(status);
+}
+
+export function resolveTuiShutdownHardExitMs(params: { localMode?: boolean } = {}): number {
+  return TUI_SHUTDOWN_HARD_EXIT_MS + (params.localMode ? resolveLocalRunShutdownGraceMs() : 0);
+}
+
 export function scheduleProcessExitAfterTuiReturn(
   params: {
     delayMs?: number;
@@ -443,7 +473,7 @@ export function resolveTuiCtrlCAction(params: {
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig();
+  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -665,15 +695,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     localBtwRunIds.clear();
   };
 
-  const client: TuiBackend = opts.backend
-    ? opts.backend
-    : opts.local
-      ? new EmbeddedTuiBackend()
-      : await GatewayChatClient.connect({
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-        });
+  let client: TuiBackend;
+  if (opts.backend) {
+    client = opts.backend;
+  } else if (opts.local) {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    client = new EmbeddedTuiBackend();
+  } else {
+    client = await GatewayChatClient.connect({
+      url: opts.url,
+      token: opts.token,
+      password: opts.password,
+    });
+  }
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter
       ? [...loggingState.consoleSubsystemFilter]
@@ -865,7 +899,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     );
   };
 
-  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -937,7 +970,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     statusTimer = setInterval(() => {
-      if (!busyStates.has(activityStatus)) {
+      if (!isTuiBusyActivityStatus(activityStatus)) {
         return;
       }
       updateBusyStatusMessage();
@@ -983,7 +1016,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const renderStatus = () => {
-    const isBusy = busyStates.has(activityStatus);
+    const isBusy = isTuiBusyActivityStatus(activityStatus);
     if (isBusy) {
       if (!statusStartedAt || lastActivityStatus !== activityStatus) {
         statusStartedAt = Date.now();
@@ -1215,10 +1248,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
-    const hardExitTimer = setTimeout(forceExit, TUI_SHUTDOWN_HARD_EXIT_MS);
+    const hardExitTimer = setTimeout(
+      forceExit,
+      resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
+    );
     hardExitTimer.unref?.();
-    client.stop();
-    void drainAndStopTuiSafely(tui)
+    void Promise.resolve()
+      .then(() => client.stop())
+      .then(() => drainAndStopTuiSafely(tui))
+      .finally(() => {
+        clearTimeout(hardExitTimer);
+      })
       .catch((err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
@@ -1229,7 +1269,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         }
       })
       .finally(() => {
-        clearTimeout(hardExitTimer);
         deferredFinish.requestFinish();
       });
   };
@@ -1272,7 +1311,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   });
   updateAutocompleteProvider();
   const canSubmitChatMessage = () =>
-    !state.activeChatRunId && !state.pendingChatRunId && !state.pendingOptimisticUserMessage;
+    canSubmitTuiChatMessage({
+      local: opts.local,
+      activityStatus: state.activityStatus,
+      activeChatRunId: state.activeChatRunId,
+      pendingChatRunId: state.pendingChatRunId,
+      pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
+    });
   const notifyBlockedChatSubmit = () => {
     chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
     tui.requestRender();
@@ -1452,8 +1497,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sigtermHandler = () => {
     requestExit();
   };
+  const sighupHandler = () => {
+    requestExit();
+  };
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
+  process.on("SIGHUP", sighupHandler);
   let cleanupTerminalLossHandler: (() => void) | null = installTuiTerminalLossExitHandler(() =>
     requestExit(),
   );
@@ -1468,6 +1517,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       cleanupTerminalLossHandler = null;
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
+      process.removeListener("SIGHUP", sighupHandler);
       process.removeListener("exit", finish);
       deferredFinish.clearFinish();
       resolve();

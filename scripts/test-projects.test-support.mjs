@@ -47,6 +47,10 @@ import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-sc
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
+const AGENTS_PI_EMBEDDED_VITEST_CONFIG = "test/vitest/vitest.agents-pi-embedded.config.ts";
+const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
+const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
@@ -125,10 +129,10 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_CLIENT_VITEST_CONFIG, 178],
   [GATEWAY_METHODS_VITEST_CONFIG, 177],
   [COMMANDS_VITEST_CONFIG, 175],
-  ["test/vitest/vitest.agents-core.config.ts", 170],
-  ["test/vitest/vitest.agents-pi-embedded.config.ts", 169],
-  ["test/vitest/vitest.agents-support.config.ts", 168],
-  ["test/vitest/vitest.agents-tools.config.ts", 167],
+  [AGENTS_CORE_VITEST_CONFIG, 170],
+  [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
+  [AGENTS_SUPPORT_VITEST_CONFIG, 168],
+  [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -220,7 +224,9 @@ const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
 const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
+const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_E2E_VITEST_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
 const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -228,6 +234,10 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
+  agentCore: AGENTS_CORE_VITEST_CONFIG,
+  agentPiEmbedded: AGENTS_PI_EMBEDDED_VITEST_CONFIG,
+  agentSupport: AGENTS_SUPPORT_VITEST_CONFIG,
+  agentTools: AGENTS_TOOLS_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
   autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
   autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
@@ -299,7 +309,9 @@ const VITEST_CONFIG_BY_KIND = {
   tasks: TASKS_VITEST_CONFIG,
   tooling: TOOLING_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
+  tuiPty: TUI_PTY_VITEST_CONFIG,
   ui: UI_VITEST_CONFIG,
+  uiE2e: UI_E2E_VITEST_CONFIG,
   utils: UTILS_VITEST_CONFIG,
   wizard: WIZARD_VITEST_CONFIG,
 };
@@ -745,6 +757,105 @@ function toScopedIncludePattern(arg, cwd) {
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
 }
 
+const EXPLICIT_TEST_TARGET_ROOTS = ["src", "test", "extensions", "ui", "packages", "apps"];
+let cachedExplicitTestTargetFiles = null;
+let cachedExplicitTestTargetFilesCwd = null;
+
+function listExplicitTestTargetFilesFromGit(cwd) {
+  const result = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "-z",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      ...EXPLICIT_TEST_TARGET_ROOTS,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\0")
+    .map((line) => normalizePathPattern(line.trim()))
+    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+}
+
+function listExplicitTestTargetFilesForCwd(cwd) {
+  if (cachedExplicitTestTargetFiles && cachedExplicitTestTargetFilesCwd === cwd) {
+    return cachedExplicitTestTargetFiles;
+  }
+
+  cachedExplicitTestTargetFiles =
+    listExplicitTestTargetFilesFromGit(cwd) ??
+    EXPLICIT_TEST_TARGET_ROOTS.flatMap((root) => listImportGraphFiles(cwd, root));
+  cachedExplicitTestTargetFilesCwd = cwd;
+  return cachedExplicitTestTargetFiles;
+}
+
+function includePatternMatchesAnyFile(pattern, files) {
+  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+}
+
+export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
+  const { targetArgs } = parseTestProjectsArgs(args, cwd);
+  if (targetArgs.length === 0) {
+    return [];
+  }
+
+  const candidateFiles = listExplicitTestTargetFilesForCwd(cwd);
+  const unmatched = [];
+  for (const targetArg of targetArgs) {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    if (resolveVitestConfigTargetKind(relative)) {
+      continue;
+    }
+    const kind = classifyTarget(targetArg, cwd);
+    if (shouldUseWholeConfigTarget(kind, targetArg, cwd)) {
+      continue;
+    }
+    if (isGlobTarget(relative)) {
+      if (!includePatternMatchesAnyFile(relative, candidateFiles)) {
+        unmatched.push({
+          target: targetArg,
+          reason: "glob-matched-no-files",
+        });
+      }
+      continue;
+    }
+
+    const absolute = path.resolve(cwd, targetArg);
+    if (!fs.existsSync(absolute)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "path-does-not-exist",
+      });
+      continue;
+    }
+
+    if (isTestFileTarget(relative)) {
+      continue;
+    }
+
+    const includePattern = toScopedIncludePattern(targetArg, cwd);
+    if (!includePatternMatchesAnyFile(includePattern, candidateFiles)) {
+      unmatched.push({
+        target: targetArg,
+        reason: "target-matched-no-test-files",
+        includePattern,
+      });
+    }
+  }
+  return unmatched;
+}
+
 function isSkippedImportGraphDirectory(name) {
   return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
@@ -1032,6 +1143,15 @@ function isUnitUiTestTarget(relative) {
   );
 }
 
+function isControlUiE2eTarget(relative) {
+  return (
+    relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
+    relative === "ui/src/ui/e2e" ||
+    relative.startsWith("ui/src/ui/e2e/") ||
+    (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
+  );
+}
+
 function resolveChannelContractTargetKind(relative) {
   if (!relative.startsWith("src/channels/plugins/contracts/")) {
     return null;
@@ -1262,6 +1382,12 @@ function classifyTarget(arg, cwd) {
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
+  if (isControlUiE2eTarget(relative)) {
+    return "uiE2e";
+  }
+  if (relative.startsWith("src/tui/tui-pty-")) {
+    return "tuiPty";
+  }
   if (relative.endsWith(".e2e.test.ts")) {
     return "e2e";
   }
@@ -1432,6 +1558,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isControlUiE2eTarget(relative)) {
+      return "uiE2e";
+    }
     if (isUnitUiTestTarget(relative)) {
       return "unitUi";
     }
@@ -1467,6 +1596,10 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isVitestConfigTargetForKind(kind, targetArg, cwd)) {
     return true;
   }
+  if (kind === "uiE2e") {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    return relative === "ui/src/test-helpers/control-ui-e2e.ts";
+  }
   if (kind !== "ui") {
     return false;
   }
@@ -1483,6 +1616,7 @@ function createVitestArgs(params) {
     ...(params.watchMode ? [] : ["run"]),
     "--config",
     params.config,
+    ...(params.config === UI_E2E_VITEST_CONFIG ? ["--configLoader", "runner"] : []),
     ...params.forwardedArgs,
   ];
 }
@@ -1580,6 +1714,7 @@ export function buildVitestRunPlans(
     "sharedCore",
     "tasks",
     "tui",
+    "tuiPty",
     "mediaUnderstanding",
     "acp",
     "cli",
@@ -1589,9 +1724,14 @@ export function buildVitestRunPlans(
     "autoReplyCore",
     "autoReplyReply",
     "autoReplyTopLevel",
+    "agentCore",
+    "agentPiEmbedded",
+    "agentSupport",
+    "agentTools",
     "agent",
     "plugin",
     "ui",
+    "uiE2e",
     "unitSrc",
     "unitSecurity",
     "unitSupport",

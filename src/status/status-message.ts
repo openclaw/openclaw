@@ -32,6 +32,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -79,6 +80,7 @@ export type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  configuredDefaultModelLabel?: string;
   runtimeContextTokens?: number;
   explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
@@ -209,6 +211,36 @@ const formatTokens = (total: number | null | undefined, contextTokens: number | 
   const totalLabel = formatTokenCount(total);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
+};
+
+const formatEstimatedContextBudgetTokens = (
+  status: SessionEntry["contextBudgetStatus"] | undefined,
+  contextTokens: number | null | undefined,
+) => {
+  if (!status || status.source !== "pre-prompt-estimate") {
+    return null;
+  }
+  const estimatedPromptTokens =
+    typeof status.estimatedPromptTokens === "number" &&
+    Number.isFinite(status.estimatedPromptTokens) &&
+    status.estimatedPromptTokens >= 0
+      ? Math.floor(status.estimatedPromptTokens)
+      : undefined;
+  if (estimatedPromptTokens === undefined) {
+    return null;
+  }
+  const ctx =
+    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
+      ? contextTokens
+      : typeof status.contextTokenBudget === "number" &&
+          Number.isFinite(status.contextTokenBudget) &&
+          status.contextTokenBudget > 0
+        ? status.contextTokenBudget
+        : undefined;
+  const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
+  const totalLabel = formatTokenCount(estimatedPromptTokens);
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+  return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
 };
 
 export const formatContextUsageShort = (
@@ -495,6 +527,19 @@ function resolveChannelModelNote(params: {
     return undefined;
   }
   return "channel override";
+}
+
+function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
+  if (!entry?.modelOverride) {
+    return false;
+  }
+  if (entry.modelOverrideSource === "user") {
+    return true;
+  }
+  if (entry.modelOverrideSource === "auto") {
+    return false;
+  }
+  return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -807,8 +852,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
+  const contextUsageLabel =
+    totalTokens == null || totalTokens === 0
+      ? (formatEstimatedContextBudgetTokens(entry?.contextBudgetStatus, contextTokens) ??
+        formatTokens(totalTokens, contextTokens ?? null))
+      : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `Context: ${contextUsageLabel}`,
     `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
   ]
     .filter(Boolean)
@@ -882,35 +932,51 @@ export function buildStatusMessage(args: StatusArgs): string {
     activeModelRef: activeModelLabel,
     state: entry,
   });
-  const effectiveCostAuthMode = fallbackState.active
-    ? activeAuthMode
-    : (selectedAuthMode ?? activeAuthMode);
-  const showCost = effectiveCostAuthMode === "api-key" || effectiveCostAuthMode === "mixed";
-  const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
-  const costConfig =
-    showCost && hasUsage
-      ? resolveModelCostConfig({
-          provider: activeProvider,
-          model: activeModel,
-          config: args.config,
-          allowPluginNormalization: false,
-        })
-      : undefined;
-  const cost =
-    showCost && hasUsage
-      ? estimateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined;
-  const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
+  const hasUsage =
+    typeof inputTokens === "number" ||
+    typeof outputTokens === "number" ||
+    typeof cacheRead === "number" ||
+    typeof cacheWrite === "number";
+  const costConfig = hasUsage
+    ? resolveModelCostConfig({
+        provider: activeProvider,
+        model: activeModel,
+        config: args.config,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const cost = hasUsage
+    ? estimateUsageCost({
+        usage: {
+          input: inputTokens ?? undefined,
+          output: outputTokens ?? undefined,
+          cacheRead: cacheRead ?? undefined,
+          cacheWrite: cacheWrite ?? undefined,
+        },
+        cost: costConfig,
+      })
+    : undefined;
+  const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
+  const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const configDefaultDiffersFromSession =
+    sessionHasPersistedModelSelection &&
+    configuredDefaultModelLabel &&
+    selectedModelLabel !== configuredDefaultModelLabel &&
+    !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel);
+  const modelLines = configDefaultDiffersFromSession
+    ? [
+        `🧠 Configured default: ${configuredDefaultModelLabel}`,
+        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
+        "⚠️ Reason: session override",
+        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
+        `↩️ Clear with: /model ${configuredDefaultModelLabel} or /reset`,
+        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      ]
+    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
@@ -944,7 +1010,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     args.uptimeLine,
-    modelLine,
+    ...modelLines,
     configuredFallbacksLine,
     fallbackLine,
     usageCostLine,

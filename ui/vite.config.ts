@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { controlUiManualChunk } from "./build/chunking.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -68,12 +69,14 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     apply: "build",
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
-      const source = fs.readFileSync(swPath, "utf8");
+      const publicSwPath = path.join(here, "public/sw.js");
+      const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
       const updated = source.replace(placeholder, JSON.stringify(buildId));
       if (updated === source) {
         throw new Error(`Control UI service worker build id placeholder missing in ${swPath}`);
       }
+      fs.mkdirSync(outDir, { recursive: true });
       fs.writeFileSync(swPath, updated);
     },
   };
@@ -96,7 +99,12 @@ export default defineConfig(() => {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      // Keep CI/onboard logs clean; current control UI chunking is intentionally above 500 kB.
+      rollupOptions: {
+        output: {
+          manualChunks: controlUiManualChunk,
+        },
+      },
+      // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
       chunkSizeWarningLimit: 1024,
     },
     server: {

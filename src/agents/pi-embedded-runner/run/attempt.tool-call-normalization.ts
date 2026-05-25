@@ -879,6 +879,20 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+type ReplayToolCallIdSanitizerDecision = {
+  sanitizeToolCallIds: boolean;
+  toolCallIdMode?: ToolCallIdMode;
+  isOpenAIResponsesApi: boolean;
+};
+
+export function shouldApplyReplayToolCallIdSanitizer(
+  params: ReplayToolCallIdSanitizerDecision,
+): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
+  return (
+    params.sanitizeToolCallIds && Boolean(params.toolCallIdMode) && !params.isOpenAIResponsesApi
+  );
+}
+
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
@@ -905,6 +919,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     TranscriptPolicy,
     "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >,
+  provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -914,6 +929,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     }
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+      provider,
       policy: {
         validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
         preserveSignatures: transcriptPolicy?.preserveSignatures === true,

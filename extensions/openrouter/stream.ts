@@ -56,8 +56,57 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function shouldPatchOpenRouterRoutingPayload(model: Parameters<StreamFn>[0]): boolean {
+  const api = readString(model.api);
+  return (api === undefined || api === "openai-completions") && isVerifiedOpenRouterRoute(model);
+}
+
 function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
   return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
+function isAnthropicToolCallContentBlock(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    ((value as { type?: unknown }).type === "tool_use" ||
+      (value as { type?: unknown }).type === "toolCall")
+  );
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  return Array.isArray(content) && content.some(isAnthropicToolCallContentBlock);
+}
+
+function shouldStripOpenRouterTrailingMessage(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const message = value as Record<string, unknown>;
+  return (
+    message.role === "assistant" &&
+    !assistantMessageHasOpenAIToolCalls(message) &&
+    !assistantMessageHasAnthropicToolUse(message)
+  );
+}
+
+function stripTrailingOpenRouterAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    return 0;
+  }
+
+  let keep = messages.length;
+  while (keep > 0 && shouldStripOpenRouterTrailingMessage(messages[keep - 1])) {
+    keep -= 1;
+  }
+  if (keep === messages.length) {
+    return 0;
+  }
+  const stripped = messages.length - keep;
+  messages.splice(keep);
+  return stripped;
 }
 
 function resolveOpenRouterDeepSeekV4ReasoningEffort(
@@ -98,46 +147,6 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
   );
 }
 
-function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-    return true;
-  }
-  const content = message.content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      ((block as { type?: unknown }).type === "tool_use" ||
-        (block as { type?: unknown }).type === "toolCall"),
-  );
-}
-
-function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
-  if (!Array.isArray(payload.messages)) {
-    return 0;
-  }
-
-  let stripped = 0;
-  while (payload.messages.length > 0) {
-    const finalMessage = payload.messages[payload.messages.length - 1];
-    if (!finalMessage || typeof finalMessage !== "object") {
-      break;
-    }
-
-    const message = finalMessage as Record<string, unknown>;
-    if (message.role !== "assistant" || assistantMessageHasAnthropicToolUse(message)) {
-      break;
-    }
-
-    payload.messages.pop();
-    stripped += 1;
-  }
-  return stripped;
-}
-
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
   providerRouting?: Record<string, unknown>,
@@ -145,7 +154,7 @@ function injectOpenRouterRouting(
   if (!providerRouting) {
     return baseStreamFn;
   }
-  return (model, context, options) =>
+  const routedStreamFn: StreamFn = (model, context, options) =>
     (
       baseStreamFn ??
       ((nextModel) => {
@@ -161,6 +170,17 @@ function injectOpenRouterRouting(
       context,
       options,
     );
+  return createPayloadPatchStreamWrapper(
+    routedStreamFn,
+    ({ payload }) => {
+      if (payload.provider === undefined) {
+        payload.provider = providerRouting;
+      }
+    },
+    {
+      shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),
+    },
+  );
 }
 
 function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -170,7 +190,7 @@ function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefi
       if (!isOpenRouterReasoningPayloadEnabled(payload)) {
         return;
       }
-      const stripped = stripTrailingAssistantPrefillMessages(payload);
+      const stripped = stripTrailingOpenRouterAssistantPrefillMessages(payload);
       if (stripped > 0) {
         log.warn(
           `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because OpenRouter-routed Anthropic reasoning requires conversations to end with a user turn`,

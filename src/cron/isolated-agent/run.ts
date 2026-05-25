@@ -7,6 +7,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext } from "../../infra/agent-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -459,7 +460,6 @@ type PreparedCronRunContext = {
   deliveryRequested: boolean;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
-  senderIsOwner: boolean;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
@@ -822,7 +822,6 @@ async function prepareCronRunContext(params: {
       deliveryRequested,
       sourceDelivery,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
-      senderIsOwner: !isExternalHook,
       skillsSnapshot,
       liveSelection,
       useSubagentFallbacks,
@@ -951,6 +950,7 @@ async function finalizeCronRun(params: {
     deliveryPayloads,
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    hasFatalStructuredErrorPayload,
     embeddedRunError,
     pendingPresentationWarningError,
   } = resolveCronPayloadOutcome({
@@ -1002,11 +1002,34 @@ async function finalizeCronRun(params: {
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&
     isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
-  const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const sourceDeliveryOutcome = resolveSourceDeliveryOutcome(prepared.sourceDelivery, {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
+  if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
+    // Structured run error payloads belong in cron state and failure alerts,
+    // not the normal completion announce path where provider JSON can leak.
+    const { cleanupDirectCronSession } = await loadCronDeliveryRuntime();
+    await cleanupDirectCronSession({
+      job: prepared.input.job,
+      agentSessionKey: prepared.agentSessionKey,
+      sessionId: prepared.currentRunSessionId(),
+      retireReason: "cron-delete-after-run-fatal-error",
+    });
+    const deliveryTrace = buildCronDeliveryTrace({
+      deliveryPlan: prepared.deliveryPlan,
+      resolvedDelivery: prepared.resolvedDelivery,
+      sourceDeliveryOutcome,
+      fallbackUsed: false,
+      delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
+    });
+    return resolveRunOutcome({
+      delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
+      deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
+      delivery: deliveryTrace,
+    });
+  }
+  const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
     cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
@@ -1082,6 +1105,30 @@ async function finalizeCronRun(params: {
   });
 }
 
+/**
+ * Release runtime references held by a completed isolated cron run.
+ *
+ * After the final durable write and delivery complete, the cron session store
+ * and run context are no longer needed in memory.  This shallow disposal prevents
+ * the heap-retention pattern described in #85019 where ~113k copies of the skill
+ * prompt string accumulated through cron run contexts that were never released.
+ *
+ * O(1) — nulls known large fields without deep traversal.  MUST run after the
+ * final `persistSessionEntry()` and delivery construction, never before.
+ */
+function disposeCronRunContext(params: {
+  sessionId: string;
+  cronSession: MutableCronSession;
+  ownsRunContext: boolean;
+}): void {
+  if (params.ownsRunContext) {
+    clearAgentRunContext(params.sessionId);
+  }
+  // Drop the in-memory store reference so GC can collect the session registry.
+  // The on-disk sessions.json is unaffected.
+  (params.cronSession as { store?: unknown }).store = undefined;
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -1133,6 +1180,10 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   };
 
+  // Capture the sessionId before the try block so the finally block clears
+  // the correct context even if adoptCronRunSessionMetadata() rotates it.
+  const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
+
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1169,7 +1220,6 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
-      senderIsOwner: prepared.context.senderIsOwner,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({
@@ -1194,6 +1244,15 @@ export async function runCronIsolatedAgentTurn(params: {
         isCronLaneTimeout ? "cron-setup" : "agent-run",
         isCronLaneTimeout ? error : err,
       ),
+    });
+  } finally {
+    // Release runtime references after the run completes (success or failure).
+    // The session entry has already been persisted to disk by this point,
+    // so the in-memory store and run context can be safely dropped.
+    disposeCronRunContext({
+      sessionId: initialSessionId,
+      cronSession: prepared.context.cronSession,
+      ownsRunContext: params.job.sessionTarget === "isolated",
     });
   }
 }

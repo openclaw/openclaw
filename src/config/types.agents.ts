@@ -40,6 +40,12 @@ export type AgentRuntimeConfig =
 
 export type AgentBindingMatch = {
   channel: string;
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
   accountId?: string;
   peer?: { kind: ChatType; id: string };
   guildId?: string;
@@ -131,7 +137,7 @@ export type AgentConfig = {
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;
-    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any configured target. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;

@@ -73,6 +73,12 @@ type CaseResult = {
   };
 };
 
+type BenchmarkFailure = {
+  id: string;
+  reason: string;
+  sampleIndex: number;
+};
+
 type PluginFixtureResult = {
   pluginIds: string[];
   pluginsDir: string;
@@ -370,6 +376,58 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]): C
       startupTrace,
     },
   };
+}
+
+function collectResultFailures(
+  results: CaseResult[],
+  options: { processMetricsRequired?: boolean } = {},
+): BenchmarkFailure[] {
+  const processMetricsRequired = options.processMetricsRequired ?? process.platform !== "win32";
+  const failures: BenchmarkFailure[] = [];
+  for (const result of results) {
+    result.samples.forEach((sample, index) => {
+      const missing: string[] = [];
+      if (sample.healthz.status !== 200 || sample.healthz.ms == null) {
+        missing.push("/healthz");
+      }
+      if (sample.readyz.status !== 200 || sample.readyz.ms == null) {
+        missing.push("/readyz");
+      }
+      if (processMetricsRequired) {
+        if (sample.cpuMs == null || sample.cpuCoreRatio == null) {
+          missing.push("cpu");
+        }
+        if (sample.maxRssMb == null) {
+          missing.push("rss");
+        }
+      }
+      if (missing.length > 0) {
+        failures.push({
+          id: result.id,
+          reason: `missing ${missing.join(", ")}`,
+          sampleIndex: index + 1,
+        });
+      }
+    });
+  }
+  return failures;
+}
+
+function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
+  if (failures.length === 0) {
+    return;
+  }
+  console.error(
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+  );
+  for (const failure of failures.slice(0, 8)) {
+    console.error(
+      `[gateway-startup-bench] ${failure.id} run ${failure.sampleIndex}: ${failure.reason}`,
+    );
+  }
+  if (failures.length > 8) {
+    console.error(`[gateway-startup-bench] ${failures.length - 8} more sample failure(s) omitted`);
+  }
 }
 
 function formatMs(value: number | null): string {
@@ -1029,16 +1087,23 @@ async function main() {
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
-    return;
+  } else {
+    for (const result of results) {
+      printResult(result);
+    }
   }
-  for (const result of results) {
-    printResult(result);
+
+  const failures = collectResultFailures(results);
+  if (failures.length > 0) {
+    printBenchmarkFailures(failures);
+    process.exitCode = 1;
   }
 }
 
 export const testing = {
   classifyGatewayReadyLog,
   classifyProbeErrorKind,
+  collectResultFailures,
   collectStartupTrace,
   parseNonNegativeInt,
   parsePositiveInt,

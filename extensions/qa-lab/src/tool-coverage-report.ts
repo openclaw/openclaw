@@ -61,6 +61,7 @@ export type QaToolCoverageReport = {
   trackedTools: number;
   nativeWorkspaceTools: number;
   dynamicIntegrationTools: number;
+  searchableDynamicTools: number;
   optionalTools: number;
   passingTools: number;
   failingTools: number;
@@ -208,9 +209,7 @@ function buildRow(params: {
     .find((entry) => entry.required);
   const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
   const rowMetadata = metadata ?? fallbackMetadata;
-  const runtimeToolName = params.group.scenarios
-    .map(readScenarioRuntimeToolName)
-    .find(Boolean);
+  const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   return {
     tool: params.group.tool,
     ...(runtimeToolName ? { runtimeToolName } : {}),
@@ -286,10 +285,14 @@ export function buildQaToolCoverageReport(params: {
     nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
     dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
       .length,
+    searchableDynamicTools: rows.filter(
+      (row) => row.capabilityLayer === "openclaw-dynamic-searchable",
+    ).length,
     optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
     passingTools: evaluated
       ? rows.filter(
           (row) =>
+            row.required &&
             !row.tracking &&
             row.pi === "pass" &&
             row.codex === "pass" &&
@@ -315,6 +318,7 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Tracked issue rows: ${report.trackedTools}`,
     `- Codex-native workspace tools: ${report.nativeWorkspaceTools}`,
     `- OpenClaw dynamic integration tools: ${report.dynamicIntegrationTools}`,
+    `- Searchable/deferred dynamic tools: ${report.searchableDynamicTools}`,
     `- Optional/profile/plugin-dependent tools: ${report.optionalTools}`,
     `- Passing tools: ${report.passingTools}`,
     `- Failing tools: ${report.failingTools}`,
