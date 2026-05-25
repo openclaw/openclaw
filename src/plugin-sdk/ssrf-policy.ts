@@ -8,6 +8,7 @@ import {
 } from "../infra/net/ssrf.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -289,7 +290,7 @@ export function normalizeHostnameSuffixAllowlist(
   if (normalized.includes("*")) {
     return ["*"];
   }
-  return Array.from(new Set(normalized));
+  return uniqueStrings(normalized);
 }
 
 /** Check whether a URL is HTTPS and its hostname matches the normalized suffix allowlist. */

@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./pi-embedded-messaging.js";
@@ -471,7 +472,7 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
       pushAttachment(attachment);
     }
   }
-  return Array.from(new Set(urls));
+  return uniqueStrings(urls);
 }
 
 function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {

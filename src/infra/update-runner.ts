@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -235,7 +236,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   if (proc) {
     dirs.push(proc);
   }
-  return Array.from(new Set(dirs));
+  return uniqueStrings(dirs);
 }
 
 function resolvePreflightTempRootPrefix() {

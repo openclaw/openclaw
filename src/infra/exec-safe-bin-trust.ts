@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
+import {
+  normalizeSortedUniqueStringEntries,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -85,7 +88,7 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
     return [];
   }
   const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return Array.from(new Set(normalized));
+  return uniqueStrings(normalized);
 }
 
 function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
@@ -147,7 +150,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
     }
   }
-  return Array.from(new Set(dirs)).toSorted();
+  return uniqueStrings(dirs).toSorted();
 }
 
 function buildTrustedSafeBinCacheKey(
