@@ -1076,6 +1076,35 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("does not copy prior session media onto text-only followups", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "follow up without media",
+          RawBody: "follow up without media",
+          CommandBody: "follow up without media",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "follow up without media",
+          BodyStripped: "follow up without media",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPath: "/tmp/previous-image.png",
+          MediaPaths: ["/tmp/previous-image.png"],
+          MediaTypes: ["image/png"],
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userMessageForPersistence).toBeUndefined();
+  });
+
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
