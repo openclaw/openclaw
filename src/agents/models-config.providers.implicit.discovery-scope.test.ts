@@ -201,6 +201,34 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
   });
 
+  it("falls back to static provider catalogs when runtime discovery has no rows", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProviderWithStaticCatalog("minimax"),
+    ]);
+    mocks.runProviderCatalog.mockResolvedValue(null);
+    mocks.runProviderStaticCatalog.mockResolvedValue({
+      providers: {
+        minimax: {
+          baseUrl: "https://api.minimax.io/anthropic",
+          api: "anthropic-messages" as const,
+          models: [createTextModel("MiniMax-M2.7", "MiniMax M2.7")],
+        },
+      },
+    });
+
+    const providers = await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryProviderIds: ["minimax"],
+    });
+
+    expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+    expect(providers?.minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M2.7"]);
+  });
+
   it("keeps explicit provider models manual without provider wildcard visibility", async () => {
     const explicitProvider = {
       baseUrl: "http://vllm.example/v1",

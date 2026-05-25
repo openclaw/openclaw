@@ -6,6 +6,7 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "providerCatalogEntry": "./provider-registration.ts",
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],
   "setup": {

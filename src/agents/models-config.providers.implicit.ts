@@ -377,7 +377,7 @@ async function resolvePluginImplicitProviders(
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
-    const result = useStaticCatalog
+    let result = useStaticCatalog
       ? await runProviderStaticCatalog({
           provider,
           config: catalogConfig,
@@ -396,6 +396,15 @@ async function resolvePluginImplicitProviders(
             ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
           timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
         });
+    if (!result && !useStaticCatalog && provider.staticCatalog) {
+      result = await runProviderStaticCatalog({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+      });
+    }
     if (!result) {
       continue;
     }
