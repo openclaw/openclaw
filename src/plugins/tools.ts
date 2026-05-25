@@ -38,6 +38,7 @@ export {
 export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
+  trustedLocalMedia?: boolean;
 };
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
@@ -136,6 +137,16 @@ function isPluginToolOptional(params: {
   return (
     params.entry.optional ||
     (params.manifestPlugin ? isManifestToolOptional(params.manifestPlugin, params.toolName) : false)
+  );
+}
+
+function isTrustedManifestLocalMediaTool(params: {
+  manifestPlugin: PluginManifestRecord | undefined;
+  toolName: string;
+}): boolean {
+  return (
+    params.manifestPlugin?.origin === "bundled" &&
+    params.manifestPlugin.contracts?.tools?.includes(params.toolName) === true
   );
 }
 
@@ -530,6 +541,7 @@ function cachedDescriptorsCoverToolNames(params: {
 
 function createCachedDescriptorPluginTool(params: {
   descriptor: CachedPluginToolDescriptor;
+  plugin: PluginManifestRecord;
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
@@ -601,6 +613,10 @@ function createCachedDescriptorPluginTool(params: {
   setPluginToolMeta(tool, {
     pluginId,
     optional: params.descriptor.optional,
+    trustedLocalMedia: isTrustedManifestLocalMediaTool({
+      manifestPlugin: params.plugin,
+      toolName,
+    }),
   });
   return tool;
 }
@@ -728,6 +744,7 @@ function resolveCachedPluginTools(params: {
       pluginTools.push(
         createCachedDescriptorPluginTool({
           descriptor: cachedDescriptor,
+          plugin,
           ctx: params.ctx,
           loadContext: params.loadContext,
           runtimeOptions: params.runtimeOptions,
@@ -1195,6 +1212,10 @@ export function resolvePluginTools(params: {
       pluginToolMeta.set(tool, {
         pluginId: entry.pluginId,
         optional,
+        trustedLocalMedia: isTrustedManifestLocalMediaTool({
+          manifestPlugin,
+          toolName: tool.name,
+        }),
       });
       if (manifestPlugin) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];

@@ -70,10 +70,14 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   /**
-   * Exact raw names of non-plugin OpenClaw tools registered for this run.
-   * When provided, MEDIA: passthrough requires an exact match instead of only
-   * a normalized-name collision with a trusted built-in.
+   * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /**
+   * Exact raw names allowed to emit local MEDIA: paths for this run.
+   * Includes core trusted tools plus bundled plugin tools proven from the
+   * startup metadata snapshot.
+   */
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };
