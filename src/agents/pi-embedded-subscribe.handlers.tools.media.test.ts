@@ -664,6 +664,61 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
   });
 
+  it("does NOT queue structured media marked as non-outbound", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["message"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Downloaded Slack file to /tmp/report.pdf" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/report.pdf",
+            outbound: false,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("does NOT queue image fallback paths when media is marked as non-outbound", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["message"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          { type: "text", text: "Downloaded Slack image" },
+          { type: "image", data: "base64", mimeType: "image/png" },
+        ],
+        details: {
+          path: "/tmp/slack-image.png",
+          media: {
+            outbound: false,
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
   it("queues trusted TTS local media when the exact built-in name is absent", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: false,
