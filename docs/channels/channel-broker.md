@@ -40,12 +40,10 @@ providers keep platform mechanics. A feature added to the broker contract
 becomes available through the same contract to routed channels whose provider
 declares and passes conformance for that capability.
 
-The V1 protocol defines outbound HTTP from OpenClaw to the provider and the
-signed inbound webhook envelope from providers back to OpenClaw. This foundation
-ships the outbound path first; the signed inbound route is added by the
-conformance layer before any native-channel migration proof depends on it.
-WebSocket and provider polling transports are reserved for later protocol
-versions.
+With the conformance layer installed, V1 transport is outbound HTTP from
+OpenClaw to the provider plus signed inbound HTTP webhooks from providers back to
+OpenClaw. WebSocket and provider polling transports are reserved for later
+protocol versions.
 
 ## Target syntax
 
