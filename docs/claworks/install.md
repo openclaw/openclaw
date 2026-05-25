@@ -44,9 +44,12 @@ curl -s http://127.0.0.1:18800/v1/health
 
 ```bash
 pnpm claworks:smoke
-pnpm claworks:gateway:e2e
-pnpm claworks:ot-dry-run    # OT 模拟连接器，无需实机
+pnpm claworks:gateway:e2e   # 本地必跑；CI 未含（~90s 启动），见 claworks-smoke.yml 注释
+pnpm claworks:ot-dry-run    # OT 模拟连接器，无需实机（CI 已跑）
+pnpm claworks:ot-live-checklist   # OT 实机签收只读清单
 ```
+
+OT 实机联调：[`ot-live.md`](ot-live.md)。
 
 ---
 
@@ -62,6 +65,7 @@ pnpm claworks:ot-dry-run    # OT 模拟连接器，无需实机
 ```bash
 pnpm claworks:publish:dry-run              # 根包 claworks
 pnpm claworks:runtime:publish:dry-run      # @claworks/runtime
+pnpm claworks:npm-publish-checklist        # 发布阻塞项清单
 ```
 
 ```bash

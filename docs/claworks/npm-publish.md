@@ -8,6 +8,8 @@
 
 ```bash
 pnpm claworks:release:preflight
+pnpm claworks:npm-publish-checklist          # 只读清单
+pnpm claworks:npm-publish-checklist --verify  # 含 dry-run
 pnpm claworks:runtime:publish:dry-run
 pnpm claworks:publish:dry-run   # 根包 claworks CLI（可选）
 ```
