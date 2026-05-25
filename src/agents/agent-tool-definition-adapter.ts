@@ -317,81 +317,86 @@ export function toToolDefinitions(
   tools: AnyAgentTool[],
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  return tools.map((tool) => {
-    const name = tool.name || "tool";
-    const normalizedName = normalizeToolName(name);
-    const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
-    return {
-      name,
-      label: tool.label ?? name,
-      description: tool.description ?? "",
-      parameters: tool.parameters,
-      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
-        let executeParams = params;
-        try {
-          if (!beforeHookWrapped) {
-            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
-            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
-            const hookOutcome = await runBeforeToolCallHook({
-              toolName: name,
-              params: hookParams,
-              ...hookMetadata,
-              toolCallId,
-              ctx: hookContext,
-            });
-            if (hookOutcome.blocked) {
-              if (hookOutcome.kind === "veto") {
-                return buildBlockedToolResult({
-                  reason: hookOutcome.reason,
-                  deniedReason: hookOutcome.deniedReason,
-                });
+  // Sort tool definitions by name for byte-stable ordering across sessions.
+  // This ensures Anthropic prompt cache hits when tools are registered in
+  // different orders (e.g. plugin tools, MCP tools, dynamic registration).
+  return tools
+    .map((tool) => {
+      const name = tool.name || "tool";
+      const normalizedName = normalizeToolName(name);
+      const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
+      return {
+        name,
+        label: tool.label ?? name,
+        description: tool.description ?? "",
+        parameters: tool.parameters,
+        execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+          const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+          let executeParams = params;
+          try {
+            if (!beforeHookWrapped) {
+              const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
+              const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
+              const hookOutcome = await runBeforeToolCallHook({
+                toolName: name,
+                params: hookParams,
+                ...hookMetadata,
+                toolCallId,
+                ctx: hookContext,
+              });
+              if (hookOutcome.blocked) {
+                if (hookOutcome.kind === "veto") {
+                  return buildBlockedToolResult({
+                    reason: hookOutcome.reason,
+                    deniedReason: hookOutcome.deniedReason,
+                  });
+                }
+                throw new Error(hookOutcome.reason);
               }
-              throw new Error(hookOutcome.reason);
+              executeParams = reconcileCodeModeExecBeforeHookParams({
+                tool,
+                originalParams: params,
+                hookParams,
+                adjustedParams: hookOutcome.params,
+              });
+              recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
-            executeParams = reconcileCodeModeExecBeforeHookParams({
-              tool,
-              originalParams: params,
-              hookParams,
-              adjustedParams: hookOutcome.params,
+            const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+            const result = normalizeToolExecutionResult({
+              toolName: normalizedName,
+              result: rawResult,
             });
-            recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
-          }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
-          const result = normalizeToolExecutionResult({
-            toolName: normalizedName,
-            result: rawResult,
-          });
-          return result;
-        } catch (err) {
-          if (signal?.aborted) {
-            throw err;
-          }
-          if (isBeforeToolCallBlockedError(err)) {
-            logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
-            return buildBlockedToolResult({
-              reason: err.reason,
+            return result;
+          } catch (err) {
+            if (signal?.aborted) {
+              throw err;
+            }
+            if (isBeforeToolCallBlockedError(err)) {
+              logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
+              return buildBlockedToolResult({
+                reason: err.reason,
+              });
+            }
+            const described = describeToolExecutionError(err);
+            if (described.stack && described.stack !== described.message) {
+              logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
+            }
+            const inputPreview = describeToolFailureInputs({
+              toolName: normalizedName,
+              rawParams: params,
+              effectiveParams: executeParams,
             });
-          }
-          const described = describeToolExecutionError(err);
-          if (described.stack && described.stack !== described.message) {
-            logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
-          }
-          const inputPreview = describeToolFailureInputs({
-            toolName: normalizedName,
-            rawParams: params,
-            effectiveParams: executeParams,
-          });
-          logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
+            logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
 
-          return buildToolExecutionErrorResult({
-            toolName: normalizedName,
-            message: described.message,
-          });
-        }
-      },
-    } satisfies ToolDefinition;
-  });
+            return buildToolExecutionErrorResult({
+              toolName: normalizedName,
+              message: described.message,
+            });
+          }
+        },
+      } satisfies ToolDefinition;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**

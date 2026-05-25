@@ -21,11 +21,11 @@ describe("splitSdkTools", () => {
       sandboxEnabled: true,
     });
     expect(customTools.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "edit",
-      "write",
       "browser",
+      "edit",
+      "exec",
+      "read",
+      "write",
     ]);
   });
 
@@ -35,11 +35,11 @@ describe("splitSdkTools", () => {
       sandboxEnabled: false,
     });
     expect(customTools.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "edit",
-      "write",
       "browser",
+      "edit",
+      "exec",
+      "read",
+      "write",
     ]);
   });
 
