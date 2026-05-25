@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - Agents: release embedded-attempt session locks from outer teardown so post-prompt exceptions cannot wedge later requests behind `SessionWriteLockTimeoutError`. Fixes #86014. Thanks @openperf.
 - Discord/OpenAI voice: rotate Realtime sessions at provider max duration without logging the expected session-expiry event as an error.
 - Agents/media: derive bundled plugin local-media trust from plugin tool metadata instead of importing the full plugin registry on subscription paths. (#84409) Thanks @samzong.
+- Image tool: keep config-backed custom-provider API keys usable for auto-discovered vision models, including deferred image-tool execution without env keys or auth profiles. (#85733)
 - Memory/local embeddings: run local GGUF embeddings in an isolated worker sidecar and degrade to configured fallback or keyword search on worker failure so native embedding crashes do not take down the Gateway. (#85348) Thanks @osolmaz.
 - Gateway: clear the runtime config snapshot before `SIGUSR1` in-process restarts so config changes survive the next gateway loop. (#86388) Thanks @XuZehan-iCenter.
 - Models: show OAuth delegation markers as configured `models.json` auth while keeping runtime route usability checks strict. (#86378) Thanks @rohitjavvadi.
