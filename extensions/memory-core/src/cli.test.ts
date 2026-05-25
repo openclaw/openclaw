@@ -9,7 +9,6 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertPathIsSafe } from "./lab-safety.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
@@ -595,6 +594,38 @@ describe("memory cli", () => {
     });
   });
 
+  it("rejects symlinked memory directories during encrypted export", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const outsideDir = path.join(workspaceDir, "outside-memory");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "secret.md"), "do not back this up\n");
+      await fs.rm(path.join(workspaceDir, "memory"), { recursive: true, force: true });
+      await fs.symlink(outsideDir, path.join(workspaceDir, "memory"));
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "symlink directory passphrase";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+
+        await expect(runMemoryCli(["export", "--encrypted", "--out", backupPath])).rejects.toThrow(
+          "Refusing to back up symlinked memory directory",
+        );
+        await expectPathMissing(backupPath);
+        expect(close).toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
   it("refuses to restore through symlinked parent directories", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-05", ["Restore safety."]);
@@ -618,6 +649,47 @@ describe("memory cli", () => {
           runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]),
         ).rejects.toThrow("Refusing to restore through symlinked directory");
         await expectPathMissing(path.join(outsideDir, "2026-04-05.md"));
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
+  it("refuses to overwrite final symlink leaves during encrypted import", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Protected.\n");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "symlink leaf passphrase";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+        const restoreDir = path.join(workspaceDir, "restore-symlink-leaf");
+        const outsidePath = path.join(workspaceDir, "outside-restore.txt");
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath]);
+        await fs.mkdir(restoreDir, { recursive: true });
+        await fs.writeFile(outsidePath, "outside remains\n");
+        await fs.symlink(outsidePath, path.join(restoreDir, "MEMORY.md"));
+
+        await expect(
+          runMemoryCli([
+            "import",
+            "--encrypted",
+            "--in",
+            backupPath,
+            "--target",
+            restoreDir,
+            "--overwrite",
+          ]),
+        ).rejects.toThrow("Refusing to overwrite symlinked file");
+        await expect(fs.readFile(outsidePath, "utf-8")).resolves.toBe("outside remains\n");
       } finally {
         if (previous === undefined) {
           delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;

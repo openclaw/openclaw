@@ -687,7 +687,8 @@ Query-string hook tokens are rejected.
 Validation and safety notes:
 
 - `hooks.enabled=true` requires a non-empty `hooks.token`.
-- `hooks.token` must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
+- `hooks.token` must be distinct from `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`; reusing the Gateway token fails startup validation.
+- `openclaw security audit` also flags `hooks.token` reuse of active Gateway password auth (`gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, or `--auth password --password <password>`) as a critical finding; password-mode reuse stays startup-compatible and should be repaired by rotating one of the secrets.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 - If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.

@@ -28,6 +28,21 @@ function assertSafeRelativePath(relativePath: string): void {
 
 async function listFilesRecursive(rootDir: string): Promise<string[]> {
   const files: string[] = [];
+  let rootStat;
+  try {
+    rootStat = await fs.lstat(rootDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
+  if (rootStat.isSymbolicLink()) {
+    throw new Error(`Refusing to back up symlinked memory directory: ${rootDir}`);
+  }
+  if (!rootStat.isDirectory()) {
+    return [];
+  }
   let entries;
   try {
     entries = await fs.readdir(rootDir, { withFileTypes: true });
@@ -154,6 +169,20 @@ async function assertNoSymlinkParents(targetDir: string, outputPath: string): Pr
   }
 }
 
+async function assertNotSymlinkLeaf(outputPath: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(outputPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to overwrite symlinked file: ${outputPath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function writeMemoryBackupArchive(params: {
   archive: MemoryBackupArchive;
   targetDir: string;
@@ -180,6 +209,7 @@ export async function writeMemoryBackupArchive(params: {
     await assertNoSymlinkParents(targetDir, outputPath);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await assertNoSymlinkParents(targetDir, outputPath);
+    await assertNotSymlinkLeaf(outputPath);
     await fs.writeFile(outputPath, Buffer.from(file.data, "base64"), {
       mode: file.mode,
       flag: params.overwrite ? "w" : "wx",

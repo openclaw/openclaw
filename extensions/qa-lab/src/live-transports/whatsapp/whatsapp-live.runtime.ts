@@ -100,6 +100,12 @@ type WhatsAppQaScenarioResult = {
   requestStartedAt?: string;
   responseObservedAt?: string;
   rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -554,7 +560,7 @@ async function runWhatsAppScenario(params: {
   sutAuthDir: string;
   sutPhoneE164: string;
   groupJid?: string;
-}) {
+}): Promise<WhatsAppQaScenarioResult> {
   const scenarioRun = params.scenario.buildRun();
   if (scenarioRun.target === "group" && !params.groupJid) {
     throw new Error(`WhatsApp scenario ${params.scenario.id} requires groupJid.`);
@@ -647,6 +653,12 @@ async function runWhatsAppScenario(params: {
       rttMs,
       requestStartedAt: requestStartedAt.toISOString(),
       responseObservedAt: responseObservedAt.toISOString(),
+      rttMeasurement: {
+        finalMatchedReplyRttMs: rttMs,
+        requestStartedAt: requestStartedAt.toISOString(),
+        responseObservedAt: responseObservedAt.toISOString(),
+        source: "request-to-observed-message",
+      },
     };
   } catch (error) {
     preservedGatewayDebug = true;

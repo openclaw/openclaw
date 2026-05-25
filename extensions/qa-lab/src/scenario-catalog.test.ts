@@ -90,6 +90,9 @@ describe("qa scenario catalog", () => {
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
+    expect(JSON.stringify(readQaScenarioById("memory-failure-fallback").execution.flow)).toContain(
+      "liveTurnTimeoutMs(env, 180000)",
+    );
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");

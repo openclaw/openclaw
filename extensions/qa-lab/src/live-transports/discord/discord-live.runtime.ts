@@ -181,7 +181,15 @@ type DiscordQaScenarioResult = {
   title: string;
   status: "pass" | "fail";
   details: string;
+  requestStartedAt?: string;
+  responseObservedAt?: string;
   rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
 };
 
 type DiscordQaRunResult = {
@@ -1779,7 +1787,9 @@ export async function runDiscordQaLive(params: {
             expectedTextIncludes: scenarioRun.expectedTextIncludes,
             message: matched.message,
           });
-          const rttMs = computeDiscordRttMs(sent.timestamp, matched.message.timestamp);
+          const requestStartedAt = sent.timestamp;
+          const responseObservedAt = matched.message.timestamp;
+          const rttMs = computeDiscordRttMs(requestStartedAt, responseObservedAt);
           scenarioResults.push({
             id: scenario.id,
             title: scenario.title,
@@ -1787,7 +1797,21 @@ export async function runDiscordQaLive(params: {
             details: redactPublicMetadata
               ? "reply matched"
               : `reply message ${matched.message.messageId} matched`,
-            ...(rttMs === undefined ? {} : { rttMs }),
+            ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+            ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+            ...(rttMs === undefined ||
+            requestStartedAt === undefined ||
+            responseObservedAt === undefined
+              ? {}
+              : {
+                  rttMs,
+                  rttMeasurement: {
+                    finalMatchedReplyRttMs: rttMs,
+                    requestStartedAt,
+                    responseObservedAt,
+                    source: "request-to-observed-message",
+                  },
+                }),
           });
         } catch (error) {
           if (scenarioRun.kind === "channel-message" && !scenarioRun.expectReply) {

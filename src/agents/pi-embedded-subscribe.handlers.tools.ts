@@ -202,6 +202,11 @@ function readToolResultDetailsRecord(result: unknown): Record<string, unknown> |
     : undefined;
 }
 
+function isAsyncStartedToolResult(result: unknown): boolean {
+  const details = readToolResultDetailsRecord(result);
+  return details?.async === true && details.status === "started";
+}
+
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetailsRecord(result);
   if (!details || typeof details.status !== "string") {
@@ -532,13 +537,14 @@ async function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
   result: unknown,
+  trustedLocalMediaToolNames?: ReadonlySet<string>,
 ): Promise<string[]> {
   const { splitMediaFromOutput } = await loadMediaParse();
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(toolName, mediaUrls, result, trustedLocalMediaToolNames);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -707,7 +713,12 @@ async function emitToolResultOutput(params: {
   const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
-    ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
+    ? filterToolResultMediaUrls(
+        rawToolName,
+        mediaReply.mediaUrls,
+        result,
+        ctx.trustedLocalMediaToolNames,
+      )
     : [];
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
@@ -725,6 +736,7 @@ async function emitToolResultOutput(params: {
           rawToolName,
           outputText,
           result,
+          ctx.trustedLocalMediaToolNames,
         );
       }
     }
@@ -1027,7 +1039,12 @@ export async function handleToolExecutionEnd(
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
-  ctx.state.toolMetas.push({ toolName, meta });
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  ctx.state.toolMetas.push({
+    toolName,
+    meta,
+    ...(asyncStarted ? { asyncStarted: true } : {}),
+  });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
       ? normalizeAcceptedSessionSpawnResult(sanitizedResult)
@@ -1068,7 +1085,10 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
-  if (completedMutatingAction || acceptedSessionSpawn) {
+  if (asyncStarted) {
+    ctx.state.hadDeterministicSideEffect = true;
+  }
+  if (completedMutatingAction || acceptedSessionSpawn || asyncStarted) {
     ctx.state.replayState = mergeEmbeddedRunReplayState(ctx.state.replayState, {
       replayInvalid: true,
       hadPotentialSideEffects: true,
@@ -1130,7 +1150,11 @@ export async function handleToolExecutionEnd(
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const response = normalizeHeartbeatToolResponse(result?.details);
     if (response) {
+      const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
+      if (isFirstHeartbeatResponse) {
+        void ctx.params.onHeartbeatToolResponse?.(response);
+      }
     }
   }
 

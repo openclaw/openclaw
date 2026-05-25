@@ -85,7 +85,6 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
-    - Defaults `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
 
   </Step>
 </Steps>
@@ -167,7 +166,6 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 | `OPENCLAW_DRY_RUN=1`                              | Dry run mode                                                       |
 | `OPENCLAW_VERBOSE=1`                              | Debug mode                                                         |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`       | npm log level                                                      |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                | Control sharp/libvips behavior (default: `1`)                      |
 
   </Accordion>
 </AccordionGroup>
@@ -189,6 +187,7 @@ by default, plus git-checkout installs under the same prefix flow.
 <Steps>
   <Step title="Install local Node runtime">
     Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk` and links that runtime into the prefix wrapper path.
   </Step>
   <Step title="Ensure Git">
     If Git is missing, attempts install via apt/dnf/yum on Linux or Homebrew on macOS.
@@ -268,7 +267,6 @@ by default, plus git-checkout installs under the same prefix flow.
 | `OPENCLAW_GIT_UPDATE=0\|1`                  | Toggle git updates for existing checkouts                          |
 | `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                    |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                                      |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | Control sharp/libvips behavior (default: `1`)                      |
 
   </Accordion>
 </AccordionGroup>
@@ -414,15 +412,6 @@ Use non-interactive flags/env vars for predictable runs.
 
   <Accordion title="Why does npm hit EACCES on Linux?">
     Some Linux setups point npm global prefix to root-owned paths. `install.sh` can switch prefix to `~/.npm-global` and append PATH exports to shell rc files (when those files exist).
-  </Accordion>
-
-  <Accordion title="sharp/libvips issues">
-    The scripts default `SHARP_IGNORE_GLOBAL_LIBVIPS=1` to avoid sharp building against system libvips. To override:
-
-    ```bash
-    SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
-    ```
-
   </Accordion>
 
   <Accordion title='Windows: "npm error spawn git / ENOENT"'>
