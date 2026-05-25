@@ -327,16 +327,22 @@ describe("Dockerfile", () => {
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const configDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0755 -o node -g node /home/node/.config",
+      runtimeStageIndex,
+    );
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node \\",
+      "install -d -m 0700 -o node -g node \\",
       runtimeStageIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
 
     expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(configDirIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(-1);
     expect(userIndex).toBeGreaterThan(-1);
-    expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(configDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(stateDirIndex).toBeGreaterThan(configDirIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expect(dockerfile).toContain("/home/node/.openclaw/workspace");
@@ -346,6 +352,9 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755'",
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",
