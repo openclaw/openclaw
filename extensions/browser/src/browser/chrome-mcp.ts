@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
   readStringValue,
   uniqueStrings,
+  uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -559,7 +560,7 @@ async function terminateChromeMcpProcessTree(
 
   const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
   const sleep = deps?.sleep ?? sleepTimeout;
-  const pids = Array.from(new Set([...descendantPids.toReversed(), rootPid])).filter(
+  const pids = uniqueValues([...descendantPids.toReversed(), rootPid]).filter(
     (pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid,
   );
   const signaled: number[] = [];

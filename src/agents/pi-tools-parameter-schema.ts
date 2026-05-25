@@ -7,6 +7,7 @@ import {
 } from "../plugins/provider-model-compat.js";
 import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
 export type ToolParameterSchemaOptions = {
@@ -52,7 +53,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   const existingEnum = extractEnumValues(existing);
   const incomingEnum = extractEnumValues(incoming);
   if (existingEnum || incomingEnum) {
-    const values = Array.from(new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]));
+    const values = uniqueValues([...(existingEnum ?? []), ...(incomingEnum ?? [])]);
     const merged: Record<string, unknown> = {};
     for (const source of [existing, incoming]) {
       if (!source || typeof source !== "object") {
