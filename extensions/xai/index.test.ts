@@ -75,22 +75,25 @@ describe("xai provider plugin", () => {
     expect(
       provider.classifyFailoverReason?.({
         errorMessage:
-          '403 {"error":{"code":"SPENDING_LIMIT","message":"Monthly spending limit reached"}}',
+          '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
       }),
     ).toBe("billing");
     expect(
       provider.classifyFailoverReason?.({
-        errorMessage: "xAI request failed: usage limit reached for this Grok account",
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+      }),
+    ).toBe("billing");
+    expect(
+      provider.classifyFailoverReason?.({
+        errorMessage:
+          '429 {"code":"Some resource has been exhausted","error":"Rate limit exceeded"}',
       }),
     ).toBe("rate_limit");
     expect(
       provider.classifyFailoverReason?.({
-        errorMessage: "Provider API error (429): Too many requests [code=rate_limit_reached]",
-      }),
-    ).toBe("rate_limit");
-    expect(
-      provider.classifyFailoverReason?.({
-        errorMessage: "xAI request failed: invalid request format",
+        errorMessage:
+          '400 {"code":"Client specified an invalid argument","error":"Incorrect API key provided: xa***en. You can obtain an API key from https://console.x.ai."}',
       }),
     ).toBeUndefined();
   });

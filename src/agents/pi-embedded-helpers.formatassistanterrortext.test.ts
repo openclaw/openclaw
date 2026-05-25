@@ -162,6 +162,16 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
+  it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
+    const msg = makeAssistantError(
+      '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "xai",
+      model: "grok-4.3",
+    });
+    expect(result).toBe(formatBillingErrorMessage("xai", "grok-4.3"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");

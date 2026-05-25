@@ -675,6 +675,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (messageReason === "billing") {
+      return toReasonClassification("billing");
+    }
     if (
       message &&
       (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
@@ -861,6 +864,12 @@ function classifyFailoverClassificationFromMessage(
   ) {
     return toReasonClassification("billing");
   }
+  // Billing runs before broad 429/resource-exhausted checks so providers that
+  // use a rate-limit-ish transport code for credit exhaustion still land in
+  // the actionable billing lane.
+  if (isBillingErrorMessage(raw)) {
+    return toReasonClassification("billing");
+  }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
@@ -888,12 +897,9 @@ function classifyFailoverClassificationFromMessage(
   if (isGenericProviderInternalError(raw)) {
     return toReasonClassification("timeout");
   }
-  // Billing and auth classifiers run before the broad isJsonApiInternalServerError
-  // check so that provider errors like {"type":"api_error","message":"insufficient
-  // balance"} are correctly classified as "billing"/"auth" rather than "timeout".
-  if (isBillingErrorMessage(raw)) {
-    return toReasonClassification("billing");
-  }
+  // Auth classifiers run before the broad isJsonApiInternalServerError check so that
+  // provider errors like {"type":"api_error","message":"invalid api key"} are
+  // correctly classified as "auth" rather than "timeout".
   const oauthRefreshFailure = classifyOAuthRefreshFailure(raw);
   if (oauthRefreshFailure?.reason) {
     return toReasonClassification("auth_permanent");
@@ -1181,6 +1187,10 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isBillingErrorMessage(raw)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
   if (transientCopy) {
     return transientCopy;
@@ -1197,10 +1207,6 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
-  }
-
-  if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (providerRuntimeFailureKind === "schema") {

@@ -1023,6 +1023,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("preserves backend billing and usage-limit errors in local mode", () => {
+    const backendError =
+      '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
     const { chatLog, handleChatEvent } = createHandlersHarness({
       localMode: true,
       state: {
@@ -1035,12 +1037,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       runId: "run-xai-spending-limit",
       sessionKey: "agent:main:main",
       state: "error",
-      errorMessage: "403 SPENDING_LIMIT: xAI spending limit reached. Add credits in the xAI console.",
+      errorMessage: backendError,
     });
 
-    expect(chatLog.addSystem).toHaveBeenCalledWith(
-      "run error: HTTP 403: SPENDING_LIMIT: xAI spending limit reached. Add credits in the xAI console.",
-    );
+    expect(chatLog.addSystem).toHaveBeenCalledWith(`run error: ${backendError}`);
   });
 
   it("drops streaming assistant when chat final has no message", () => {
