@@ -46,7 +46,7 @@ function resolveMetadataSnapshotForPolicies(
       env,
       workspaceDir,
       allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: params.env !== undefined,
+      requireDefaultDiscoveryContext: true,
     });
     if (currentSnapshot) {
       return {
