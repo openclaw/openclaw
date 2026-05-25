@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { compareOpenClawVersions } from "../config/version.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
@@ -850,6 +851,38 @@ function isTrustedOfficialPluginInstall(params: {
   return false;
 }
 
+function resolveCandidateInstallVersion(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  installRecords: Record<string, PluginInstallRecord>;
+}): string | undefined {
+  const candidateVersion = normalizeOptionalString(params.candidate.packageVersion);
+  if (candidateVersion) {
+    return candidateVersion;
+  }
+  const record = params.installRecords[params.pluginId];
+  return (
+    normalizeOptionalString(record?.resolvedVersion) ??
+    normalizeOptionalString(record?.version) ??
+    normalizeOptionalString(record?.resolvedSpec?.split("@").at(-1))
+  );
+}
+
+function isStaleTrustedOfficialPluginInstall(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  if (!isTrustedOfficialPluginInstall(params)) {
+    return false;
+  }
+  const installedVersion = resolveCandidateInstallVersion(params);
+  const hostVersion = resolveCompatibilityHostVersion(params.env);
+  const comparison = compareOpenClawVersions(installedVersion, hostVersion);
+  return comparison !== null && comparison < 0;
+}
+
 function resolveDuplicatePrecedenceRank(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -870,6 +903,12 @@ function resolveDuplicatePrecedenceRank(params: {
       installRecords: params.installRecords,
     })
   ) {
+    if (isStaleTrustedOfficialPluginInstall(params)) {
+      // Official plugin packages can lag behind a linked or upgraded host. In
+      // duplicate resolution, prefer the bundled host copy over stale official
+      // installs so old runtime packages do not silently shadow current fixes.
+      return 3.5;
+    }
     return 1;
   }
   if (params.candidate.origin === "bundled") {
@@ -904,6 +943,18 @@ function isIntentionalInstalledBundledDuplicate(params: {
     env: params.env,
     installRecords: params.installRecords,
   });
+  const installedCandidate = leftIsInstalled ? params.left : rightIsInstalled ? params.right : null;
+  if (
+    installedCandidate &&
+    isStaleTrustedOfficialPluginInstall({
+      pluginId: params.pluginId,
+      candidate: installedCandidate,
+      env: params.env,
+      installRecords: params.installRecords,
+    })
+  ) {
+    return false;
+  }
   return (
     (leftIsInstalled && params.right.origin === "bundled") ||
     (rightIsInstalled && params.left.origin === "bundled")

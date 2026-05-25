@@ -372,7 +372,8 @@ function listManifestToolNamesForAllowlist(params: {
     return [...params.toolNames];
   }
   const pluginKey = normalizeToolName(params.pluginId);
-  if (params.allowlist.has(pluginKey)) {
+  const pluginSelected = params.allowlist.has(pluginKey);
+  if (pluginSelected) {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
@@ -380,6 +381,9 @@ function listManifestToolNamesForAllowlist(params: {
   );
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
+  }
+  if (params.allowlist.size > 1 && matchedToolNames.length === 0) {
+    return [];
   }
   const defaultToolNames = params.toolNames.filter(
     (name) => !isManifestToolOptional(params.plugin, name),

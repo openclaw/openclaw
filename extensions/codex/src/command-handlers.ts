@@ -699,6 +699,7 @@ async function resumeThread(
     cwd: readString(thread, "cwd") ?? "",
     model: isJsonObject(response) ? readString(response, "model") : undefined,
     modelProvider: isJsonObject(response) ? readString(response, "modelProvider") : undefined,
+    threadBindingOrigin: "explicit",
   });
   return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
     effectiveThreadId,

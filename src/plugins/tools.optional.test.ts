@@ -991,7 +991,7 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
   });
 
-  it("keeps default non-optional plugin tools when alsoAllow opts into optional tools", () => {
+  it("does not widen alsoAllow discovery to unrelated default plugin tools", () => {
     const defaultEntry: MockRegistryToolEntry = {
       pluginId: "multi",
       optional: false,
@@ -1008,10 +1008,10 @@ describe("resolvePluginTools optional tools", () => {
       }),
     );
 
-    expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
+    expectResolvedToolNames(tools, ["optional_tool"]);
   });
 
-  it("cold-loads default plugin tools when alsoAllow opts into optional tools", () => {
+  it("cold-loads only selected plugins when alsoAllow opts into optional tools", () => {
     const context = createContext();
     const config = context.config;
     const defaultEntry: MockRegistryToolEntry = {
@@ -1058,8 +1058,8 @@ describe("resolvePluginTools optional tools", () => {
       }),
     );
 
-    expectResolvedToolNames(tools, ["other_tool", "optional_tool"]);
-    expectLoaderSelectedOnlyPluginIds(["multi", "optional-demo"]);
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expectLoaderSelectedOnlyPluginIds(["optional-demo"]);
   });
 
   it("does not cold-load unrelated manifest-optional plugins when alsoAllow opts into one optional tool", () => {
