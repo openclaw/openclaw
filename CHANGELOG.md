@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 - Live tests: fail Gateway live model sweeps when selected coverage is lost to timeouts or stale high-signal filters instead of reporting false missing-profile coverage, and pin Docker OpenAI gateway coverage to the current `gpt-5.5` lane.
 - Tests: fail Docker resource-ceiling checks when stats samples or configured limits are invalid instead of silently reporting zero peaks.
 - Agents: fail closed when provider-less session models match multiple provider-prefixed runtime policies so CLI runtime routing no longer depends on config order. (#85970) Thanks @potterdigital.
+- Control UI/agents: keep collapsed tool rows readable without early ellipses, preserve raw expanded tool details, and make post-compaction AGENTS.md reinjection opt-in to avoid duplicated project context. Fixes #45649 and #45488. Thanks @BunsDev.
 
 ## 2026.5.24
 
