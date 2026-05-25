@@ -34,7 +34,7 @@ export function registerCronStatusCommand(cron: Command) {
           const res = await callGatewayFromCli("cron.status", opts, {});
           printCronJson(res);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -66,7 +66,7 @@ export function registerCronListCommand(cron: Command) {
           const deliveryPreviews = coerceCronDeliveryPreviews(res);
           printCronList(jobs, defaultRuntime, { deliveryPreviews });
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );
@@ -275,7 +275,7 @@ export function registerCronAddCommand(cron: Command) {
           printCronJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          handleCronCliError(err);
+          handleCronCliError(err, opts);
         }
       }),
   );

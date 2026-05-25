@@ -30,14 +30,14 @@ require the `node` role.
 
 ## Scope levels
 
-| Scope                   | Meaning                                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating control-plane calls.                                                                                    |
-| `operator.write`        | Normal mutating operator actions such as sending messages, invoking tools, updating talk/voice settings, and node command relay. Also satisfies `operator.read`.                      |
-| `operator.admin`        | Administrative control-plane access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, sensitive reserved namespaces, and high-risk approvals. |
-| `operator.pairing`      | Device and node pairing management, including listing, approving, rejecting, removing, rotating, and revoking pairing records or device tokens.                                       |
-| `operator.approvals`    | Exec and plugin approval APIs.                                                                                                                                                        |
-| `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                                                     |
+| Scope                   | Meaning                                                                                                                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating control-plane calls.                                                                                     |
+| `operator.write`        | Normal mutating operator actions such as sending messages, invoking tools, scheduling cron jobs, updating talk/voice settings, and node command relay. Also satisfies `operator.read`. |
+| `operator.admin`        | Administrative control-plane access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, sensitive reserved namespaces, and high-risk approvals.  |
+| `operator.pairing`      | Device and node pairing management, including listing, approving, rejecting, removing, rotating, and revoking pairing records or device tokens.                                        |
+| `operator.approvals`    | Exec and plugin approval APIs.                                                                                                                                                         |
+| `operator.talk.secrets` | Reading Talk configuration with secrets included.                                                                                                                                      |
 
 Unknown future `operator.*` scopes require an exact match unless the caller has
 `operator.admin`.

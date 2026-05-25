@@ -2,6 +2,11 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
+import {
+  readConnectPairingRequiredMessage,
+  readPairingConnectErrorDetails,
+  type ConnectPairingRequiredReason,
+} from "../../gateway/protocol/connect-error-details.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
@@ -68,8 +73,118 @@ function computeStatus(job: CronJob): string {
   return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
-export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+type CronCliErrorOptions = {
+  json?: boolean;
+};
+
+type CronPairingErrorDetails = {
+  reason?: ConnectPairingRequiredReason;
+  requestId?: string;
+  requestedScopes?: string[];
+  approvedScopes?: string[];
+};
+
+function normalizeCronCliErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function readCronCliErrorDetails(err: unknown): unknown {
+  return err && typeof err === "object" && !Array.isArray(err)
+    ? (err as { details?: unknown }).details
+    : undefined;
+}
+
+function resolveCronPairingErrorDetails(err: unknown): CronPairingErrorDetails | null {
+  const details = readPairingConnectErrorDetails(readCronCliErrorDetails(err));
+  if (details) {
+    return {
+      ...(details.reason ? { reason: details.reason } : {}),
+      ...(details.requestId ? { requestId: details.requestId } : {}),
+      ...(details.requestedScopes ? { requestedScopes: details.requestedScopes } : {}),
+      ...(details.approvedScopes ? { approvedScopes: details.approvedScopes } : {}),
+    };
+  }
+  const message = normalizeCronCliErrorMessage(err);
+  const parsed = readConnectPairingRequiredMessage(message);
+  if (!parsed) {
+    return null;
+  }
+  const normalized = message.toLowerCase();
+  if (parsed.reason === "not-paired" && normalized.includes("more scopes")) {
+    return { ...parsed, reason: "scope-upgrade" };
+  }
+  return parsed;
+}
+
+function formatScopeList(scopes: readonly string[] | undefined): string {
+  if (!scopes) {
+    return "";
+  }
+  return scopes.length > 0 ? scopes.join(", ") : "(none)";
+}
+
+function formatCronPairingError(details: CronPairingErrorDetails): string {
+  const title =
+    details.reason === "scope-upgrade"
+      ? "Gateway scope upgrade pending approval."
+      : "Gateway pairing approval required.";
+  const approveCommand = details.requestId
+    ? `openclaw devices approve ${details.requestId}`
+    : "openclaw devices approve --latest";
+  return [
+    title,
+    details.requestedScopes ? `Requested scopes: ${formatScopeList(details.requestedScopes)}` : "",
+    details.approvedScopes ? `Approved scopes: ${formatScopeList(details.approvedScopes)}` : "",
+    `Approve it with: ${approveCommand}`,
+    "Review pending requests with: openclaw devices list",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatCronCliErrorJson(err: unknown): Record<string, unknown> {
+  const pairing = resolveCronPairingErrorDetails(err);
+  if (pairing) {
+    const approveCommand = pairing.requestId
+      ? `openclaw devices approve ${pairing.requestId}`
+      : "openclaw devices approve --latest";
+    return {
+      ok: false,
+      error: {
+        type: "gateway_pairing_required",
+        message:
+          pairing.reason === "scope-upgrade"
+            ? "scope upgrade pending approval"
+            : "gateway pairing approval required",
+        ...(pairing.reason ? { reason: pairing.reason } : {}),
+        ...(pairing.requestId ? { requestId: pairing.requestId } : {}),
+        ...(pairing.requestedScopes ? { requestedScopes: pairing.requestedScopes } : {}),
+        ...(pairing.approvedScopes ? { approvedScopes: pairing.approvedScopes } : {}),
+        approveCommand,
+        listCommand: "openclaw devices list",
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      type: "cron_cli_error",
+      message: normalizeCronCliErrorMessage(err),
+    },
+  };
+}
+
+export function handleCronCliError(err: unknown, opts: CronCliErrorOptions = {}) {
+  if (opts.json === true) {
+    defaultRuntime.writeJson(formatCronCliErrorJson(err));
+    defaultRuntime.exit(1);
+    return;
+  }
+  const pairing = resolveCronPairingErrorDetails(err);
+  defaultRuntime.error(danger(pairing ? formatCronPairingError(pairing) : String(err)));
   defaultRuntime.exit(1);
 }
 

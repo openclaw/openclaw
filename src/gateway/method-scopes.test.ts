@@ -52,6 +52,10 @@ describe("method scope resolution", () => {
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
+    ["cron.add", ["operator.write"]],
+    ["cron.update", ["operator.write"]],
+    ["cron.remove", ["operator.write"]],
+    ["cron.run", ["operator.write"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
     ["talk.client.toolCall", ["operator.write"]],
@@ -241,6 +245,19 @@ describe("operator scope authorization", () => {
       missingScope: "operator.write",
     });
   });
+
+  it.each(["cron.add", "cron.update", "cron.remove", "cron.run"])(
+    "requires operator.write for cron mutation %s",
+    (method) => {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+    },
+  );
 
   it("allows operator.write clients to use unified Talk sessions", () => {
     for (const method of [

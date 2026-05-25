@@ -589,6 +589,21 @@ describe("callGateway url resolution", () => {
       call: () => callGatewayCli({ method: "health" }),
       expectedScopes: ["operator.read"],
     },
+    {
+      label: "uses write scope for cron CLI mutations",
+      call: () =>
+        callGatewayCli({
+          method: "cron.add",
+          params: {
+            name: "daily-check",
+            schedule: { kind: "every", everyMs: 86_400_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "run the daily check" },
+          },
+        }),
+      expectedScopes: ["operator.write"],
+    },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
     await call();
