@@ -70,6 +70,9 @@ const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
 const DISCORD_REALTIME_TRAILING_SILENCE_MIN_MS = 700;
 const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
+const DISCORD_REALTIME_WAKE_NAME_CONFUSIONS = new Map<string, ReadonlySet<string>>([
+  ["openclaw", new Set(["openclub", "opencloud"])],
+]);
 const DISCORD_REALTIME_FORCED_CONSULT_TRAILING_FRAGMENT_WORDS = new Set([
   "a",
   "about",
@@ -492,7 +495,10 @@ function isFuzzyWakeNameMatch(candidate: LeadingWakeNameCandidate, wakeName: str
   if (distance <= 1) {
     return true;
   }
-  return distance === 2 && wakeCompact.length >= 5 && heardCompact.length !== wakeCompact.length;
+  if (distance === 2 && wakeCompact.length >= 5 && heardCompact.length !== wakeCompact.length) {
+    return true;
+  }
+  return DISCORD_REALTIME_WAKE_NAME_CONFUSIONS.get(wakeCompact)?.has(heardCompact) === true;
 }
 
 function stripLeadingWakeNameCandidate(text: string, candidate: LeadingWakeNameCandidate): string {
