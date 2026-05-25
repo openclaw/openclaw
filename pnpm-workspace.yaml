@@ -55,6 +55,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "rastermill@0.1.0"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
@@ -104,6 +105,7 @@ allowBuilds:
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
+  rastermill: true
 
 packageExtensions:
   baileys:
