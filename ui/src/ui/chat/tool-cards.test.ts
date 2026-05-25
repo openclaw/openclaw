@@ -356,6 +356,11 @@ describe("tool-cards", () => {
       expect(isToolErrorOutput(undefined)).toBe(false);
       expect(isToolErrorOutput("")).toBe(false);
       expect(isToolErrorOutput("Opened page")).toBe(false);
+      expect(
+        isToolErrorOutput(
+          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
+        ),
+      ).toBe(false);
       expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
       expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
       expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);

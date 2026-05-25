@@ -1563,10 +1563,9 @@ function renderGroupedMessage(
   const toolSummaryLabel = formatCollapsedToolSummaryText(toolSummaryLabelRaw);
   const toolPreview =
     markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
-  const toolMessageLabelRaw =
-    toolMessageHasError
-      ? "Tool error"
-      : singleToolDisplayDetail && !markdown && !hasImages
+  const toolMessageLabelRaw = toolMessageHasError
+    ? "Tool error"
+    : singleToolDisplayDetail && !markdown && !hasImages
       ? singleToolDisplayDetail
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label

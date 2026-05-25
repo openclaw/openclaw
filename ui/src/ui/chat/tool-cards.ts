@@ -98,8 +98,9 @@ export function isToolErrorOutput(outputText: string | undefined): boolean {
     return false;
   }
   const obj = parsed as Record<string, unknown>;
-  if (readToolErrorFlag(obj) === true) {
-    return true;
+  const explicitErrorFlag = readToolErrorFlag(obj);
+  if (explicitErrorFlag !== undefined) {
+    return explicitErrorFlag;
   }
   if ("error" in obj) {
     const value = obj.error;
