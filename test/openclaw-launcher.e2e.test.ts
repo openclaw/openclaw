@@ -190,6 +190,89 @@ describe("openclaw launcher", () => {
     expect(result.stderr).not.toContain("missing dist/entry.(m)js");
   });
 
+  it("continues past Bun-shaped direct warning filter misses", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const loaderPath = path.join(fixtureRoot, "bun-direct-miss-loader.mjs");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      loaderPath,
+      [
+        'import { fileURLToPath } from "node:url";',
+        "export async function resolve(specifier, context, nextResolve) {",
+        "  if (specifier === './dist/warning-filter.js' || specifier === './dist/warning-filter.mjs') {",
+        "    const err = new Error(`Cannot find module '${specifier}' from '${fileURLToPath(context.parentURL)}'`);",
+        "    err.specifier = specifier;",
+        "    throw err;",
+        "  }",
+        "  return nextResolve(specifier, context);",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-loader", loaderPath, path.join(fixtureRoot, "openclaw.mjs"), "--version"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("ENTRY\n");
+    expect(result.stderr).not.toContain("warning-filter");
+  });
+
+  it("surfaces Bun-shaped transitive entry import failures", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const loaderPath = path.join(fixtureRoot, "bun-transitive-miss-loader.mjs");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      'import "missing-openclaw-launcher-dep";\nexport {};\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      loaderPath,
+      [
+        'import { fileURLToPath } from "node:url";',
+        "export async function resolve(specifier, context, nextResolve) {",
+        "  if ([",
+        "    './dist/warning-filter.js',",
+        "    './dist/warning-filter.mjs',",
+        "    'missing-openclaw-launcher-dep',",
+        "  ].includes(specifier)) {",
+        "    const err = new Error(`Cannot find module '${specifier}' from '${fileURLToPath(context.parentURL)}'`);",
+        "    err.specifier = specifier;",
+        "    err.referrer = context.parentURL;",
+        "    throw err;",
+        "  }",
+        "  return nextResolve(specifier, context);",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--experimental-loader", loaderPath, path.join(fixtureRoot, "openclaw.mjs"), "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing-openclaw-launcher-dep");
+    expect(result.stderr).not.toContain("missing dist/entry.(m)js");
+  });
+
   it("keeps the friendly launcher error for a truly missing entry build output", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
 

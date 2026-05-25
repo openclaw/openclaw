@@ -250,21 +250,39 @@ if (
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
+const quotedCannotFindModule = (message, value) =>
+  message.includes(`Cannot find module '${value}'`) ||
+  message.includes(`Cannot find module "${value}"`);
+
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
+  if (!err || typeof err !== "object") {
     return false;
   }
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if ("url" in err && err.url === expectedUrl.href) {
-    return true;
-  }
-
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
   const expectedPath = fileURLToPath(expectedUrl);
+  const launcherPath = fileURLToPath(import.meta.url);
+  if (isModuleNotFoundError(err)) {
+    return (
+      ("url" in err && err.url === expectedUrl.href) ||
+      quotedCannotFindModule(message, expectedPath)
+    );
+  }
+
+  const errorSpecifier =
+    "specifier" in err && typeof err.specifier === "string" ? err.specifier : "";
+  const errorReferrer = "referrer" in err && typeof err.referrer === "string" ? err.referrer : "";
+  const hasLauncherReferrer =
+    !errorReferrer || errorReferrer === import.meta.url || errorReferrer === launcherPath;
   return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
+    (errorSpecifier === specifier && hasLauncherReferrer) ||
+    (quotedCannotFindModule(message, specifier) &&
+      hasLauncherReferrer &&
+      (message.includes(`from '${launcherPath}'`) ||
+        message.includes(`from "${launcherPath}"`) ||
+        message.includes(`from '${import.meta.url}'`) ||
+        message.includes(`from "${import.meta.url}"`)))
   );
 };
 
