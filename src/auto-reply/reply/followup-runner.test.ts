@@ -359,7 +359,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     );
     return {
       ...actual,
-      persistUserTurnTranscript: (params: unknown) => persistUserTurnTranscriptMock(params),
+      tryPersistInlineUserTurnTranscript: (params: unknown) =>
+        persistUserTurnTranscriptMock(params),
     };
   });
   vi.doMock("./queue.js", () => ({
@@ -844,11 +845,10 @@ describe("createFollowupRunner runtime config", () => {
       agentId: "agent",
       cwd: "/tmp",
       config: runtimeConfig,
-      updateMode: "inline",
-    });
-    expect(persistenceCall.input).toMatchObject({
       text: "hello",
+      errorContext: "CLI user turn transcript",
     });
+    expect(persistenceCall.input).toBeUndefined();
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {

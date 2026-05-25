@@ -3,6 +3,7 @@ import { appendSessionTranscriptMessage } from "../config/sessions/transcript-ap
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { logVerbose } from "../globals.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
 export type PersistedUserTurnMediaInput = {
@@ -58,6 +59,38 @@ export type PersistUserTurnTranscriptParams = {
   config?: OpenClawConfig;
   updateMode?: UserTurnTranscriptUpdateMode;
 };
+
+export type UserTurnTranscriptPersistenceTarget = Omit<
+  PersistUserTurnTranscriptParams,
+  "input" | "message" | "updateMode"
+>;
+
+type InlineUserTurnTranscriptSource =
+  | {
+      message: PersistedUserTurnMessage;
+      input?: UserTurnInput;
+      text?: string | null;
+      timestamp?: number;
+    }
+  | {
+      message?: undefined;
+      input: UserTurnInput;
+      text?: string | null;
+      timestamp?: number;
+    }
+  | {
+      message?: undefined;
+      input?: undefined;
+      text: string;
+      timestamp?: number;
+    };
+
+export type PersistInlineUserTurnTranscriptParams = UserTurnTranscriptPersistenceTarget &
+  InlineUserTurnTranscriptSource & {
+    errorContext?: string;
+  };
+
+export type TryPersistInlineUserTurnTranscriptParams = PersistInlineUserTurnTranscriptParams;
 
 export type PersistedUserTurnTextFieldSource = {
   Transcript?: string | null;
@@ -332,4 +365,49 @@ export async function persistUserTurnTranscript(params: PersistUserTurnTranscrip
     ...appended,
     sessionEntry,
   };
+}
+
+export async function persistInlineUserTurnTranscript(
+  params: PersistInlineUserTurnTranscriptParams,
+): ReturnType<typeof persistUserTurnTranscript> {
+  const target: UserTurnTranscriptPersistenceTarget = {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    ...(params.sessionStore ? { sessionStore: params.sessionStore } : {}),
+    ...(params.storePath ? { storePath: params.storePath } : {}),
+    agentId: params.agentId,
+    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.config ? { config: params.config } : {}),
+  };
+  const userTurn = params.message
+    ? { message: params.message }
+    : params.input
+      ? { input: params.input }
+      : {
+          input: {
+            text: params.text,
+            timestamp: params.timestamp ?? Date.now(),
+          },
+        };
+
+  return await persistUserTurnTranscript({
+    ...target,
+    ...userTurn,
+    updateMode: "inline",
+  });
+}
+
+export async function tryPersistInlineUserTurnTranscript(
+  params: TryPersistInlineUserTurnTranscriptParams,
+): ReturnType<typeof persistUserTurnTranscript> {
+  try {
+    return await persistInlineUserTurnTranscript(params);
+  } catch (error) {
+    logVerbose(
+      `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+    );
+    return undefined;
+  }
 }

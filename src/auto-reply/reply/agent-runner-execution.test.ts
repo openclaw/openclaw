@@ -144,7 +144,8 @@ vi.mock("../../sessions/user-turn-transcript.js", async () => {
   );
   return {
     ...actual,
-    persistUserTurnTranscript: (params: unknown) => state.persistUserTurnTranscriptMock(params),
+    tryPersistInlineUserTurnTranscript: (params: unknown) =>
+      state.persistUserTurnTranscriptMock(params),
   };
 });
 
@@ -1835,7 +1836,7 @@ describe("runAgentTurnWithFallback", () => {
       storePath: "/tmp/sessions.json",
       agentId: "agent",
       cwd: "/tmp",
-      updateMode: "inline",
+      errorContext: "CLI user turn transcript",
     });
   });
 
@@ -1867,12 +1868,11 @@ describe("runAgentTurnWithFallback", () => {
       sessionId: "session",
       sessionKey: "main",
       agentId: "agent",
-      updateMode: "inline",
+      text: "display prompt",
+      errorContext: "CLI user turn transcript",
     });
     const call = requireMockCall(state.persistUserTurnTranscriptMock, 0, "user turn persistence");
-    expect(requireRecord(call[0], "user turn persistence").input).toMatchObject({
-      text: "display prompt",
-    });
+    expect(requireRecord(call[0], "user turn persistence").input).toBeUndefined();
   });
 
   it("does not reuse or persist CLI sessions for room-event turns", async () => {

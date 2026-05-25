@@ -52,7 +52,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
-  persistUserTurnTranscript,
+  persistInlineUserTurnTranscript,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
@@ -2693,7 +2693,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               }
               const persistedImages = await getPersistedMediaForTranscript();
               const userTurnInput = await userTurnInputPromise;
-              await persistUserTurnTranscript({
+              await persistInlineUserTurnTranscript({
                 sessionId: resolvedSessionId,
                 sessionKey,
                 sessionEntry: latestEntry ?? entry,
@@ -2705,7 +2705,6 @@ export const chatHandlers: GatewayRequestHandlers = {
                   media: persistedImages,
                   timestamp: now,
                 },
-                updateMode: "inline",
               });
             },
             {
