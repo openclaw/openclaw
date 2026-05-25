@@ -155,6 +155,7 @@ describe("runNodeDaemonStatus", () => {
   it("fails install when the saved node gateway port is invalid", async () => {
     mocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,
+      nodeId: "node-invalid-port",
       gateway: { port: 70_000 },
     });
 
