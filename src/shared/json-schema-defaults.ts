@@ -96,6 +96,18 @@ function normalizeSchemaMap(value: unknown): unknown {
   );
 }
 
+function normalizeSchemaDependencies(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry),
+    ]),
+  );
+}
+
 function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
   const { type, ...rest } = schema;
   if (!Array.isArray(type)) {
@@ -118,6 +130,9 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
     Object.entries(normalizedSchema).map(([key, value]) => {
       if (schemaMapKeywords.has(key)) {
         return [key, normalizeSchemaMap(value)];
+      }
+      if (key === "dependencies") {
+        return [key, normalizeSchemaDependencies(value)];
       }
       if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
         return [key, normalizeJsonSchemaNode(value)];
@@ -166,6 +181,17 @@ function resolveLocalAnchor(
       continue;
     }
     for (const entry of Object.values(value)) {
+      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+  }
+  if (isRecord(schema.dependencies)) {
+    for (const entry of Object.values(schema.dependencies)) {
+      if (isStringArray(entry)) {
+        continue;
+      }
       const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
       if (resolved !== undefined) {
         return resolved;
@@ -303,6 +329,16 @@ function validateSchemaKeywordShapes(
       }
     }
   }
+  if (schema.dependencies !== undefined) {
+    if (!isRecord(schema.dependencies)) {
+      return `${path}.dependencies: expected schema or string array map`;
+    }
+    for (const [key, value] of Object.entries(schema.dependencies)) {
+      if (!isStringArray(value) && typeof value !== "boolean" && !isRecord(value)) {
+        return `${path}.dependencies.${key}: expected schema or string array`;
+      }
+    }
+  }
   return undefined;
 }
 
@@ -348,6 +384,21 @@ function findJsonSchemaNodeError(
       const error = findJsonSchemaNodeError(
         entry,
         `${path}.${key}.${entryKey}`,
+        currentResourceRoot,
+      );
+      if (error) {
+        return error;
+      }
+    }
+  }
+  if (isRecord(schema.dependencies)) {
+    for (const [key, value] of Object.entries(schema.dependencies)) {
+      if (isStringArray(value)) {
+        continue;
+      }
+      const error = findJsonSchemaNodeError(
+        value,
+        `${path}.dependencies.${key}`,
         currentResourceRoot,
       );
       if (error) {

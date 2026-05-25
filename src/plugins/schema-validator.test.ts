@@ -266,6 +266,24 @@ describe("schema validator", () => {
           $ref: "#value",
         },
       ],
+      [
+        "schema-validator.test.invalid-dependencies-value",
+        {
+          type: "object",
+          dependencies: {
+            mode: 123,
+          },
+        },
+      ],
+      [
+        "schema-validator.test.invalid-dependencies-array",
+        {
+          type: "object",
+          dependencies: {
+            mode: [1],
+          },
+        },
+      ],
     ] as const) {
       expect(() =>
         validateJsonSchemaValue({
@@ -353,6 +371,52 @@ describe("schema validator", () => {
         value: "ok",
       },
       expectedValue: "ok",
+    });
+  });
+
+  it("accepts local refs to anchors inside dependency schemas", () => {
+    const schema = {
+      type: "object",
+      dependencies: {
+        a: {
+          $defs: {
+            Target: {
+              $anchor: "target",
+              type: "object",
+            },
+          },
+        },
+        b: {
+          properties: {
+            b: {
+              $ref: "#target",
+            },
+          },
+          required: ["b"],
+        },
+      },
+    } as const;
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.dependencies-anchor-ref",
+        schema,
+        value: {
+          a: {},
+          b: {},
+        },
+      },
+      expectedValue: {
+        a: {},
+        b: {},
+      },
+    });
+    expectValidationFailure({
+      cacheKey: "schema-validator.test.dependencies-anchor-ref",
+      schema,
+      value: {
+        a: {},
+        b: 1,
+      },
     });
   });
 

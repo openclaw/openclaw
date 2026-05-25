@@ -282,6 +282,20 @@ describe("session MCP runtime", () => {
         },
         $ref: "#value",
       },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: 123,
+        },
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: [1],
+        },
+      },
     ] as const) {
       expect(() => createBundleMcpJsonSchemaValidator().getValidator(schema as never)).toThrow(
         "Invalid MCP draft-2020-12 JSON Schema",
@@ -340,6 +354,33 @@ describe("session MCP runtime", () => {
     });
     expect(validator("ok").valid).toBe(true);
     expect(validator(1).valid).toBe(false);
+  });
+
+  it("accepts draft-2020-12 local refs to anchors inside dependency schemas", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        a: {
+          $defs: {
+            Target: {
+              $anchor: "target",
+              type: "object",
+            },
+          },
+        },
+        b: {
+          properties: {
+            b: {
+              $ref: "#target",
+            },
+          },
+          required: ["b"],
+        },
+      },
+    });
+    expect(validator({ a: {}, b: {} }).valid).toBe(true);
+    expect(validator({ a: {}, b: 1 }).valid).toBe(false);
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
