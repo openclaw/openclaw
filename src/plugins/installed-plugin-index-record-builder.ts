@@ -79,7 +79,9 @@ function resolvePackageJsonPath(
     safeRealpathSync(candidate.packageDir, realpathCache) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
   const rootDir =
-    safeRealpathSync(candidate.rootDir, realpathCache) ?? path.resolve(candidate.rootDir);
+    candidate.rootDir === candidate.packageDir
+      ? packageDir
+      : (safeRealpathSync(candidate.rootDir, realpathCache) ?? path.resolve(candidate.rootDir));
   const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
   return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
     ? packageJsonPath
@@ -91,7 +93,10 @@ function resolvePackageJsonRelativePath(
   packageJsonPath: string,
   realpathCache: Map<string, string>,
 ): string {
-  const resolvedRootDir = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
+  const resolvedRootDir =
+    rootDir === path.dirname(packageJsonPath)
+      ? path.dirname(packageJsonPath)
+      : (safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir));
   const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
   return relativePath.split(path.sep).join("/");
 }

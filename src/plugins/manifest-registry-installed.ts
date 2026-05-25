@@ -78,7 +78,9 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
-      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
+      const packageJsonFile =
+        record.packageJson?.fileSignature ??
+        safeFileSignature(resolvePackageJsonPath(record, realpathCache));
       return {
         pluginId: record.pluginId,
         packageName: record.packageName,
@@ -95,7 +97,7 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         source: record.source,
         setupSource: record.setupSource,
         packageJson: record.packageJson,
-        packageJsonFile: safeFileSignature(packageJsonPath),
+        packageJsonFile,
         rootDir: record.rootDir,
         origin: record.origin,
         enabled: record.enabled,

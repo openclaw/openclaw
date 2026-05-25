@@ -26,6 +26,22 @@ describe("realtime voice turn context tracker", () => {
     expect(turn.closed).toBe(true);
   });
 
+  it("can defer retaining silent turns until audio starts", () => {
+    const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>({
+      deferUntilAudio: true,
+    });
+    const silent = tracker.open({ id: "silent" });
+    const spoken = tracker.open({ id: "spoken" });
+
+    expect(tracker.size()).toBe(0);
+    tracker.close(silent);
+    tracker.markAudio(spoken);
+
+    expect(tracker.size()).toBe(1);
+    expect(tracker.consumeAudioContext()).toEqual({ id: "spoken" });
+    expect(tracker.consumeAudioContext()).toBeUndefined();
+  });
+
   it("ignores handles from another tracker", () => {
     const first = createRealtimeVoiceTurnContextTracker<{ id: string }>();
     const second = createRealtimeVoiceTurnContextTracker<{ id: string }>();
