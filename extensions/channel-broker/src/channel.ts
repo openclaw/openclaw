@@ -77,6 +77,17 @@ function resolveBrokerSessionTarget(params: {
   }
 }
 
+function buildBrokerOwnedChannelTarget(params: {
+  rawTarget: string;
+  account: ResolvedChannelBrokerAccount;
+  threadId?: string | number | null;
+}): string {
+  const target = buildCanonicalChannelBrokerTarget(params);
+  return target.startsWith("broker:") || target.startsWith("channel-broker:")
+    ? target
+    : `broker:${target}`;
+}
+
 const channelBrokerMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,
   durableFinal: {
@@ -204,7 +215,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
         const parsed = parseChannelBrokerTarget({ rawTarget: target, account, threadId });
         const brokerConversationType = parsed.conversationType ?? "channel";
         const chatType = brokerConversationType === "thread" ? "channel" : brokerConversationType;
-        const to = buildCanonicalChannelBrokerTarget({
+        const to = buildBrokerOwnedChannelTarget({
           rawTarget: target,
           account,
           threadId,
@@ -255,7 +266,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
         try {
           return {
             ok: true,
-            to: buildCanonicalChannelBrokerTarget({ rawTarget: resolved, account }),
+            to: buildBrokerOwnedChannelTarget({ rawTarget: resolved, account }),
           };
         } catch (cause) {
           return {

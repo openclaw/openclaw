@@ -1317,7 +1317,7 @@ describe("channel-broker plugin", () => {
     expect(route).toMatchObject({
       chatType: "direct",
       peer: { kind: "direct", id: "telegram:123456789" },
-      to: "telegram:123456789?conversationType=direct",
+      to: "broker:telegram:123456789?conversationType=direct",
     });
   });
 
