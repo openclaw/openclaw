@@ -233,10 +233,6 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
   return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
 }
 
-function normalizeStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 function readManifestProviderEndpoints(
   manifest: Record<string, unknown>,
 ): ManifestProviderEndpointCacheEntry[] {
@@ -254,9 +250,11 @@ function readManifestProviderEndpoints(
     }
     entries.push({
       endpointClass: endpointClassRaw,
-      hosts: normalizeStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
-      hostSuffixes: normalizeStringList(rawEndpoint.hostSuffixes).map((host) => host.toLowerCase()),
-      normalizedBaseUrls: normalizeStringList(rawEndpoint.baseUrls)
+      hosts: normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
+      hostSuffixes: normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
+        host.toLowerCase(),
+      ),
+      normalizedBaseUrls: normalizeTrimmedStringList(rawEndpoint.baseUrls)
         .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
         .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
       ...(normalizeOptionalString(rawEndpoint.googleVertexRegion)

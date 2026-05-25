@@ -824,17 +824,13 @@ async function scanDirectoryTarget(params: {
   }
 }
 
-function readStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 function collectPackageExecutableScanEntries(params: {
   extensions: string[];
   packageMetadata?: PackageExecutableScanMetadata;
 }): string[] {
   const entries: string[] = [];
   const metadata = params.packageMetadata;
-  const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
+  const runtimeExtensions = normalizeTrimmedStringList(metadata?.runtimeExtensions);
   for (const [index, extensionEntry] of params.extensions.entries()) {
     entries.push(extensionEntry);
     const runtimeEntry = runtimeExtensions[index];

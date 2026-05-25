@@ -43,12 +43,8 @@ type BundleManifestFileLoadResult =
   | { ok: true; raw: Record<string, unknown>; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
-function normalizePathList(value: unknown): string[] {
-  return normalizeSingleOrTrimmedStringList(value);
-}
-
 export function normalizeBundlePathList(value: unknown): string[] {
-  return Array.from(new Set(normalizePathList(value)));
+  return Array.from(new Set(normalizeSingleOrTrimmedStringList(value)));
 }
 
 export function mergeBundlePathLists(...groups: string[][]): string[] {

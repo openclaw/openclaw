@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { enablePluginInConfig } from "./enable.js";
 import type { PluginPackageInstall } from "./manifest.js";
@@ -19,12 +20,6 @@ export type WebSearchInstallCatalogEntry = {
   provider: PluginWebSearchProviderEntry;
   trustedSourceLinkedOfficialInstall?: boolean;
 };
-
-function normalizeStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map(normalizeString).filter((entry): entry is string => Boolean(entry))
-    : [];
-}
 
 function normalizeOnboardingScopes(
   value: OfficialExternalWebSearchProvider["onboardingScopes"],
@@ -80,7 +75,7 @@ function buildProviderEntry(params: {
   const credentialPath =
     normalizeString(params.provider.credentialPath) ??
     `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const envVars = normalizeStringList(params.provider.envVars);
+  const envVars = normalizeTrimmedStringList(params.provider.envVars);
   const placeholder = normalizeString(params.provider.placeholder);
   const signupUrl = normalizeString(params.provider.signupUrl);
   if (!providerId || !label || !hint || envVars.length === 0 || !placeholder || !signupUrl) {

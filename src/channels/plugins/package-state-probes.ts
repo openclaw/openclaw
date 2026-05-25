@@ -63,10 +63,6 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
   }
 }
 
-function normalizeStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
-
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
   return typeof env?.[key] === "string" && env[key].trim().length > 0;
 }
@@ -156,8 +152,8 @@ function resolveChannelPackageStateMetadata(
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   const envMetadata = "env" in metadata ? metadata.env : undefined;
-  const allOf = normalizeStringList(envMetadata?.allOf);
-  const anyOf = normalizeStringList(envMetadata?.anyOf);
+  const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
+  const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
   if ((!specifier || !exportName) && !env) {
     return null;
