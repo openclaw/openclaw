@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -969,6 +969,59 @@ describe("runPreparedReply media-only handling", () => {
     });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+  });
+
+  it("persists staged relative media paths as workspace-backed paths", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const relativeImagePath = "media/inbound/inbound.png";
+    const imagePath = path.join(tmpDir, relativeImagePath);
+    await mkdir(path.dirname(imagePath), { recursive: true });
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this",
+          RawBody: "describe this",
+          CommandBody: "describe this",
+          MediaPaths: [relativeImagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this",
+          BodyStripped: "describe this",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPaths: [relativeImagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userMessageForPersistence).toMatchObject({
+      role: "user",
+      content: "describe this",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
   });
 
   it("persists clean media captions instead of model-only media notes", async () => {

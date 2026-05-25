@@ -65,6 +65,51 @@ describe("user turn transcript persistence", () => {
       ).toEqual([{ url: "media://inbound/a.png", contentType: "image/png" }]);
     });
 
+    it("infers transcript media type from media path when explicit type is absent", () => {
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPaths: ["/tmp/a.png", "https://example.test/report.pdf"],
+        }),
+      ).toEqual([
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "https://example.test/report.pdf", contentType: "application/pdf" },
+      ]);
+    });
+
+    it("resolves staged relative media paths against the media workspace", () => {
+      const workspaceDir = createTempDir("openclaw-user-turn-media-");
+
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPath: "media/inbound/a.png",
+          MediaPaths: ["media/inbound/a.png", "media/inbound/b.jpg"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png", "image/jpeg"],
+          MediaWorkspaceDir: workspaceDir,
+        }),
+      ).toEqual([
+        { path: path.join(workspaceDir, "media/inbound/a.png"), contentType: "image/png" },
+        { path: path.join(workspaceDir, "media/inbound/b.jpg"), contentType: "image/jpeg" },
+      ]);
+    });
+
+    it("does not rewrite absolute or URL-like media paths", () => {
+      const workspaceDir = createTempDir("openclaw-user-turn-media-");
+      const absolutePath = path.join(workspaceDir, "media/inbound/a.png");
+
+      expect(
+        buildPersistedUserTurnMediaInputsFromFields({
+          MediaPaths: [absolutePath, "media://inbound/b.jpg", "https://example.test/c.png"],
+          MediaTypes: ["image/png", "image/jpeg", "image/png"],
+          MediaWorkspaceDir: workspaceDir,
+        }),
+      ).toEqual([
+        { path: absolutePath, contentType: "image/png" },
+        { path: "media://inbound/b.jpg", contentType: "image/jpeg" },
+        { path: "https://example.test/c.png", contentType: "image/png" },
+      ]);
+    });
+
     it("does not infer media from absent structured fields", () => {
       expect(buildPersistedUserTurnMediaInputsFromFields(undefined)).toEqual([]);
       expect(buildPersistedUserTurnMediaInputsFromFields({})).toEqual([]);

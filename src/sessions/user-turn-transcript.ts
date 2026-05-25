@@ -1,9 +1,11 @@
+import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { mimeTypeFromFilePath } from "../media/mime.js";
 import { emitSessionTranscriptUpdate } from "./transcript-events.js";
 
 export type PersistedUserTurnMediaInput = {
@@ -123,6 +125,7 @@ export type PersistedUserTurnMediaFieldSource = {
   MediaUrls?: readonly (string | null | undefined)[] | null;
   MediaType?: string | null;
   MediaTypes?: readonly (string | null | undefined)[] | null;
+  MediaWorkspaceDir?: string | null;
 };
 
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
@@ -205,6 +208,23 @@ function normalizeOptionalTextArray(
   );
 }
 
+const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
+
+function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
+  if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
+    return pathValue;
+  }
+  return path.join(workspaceDir, pathValue);
+}
+
+function resolveTranscriptMediaType(params: {
+  explicitType: string | undefined;
+  mediaPath: string | undefined;
+  mediaUrl: string | undefined;
+}): string | undefined {
+  return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
+}
+
 export function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMediaFieldSource | null | undefined,
 ): PersistedUserTurnMediaInput[] {
@@ -218,19 +238,25 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   const singlePath = normalizeOptionalText(fields.MediaPath);
   const singleUrl = normalizeOptionalText(fields.MediaUrl);
   const singleType = normalizeOptionalText(fields.MediaType);
+  const workspaceDir = normalizeOptionalText(fields.MediaWorkspaceDir);
   const mediaCount = Math.max(paths.length, urls.length, singlePath || singleUrl ? 1 : 0);
   const media: PersistedUserTurnMediaInput[] = [];
 
   for (let index = 0; index < mediaCount; index += 1) {
-    const path = paths[index] ?? (index === 0 ? singlePath : undefined);
+    const rawPath = paths[index] ?? (index === 0 ? singlePath : undefined);
+    const mediaPath = rawPath ? resolveTranscriptMediaPath(rawPath, workspaceDir) : undefined;
     const url = urls[index] ?? (index === 0 ? singleUrl : undefined);
-    if (!path && !url) {
+    if (!mediaPath && !url) {
       continue;
     }
     media.push({
-      ...(path ? { path } : {}),
+      ...(mediaPath ? { path: mediaPath } : {}),
       ...(url ? { url } : {}),
-      contentType: types[index] ?? singleType,
+      contentType: resolveTranscriptMediaType({
+        explicitType: types[index] ?? singleType,
+        mediaPath,
+        mediaUrl: url,
+      }),
     });
   }
 
