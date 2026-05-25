@@ -28,6 +28,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { sortUniqueStrings } from "../../shared/string-normalization.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -803,9 +804,7 @@ function buildMessageToolDescription(options?: {
   if (messageToolDiscoveryParams) {
     const actions = resolveMessageToolActionSchemaActions(messageToolDiscoveryParams);
     if (actions.length > 0) {
-      const sortedActions = Array.from(new Set(actions)).toSorted() as Array<
-        ChannelMessageActionName | "send"
-      >;
+      const sortedActions = sortUniqueStrings(actions) as Array<ChannelMessageActionName | "send">;
       return appendMessageToolReadHint(
         appendMessageToolVisibleReplyHint(
           `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,

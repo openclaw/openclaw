@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -90,7 +91,7 @@ function mergeConfiguredSubagentAllow(
   allow: string[] | undefined,
   alsoAllow: string[] | undefined,
 ): string[] | undefined {
-  return allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
 }
 
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
@@ -509,7 +510,7 @@ export function resolveEffectiveToolPolicy(params: {
   }
 
   const profileAlsoAllow = explicitProfileAlsoAllow
-    ? Array.from(new Set(explicitProfileAlsoAllow))
+    ? uniqueStrings(explicitProfileAlsoAllow)
     : undefined;
   return {
     agentId,

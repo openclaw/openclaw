@@ -9,6 +9,7 @@ import {
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
@@ -242,7 +243,7 @@ function mergeConfig(
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
     .filter(Boolean);
-  const extraPaths = Array.from(new Set(rawPaths));
+  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,

@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -343,7 +344,7 @@ function ensureImageInput(model: OpenAIModel): OpenAIModel {
   }
   return {
     ...model,
-    input: Array.from(new Set([...(model.input ?? []), "image"])),
+    input: uniqueStrings([...(model.input ?? []), "image"]) as OpenAIModel["input"],
   };
 }
 

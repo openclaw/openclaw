@@ -255,7 +255,7 @@ export function readPendingToolMediaReply(
   }
   return {
     mediaUrls: state.pendingToolMediaUrls.length
-      ? Array.from(new Set(state.pendingToolMediaUrls))
+      ? uniqueStrings(state.pendingToolMediaUrls)
       : undefined,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   normalizeSortedUniqueStringEntries,
+  sortUniqueStrings,
   uniqueStrings,
 } from "../shared/string-normalization.js";
 
@@ -95,7 +96,7 @@ function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = t
   const resolved = entries
     .map((entry) => normalizeTrustedDir(entry, forComparison))
     .filter((entry): entry is string => Boolean(entry));
-  return Array.from(new Set(resolved)).toSorted();
+  return sortUniqueStrings(resolved);
 }
 
 function hasPathSelector(value: string): boolean {
@@ -150,7 +151,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
     }
   }
-  return uniqueStrings(dirs).toSorted();
+  return sortUniqueStrings(dirs);
 }
 
 function buildTrustedSafeBinCacheKey(
