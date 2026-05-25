@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: clear the runtime config snapshot before `SIGUSR1` in-process restarts so config changes survive the next gateway loop. (#86388) Thanks @XuZehan-iCenter.
 - Models: show OAuth delegation markers as configured `models.json` auth while keeping runtime route usability checks strict. (#86378) Thanks @rohitjavvadi.
 - Cron: seed active scheduled and manual cron task rows with a progress summary so status surfaces do not look blank while jobs run. (#86313) Thanks @ferminquant.
+- Cron: preserve unsupported persisted cron payload rows during routine store writes while keeping those rows non-runnable. Fixes #84922. (#86415) Thanks @IWhatsskill.
 - Updater: exclude prerelease git tags from stable channel resolution so source updates do not check out newer alpha/rc/preview/canary tags. (#86260) Thanks @stevenepalmer.
 - Security/Audit: flag webhook `hooks.token` reuse of active Gateway password auth in `openclaw security audit` while keeping password-mode startup compatibility. (#84338) Thanks @coygeek.
 - QQBot: derive the outbound reply watchdog from configured agent and provider timeouts so slow local model replies are not cut off at five minutes. Fixes #85267. (#85271) Thanks @SymbolStar.
