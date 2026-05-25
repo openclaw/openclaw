@@ -4422,6 +4422,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(persistedUser?.content).toBe("hello before cli startup failure");
     });
   });
+
+  it("emits a user transcript update when a started agent returns an error before runtime persistence", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-agent-error-no-runtime-persist-");
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = { text: "agent failed before prompt append", isError: true };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-agent-error-no-runtime-persist",
+      message: "hello before agent error payload",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      expect(
+        context.dedupe.get("chat:idem-user-transcript-agent-error-no-runtime-persist")?.ok,
+      ).toBe(false);
+      const userUpdate = findUserUpdate();
+      const message = userUpdateMessage(userUpdate);
+      expect(userUpdate?.sessionFile.endsWith("sess.jsonl")).toBe(true);
+      expect(userUpdate?.sessionKey).toBe("main");
+      expect(message?.role).toBe("user");
+      expect(message?.content).toBe("hello before agent error payload");
+    });
+  });
 });
 
 describe("chat.send operator UI client sender context", () => {

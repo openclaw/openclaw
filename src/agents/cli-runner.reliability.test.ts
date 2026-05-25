@@ -10,6 +10,7 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -900,12 +901,11 @@ describe("runCliAgent reliability", () => {
           workspaceDir: dir,
           prompt: "runtime image prompt",
           userTurnTranscript: {
-            message: {
-              role: "user",
-              content: "describe this",
-              MediaPath: "/tmp/image.png",
-              MediaType: "image/png",
-            },
+            message: buildPersistedUserTurnMessage({
+              text: "describe this",
+              media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+              timestamp: 123,
+            }),
           },
           onUserMessagePersisted,
         },

@@ -2910,6 +2910,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
+              if (
+                agentRunStarted &&
+                returnedAgentErrorPayloads.length > 0 &&
+                !agentUserMessagePersisted &&
+                !beforeAgentRunHooksRegistered
+              ) {
+                await persistGatewayUserTurnTranscript();
+              }
               let broadcastedSourceReplyFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
