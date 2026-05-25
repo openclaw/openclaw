@@ -1,5 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
@@ -19,6 +18,7 @@ import {
   type MessagingToolSourceReplyPayload,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   asOptionalRecord as readRecord,

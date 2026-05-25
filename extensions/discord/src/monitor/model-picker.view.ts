@@ -180,9 +180,9 @@ function getRuntimeChoices(params: {
   }
   return [
     {
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     },
   ];
 }
@@ -203,7 +203,7 @@ function resolveSelectedRuntime(params: {
   if (current && allowed.has(current)) {
     return current;
   }
-  return choices[0]?.id ?? "pi";
+  return choices[0]?.id ?? "openclaw";
 }
 
 function resolveExplicitRuntimeState(params: {

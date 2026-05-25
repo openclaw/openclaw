@@ -273,7 +273,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "pi,codex",
+      runtimePair: "openclaw,codex",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -285,8 +285,41 @@ describe("qa cli runtime", () => {
       alternateModel: undefined,
       fastMode: undefined,
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: ["pi", "codex"],
+      runtimePair: ["openclaw", "codex"],
     });
+  });
+
+  it("normalizes deprecated pi runtime-pair aliases at the CLI boundary", async () => {
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair: "pi,codex",
+      });
+
+      expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        outputDir: undefined,
+        transportId: "qa-channel",
+        providerMode: "mock-openai",
+        primaryModel: undefined,
+        alternateModel: undefined,
+        fastMode: undefined,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair: ["openclaw", "codex"],
+      });
+      expect(emitWarning).toHaveBeenCalledWith(
+        'QA runtime "pi" is deprecated; use "openclaw" instead.',
+        {
+          code: "OPENCLAW_QA_LEGACY_RUNTIME_ALIAS",
+          type: "DeprecationWarning",
+        },
+      );
+    } finally {
+      emitWarning.mockRestore();
+    }
   });
 
   it("drops blank suite model refs so provider defaults apply", async () => {
@@ -924,8 +957,8 @@ describe("qa cli runtime", () => {
                 drift: "tool-call-shape",
                 driftDetails: "tool call 1 differs",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -951,7 +984,7 @@ describe("qa cli runtime", () => {
           run: {
             providerMode: "mock-openai",
             primaryModel: "openai/gpt-5.5",
-            runtimePair: ["pi", "codex"],
+            runtimePair: ["openclaw", "codex"],
           },
         }),
         "utf8",
@@ -994,8 +1027,8 @@ describe("qa cli runtime", () => {
                 scenarioId: "runtime-tool-fs-read",
                 drift: "none",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: '{"role":"assistant"}\n',
                     toolCalls: [{ tool: "fs.read", argsHash: "a", resultHash: "r" }],
                     finalText: "done",
@@ -1024,7 +1057,7 @@ describe("qa cli runtime", () => {
           run: {
             providerMode: "live-frontier",
             primaryModel: "openai/gpt-5.5",
-            runtimePair: ["pi", "codex"],
+            runtimePair: ["openclaw", "codex"],
           },
         }),
         "utf8",
@@ -1121,7 +1154,7 @@ describe("qa cli runtime", () => {
         repoRoot,
         transcripts: path.resolve("qa/scenarios/jsonl-replay"),
         outputDir: "jsonl-output",
-        runtimePair: "pi,codex",
+        runtimePair: "openclaw,codex",
       });
 
       const report = await fs.readFile(
@@ -1135,7 +1168,7 @@ describe("qa cli runtime", () => {
         ),
       ) as { transcripts?: Array<{ userTurnCount?: number }> };
 
-      expect(report).toContain("# OpenClaw JSONL Replay Report - pi vs codex");
+      expect(report).toContain("# OpenClaw JSONL Replay Report - openclaw vs codex");
       expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
       expect(summary.transcripts).toHaveLength(7);
     } finally {
@@ -1168,8 +1201,8 @@ describe("qa cli runtime", () => {
                 drift: "tool-call-shape",
                 driftDetails: "Codex emitted no web_search call",
                 cells: {
-                  pi: {
-                    runtime: "pi",
+                  openclaw: {
+                    runtime: "openclaw",
                     transcriptBytes: "",
                     toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                     finalText: "",
@@ -1190,7 +1223,7 @@ describe("qa cli runtime", () => {
               },
             },
           ],
-          run: { runtimePair: ["pi", "codex"] },
+          run: { runtimePair: ["openclaw", "codex"] },
         }),
         "utf8",
       );
@@ -1376,14 +1409,14 @@ describe("qa cli runtime", () => {
       runner: "multipass",
       providerMode: "mock-openai",
       scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "codex,pi",
+      runtimePair: "codex,openclaw",
       allowFailures: true,
     });
 
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
-        runtimePair: ["pi", "codex"],
+        runtimePair: ["openclaw", "codex"],
       }),
     );
   });

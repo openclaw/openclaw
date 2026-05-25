@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import type { OAuthCredentials } from "openclaw/plugin-sdk/llm";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,

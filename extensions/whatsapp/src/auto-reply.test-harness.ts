@@ -101,17 +101,17 @@ function resetWebAutoReplySessionSockets() {
 }
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   appendCronStyleCurrentTimeLine: (text: string) => text,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
   resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
     cfg.messages?.messagePrefix,
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
 }));
 
 async function rmDirWithRetries(

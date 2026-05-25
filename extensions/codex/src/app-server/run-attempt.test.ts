@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   abortAgentHarnessRun,
   embeddedAgentLog,
@@ -13,6 +12,7 @@ import {
   type AgentEventPayload,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -2340,8 +2340,8 @@ describe("runCodexAppServerAttempt", () => {
           text: "Unscoped structured command guidance.",
         },
         {
-          text: "PI main command guidance.",
-          surfaces: ["pi_main"],
+          text: "OpenClaw main command guidance.",
+          surfaces: ["openclaw_main"],
         },
       ],
       handler: async () => ({ text: "ok" }),

@@ -1,11 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
+import type { ModelRegistry } from "../../agents/sessions/index.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
@@ -21,7 +21,7 @@ import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
-type ModelResolverModule = typeof import("../../agents/pi-embedded-runner/model.js");
+type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
 
 type RowFilter = {
@@ -46,7 +46,7 @@ const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
   () => import("../../agents/model-catalog.js"),
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
-  () => import("../../agents/pi-embedded-runner/model.js"),
+  () => import("../../agents/embedded-agent-runner/model.js"),
 );
 const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule>(
   () => import("./list.provider-catalog.js"),
@@ -280,7 +280,7 @@ function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConf
 
 export async function appendDiscoveredRows(params: {
   rows: ModelRow[];
-  models: Model<Api>[];
+  models: Model[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
   resolveWithRegistry?: boolean;
@@ -483,7 +483,7 @@ export async function appendProviderCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
   staticOnly?: boolean;
-  catalogModels?: readonly Model<Api>[];
+  catalogModels?: readonly Model[];
 }): Promise<number> {
   let appended = 0;
   let catalogModels = params.catalogModels;

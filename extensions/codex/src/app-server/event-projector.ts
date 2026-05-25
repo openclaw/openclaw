@@ -1,4 +1,3 @@
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -21,11 +20,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  asBoolean,
-  asFiniteNumber,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -151,10 +146,7 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
-  private readonly toolMetas = new Map<
-    string,
-    { toolName: string; meta?: string; asyncStarted?: boolean }
-  >();
+  private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
   private readonly sideEffectingToolItemIds = new Set<string>();
   private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
@@ -383,20 +375,11 @@ export class CodexAppServerEventProjector {
   recordDynamicToolResult(params: {
     callId: string;
     tool: string;
-    asyncStarted?: boolean;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
-    const existingMeta = this.toolMetas.get(params.callId);
-    this.toolMetas.set(params.callId, {
-      toolName: params.tool,
-      ...(existingMeta?.meta ? { meta: existingMeta.meta } : {}),
-      ...(existingMeta?.asyncStarted === true || params.asyncStarted === true
-        ? { asyncStarted: true }
-        : {}),
-    });
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
@@ -812,7 +795,9 @@ export class CodexAppServerEventProjector {
   }
 
   private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
-    const mediaUrls = new Set(normalizeStringEntries(toolTelemetry.toolMediaUrls ?? []));
+    const mediaUrls = new Set(
+      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+    );
     if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
       for (const mediaUrl of this.nativeGeneratedMediaUrls) {
         mediaUrls.add(mediaUrl);
@@ -1225,11 +1210,9 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
-    const existingMeta = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
-      ...(existingMeta?.asyncStarted === true ? { asyncStarted: true } : {}),
     });
     if (isSideEffectingNativeToolItem(item)) {
       this.sideEffectingToolItemIds.add(item.id);
@@ -1584,11 +1567,13 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  return asFiniteNumber(record[key]);
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  return asBoolean(record[key]);
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {

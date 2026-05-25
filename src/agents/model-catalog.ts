@@ -32,7 +32,7 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
-const PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;
+const AGENT_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;
 
 export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 export {
@@ -52,22 +52,13 @@ type DiscoveredModel = {
   compat?: ModelCatalogEntry["compat"];
 };
 
-type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
-type PiRegistryInstance =
-  | Array<DiscoveredModel>
-  | {
-      getAll: () => Array<DiscoveredModel>;
-    };
-type PiRegistryClassLike = {
-  create?: (authStorage: unknown, modelsFile: string) => PiRegistryInstance;
-  new (authStorage: unknown, modelsFile: string): PiRegistryInstance;
-};
+type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 let hasLoggedReadOnlyStaticCatalogError = false;
-const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
-let importPiSdk = defaultImportPiSdk;
+const defaultImportAgentDiscovery = () => import("./agent-model-discovery.js");
+let importAgentDiscovery = defaultImportAgentDiscovery;
 const modelSuppressionLoader = createLazyImportLoader(
   () => import("./model-suppression.runtime.js"),
 );
@@ -88,28 +79,16 @@ export function resetModelCatalogCache() {
 
 export function resetModelCatalogCacheForTest() {
   resetModelCatalogCache();
-  importPiSdk = defaultImportPiSdk;
+  importAgentDiscovery = defaultImportAgentDiscovery;
 }
 
-// Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
-export function setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
-  importPiSdk = loader ?? defaultImportPiSdk;
+// Test-only escape hatch: allow mocking discovery failures without touching module state.
+export function setModelCatalogImportForTest(loader?: () => Promise<AgentDiscoveryModule>) {
+  importAgentDiscovery = loader ?? defaultImportAgentDiscovery;
 }
 
 /** @deprecated Use `setModelCatalogImportForTest`. */
 export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
-
-function instantiatePiModelRegistry(
-  piSdk: PiSdkModule,
-  authStorage: unknown,
-  modelsFile: string,
-): PiRegistryInstance {
-  const Registry = piSdk.ModelRegistry as unknown as PiRegistryClassLike;
-  if (typeof Registry.create === "function") {
-    return Registry.create(authStorage, modelsFile);
-  }
-  return new Registry(authStorage, modelsFile);
-}
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
   return `${normalizeProviderId(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
@@ -229,7 +208,7 @@ function normalizePersistedModelCatalogEntry(
       ? entry.contextWindow
       : defaults?.contextWindow !== undefined
         ? defaults.contextWindow
-        : PI_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
+        : AGENT_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW;
   const contextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
@@ -433,27 +412,21 @@ export async function loadModelCatalog(params?: {
         await ensureOpenClawModelsJson(cfg);
         logStage("models-json-ready");
       }
-      // IMPORTANT: keep the dynamic import *inside* the try/catch.
-      // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
-      // we must not poison the cache with a rejected promise (otherwise all channel handlers
-      // will keep failing until restart).
-      const piSdk = await importPiSdk();
-      logStage("pi-sdk-imported");
+      // Keep discovery inside try/catch so transient filesystem/config failures do not poison
+      // the shared catalog cache until restart.
+      const agentDiscovery = await importAgentDiscovery();
+      logStage("agent-discovery-imported");
       const agentDir = resolveDefaultAgentDir(cfg);
       const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const authStorage = piSdk.discoverAuthStorage(
+      const authStorage = agentDiscovery.discoverAuthStorage(
         agentDir,
         readOnly ? { readOnly: true } : undefined,
       );
       logStage("auth-storage-ready");
-      const registry = instantiatePiModelRegistry(
-        piSdk,
-        authStorage,
-        join(agentDir, "models.json"),
-      );
+      const registry = agentDiscovery.discoverModels(authStorage, agentDir);
       logStage("registry-ready");
-      const entries = Array.isArray(registry) ? registry : registry.getAll();
+      const entries = registry.getAll() as DiscoveredModel[];
       logStage("registry-read", `entries=${entries.length}`);
 
       const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });

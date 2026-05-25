@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import { streamAnthropic } from "openclaw/plugin-sdk/llm-anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -36,7 +36,7 @@ function mergeHeaders(
 }
 
 function buildMantleAnthropicBaseOptions(
-  model: Model<Api>,
+  model: Model,
   options: SimpleStreamOptions | undefined,
   apiKey: string,
 ) {

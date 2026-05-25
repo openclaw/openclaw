@@ -1,4 +1,4 @@
-import { getModels } from "@earendil-works/pi-ai";
+import { getModels } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,

@@ -11,8 +11,9 @@
     "@aws-sdk/client-bedrock": "3.1053.0",
     "@aws-sdk/client-bedrock-runtime": "3.1053.0",
     "@aws-sdk/credential-provider-node": "3.972.44",
-    "@earendil-works/pi-ai": "0.75.5",
-    "@smithy/shared-ini-file-loader": "4.5.4"
+    "@smithy/node-http-handler": "4.7.3",
+    "@smithy/shared-ini-file-loader": "4.5.4",
+    "@smithy/types": "4.14.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

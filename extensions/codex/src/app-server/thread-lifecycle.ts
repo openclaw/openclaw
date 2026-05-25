@@ -1020,7 +1020,7 @@ export function resolveCodexAppServerModelProvider(params: {
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in
-// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
 // first request is accepted. Older Codex models still accept "minimal"
 // directly. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.

@@ -32,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),

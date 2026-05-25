@@ -1,9 +1,6 @@
-import type { Context, Tool } from "@earendil-works/pi-ai";
+import type { Context, Tool } from "openclaw/plugin-sdk/llm";
+import { convertMessages, convertTools } from "openclaw/plugin-sdk/llm-google-shared";
 import { describe, expect, it } from "vitest";
-import {
-  convertMessages,
-  convertTools,
-} from "../../node_modules/@earendil-works/pi-ai/dist/providers/google-shared.js";
 import {
   asRecord,
   expectConvertedRoles,

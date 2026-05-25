@@ -33,9 +33,6 @@ minimumReleaseAgeExclude:
   - "@aws-sdk/token-providers@3.1052.0"
   - "@aws-sdk/token-providers@3.1053.0"
   - "@copilotkit/aimock@1.27.1"
-  - "@earendil-works/pi-agent-core"
-  - "@earendil-works/pi-ai"
-  - "@earendil-works/pi-coding-agent"
   - "@earendil-works/pi-tui"
   - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.65.0"
@@ -101,6 +98,7 @@ allowBuilds:
   koffi: false
   node-llama-cpp: true
   protobufjs: true
+  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
@@ -110,9 +108,6 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-  "@earendil-works/pi-coding-agent":
-    dependencies:
-      strip-ansi: 7.2.0
 
 peerDependencyRules:
   allowedVersions:
