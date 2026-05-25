@@ -312,11 +312,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     try {
       await this.providerInitPromise;
+    } catch (err) {
+      // Clear the cached rejected promise so subsequent calls can retry
+      // initialization instead of being permanently stuck with a stale failure.
+      this.providerInitPromise = null;
+      throw err;
     } finally {
       if (this.providerInitialized) {
         this.providerInitPromise = null;
       }
     }
+  }
+
+  protected resetProviderInitializationForRetry(): void {
+    this.providerInitialized = false;
+    this.providerInitPromise = null;
+    this.providerUnavailableReason = undefined;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
