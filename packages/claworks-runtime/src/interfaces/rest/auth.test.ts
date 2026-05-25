@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClaworksRuntime } from "../../claworks/runtime.js";
-import { checkClaworksApiAuth, resolveAuthContext } from "./auth.js";
+import { checkClaworksApiAuth, hashApiKey, resolveAuthContext } from "./auth.js";
 
 function fakeRuntime(apiKey?: string, extraKeys?: string[]): ClaworksRuntime {
   return {
@@ -86,5 +86,25 @@ describe("multi-key support (key rotation)", () => {
       ({ headers: { authorization: `Bearer ${token}` } }) as import("node:http").IncomingMessage;
     expect(resolveAuthContext(req("shared-key"), rt).authenticated).toBe(true);
     expect(resolveAuthContext(req("extra-key"), rt).authenticated).toBe(true);
+  });
+
+  it("accepts 32-char base64url plaintext keys from secure init", () => {
+    const plainKey = "AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+    expect(plainKey.length).toBe(32);
+    const rt = fakeRuntime(plainKey);
+    const req = {
+      headers: { authorization: `Bearer ${plainKey}` },
+    } as import("node:http").IncomingMessage;
+    expect(resolveAuthContext(req, rt).authenticated).toBe(true);
+  });
+
+  it("accepts SHA-256 hex stored keys", () => {
+    const token = "my-secret-token";
+    const stored = hashApiKey(token);
+    const rt = fakeRuntime(stored);
+    const req = {
+      headers: { authorization: `Bearer ${token}` },
+    } as import("node:http").IncomingMessage;
+    expect(resolveAuthContext(req, rt).authenticated).toBe(true);
   });
 });
