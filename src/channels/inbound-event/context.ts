@@ -39,6 +39,10 @@ type ChannelInboundSupplementalQuoteFacts = NonNullable<SupplementalContextFacts
 type ChannelInboundSupplementalFacts = Omit<SupplementalContextFacts, "quote"> & {
   quote?: ChannelInboundSupplementalQuoteFacts;
 };
+/**
+ * @deprecated Prefer passing `resolveSupplementalMedia: true` directly to
+ * `buildChannelInboundEventContext` without naming this compatibility type.
+ */
 export type ChannelInboundSupplementalResolutionOptions = {
   resolveSupplementalMedia: true;
   suppressSelfQuoteBody?: boolean;
@@ -102,6 +106,10 @@ type FinalizeInboundContextFn = <T extends Record<string, unknown>>(
   opts?: FinalizeInboundContextOptions,
 ) => unknown;
 
+/**
+ * @deprecated Used by deprecated `finalizeChannelInboundContext`; new channel
+ * code should pass facts to `buildChannelInboundEventContext`.
+ */
 export type FinalizeChannelInboundContextParams<T extends Record<string, unknown>> = {
   context: T;
   supplemental?: SupplementalContextFacts | ChannelInboundSupplementalFacts;
@@ -120,6 +128,9 @@ export type FinalizeChannelInboundContextAsyncParams<T extends Record<string, un
       "suppressSelfQuoteBody" | "suppressSelfQuoteMedia"
     >;
 
+/**
+ * @deprecated Result type for deprecated `finalizeChannelInboundContext`.
+ */
 export type FinalizeChannelInboundContextResult<T extends Record<string, unknown>> = {
   context: T & FinalizedMsgContext;
   supplemental?: SupplementalContextFacts;
