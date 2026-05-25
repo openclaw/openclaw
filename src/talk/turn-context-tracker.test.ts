@@ -26,6 +26,19 @@ describe("realtime voice turn context tracker", () => {
     expect(turn.closed).toBe(true);
   });
 
+  it("ignores handles from another tracker", () => {
+    const first = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const second = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const firstTurn = first.open({ id: "first" });
+
+    second.markAudio(firstTurn);
+    second.close(firstTurn);
+
+    expect(firstTurn.hasAudio).toBe(false);
+    expect(firstTurn.closed).toBe(false);
+    expect(first.consumeAudioContext()).toBeUndefined();
+  });
+
   it("drops closed audio turns that are older than later audio", () => {
     const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>();
     const older = tracker.open({ id: "older" });
@@ -78,6 +91,7 @@ describe("realtime voice turn context tracker", () => {
     tracker.markAudio(turn);
 
     expect(tracker.size()).toBe(0);
+    expect(turn.hasAudio).toBe(true);
     expect(tracker.consumeAudioContext()).toBeUndefined();
   });
 

@@ -63,6 +63,7 @@ export function createRealtimeVoiceTurnContextTracker<
   const turns: RealtimeVoiceTurnContextHandle<TContext, TExtra>[] = [];
   let recentIgnoredContext: RecentIgnoredContext<TContext> | undefined;
   let nextId = 0;
+  const owner = Symbol("realtimeVoiceTurnContextTracker");
   const now = options.now ?? Date.now;
   const limit = normalizeNonNegativeInteger(
     options.limit,
@@ -106,11 +107,19 @@ export function createRealtimeVoiceTurnContextTracker<
     expireClosedTurnsBeforeLaterAudio();
   };
 
+  const owns = (handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>) =>
+    (
+      handle as RealtimeVoiceTurnContextHandle<TContext, TExtra> & {
+        [owner]?: true;
+      }
+    )[owner] === true;
+
   return {
     open(context, ...extra) {
       const startedAt = now();
       const handle: RealtimeVoiceTurnContextHandle<TContext, TExtra> = {
         ...(extra[0] ?? ({} as TExtra)),
+        [owner]: true,
         id: `realtime-turn:${startedAt}:${++nextId}`,
         context,
         hasAudio: false,
@@ -122,13 +131,19 @@ export function createRealtimeVoiceTurnContextTracker<
       return handle;
     },
     markAudio(handle) {
-      if (!turns.includes(handle)) {
+      if (!owns(handle)) {
         return;
       }
       handle.hasAudio = true;
       handle.lastAudioAt = now();
+      if (!turns.includes(handle)) {
+        return;
+      }
     },
     close(handle) {
+      if (!owns(handle)) {
+        return;
+      }
       handle.closed = true;
       if (!turns.includes(handle)) {
         return;
