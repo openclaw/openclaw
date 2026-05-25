@@ -1084,8 +1084,7 @@ function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
 
 export function extractTranscriptUserText(content: unknown): string | undefined {
   const extractFromString = (str: string): string => {
-    // Remove media attachment markers like "[media attached: media://...]"
-    return str.replace(/\[media attached:[^\]]*\]/g, "").trim();
+    return str.replace(/\[media attached(?: \d+\/\d+)?:[^\]]*\]/g, "").trim();
   };
   if (typeof content === "string") {
     return extractFromString(content);
@@ -1095,7 +1094,9 @@ export function extractTranscriptUserText(content: unknown): string | undefined 
   }
   const textBlocks = content
     .map((block) => {
-      if (!block || typeof block !== "object") return undefined;
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
       const typed = block as { text?: unknown };
       return typeof typed.text === "string" ? extractFromString(typed.text) : undefined;
     })

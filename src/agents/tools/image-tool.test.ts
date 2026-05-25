@@ -2114,7 +2114,7 @@ describe("image tool managed inbound media", () => {
     }
   }
 
-  it("resolves media://inbound refs", async () => {
+  it("resolves media://inbound refs before workspace-relative path expansion", async () => {
     await withManagedInboundPng(async ({ mediaId }) => {
       installImageUnderstandingProviderStubs();
       const fetch = stubMinimaxOkFetch();
@@ -2123,6 +2123,7 @@ describe("image tool managed inbound media", () => {
           config: createMinimaxImageConfig(),
           agentDir,
           fsPolicy: { workspaceOnly: true },
+          workspaceDir: path.join(agentDir, "workspace"),
         });
 
         await expectImageToolExecOk(tool, `media://inbound/${mediaId}`);

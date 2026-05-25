@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractTranscriptUserText } from "./chat";
+import { extractTranscriptUserText } from "./chat.js";
 
 describe("extractTranscriptUserText", () => {
   it("returns string content unchanged", () => {
@@ -20,16 +20,20 @@ describe("extractTranscriptUserText", () => {
   });
 
   it("strips media markers from array text blocks", () => {
-    const content = [
-      { type: "text", text: "Start [media attached: media://inbound/xyz] end" },
-    ];
+    const content = [{ type: "text", text: "Start [media attached: media://inbound/xyz] end" }];
     expect(extractTranscriptUserText(content)).toBe("Start  end");
   });
 
+  it("strips numbered media attachment markers", () => {
+    expect(
+      extractTranscriptUserText(
+        "Check these [media attached 1/2: media://inbound/a.png] [media attached 2/2: media://inbound/b.png] images",
+      ),
+    ).toBe("Check these   images");
+  });
+
   it("returns undefined for non-string non-array", () => {
-    // @ts-expect-error testing any
     expect(extractTranscriptUserText(123)).toBeUndefined();
-    // @ts-expect-error testing any
     expect(extractTranscriptUserText({})).toBeUndefined();
   });
 
