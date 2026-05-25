@@ -708,6 +708,46 @@ describe("delivery-queue recovery", () => {
     expect(deliverInput.skipQueue).toBe(true);
   });
 
+  it("replays queued automatic entries as automatic so restart recovery keeps policy checks enabled", async () => {
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "automatic replay" }],
+        sendPolicyMode: "automatic",
+        session: {
+          key: "agent:main:telegram:direct:sender-1",
+          policyKey: "agent:main:telegram:direct:sender-1",
+          conversationType: "direct",
+        },
+      },
+      tmpDir(),
+    );
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log: createRecoveryLog(),
+      cfg: {
+        session: {
+          sendPolicy: {
+            default: "deny",
+          },
+        },
+      },
+      stateDir: tmpDir(),
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const deliverInput = mockCallArg(deliver) as {
+      sendPolicyMode?: string;
+      skipQueue?: boolean;
+    };
+    expect(deliverInput.sendPolicyMode).toBe("automatic");
+    expect(deliverInput.skipQueue).toBe(true);
+  });
+
   it("respects maxRecoveryMs time budget and bumps deferred retries", async () => {
     await enqueueCrashRecoveryEntries();
     await enqueueDelivery(

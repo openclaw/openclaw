@@ -2728,6 +2728,30 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.sendPolicyMode).toBe("explicit");
   });
 
+  it("persists automatic replay mode for non-explicit queued deliveries", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m-automatic", roomId: "!room:example" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "automatic" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(results).toEqual([
+      { channel: "matrix", messageId: "m-automatic", roomId: "!room:example" },
+    ]);
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<[{ sendPolicyMode?: unknown }]>
+    )[0]?.[0];
+    expect(queuedDelivery?.sendPolicyMode).toBe("automatic");
+  });
+
   it("strips internal runtime scaffolding before queue persistence", async () => {
     const sendMatrix = vi
       .fn()

@@ -1190,6 +1190,7 @@ export async function deliverOutboundPayloadsInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+  const effectiveSendPolicyMode = params.sendPolicyMode ?? "automatic";
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
   const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
@@ -1199,7 +1200,7 @@ export async function deliverOutboundPayloadsInternal(
     ? createRenderedMessageBatchPlan(queuePayloads)
     : renderedBatchPlan;
 
-  if (params.sendPolicyMode !== "explicit") {
+  if (effectiveSendPolicyMode !== "explicit") {
     const sendPolicyDecision = resolveSendPolicyDetailed({
       cfg: params.cfg,
       sessionKey: params.session?.policyKey ?? params.session?.key,
@@ -1253,7 +1254,7 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-        sendPolicyMode: params.sendPolicyMode,
+        sendPolicyMode: effectiveSendPolicyMode,
       }).catch((err: unknown) => {
         if (queuePolicy === "required") {
           throw err;
