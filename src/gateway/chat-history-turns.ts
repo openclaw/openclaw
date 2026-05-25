@@ -235,7 +235,8 @@ function createTurn(turnId: string): MutableTurn {
 function appendToolActivity(turn: MutableTurn, message: ChatHistoryRecord) {
   turn.collapsedToolRecordCount += 1;
   const normalizedRole = normalizeRole(message).replaceAll("_", "");
-  for (const id of extractToolCallIds(message)) {
+  const toolCallIds = extractToolCallIds(message);
+  for (const id of toolCallIds) {
     if (normalizedRole === "toolresult" || normalizedRole === "tool") {
       turn.toolResultIds.add(id);
     } else {
@@ -245,7 +246,7 @@ function appendToolActivity(turn: MutableTurn, message: ChatHistoryRecord) {
   for (const name of extractToolNames(message)) {
     turn.toolNames.add(name);
   }
-  if (extractToolCallIds(message).length === 0) {
+  if (toolCallIds.length === 0) {
     turn.hasUnpairedToolActivity = true;
   }
 }

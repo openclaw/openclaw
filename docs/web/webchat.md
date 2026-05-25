@@ -23,7 +23,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 ## How it works (behavior)
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
-- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
+- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, replace oversized entries with `[chat.history omitted: message too large]`, and replace raw tool payloads with `[chat.history tool payload omitted]` in display-safe modes.
+- `chat.history` accepts `mode: "turns" | "messages" | "raw-messages"`. Display clients default to `turns`, which groups transcript rows into visible conversational turns and collapses tool activity. `messages` preserves legacy message-row shape while still omitting raw tool payloads. `raw-messages` is an admin-only diagnostic mode for inspecting raw transcript rows.
+- `unsafeRawToolPayloads: true` only has effect with `mode: "raw-messages"` and requires `operator.admin` scope. Non-admin callers receive `INVALID_REQUEST`.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
 - Compaction entries render as an explicit compacted-history divider. The divider explains that the compacted transcript is preserved as a checkpoint and links to the Sessions checkpoint controls, where operators can branch or restore from that compacted view when their permissions allow it.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.

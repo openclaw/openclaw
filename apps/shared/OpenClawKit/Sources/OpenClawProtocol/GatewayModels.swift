@@ -6355,8 +6355,8 @@ public struct ChatHistoryParams: Codable, Sendable {
         sessionkey: String,
         limit: Int?,
         maxchars: Int?,
-        mode: AnyCodable? = nil,
-        unsaferawtoolpayloads: Bool? = nil)
+        mode: AnyCodable?,
+        unsaferawtoolpayloads: Bool?)
     {
         self.sessionkey = sessionkey
         self.limit = limit
