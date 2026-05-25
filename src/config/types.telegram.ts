@@ -72,6 +72,7 @@ export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
   preview?: TelegramStreamingPreviewConfig;
+  nativeTransport?: boolean;
 };
 
 export type TelegramExecApprovalConfig = {

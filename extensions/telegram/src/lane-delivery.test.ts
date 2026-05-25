@@ -141,6 +141,25 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
+  it("suppresses non-final fallback when a stream asks for it", async () => {
+    const answer = createTestDraftStream() as DraftLaneState["stream"] & {
+      suppressNonFinalFallback: () => boolean;
+    };
+    answer.suppressNonFinalFallback = vi.fn(() => true);
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "working",
+      payload: { text: "working" },
+      infoKind: "block",
+    });
+
+    expect(result.kind).toBe("preview-updated");
+    expect(harness.flushDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+  });
+
   it("uses normal final delivery when the stream edit leaves stale text", async () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue("working");

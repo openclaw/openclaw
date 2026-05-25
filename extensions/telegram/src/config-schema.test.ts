@@ -106,6 +106,22 @@ describe("telegram custom commands schema", () => {
     });
   });
 
+  it("accepts streaming.nativeTransport at base and account level", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        mode: "partial",
+        nativeTransport: true,
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            nativeTransport: false,
+          },
+        },
+      },
+    });
+  });
+
   it("accepts DM thread reply policy overrides", () => {
     const res = TelegramConfigSchema.safeParse({
       dm: { threadReplies: "off" },

@@ -6,7 +6,8 @@ Verified against Telegram Bot API 10.0, May 8 2026.
 
 ## Streaming
 
-- Do not reintroduce `sendMessageDraft` for answer streaming. Telegram drafts are ephemeral 30-second previews in private chats; final delivery still requires a separate `sendMessage`. OpenClaw uses `sendMessage` plus `editMessageText`, then finalizes in place so the user sees one persistent answer.
+- `sendMessageDraft` answer streaming is allowed only with `streaming.nativeTransport: true`, `mode: "partial"`, and DM scope. Drafts are text-only, ephemeral previews; durable finals stay on the normal Telegram delivery path.
+- Groups, disabled native transport, and missing `sendMessageDraft` support use the default `sendMessage` plus `editMessageText` path.
 - Streaming owns one visible preview message. Edit it forward. Do not send an extra final bubble unless the final edit genuinely failed.
 - Keep the first-preview debounce. If a provider sends token-sized deltas, coalesce them into cumulative preview text instead of removing the debounce.
 - Respect Telegram limits in the Telegram layer. Text over 4096 chars chains into continuation messages. Polls keep the current Bot API 12-option cap.

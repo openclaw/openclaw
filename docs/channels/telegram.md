@@ -305,7 +305,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Live stream preview (message edits)">
     OpenClaw can stream partial replies in real time:
 
-    - direct chats: preview message + `editMessageText`
+    - direct chats: preview message + `editMessageText` (default), or native `sendMessageDraft` typing animation when `streaming.nativeTransport: true`
     - groups/topics: preview message + `editMessageText`
     - direct-chat tool progress: optional native `sendMessageDraft` status preview when enabled and supported
 
@@ -332,6 +332,21 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
               "nativeToolProgress": true,
               "nativeToolProgressAllowFrom": ["123456789"]
             }
+          }
+        }
+      }
+    }
+    ```
+
+    Direct chats can also use native Telegram drafts for answer text streaming, producing a smooth typing animation instead of choppy message edits. Drafts are ephemeral 30-second previews; the final answer is persisted via `sendMessage`. This only applies to private (DM) chats with `mode: "partial"`. Groups always use edit-based streaming.
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "nativeTransport": true
           }
         }
       }
@@ -1079,7 +1094,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`, `dm.threadReplies`, `direct.*.threadReplies`
-- streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
+- streaming: `streaming` (preview), `streaming.nativeTransport`, `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)

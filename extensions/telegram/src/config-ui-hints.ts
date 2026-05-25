@@ -45,6 +45,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Streaming Mode",
     help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
   },
+  "streaming.nativeTransport": {
+    label: "Telegram Native Draft Streaming",
+    help: "Use Telegram-native sendMessageDraft for DM answer streaming (smooth typing animation). Only applies to private chats with mode=partial. Groups always use edit-based streaming. Default: false.",
+  },
   "streaming.chunkMode": {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',

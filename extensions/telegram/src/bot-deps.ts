@@ -23,6 +23,7 @@ import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import { createNativeTelegramAnswerDraftStream } from "./native-answer-draft.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
@@ -49,6 +50,7 @@ export type TelegramBotDeps = {
   wasSentByBot: typeof wasSentByBot;
   resolveExecApproval?: typeof resolveTelegramExecApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
+  createNativeTelegramAnswerDraftStream?: typeof createNativeTelegramAnswerDraftStream;
   createNativeTelegramToolProgressDraft?: typeof createNativeTelegramToolProgressDraft;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
@@ -118,6 +120,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;
+  },
+  get createNativeTelegramAnswerDraftStream() {
+    return createNativeTelegramAnswerDraftStream;
   },
   get createNativeTelegramToolProgressDraft() {
     return createNativeTelegramToolProgressDraft;

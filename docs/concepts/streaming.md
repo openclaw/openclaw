@@ -144,10 +144,11 @@ delivery instead of native partial/progress streaming.
 | Mattermost | ✅    | ✅        | ✅      | ✅                      |
 | MS Teams   | ✅    | ✅        | ✅      | native progress stream  |
 
-Slack-only:
+Native transport:
 
 - `channels.slack.streaming.nativeTransport` toggles Slack native streaming API calls when `channels.slack.streaming.mode="partial"` (default: `true`).
 - Slack native streaming and Slack assistant thread status require a reply thread target. Top-level DMs do not show that thread-style preview, but they can still use Slack draft preview posts and edits.
+- `channels.telegram.streaming.nativeTransport` toggles Telegram native `sendMessageDraft` for DM answer streaming when `channels.telegram.streaming.mode="partial"`. Produces smooth typing animation instead of choppy message edits. Groups always use edit-based streaming. The final answer is persisted via `sendMessage`.
 
 Legacy key migration:
 
