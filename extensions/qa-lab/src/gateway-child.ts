@@ -10,7 +10,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   createQaBundledPluginsDir,
@@ -445,9 +449,7 @@ async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const providerIds = [
-    ...new Set(params.providerIds.map((providerId) => providerId.trim())),
-  ].filter((providerId) => providerId.length > 0);
+  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds));
   if (providerIds.length === 0) {
     return {};
   }

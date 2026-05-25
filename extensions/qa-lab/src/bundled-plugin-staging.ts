@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "image-generation-core",
@@ -136,9 +136,7 @@ export async function resolveQaOwnerPluginIdsForProviderIds(params: {
   providerIds: readonly string[];
   providerConfigs?: Record<string, ModelProviderConfig>;
 }) {
-  const providerIds = [
-    ...new Set(params.providerIds.map((providerId) => providerId.trim())),
-  ].filter((providerId) => providerId.length > 0);
+  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds));
   if (providerIds.length === 0) {
     return [];
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
@@ -126,7 +126,7 @@ export type QaCharacterEvalParams = {
 };
 
 function normalizeModelRefs(models: readonly string[]) {
-  return uniqueStrings(models.map((model) => model.trim()).filter((model) => model.length > 0));
+  return uniqueStrings(normalizeStringEntries(models));
 }
 
 function resolveCandidateThinkingDefault(params: {
