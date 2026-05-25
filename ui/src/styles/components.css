@@ -6239,7 +6239,7 @@ td.data-table-key-col {
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(280px, 1.3fr) minmax(260px, 1fr) minmax(260px, 1fr);
-  align-items: stretch;
+  align-items: start;
 }
 
 .ov-operator-grid + .ov-operator-grid {
@@ -6321,6 +6321,65 @@ td.data-table-key-col {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ov-operator-more {
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.ov-operator-more--button {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.ov-operator-more--button:hover,
+.ov-operator-more--button:focus-visible {
+  color: var(--accent);
+}
+
+.ov-operator-more--button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.ov-usage-card {
+  align-self: start;
+}
+
+.ov-usage-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ov-usage-metrics .stat {
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.ov-usage-metrics .stat-value {
+  margin-top: 4px;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.ov-usage-note {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .stat-value.warn {

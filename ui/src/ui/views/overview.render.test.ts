@@ -182,6 +182,63 @@ describe("overview view rendering", () => {
     expect(recentNames).not.toContain("telegram:123:456");
   });
 
+  it("blurs digit runs in operator overview recent sessions", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      connected: true,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:imessage:direct:+19257864429",
+            kind: "direct",
+            label: "",
+            model: "gpt-5",
+            updatedAt: null,
+          },
+        ],
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const recent = container.querySelector(".ov-recent__key");
+    expect(compactText(recent)).toBe("iMessage · +19257864429");
+    expect(recent?.querySelector(".blur-digits")?.textContent).toBe("19257864429");
+  });
+
+  it("keeps recent sessions compact on the operator overview", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      connected: true,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 5,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: Array.from({ length: 5 }, (_, index) => ({
+          key: `session:${index}`,
+          kind: "direct",
+          label: `Session ${index + 1}`,
+          model: "gpt-5",
+          updatedAt: null,
+        })),
+      },
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".ov-recent__key")).toHaveLength(3);
+    expect(compactText(container.querySelector(".ov-operator-more--button"))).toBe(
+      "2 more sessions",
+    );
+  });
+
   it("promotes provider quota into a dedicated overview card", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
@@ -223,5 +280,24 @@ describe("overview view rendering", () => {
 
     const quota = container.querySelector('[data-kind="quota"]');
     expect(compactText(quota)).toBe("Usage 28% left Codex · Week · Claude · 5h 40% left");
+  });
+
+  it("does not call provider quota unavailable while auth status is still loading", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      connected: true,
+      usageResult: {
+        totals: { totalCost: 0, totalTokens: 0 },
+        aggregates: { messages: { total: 0 } },
+      } as OverviewProps["usageResult"],
+      modelAuthStatus: null,
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    const note = compactText(container.querySelector(".ov-usage-note"));
+    expect(note).toBe("Provider quota is still loading; showing local session usage meanwhile.");
+    expect(note).not.toContain("unavailable");
   });
 });

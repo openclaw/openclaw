@@ -123,6 +123,20 @@ function renderEmptyOperatorRow(
   `;
 }
 
+const DIGIT_RUN_PART = /^\d{3,}$/;
+
+function blurDigitRuns(value: string): TemplateResult {
+  return html`${value
+    .split(/(\d{3,})/g)
+    .map((part) =>
+      DIGIT_RUN_PART.test(part) ? html`<span class="blur-digits">${part}</span>` : part,
+    )}`;
+}
+
+function tCount(singularKey: string, pluralKey: string, count: number): string {
+  return t(count === 1 ? singularKey : pluralKey, { count: String(count) });
+}
+
 function summarizeLogLines(lines: string[]) {
   const visible = lines.slice(-200);
   const errors = visible.filter((line) => /\b(error|fatal|exception|failed)\b/i.test(line)).length;
@@ -138,13 +152,19 @@ function sessionStatusLabel(session: SessionsListResult["sessions"][number]): {
     return { label: t("common.running"), tone: "ok" };
   }
   if (session.status === "failed" || session.status === "timeout") {
-    return { label: session.status, tone: "danger" };
+    return {
+      label:
+        session.status === "timeout"
+          ? t("overview.operator.timeout")
+          : t("overview.operator.failed"),
+      tone: "danger",
+    };
   }
   if (session.status === "killed") {
-    return { label: session.status, tone: "warn" };
+    return { label: t("overview.operator.killed"), tone: "warn" };
   }
   if (session.status === "done") {
-    return { label: "done", tone: "neutral" };
+    return { label: t("sessionsView.status.done"), tone: "neutral" };
   }
   return {
     label: session.updatedAt ? formatRelativeTimestamp(session.updatedAt) : t("common.na"),
@@ -349,7 +369,9 @@ export function renderOverview(props: OverviewProps) {
   const failedSessions = sessions.filter(
     (session) => session.status === "failed" || session.status === "timeout",
   );
-  const recentSessions = sessions.slice(0, 5);
+  const recentSessionLimit = 3;
+  const recentSessions = sessions.slice(0, recentSessionLimit);
+  const remainingRecentSessions = Math.max(0, sessions.length - recentSessions.length);
   const totals = props.usageResult?.totals;
   const totalCost = formatCost(totals?.totalCost);
   const totalTokens = formatTokens(totals?.totalTokens);
@@ -376,6 +398,45 @@ export function renderOverview(props: OverviewProps) {
     (entry) =>
       entry.displayName !== primaryQuota?.displayName || entry.label !== primaryQuota?.label,
   );
+  const primaryQuotaReset = primaryQuota ? formatQuotaReset(primaryQuota.resetAt) : null;
+  const secondaryQuotaHint = secondaryQuota
+    ? `${[secondaryQuota.displayName, secondaryQuota.label].filter(Boolean).join(" · ")} ${t(
+        "overview.cards.modelAuthUsageLeft",
+        { pct: String(secondaryQuota.remaining) },
+      )}`
+    : null;
+  const primaryQuotaHint = primaryQuota
+    ? [
+        [primaryQuota.displayName, primaryQuota.label].filter(Boolean).join(" · "),
+        secondaryQuotaHint,
+        !secondaryQuotaHint && primaryQuotaReset
+          ? t("overview.operator.quotaResetShort", { time: primaryQuotaReset })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const visibleAttentionItems = props.attentionItems.slice(0, 3);
+  const remainingAttentionItems = Math.max(
+    0,
+    props.attentionItems.length - visibleAttentionItems.length,
+  );
+  const quotaStatusNote = primaryQuota
+    ? primaryQuotaReset
+      ? t("overview.operator.usageQuotaResets", {
+          provider: primaryQuota.displayName,
+          window: primaryQuota.label,
+          time: primaryQuotaReset,
+        })
+      : t("overview.operator.usageQuotaWindow", {
+          provider: primaryQuota.displayName,
+          window: primaryQuota.label,
+        })
+    : props.modelAuthStatus === null
+      ? t("overview.operator.usageQuotaLoading")
+      : monitoredProviders.length > 0
+        ? t("overview.operator.usageQuotaNoWindows")
+        : t("overview.operator.usageQuotaNotConfigured");
   const logSummary = summarizeLogLines(props.overviewLogLines);
   const hasOperationalData =
     props.usageResult != null ||
@@ -584,19 +645,21 @@ export function renderOverview(props: OverviewProps) {
     ${!props.connected
       ? html`<section class="grid">${accessCard}${snapshotCard}</section>`
       : html`
-          <section class="ov-summary-strip" aria-label="Overview summary">
+          <section class="ov-summary-strip" aria-label=${t("overview.operator.overviewSummary")}>
             ${renderSummaryTile({
-              label: "Gateway",
+              label: t("overview.operator.gateway"),
               value: html`${renderOverviewBadge(t("common.ok"), "ok")} ${t("common.online")}`,
-              hint: `uptime ${uptime}`,
+              hint: t("overview.operator.uptime", { time: uptime }),
               tone: "ok",
               onNavigate: props.onNavigate,
             })}
             ${renderSummaryTile({
-              label: "Channels",
+              label: t("tabs.channels"),
               value: props.lastChannelsRefresh
-                ? html`${renderOverviewBadge("fresh", "ok")} refreshed`
-                : html`${renderOverviewBadge(t("common.na"), "neutral")} unknown`,
+                ? html`${renderOverviewBadge(t("overview.operator.fresh"), "ok")}
+                  ${t("overview.operator.refreshed")}`
+                : html`${renderOverviewBadge(t("common.na"), "neutral")}
+                  ${t("sessionsView.unknown")}`,
               hint: props.lastChannelsRefresh
                 ? formatRelativeTimestamp(props.lastChannelsRefresh)
                 : t("overview.snapshot.channelsHint"),
@@ -605,12 +668,17 @@ export function renderOverview(props: OverviewProps) {
               onNavigate: props.onNavigate,
             })}
             ${renderSummaryTile({
-              label: "Active work",
-              value: `${activeSessions.length}/${props.sessionsResult?.count ?? sessions.length} active`,
+              label: t("overview.operator.activeWork"),
+              value: t("overview.operator.activeSessions", {
+                active: String(activeSessions.length),
+                total: String(props.sessionsResult?.count ?? sessions.length),
+              }),
               hint:
                 failedSessions.length > 0
-                  ? `${failedSessions.length} failed or timed out`
-                  : "no failed active sessions",
+                  ? t("overview.operator.failedOrTimedOutCount", {
+                      count: String(failedSessions.length),
+                    })
+                  : t("overview.operator.noFailedActiveSessions"),
               tone:
                 failedSessions.length > 0 ? "danger" : activeSessions.length > 0 ? "ok" : "neutral",
               tab: "sessions",
@@ -622,9 +690,16 @@ export function renderOverview(props: OverviewProps) {
                 props.cronStatus?.enabled === false
                   ? html`${renderOverviewBadge(t("common.disabled"), "neutral")}`
                   : failedCronJobs.length > 0
-                    ? html`${renderOverviewBadge(`${failedCronJobs.length} failed`, "danger")}
-                      ${props.cronJobs.length} jobs`
-                    : `${props.cronJobs.length} jobs`,
+                    ? html`${renderOverviewBadge(
+                        tCount(
+                          "overview.operator.failedCount",
+                          "overview.operator.failedCountPlural",
+                          failedCronJobs.length,
+                        ),
+                        "danger",
+                      )}
+                      ${t("overview.operator.jobsCount", { count: String(props.cronJobs.length) })}`
+                    : t("overview.operator.jobsCount", { count: String(props.cronJobs.length) }),
               hint: cronNext ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) }) : "",
               tone: failedCronJobs.length > 0 ? "danger" : "neutral",
               tab: "cron",
@@ -634,19 +709,16 @@ export function renderOverview(props: OverviewProps) {
               kind: primaryQuota ? "quota" : "usage",
               label: t("tabs.usage"),
               value: primaryQuota
-                ? html`${primaryQuota.remaining}% left`
-                : `${totalCost} / ${totalMessages} msgs`,
+                ? html`${t("overview.cards.modelAuthUsageLeft", {
+                    pct: String(primaryQuota.remaining),
+                  })}`
+                : t("overview.operator.usageCostMessages", {
+                    cost: totalCost,
+                    count: totalMessages,
+                  }),
               hint: primaryQuota
-                ? `${[primaryQuota.displayName, primaryQuota.label].filter(Boolean).join(" · ")}${
-                    secondaryQuota
-                      ? ` · ${[secondaryQuota.displayName, secondaryQuota.label]
-                          .filter(Boolean)
-                          .join(" · ")} ${secondaryQuota.remaining}% left`
-                      : formatQuotaReset(primaryQuota.resetAt)
-                        ? ` reset ${formatQuotaReset(primaryQuota.resetAt)}`
-                        : ""
-                  }`
-                : `${totalTokens} tokens`,
+                ? primaryQuotaHint
+                : t("overview.operator.tokensCount", { count: totalTokens }),
               tone:
                 primaryQuota?.remaining != null && primaryQuota.remaining <= 25
                   ? "warn"
@@ -658,11 +730,30 @@ export function renderOverview(props: OverviewProps) {
               label: t("overview.cards.modelAuth"),
               value:
                 expiredProviders.length > 0
-                  ? html`${renderOverviewBadge(`${expiredProviders.length} expired`, "danger")}`
+                  ? html`${renderOverviewBadge(
+                      tCount(
+                        "overview.operator.expiredCount",
+                        "overview.operator.expiredCountPlural",
+                        expiredProviders.length,
+                      ),
+                      "danger",
+                    )}`
                   : expiringProviders.length > 0
-                    ? html`${renderOverviewBadge(`${expiringProviders.length} expiring`, "warn")}`
+                    ? html`${renderOverviewBadge(
+                        tCount(
+                          "overview.operator.expiringCount",
+                          "overview.operator.expiringCountPlural",
+                          expiringProviders.length,
+                        ),
+                        "warn",
+                      )}`
                     : monitoredProviders.length > 0
-                      ? html`${renderOverviewBadge(`${monitoredProviders.length} ok`, "ok")}`
+                      ? html`${renderOverviewBadge(
+                          t("overview.operator.okCount", {
+                            count: String(monitoredProviders.length),
+                          }),
+                          "ok",
+                        )}`
                       : html`${renderOverviewBadge(t("common.na"), "neutral")}`,
               hint:
                 monitoredProviders.length > 0
@@ -670,7 +761,7 @@ export function renderOverview(props: OverviewProps) {
                       .map((provider) => provider.displayName)
                       .slice(0, 2)
                       .join(", ")
-                  : "api-key-only or unavailable",
+                  : t("overview.operator.apiKeyOnlyUnavailable"),
               tone:
                 expiredProviders.length > 0
                   ? "danger"
@@ -685,34 +776,45 @@ export function renderOverview(props: OverviewProps) {
           <section class="ov-operator-grid">
             <div class="card ov-attention ov-operator-attention">
               <div class="card-title">${t("overview.attention.title")}</div>
-              <div class="card-sub">Failures, expiring auth, and blocked work.</div>
+              <div class="card-sub">${t("overview.operator.attentionSubtitle")}</div>
               <div class="ov-attention-list" style="margin-top: 12px;">
-                ${props.attentionItems.length > 0
-                  ? props.attentionItems.map(
-                      (item) => html`
-                        <div
-                          class=${`ov-attention-item ${item.severity === "error" ? "danger" : item.severity === "warning" ? "warn" : ""}`}
-                        >
-                          <span class="ov-attention-icon">${icons.radio}</span>
-                          <div class="ov-attention-body">
-                            <div class="ov-attention-title">${item.title}</div>
-                            <div class="muted">${item.description}</div>
+                ${visibleAttentionItems.length > 0
+                  ? html`
+                      ${visibleAttentionItems.map(
+                        (item) => html`
+                          <div
+                            class=${`ov-attention-item ${item.severity === "error" ? "danger" : item.severity === "warning" ? "warn" : ""}`}
+                          >
+                            <span class="ov-attention-icon">${icons.radio}</span>
+                            <div class="ov-attention-body">
+                              <div class="ov-attention-title">${item.title}</div>
+                              <div class="muted">${item.description}</div>
+                            </div>
+                            ${item.href
+                              ? html`<a
+                                  class="ov-attention-link"
+                                  href=${item.href}
+                                  target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
+                                  rel=${item.external ? buildExternalLinkRel() : nothing}
+                                  >${t("common.docs")}</a
+                                >`
+                              : nothing}
                           </div>
-                          ${item.href
-                            ? html`<a
-                                class="ov-attention-link"
-                                href=${item.href}
-                                target=${item.external ? EXTERNAL_LINK_TARGET : nothing}
-                                rel=${item.external ? buildExternalLinkRel() : nothing}
-                                >${t("common.docs")}</a
-                              >`
-                            : nothing}
-                        </div>
-                      `,
-                    )
+                        `,
+                      )}
+                      ${remainingAttentionItems > 0
+                        ? html`<div class="ov-operator-more">
+                            ${tCount(
+                              "overview.operator.moreAttentionItem",
+                              "overview.operator.moreAttentionItems",
+                              remainingAttentionItems,
+                            )}
+                          </div>`
+                        : nothing}
+                    `
                   : renderEmptyOperatorRow(
-                      "No urgent attention items",
-                      "Gateway and monitored auth are clear.",
+                      t("overview.operator.noUrgentAttention"),
+                      t("overview.operator.gatewayAuthClear"),
                       "ok",
                     )}
               </div>
@@ -720,7 +822,7 @@ export function renderOverview(props: OverviewProps) {
 
             <div class="card">
               <div class="card-title">${t("overview.cards.recentSessions")}</div>
-              <div class="card-sub">Current work state, model, and recency.</div>
+              <div class="card-sub">${t("overview.operator.recentSessionsSubtitle")}</div>
               <div class="ov-operator-list" style="margin-top: 12px;">
                 ${recentSessions.length > 0
                   ? recentSessions.map((session) => {
@@ -733,7 +835,9 @@ export function renderOverview(props: OverviewProps) {
                           <div>
                             <div class="ov-operator-row__title">
                               <span class="ov-recent__key"
-                                >${resolveSessionDisplayName(session.key, session)}</span
+                                >${blurDigitRuns(
+                                  resolveSessionDisplayName(session.key, session),
+                                )}</span
                               >
                             </div>
                             <div class="ov-operator-row__meta">
@@ -745,20 +849,32 @@ export function renderOverview(props: OverviewProps) {
                       `;
                     })
                   : renderEmptyOperatorRow(
-                      "No sessions loaded",
+                      t("overview.operator.noSessionsLoaded"),
                       hasOperationalData
-                        ? "No recent sessions match the current view."
-                        : "Session data is still loading.",
+                        ? t("overview.operator.noRecentSessionsMatch")
+                        : t("overview.operator.sessionDataLoading"),
                     )}
+                ${remainingRecentSessions > 0
+                  ? html`<button
+                      class="ov-operator-more ov-operator-more--button"
+                      @click=${() => props.onNavigate("sessions")}
+                    >
+                      ${tCount(
+                        "overview.operator.moreSession",
+                        "overview.operator.moreSessions",
+                        remainingRecentSessions,
+                      )}
+                    </button>`
+                  : nothing}
               </div>
             </div>
 
-            <div class="card">
-              <div class="card-title">Codex Usage</div>
-              <div class="card-sub">Compact until quota is low or usage spikes.</div>
-              <div class="stat-grid" style="margin-top: 16px;">
+            <div class="card ov-usage-card">
+              <div class="card-title">${t("overview.operator.codexUsageTitle")}</div>
+              <div class="card-sub">${t("overview.operator.codexUsageSubtitle")}</div>
+              <div class="ov-usage-metrics">
                 <div class="stat">
-                  <div class="stat-label">Quota</div>
+                  <div class="stat-label">${t("overview.operator.quota")}</div>
                   <div
                     class="stat-value ${primaryQuota?.remaining != null &&
                     primaryQuota.remaining <= 25
@@ -769,34 +885,26 @@ export function renderOverview(props: OverviewProps) {
                   </div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Cost</div>
+                  <div class="stat-label">${t("overview.cards.cost")}</div>
                   <div class="stat-value">${totalCost}</div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Messages</div>
+                  <div class="stat-label">${t("overview.operator.messages")}</div>
                   <div class="stat-value">${totalMessages}</div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Tokens</div>
+                  <div class="stat-label">${t("overview.operator.tokens")}</div>
                   <div class="stat-value">${totalTokens}</div>
                 </div>
               </div>
-              <div class="callout" style="margin-top: 14px">
-                ${primaryQuota
-                  ? `${primaryQuota.displayName} ${primaryQuota.label} window${
-                      formatQuotaReset(primaryQuota.resetAt)
-                        ? ` resets ${formatQuotaReset(primaryQuota.resetAt)}`
-                        : ""
-                    }.`
-                  : "Provider quota is unavailable for this setup; showing local session usage instead."}
-              </div>
+              <div class="ov-usage-note">${quotaStatusNote}</div>
             </div>
           </section>
 
           <section class="ov-operator-grid ov-operator-grid--secondary">
             <div class="card">
               <div class="card-title">${t("tabs.cron")}</div>
-              <div class="card-sub">Failures, overdue jobs, and next wake.</div>
+              <div class="card-sub">${t("overview.operator.cronSubtitle")}</div>
               <div class="ov-operator-list" style="margin-top: 12px;">
                 ${failedCronJobs.length > 0
                   ? failedCronJobs.slice(0, 4).map(
@@ -810,10 +918,10 @@ export function renderOverview(props: OverviewProps) {
                             <div class="ov-operator-row__meta">
                               ${job.state?.lastErrorReason ??
                               job.state?.lastError ??
-                              "last run failed"}
+                              t("overview.operator.lastRunFailed")}
                             </div>
                           </div>
-                          ${renderOverviewBadge("failed", "danger")}
+                          ${renderOverviewBadge(t("overview.operator.failed"), "danger")}
                         </button>
                       `,
                     )
@@ -826,35 +934,39 @@ export function renderOverview(props: OverviewProps) {
                           >
                             <div>
                               <div class="ov-operator-row__title">${job.name}</div>
-                              <div class="ov-operator-row__meta">next run is overdue</div>
+                              <div class="ov-operator-row__meta">
+                                ${t("overview.operator.nextRunOverdue")}
+                              </div>
                             </div>
-                            ${renderOverviewBadge("overdue", "warn")}
+                            ${renderOverviewBadge(t("overview.operator.overdue"), "warn")}
                           </button>
                         `,
                       )
                     : renderEmptyOperatorRow(
-                        "No failed cron jobs",
+                        t("overview.operator.noFailedCronJobs"),
                         cronNext
                           ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
-                          : "No next wake scheduled.",
+                          : t("overview.operator.noNextWakeScheduled"),
                         "ok",
                       )}
               </div>
             </div>
 
             <div class="card">
-              <div class="card-title">Connectors & Skills</div>
-              <div class="card-sub">Auth and capability health that can break work later.</div>
+              <div class="card-title">${t("overview.operator.connectorsSkillsTitle")}</div>
+              <div class="card-sub">${t("overview.operator.connectorsSkillsSubtitle")}</div>
               <div class="ov-operator-list" style="margin-top: 12px;">
                 ${renderEmptyOperatorRow(
-                  "Model auth",
+                  t("overview.cards.modelAuth"),
                   expiredProviders.length > 0
                     ? expiredProviders.map((provider) => provider.displayName).join(", ")
                     : expiringProviders.length > 0
                       ? expiringProviders.map((provider) => provider.displayName).join(", ")
                       : monitoredProviders.length > 0
-                        ? `${monitoredProviders.length} monitored providers ok`
-                        : "No expiring OAuth/token providers reported.",
+                        ? t("overview.operator.monitoredProvidersOk", {
+                            count: String(monitoredProviders.length),
+                          })
+                        : t("overview.operator.noExpiringProviders"),
                   expiredProviders.length > 0
                     ? "danger"
                     : expiringProviders.length > 0
@@ -862,37 +974,44 @@ export function renderOverview(props: OverviewProps) {
                       : "ok",
                 )}
                 ${renderEmptyOperatorRow(
-                  "Skills",
+                  t("overview.cards.skills"),
                   skills.length > 0
-                    ? `${enabledSkills}/${skills.length} enabled${
-                        blockedSkills > 0 ? `, ${blockedSkills} blocked` : ""
-                      }`
-                    : "Skill status unavailable.",
+                    ? blockedSkills > 0
+                      ? t("overview.operator.skillsEnabledBlocked", {
+                          enabled: String(enabledSkills),
+                          total: String(skills.length),
+                          blocked: String(blockedSkills),
+                        })
+                      : t("overview.operator.skillsEnabled", {
+                          enabled: String(enabledSkills),
+                          total: String(skills.length),
+                        })
+                    : t("overview.operator.skillStatusUnavailable"),
                   blockedSkills > 0 ? "warn" : "neutral",
                 )}
               </div>
             </div>
 
             <div class="card">
-              <div class="card-title">Log & Event Anomalies</div>
-              <div class="card-sub">Raw logs stay behind expanders unless something clusters.</div>
+              <div class="card-title">${t("overview.operator.logEventAnomaliesTitle")}</div>
+              <div class="card-sub">${t("overview.operator.logEventAnomaliesSubtitle")}</div>
               <div class="stat-grid" style="margin-top: 16px;">
                 <div class="stat">
-                  <div class="stat-label">Events</div>
+                  <div class="stat-label">${t("overview.operator.events")}</div>
                   <div class="stat-value">${props.eventLog.length}</div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Log lines</div>
+                  <div class="stat-label">${t("overview.operator.logLines")}</div>
                   <div class="stat-value">${logSummary.lines}</div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Warnings</div>
+                  <div class="stat-label">${t("overview.operator.warnings")}</div>
                   <div class="stat-value ${logSummary.warnings > 0 ? "warn" : "ok"}">
                     ${logSummary.warnings}
                   </div>
                 </div>
                 <div class="stat">
-                  <div class="stat-label">Errors</div>
+                  <div class="stat-label">${t("overview.operator.errors")}</div>
                   <div class="stat-value ${logSummary.errors > 0 ? "warn" : "ok"}">
                     ${logSummary.errors}
                   </div>
