@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Agents/memory: return optional not-found context for missing date-only daily memory reads instead of logging benign first-run `ENOENT` failures. Fixes #82928. Thanks @galiniliev.
 - Discord: merge streamed text captions into following media block replies so captions and attachments send as one message. (#86487) Thanks @neeravmakwana.
 - Gateway: avoid sending duplicate tool-event frames to Control UI connections that are subscribed by both run and session.
+- Discord/OpenAI voice: accept broader leading fuzzy wake-name transcripts while keeping ambient speech gated.
 - Discord/OpenAI voice: accept longer leading wake-name mistranscripts such as "Open Club" for OpenClaw.
 - Agents/OpenAI-compatible: stop ModelStudio-compatible chat requests before sending system/tool-only payloads that have no usable user or assistant turn. (#86177) Thanks @TurboTheTurtle.
 - Gateway/plugins: reuse plugin package realpath checks while building installed plugin indexes so startup avoids repeated filesystem resolution work.
