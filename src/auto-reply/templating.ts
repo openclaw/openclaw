@@ -218,7 +218,7 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /**
    * Canonical inbound supplemental facts for new channel code. `finalizeInboundContext`
-   * projects these to the legacy reply/forward/thread/group prompt fields.
+   * projects these to the existing flat reply/forward/thread/group prompt fields.
    */
   SupplementalContext?: SupplementalContextFacts;
   /** Untrusted metadata that must not be treated as system instructions. */
