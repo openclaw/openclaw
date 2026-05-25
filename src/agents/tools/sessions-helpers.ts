@@ -19,6 +19,7 @@ export {
   extractAssistantText,
   sanitizeTextContent,
   stripToolMessages,
+  stripTranscriptOnlyOpenClawAssistantMessages,
 } from "./chat-history-text.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";

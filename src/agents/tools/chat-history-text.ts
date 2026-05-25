@@ -1,4 +1,5 @@
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
+export { stripTranscriptOnlyOpenClawAssistantMessages } from "../../shared/openclaw-transcript-only.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 
