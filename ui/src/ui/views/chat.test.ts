@@ -2034,13 +2034,56 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Week quota 28%");
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Week quota 28% left");
     expect(quota?.getAttribute("href")).toBe("/usage");
     expect(quota?.getAttribute("title")).toContain("Codex · Week");
 
     quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
 
     expect(state.setTab).toHaveBeenCalledWith("usage");
+  });
+
+  it("uses provider-native quota labels in the chat header", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          status: "ok",
+          profiles: [{ profileId: "openrouter", type: "api_key", status: "ok" }],
+          usage: {
+            windows: [
+              {
+                label: "Credits",
+                usedPercent: 82,
+                remainingLabel: "$12.34",
+                usedLabel: "$8.90",
+                totalLabel: "$21.24",
+              },
+            ],
+          },
+        },
+        {
+          provider: "openai-codex",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [{ label: "5h", usedPercent: 60 }],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Credits $12.34 left");
+    expect(quota?.textContent).not.toContain("Credits quota");
+    expect(quota?.getAttribute("title")).toContain("OpenRouter · Credits");
+    expect(quota?.getAttribute("title")).toContain("Codex 5h 40% left");
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
