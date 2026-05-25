@@ -507,6 +507,43 @@ describe("task-registry maintenance issue #60299", () => {
     expect(recoveredTask).not.toHaveProperty("error");
   });
 
+  it("does not recover terminal lost cron tasks without a backing-session error", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-no-error",
+      runId: `cron:cron-job-terminal-lost-no-error:${startedAt}`,
+      status: "lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-terminal-lost-no-error": [
+          {
+            ts: startedAt + 1250,
+            jobId: "cron-job-terminal-lost-no-error",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: startedAt,
+            durationMs: 1250,
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+    });
+  });
+
   it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
     const task = makeStaleTask({
