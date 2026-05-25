@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Scripts: build CLI startup artifacts before the gateway CPU startup bench so fresh Linux runners do not report false `n/a` readiness and process metrics.
 - Scripts: remove stale Knip unused-file allowlist entries so the dead-code gate fails only on current findings.
 - Tests: normalize bundled plugin lifecycle probe paths and state-root lookup so native Windows release sweeps accept valid packaged plugin installs.
 - Config: keep benign legacy metadata write anomalies out of default doctor and config command output while preserving explicit anomaly logging for diagnostics.
