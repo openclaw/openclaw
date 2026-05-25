@@ -1800,6 +1800,41 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history turns mode reports earlier history when the scan window saturates", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const lines: string[] = [];
+      for (let turn = 1; turn <= 1001; turn += 1) {
+        lines.push(
+          transcriptMessageLine({
+            role: "user",
+            turnId: `saturated-turn-${turn}`,
+            content: [{ type: "text", text: `saturated user turn ${turn}` }],
+            timestamp: turn,
+          }),
+        );
+      }
+      await writeMainSessionTranscript(sessionDir, lines);
+
+      const res = await rpcReq<{
+        mode?: string;
+        items?: unknown[];
+        meta?: { hasMoreBefore?: boolean; displayItemsReturned?: number };
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1000,
+        maxChars: 200,
+        mode: "turns",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.mode).toBe("turns");
+      expect(res.payload?.items).toHaveLength(1000);
+      expect(res.payload?.meta?.displayItemsReturned).toBe(1000);
+      expect(res.payload?.meta?.hasMoreBefore).toBe(true);
+    });
+  });
+
   test("chat.history turns mode bounds response items by the history byte budget", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 6 * 1024;
