@@ -47,10 +47,12 @@ function sameSlackChannelTarget(targetChannel: string, currentChannelId: string)
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
 type SlackAdminActionsRuntimeModule = typeof import("./admin-actions.runtime.js");
+type SlackAppConfigActionsRuntimeModule = typeof import("./app-config-actions.runtime.js");
 
 let slackActionsRuntimePromise: Promise<SlackActionsRuntimeModule> | undefined;
 let slackAccountsRuntimePromise: Promise<SlackAccountsRuntimeModule> | undefined;
 let slackAdminActionsRuntimePromise: Promise<SlackAdminActionsRuntimeModule> | undefined;
+let slackAppConfigActionsRuntimePromise: Promise<SlackAppConfigActionsRuntimeModule> | undefined;
 
 function loadSlackActionsRuntime(): Promise<SlackActionsRuntimeModule> {
   slackActionsRuntimePromise ??= import("./actions.runtime.js");
@@ -65,6 +67,11 @@ function loadSlackAccountsRuntime(): Promise<SlackAccountsRuntimeModule> {
 function loadSlackAdminActionsRuntime(): Promise<SlackAdminActionsRuntimeModule> {
   slackAdminActionsRuntimePromise ??= import("./admin-actions.runtime.js");
   return slackAdminActionsRuntimePromise;
+}
+
+function loadSlackAppConfigActionsRuntime(): Promise<SlackAppConfigActionsRuntimeModule> {
+  slackAppConfigActionsRuntimePromise ??= import("./app-config-actions.runtime.js");
+  return slackAppConfigActionsRuntimePromise;
 }
 
 function createLazySlackAction<K extends keyof SlackActionsRuntimeModule>(
@@ -85,6 +92,16 @@ function createLazySlackAdminAction<K extends keyof SlackAdminActionsRuntimeModu
     const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
     return action(...args);
   }) as SlackAdminActionsRuntimeModule[K];
+}
+
+function createLazySlackAppConfigAction<K extends keyof SlackAppConfigActionsRuntimeModule>(
+  key: K,
+): SlackAppConfigActionsRuntimeModule[K] {
+  return (async (...args: unknown[]) => {
+    const runtime = await loadSlackAppConfigActionsRuntime();
+    const action = runtime[key] as (...actionArgs: unknown[]) => unknown;
+    return action(...args);
+  }) as SlackAppConfigActionsRuntimeModule[K];
 }
 
 export const slackActionRuntime = {
@@ -108,6 +125,12 @@ export const slackActionRuntime = {
   inviteSlackUsersToConversation: createLazySlackAdminAction("inviteSlackUsersToConversation"),
   listSlackChannelMembers: createLazySlackAdminAction("listSlackChannelMembers"),
   lookupSlackUserByEmail: createLazySlackAdminAction("lookupSlackUserByEmail"),
+  // App manifest actions (channels.slack.actions.appManifest === true required;
+  // also requires channels.slack.appConfigToken).
+  createSlackAppManifest: createLazySlackAppConfigAction("createSlackAppManifest"),
+  exportSlackAppManifest: createLazySlackAppConfigAction("exportSlackAppManifest"),
+  updateSlackAppManifest: createLazySlackAppConfigAction("updateSlackAppManifest"),
+  validateSlackAppManifest: createLazySlackAppConfigAction("validateSlackAppManifest"),
 };
 
 export type SlackActionContext = {
@@ -667,6 +690,62 @@ export async function handleSlackAction(
           ...(cursor ? { cursor } : {}),
         });
     return jsonResult({ ok: true, ...page });
+  }
+
+  // App manifest actions (default off; opt-in via
+  // channels.slack.actions.appManifest === true and require an
+  // appConfigToken to be configured).
+  if (
+    action === "app-manifest-create" ||
+    action === "app-manifest-update" ||
+    action === "app-manifest-export" ||
+    action === "app-manifest-validate"
+  ) {
+    if (!isActionEnabled("appManifest", false)) {
+      throw new Error(
+        "Slack app-manifest actions are disabled. Set channels.slack.actions.appManifest=true " +
+          "and configure channels.slack.appConfigToken to opt in.",
+      );
+    }
+    // App-manifest actions use the dedicated appConfigToken, not the bot/user
+    // token; so we forward only cfg + accountId and let the runtime resolve it.
+    const manifestOpts: { cfg: OpenClawConfig; accountId?: string } = {
+      cfg,
+      ...(accountId ? { accountId } : {}),
+    };
+    if (action === "app-manifest-create") {
+      const manifest = params.manifest;
+      if (manifest === undefined) {
+        throw new Error("manifest required for app-manifest-create");
+      }
+      const result = await slackActionRuntime.createSlackAppManifest(manifest, manifestOpts);
+      return jsonResult({ ok: true, ...result });
+    }
+    if (action === "app-manifest-update") {
+      const appId = readStringParam(params, "appId", { required: true });
+      const manifest = params.manifest;
+      if (manifest === undefined) {
+        throw new Error("manifest required for app-manifest-update");
+      }
+      const result = await slackActionRuntime.updateSlackAppManifest(appId, manifest, manifestOpts);
+      return jsonResult({ ok: true, ...result });
+    }
+    if (action === "app-manifest-export") {
+      const appId = readStringParam(params, "appId", { required: true });
+      const result = await slackActionRuntime.exportSlackAppManifest(appId, manifestOpts);
+      return jsonResult({ ok: true, ...result });
+    }
+    // app-manifest-validate
+    const manifest = params.manifest;
+    if (manifest === undefined) {
+      throw new Error("manifest required for app-manifest-validate");
+    }
+    const appId = readStringParam(params, "appId");
+    const result = await slackActionRuntime.validateSlackAppManifest(manifest, {
+      ...manifestOpts,
+      ...(appId ? { appId } : {}),
+    });
+    return jsonResult({ ok: true, ...result });
   }
 
   throw new Error(`Unknown action: ${action}`);

@@ -321,6 +321,56 @@ describe("slack tool bridge", () => {
         params: { channelId: "C1", limit: 50, cursor: "next-1" },
       });
     });
+
+    it("manifestCreate maps to app-manifest-create with the manifest payload", async () => {
+      const tool = makeTool();
+      const manifest = { display_information: { name: "Demo Bot" } };
+      await tool.execute("c-mc", { action: "manifestCreate", manifest });
+      expect(lastCall().request).toMatchObject({
+        action: "app-manifest-create",
+        params: { manifest },
+      });
+    });
+
+    it("manifestUpdate maps to app-manifest-update with appId + manifest", async () => {
+      const tool = makeTool();
+      const manifest = { display_information: { name: "Demo Bot v2" } };
+      await tool.execute("c-mu", { action: "manifestUpdate", appId: "A1", manifest });
+      expect(lastCall().request).toMatchObject({
+        action: "app-manifest-update",
+        params: { appId: "A1", manifest },
+      });
+    });
+
+    it("manifestExport maps to app-manifest-export with appId", async () => {
+      const tool = makeTool();
+      await tool.execute("c-me", { action: "manifestExport", appId: "A1" });
+      expect(lastCall().request).toMatchObject({
+        action: "app-manifest-export",
+        params: { appId: "A1" },
+      });
+    });
+
+    it("manifestValidate maps to app-manifest-validate with optional appId", async () => {
+      const tool = makeTool();
+      const manifest = { display_information: { name: "Demo Bot" } };
+      await tool.execute("c-mv", { action: "manifestValidate", manifest });
+      expect(lastCall().request).toMatchObject({
+        action: "app-manifest-validate",
+        params: { manifest },
+      });
+      expect(lastCall().request.params).not.toHaveProperty("appId");
+
+      await tool.execute("c-mv-appid", {
+        action: "manifestValidate",
+        manifest,
+        appId: "A1",
+      });
+      expect(lastCall().request).toMatchObject({
+        action: "app-manifest-validate",
+        params: { manifest, appId: "A1" },
+      });
+    });
   });
 
   describe("validation", () => {
@@ -398,14 +448,44 @@ describe("slack tool bridge", () => {
         /channelId required/,
       );
     });
+
+    it("manifestCreate requires manifest", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "manifestCreate" })).rejects.toThrow(
+        /manifest required/,
+      );
+    });
+
+    it("manifestUpdate requires appId and manifest", async () => {
+      const tool = makeTool();
+      await expect(
+        tool.execute("call", { action: "manifestUpdate", manifest: { x: 1 } }),
+      ).rejects.toThrow(/appId/);
+      await expect(tool.execute("call", { action: "manifestUpdate", appId: "A1" })).rejects.toThrow(
+        /manifest required/,
+      );
+    });
+
+    it("manifestExport requires appId", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "manifestExport" })).rejects.toThrow(/appId/);
+    });
+
+    it("manifestValidate requires manifest", async () => {
+      const tool = makeTool();
+      await expect(tool.execute("call", { action: "manifestValidate" })).rejects.toThrow(
+        /manifest required/,
+      );
+    });
   });
 
   describe("description", () => {
-    it("documents the bridge boundary and the admin opt-in", () => {
+    it("documents the bridge boundary and the admin/app-manifest opt-ins", () => {
       const tool = makeTool();
       expect(tool.description).toContain("skills/slack/SKILL.md");
       expect(tool.description).toContain("channels.slack.actions.admin");
-      expect(tool.description).toContain("apps.manifest.create");
+      expect(tool.description).toContain("channels.slack.actions.appManifest");
+      expect(tool.description).toContain("channels.slack.appConfigToken");
     });
   });
 });

@@ -26,6 +26,12 @@ const SLACK_TOOL_ACTIONS = [
   "lookupUserByEmail",
   "inviteUsers",
   "listMembers",
+  // App manifest actions. Disabled by default and require
+  // channels.slack.actions.appManifest=true plus channels.slack.appConfigToken.
+  "manifestCreate",
+  "manifestUpdate",
+  "manifestExport",
+  "manifestValidate",
 ] as const;
 
 type SlackToolAction = (typeof SLACK_TOOL_ACTIONS)[number];
@@ -109,6 +115,22 @@ const SlackToolSchema = Type.Object(
       Type.String({
         description: "Pagination cursor for listMembers (admin actions opt-in only).",
       }),
+    ),
+    appId: Type.Optional(
+      Type.String({
+        description:
+          "Slack app id for manifestUpdate / manifestExport / manifestValidate (app-manifest opt-in only).",
+      }),
+    ),
+    manifest: Type.Optional(
+      Type.Object(
+        {},
+        {
+          additionalProperties: true,
+          description:
+            "Slack app manifest JSON object for manifestCreate / manifestUpdate / manifestValidate (app-manifest opt-in only).",
+        },
+      ),
     ),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
@@ -363,6 +385,45 @@ function buildSlackActionRequest(
         }),
       };
     }
+    case "manifestCreate": {
+      const manifest = params.manifest;
+      if (manifest === undefined) {
+        throw new Error("manifest required");
+      }
+      return {
+        agnosticAction: "app-manifest-create",
+        actionParams: { manifest },
+      };
+    }
+    case "manifestUpdate": {
+      const appId = readStringParam(params, "appId", { required: true });
+      const manifest = params.manifest;
+      if (manifest === undefined) {
+        throw new Error("manifest required");
+      }
+      return {
+        agnosticAction: "app-manifest-update",
+        actionParams: { appId, manifest },
+      };
+    }
+    case "manifestExport": {
+      const appId = readStringParam(params, "appId", { required: true });
+      return {
+        agnosticAction: "app-manifest-export",
+        actionParams: { appId },
+      };
+    }
+    case "manifestValidate": {
+      const manifest = params.manifest;
+      if (manifest === undefined) {
+        throw new Error("manifest required");
+      }
+      const appId = readStringParam(params, "appId");
+      return {
+        agnosticAction: "app-manifest-validate",
+        actionParams: pickDefined({ manifest, appId }),
+      };
+    }
     default: {
       const exhaustive: never = action;
       throw new Error(`Unsupported slack action: ${exhaustive as string}`);
@@ -381,7 +442,7 @@ export function createSlackTool(deps?: SlackToolDeps): AnyAgentTool {
     displaySummary: SLACK_TOOL_DISPLAY_SUMMARY,
     description: `Invoke Slack channel actions through the Gateway. Action names match skills/slack/SKILL.md.
 
-Routes through the gateway message.action method, which dispatches to the Slack channel plugin and uses the configured Slack account credentials. Requires channels.slack to be configured. Admin operations (createConversation, lookupUserByEmail, inviteUsers, listMembers) are gated server-side on channels.slack.actions.admin === true and default to disabled. Workspace-level operations such as apps.manifest.create are not exposed here.
+Routes through the gateway message.action method, which dispatches to the Slack channel plugin and uses the configured Slack account credentials. Requires channels.slack to be configured. Admin operations (createConversation, lookupUserByEmail, inviteUsers, listMembers) are gated on channels.slack.actions.admin === true and default to disabled. App manifest operations (manifestCreate, manifestUpdate, manifestExport, manifestValidate) are gated on channels.slack.actions.appManifest === true and additionally require channels.slack.appConfigToken; they also default to disabled.
 
 Common parameters: channelId (e.g. C123), messageId (Slack message timestamp), to ("channel:<id>" / "user:<id>" / bare id), content (message body), emoji (Unicode or :name:), threadTs (thread root timestamp).
 

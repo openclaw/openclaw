@@ -79,6 +79,17 @@ export type SlackActionConfig = {
   memberInfo?: boolean;
   channelInfo?: boolean;
   emojiList?: boolean;
+  /**
+   * Workspace admin operations (conversations.create, users.lookupByEmail,
+   * conversations.invite, conversations.members). Defaults to false because
+   * these mutate workspace state and require broader Slack scopes.
+   */
+  admin?: boolean;
+  /**
+   * `apps.manifest.*` administration (create/update/export/validate).
+   * Defaults to false. Requires `appConfigToken` to be configured.
+   */
+  appManifest?: boolean;
 };
 
 export type SlackSlashCommandConfig = {
@@ -146,6 +157,14 @@ export type SlackAccountConfig = {
   userToken?: string;
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;
+  /**
+   * Slack app configuration token (xoxe.xoxp-... format). Required only
+   * when `actions.appManifest === true`. Authorizes the workspace-wide
+   * `apps.manifest.*` API for create/update/export/validate. Distinct
+   * from the bot token and the user token; treat it as the most sensitive
+   * Slack credential because it can mutate app installation surfaces.
+   */
+  appConfigToken?: string;
   /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
   allowBots?: boolean | "mentions";
   /** Sliding-window bot-pair loop guard for accepted bot-authored Slack messages. */

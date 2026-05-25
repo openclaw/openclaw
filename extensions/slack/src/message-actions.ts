@@ -56,6 +56,12 @@ export function listSlackMessageActions(
     actions.add("member-list");
     actions.add("user-lookup-by-email");
   }
+  if (isActionEnabled("appManifest", false)) {
+    actions.add("app-manifest-create");
+    actions.add("app-manifest-update");
+    actions.add("app-manifest-export");
+    actions.add("app-manifest-validate");
+  }
   return Array.from(actions);
 }
 

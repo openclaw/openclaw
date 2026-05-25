@@ -58,6 +58,10 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "upload-file",
   "member-list",
   "user-lookup-by-email",
+  "app-manifest-create",
+  "app-manifest-update",
+  "app-manifest-export",
+  "app-manifest-validate",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

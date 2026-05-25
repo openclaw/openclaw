@@ -31,6 +31,17 @@ const listSlackChannelMembers = vi.fn(
 const lookupSlackUserByEmail = vi.fn(
   async (..._args: unknown[]) => ({ id: "U9", email: "a@b" }) as unknown,
 );
+const createSlackAppManifest = vi.fn(
+  async (..._args: unknown[]) => ({ appId: "A-NEW", oauthAuthorizeUrl: "https://x" }) as unknown,
+);
+const updateSlackAppManifest = vi.fn(
+  async (..._args: unknown[]) => ({ appId: "A1", permissionsUpdated: false }) as unknown,
+);
+const exportSlackAppManifest = vi.fn(
+  async (..._args: unknown[]) =>
+    ({ appId: "A1", manifest: { display_information: { name: "Demo" } } }) as unknown,
+);
+const validateSlackAppManifest = vi.fn(async (..._args: unknown[]) => ({ ok: true }) as unknown);
 
 describe("handleSlackAction", () => {
   function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -233,6 +244,10 @@ describe("handleSlackAction", () => {
       inviteSlackUsersToConversation,
       listSlackChannelMembers,
       lookupSlackUserByEmail,
+      createSlackAppManifest,
+      updateSlackAppManifest,
+      exportSlackAppManifest,
+      validateSlackAppManifest,
     });
   });
 
@@ -1207,6 +1222,84 @@ describe("handleSlackAction", () => {
       const details = requireDetails(result);
       expect(details.ok).toBe(true);
       expect(details.members).toEqual(["U1", "U2"]);
+    });
+  });
+
+  describe("app manifest actions", () => {
+    it("errors when appManifest gate is off (default)", async () => {
+      await expect(
+        handleSlackAction({ action: "app-manifest-create", manifest: { x: 1 } }, slackConfig()),
+      ).rejects.toThrow(/app-manifest actions are disabled/i);
+      await expect(
+        handleSlackAction({ action: "app-manifest-export", appId: "A1" }, slackConfig()),
+      ).rejects.toThrow(/app-manifest actions are disabled/i);
+      expect(createSlackAppManifest).not.toHaveBeenCalled();
+      expect(exportSlackAppManifest).not.toHaveBeenCalled();
+    });
+
+    it("dispatches app-manifest-create when gate is on", async () => {
+      const manifest = { display_information: { name: "Demo" } };
+      const result = await handleSlackAction(
+        { action: "app-manifest-create", manifest },
+        slackConfig({ actions: { appManifest: true } }),
+      );
+      expect(createSlackAppManifest).toHaveBeenCalledTimes(1);
+      expect((createSlackAppManifest.mock.calls[0] as unknown[])[0]).toEqual(manifest);
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.appId).toBe("A-NEW");
+    });
+
+    it("dispatches app-manifest-update with appId + manifest", async () => {
+      const manifest = { display_information: { name: "Demo v2" } };
+      const result = await handleSlackAction(
+        { action: "app-manifest-update", appId: "A1", manifest },
+        slackConfig({ actions: { appManifest: true } }),
+      );
+      expect(updateSlackAppManifest).toHaveBeenCalledTimes(1);
+      const [appId, calledManifest] = updateSlackAppManifest.mock.calls[0] as unknown[];
+      expect(appId).toBe("A1");
+      expect(calledManifest).toEqual(manifest);
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.appId).toBe("A1");
+    });
+
+    it("dispatches app-manifest-export with appId", async () => {
+      const result = await handleSlackAction(
+        { action: "app-manifest-export", appId: "A1" },
+        slackConfig({ actions: { appManifest: true } }),
+      );
+      expect(exportSlackAppManifest).toHaveBeenCalledTimes(1);
+      expect((exportSlackAppManifest.mock.calls[0] as unknown[])[0]).toBe("A1");
+      const details = requireDetails(result);
+      expect(details.ok).toBe(true);
+      expect(details.appId).toBe("A1");
+    });
+
+    it("dispatches app-manifest-validate with manifest and optional appId", async () => {
+      const manifest = { display_information: { name: "Demo" } };
+      await handleSlackAction(
+        { action: "app-manifest-validate", manifest },
+        slackConfig({ actions: { appManifest: true } }),
+      );
+      expect(validateSlackAppManifest).toHaveBeenCalledTimes(1);
+      const [calledManifest, opts] = validateSlackAppManifest.mock.calls[0] as [
+        unknown,
+        Record<string, unknown>,
+      ];
+      expect(calledManifest).toEqual(manifest);
+      expect(opts).not.toHaveProperty("appId");
+
+      await handleSlackAction(
+        { action: "app-manifest-validate", manifest, appId: "A1" },
+        slackConfig({ actions: { appManifest: true } }),
+      );
+      const secondOpts = (validateSlackAppManifest.mock.calls[1] as unknown[])[1] as Record<
+        string,
+        unknown
+      >;
+      expect(secondOpts.appId).toBe("A1");
     });
   });
 });

@@ -263,6 +263,38 @@ describe("Slack message tools", () => {
     expect(withAdmin).toContain("addParticipant");
     expect(withAdmin).toContain("member-list");
     expect(withAdmin).toContain("user-lookup-by-email");
+    expect(withAdmin).not.toContain("app-manifest-create");
+  });
+
+  it("omits app-manifest actions by default and adds them when appManifest gate is on", () => {
+    const baseCfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+        },
+      },
+    } as OpenClawConfig;
+    const baseline = listSlackMessageActions(baseCfg);
+    expect(baseline).not.toContain("app-manifest-create");
+    expect(baseline).not.toContain("app-manifest-update");
+    expect(baseline).not.toContain("app-manifest-export");
+    expect(baseline).not.toContain("app-manifest-validate");
+
+    const manifestCfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          actions: { appManifest: true },
+        },
+      },
+    } as OpenClawConfig;
+    const withManifest = listSlackMessageActions(manifestCfg);
+    expect(withManifest).toContain("app-manifest-create");
+    expect(withManifest).toContain("app-manifest-update");
+    expect(withManifest).toContain("app-manifest-export");
+    expect(withManifest).toContain("app-manifest-validate");
+    // appManifest stays orthogonal to admin
+    expect(withManifest).not.toContain("channel-create");
   });
 
   it("omits Slack file and message id schemas when those actions are disabled", () => {

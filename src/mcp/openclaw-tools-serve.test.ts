@@ -37,6 +37,10 @@ describe("OpenClaw tools MCP server", () => {
         "lookupUserByEmail",
         "inviteUsers",
         "listMembers",
+        "manifestCreate",
+        "manifestUpdate",
+        "manifestExport",
+        "manifestValidate",
       ]),
     );
   });

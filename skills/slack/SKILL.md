@@ -10,7 +10,9 @@ Use the `slack` tool. Reuse `channelId` and Slack timestamp message IDs from con
 
 Harnesses that only see `mcp__openclaw__*` tools (Claude Code, etc.) reach the same surface as `mcp__openclaw__slack` via the OpenClaw-tools MCP bridge; the tool name stays `slack` and the `action` parameter selects the operation. The bridge routes through the Slack channel plugin and uses the configured Slack account credentials.
 
-Admin actions (`createConversation`, `lookupUserByEmail`, `inviteUsers`, `listMembers`) are **disabled by default**. The host operator opts in per account by setting `channels.slack.actions.admin: true` and granting the bot the required scopes (`channels:manage` / `groups:write`, `users:read.email`, `conversations:write`, `channels:read`). Workspace-level operations such as `apps.manifest.create` are not exposed here.
+Admin actions (`createConversation`, `lookupUserByEmail`, `inviteUsers`, `listMembers`) are **disabled by default**. The host operator opts in per account by setting `channels.slack.actions.admin: true` and granting the bot the required scopes (`channels:manage` / `groups:write`, `users:read.email`, `conversations:write`, `channels:read`).
+
+App manifest actions (`manifestCreate`, `manifestUpdate`, `manifestExport`, `manifestValidate`) are also **disabled by default** and gated separately on `channels.slack.actions.appManifest: true`. They additionally require `channels.slack.appConfigToken` (Slack `xoxe.xoxp-…` app configuration token) because they mutate the workspace app definition itself rather than channel state.
 
 ## Inputs
 
@@ -93,6 +95,30 @@ These only work when the host has set `channels.slack.actions.admin: true`. Call
 
 ```json
 { "action": "listMembers", "channelId": "C123", "limit": 100 }
+```
+
+### App manifest actions (opt-in, separate gate)
+
+These only work when `channels.slack.actions.appManifest: true` _and_ `channels.slack.appConfigToken` is set. They mutate the Slack app definition itself, so they stay behind a stricter gate than the channel admin actions.
+
+```json
+{ "action": "manifestCreate", "manifest": { "display_information": { "name": "Demo Bot" } } }
+```
+
+```json
+{
+  "action": "manifestUpdate",
+  "appId": "A012345",
+  "manifest": { "display_information": { "name": "Demo Bot v2" } }
+}
+```
+
+```json
+{ "action": "manifestExport", "appId": "A012345" }
+```
+
+```json
+{ "action": "manifestValidate", "manifest": { "display_information": { "name": "Demo Bot" } } }
 ```
 
 ## Safety

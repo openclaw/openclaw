@@ -966,6 +966,18 @@ export const SlackAccountSchema = z
     appToken: SecretInputSchema.optional().register(sensitive),
     userToken: SecretInputSchema.optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
+    /**
+     * Slack app configuration token (xoxe.xoxp-... format) used by the
+     * `apps.manifest.*` admin API. Required only when
+     * `actions.appManifest === true`. This is distinct from the bot token
+     * and the user token; it is issued through Slack's app configuration
+     * tokens flow and authorizes workspace-wide app installation/management.
+     *
+     * The current implementation expects a static token value; automatic
+     * refresh-token rotation is not implemented here and the operator is
+     * expected to rotate the secret out-of-band when Slack expires it.
+     */
+    appConfigToken: SecretInputSchema.optional().register(sensitive),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
@@ -1002,6 +1014,13 @@ export const SlackAccountSchema = z
          * explicitly per account when the deployment is ready to grant them.
          */
         admin: z.boolean().optional(),
+        /**
+         * Slack `apps.manifest.*` administration (create/update/export/validate).
+         * Defaults to false because these alter the workspace app definition itself
+         * and require an `appConfigToken`. Keep this separate from the regular
+         * channel admin gate so workspace-app mutation stays an explicit opt-in.
+         */
+        appManifest: z.boolean().optional(),
       })
       .strict()
       .optional(),
