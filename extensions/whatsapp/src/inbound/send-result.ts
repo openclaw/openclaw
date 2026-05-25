@@ -6,7 +6,7 @@ import {
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
 } from "openclaw/plugin-sdk/channel-message";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type WhatsAppSendKind = "media" | "poll" | "reaction" | "text";
 
@@ -102,7 +102,7 @@ export function listWhatsAppSendResultMessageIds(result: WhatsAppSendResult): st
   if (receiptIds.length > 0) {
     return receiptIds;
   }
-  const keyIds = result.keys.map((key) => key.id.trim()).filter(Boolean);
+  const keyIds = normalizeStringEntries(result.keys.map((key) => key.id));
   if (keyIds.length > 0) {
     return uniqueStrings(keyIds);
   }

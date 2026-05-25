@@ -145,8 +145,8 @@ import {
   type Tab,
 } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
-import "./components/dashboard-header.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSubagentSessionKey,
@@ -154,6 +154,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
+import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
@@ -2497,7 +2498,7 @@ export function renderApp(state: AppViewState) {
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
                   const existing = Array.isArray(entry?.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                    ? normalizeStringEntries(entry.skills)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);
@@ -2546,7 +2547,7 @@ export function renderApp(state: AppViewState) {
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const normalized = normalizeStringEntries(fallbacks);
                   const currentConfig = getCurrentConfigValue();
                   const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
                   const effectivePrimary =

@@ -1272,9 +1272,7 @@ export async function seedHistoricalDailyMemorySignals(params: {
   importedSignalCount: number;
   skippedPaths: string[];
 }> {
-  const normalizedPaths = [
-    ...new Set(params.filePaths.map((entry) => entry.trim()).filter(Boolean)),
-  ];
+  const normalizedPaths = uniqueStrings(normalizeStringEntries(params.filePaths));
   if (normalizedPaths.length === 0) {
     return {
       importedFileCount: 0,

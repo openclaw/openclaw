@@ -23,6 +23,7 @@ import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-ru
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
+  normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -873,9 +874,7 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
-      : [],
+    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()

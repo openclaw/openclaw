@@ -21,7 +21,11 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { asBoolean, asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asFiniteNumber,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -808,9 +812,7 @@ export class CodexAppServerEventProjector {
   }
 
   private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
-    const mediaUrls = new Set(
-      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
-    );
+    const mediaUrls = new Set(normalizeStringEntries(toolTelemetry.toolMediaUrls ?? []));
     if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
       for (const mediaUrl of this.nativeGeneratedMediaUrls) {
         mediaUrls.add(mediaUrl);
