@@ -443,6 +443,34 @@ describe("createFeishuClient HTTP timeout", () => {
       },
     );
   });
+
+  it("preserves request-level agents while disabling axios ambient proxy handling", async () => {
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    const callerHttpAgent = { caller: "http" };
+    const callerHttpsAgent = { caller: "https" };
+
+    createFeishuClient({
+      appId: "app_12",
+      appSecret: "secret_12", // pragma: allowlist secret
+      accountId: "http-proxy-preserve-agent",
+    });
+
+    const httpInstance = readLastClientHttpInstance();
+    await httpInstance.request({
+      url: "https://example.com/api",
+      httpAgent: callerHttpAgent,
+      httpsAgent: callerHttpsAgent,
+    });
+
+    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledWith({
+      url: "https://example.com/api",
+      timeout: FEISHU_HTTP_TIMEOUT_MS,
+      httpAgent: callerHttpAgent,
+      httpsAgent: callerHttpsAgent,
+      proxy: false,
+    });
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {

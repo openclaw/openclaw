@@ -129,8 +129,8 @@ function createFeishuHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
     const next: FeishuProxyAwareHttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
     const agent = await getWsProxyAgent();
     if (agent) {
-      next.httpAgent = agent;
-      next.httpsAgent = agent;
+      next.httpAgent ??= agent;
+      next.httpsAgent ??= agent;
       next.proxy = false;
     }
     return next;
