@@ -271,7 +271,7 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
       return true;
     }
-    return nodePathMiss;
+    return nodePathMiss || bunSpecifierMiss;
   }
 
   return bunSpecifierMiss;

@@ -232,6 +232,10 @@ describe("openclaw launcher", () => {
         "    { message: \"Cannot find module './dist/warning-filter.js' from '/pkg/openclaw/openclaw.mjs'\" },",
         "    './dist/warning-filter.js',",
         "  ),",
+        "  directWithCode: isDirectModuleNotFoundError(",
+        "    { code: 'ERR_MODULE_NOT_FOUND', message: \"Cannot find module './dist/warning-filter.js' from '/pkg/openclaw/openclaw.mjs'\" },",
+        "    './dist/warning-filter.js',",
+        "  ),",
         "  transitive: isDirectModuleNotFoundError(",
         "    { message: \"Cannot find module './nested.js' from '/pkg/openclaw/dist/entry.js'\" },",
         "    './dist/entry.js',",
@@ -258,6 +262,7 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       direct: true,
+      directWithCode: true,
       nonModulePath: false,
       nonModuleUrl: false,
       transitive: false,
