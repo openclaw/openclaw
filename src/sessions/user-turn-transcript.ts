@@ -312,12 +312,23 @@ function applyBeforeMessageWriteToUserTurn(
   message: PersistedUserTurnMessage,
   params: Pick<AppendUserTurnTranscriptMessageParams, "agentId" | "sessionKey">,
 ): PersistedUserTurnMessage | undefined {
+  const originalMessage = message as unknown as { idempotencyKey?: unknown };
+  const idempotencyKey =
+    typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
   const nextMessage = runAgentHarnessBeforeMessageWriteHook({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });
-  return nextMessage?.role === "user" ? nextMessage : undefined;
+  if (nextMessage?.role !== "user") {
+    return undefined;
+  }
+  return idempotencyKey
+    ? ({
+        ...(nextMessage as unknown as Record<string, unknown>),
+        idempotencyKey,
+      } as unknown as PersistedUserTurnMessage)
+    : nextMessage;
 }
 
 export async function appendUserTurnTranscriptMessage(

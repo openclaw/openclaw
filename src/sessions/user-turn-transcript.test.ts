@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendInlineUserTurnTranscriptMessage,
@@ -17,6 +23,7 @@ describe("user turn transcript persistence", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    resetGlobalHookRunner();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -410,6 +417,47 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "hello once",
           timestamp: 123,
+          idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: () => ({
+              message: castAgentMessage({
+                role: "user",
+                content: "[redacted by hook]",
+              }),
+            }),
+          },
+        ]),
+      );
+      const dir = createTempDir("openclaw-user-turn-redacted-idempotent-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      await appendInlineUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-1:user",
+        },
+      });
+      await appendInlineUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-1:user",
+        },
+      });
+
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
         }),
       ]);
