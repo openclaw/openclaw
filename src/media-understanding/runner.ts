@@ -111,16 +111,14 @@ function resolveConfiguredKeyProviderOrder(params: {
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
     .map((providerId) => normalizeMediaExecutionProviderId(providerId))
-    .filter(Boolean)
-    .filter((providerId, index, values) => values.indexOf(providerId) === index)
-    .filter((providerId) =>
-      providerSupportsCapability(
-        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
-        params.capability,
-      ),
-    );
-
-  return uniqueStrings([...configuredProviders, ...params.fallbackProviders]);
+    .filter(Boolean);
+  const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
+    providerSupportsCapability(
+      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      params.capability,
+    ),
+  );
+  return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
 function resolveConfiguredImageModelId(params: {

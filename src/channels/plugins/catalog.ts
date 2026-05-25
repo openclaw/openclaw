@@ -15,7 +15,7 @@ import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/m
 import { listOfficialExternalChannelCatalogEntries } from "../../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
@@ -191,10 +191,12 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
     return normalizeStringEntries(options.officialCatalogPaths);
   }
 
-  const packageRoots = [
-    resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-  ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
+  const packageRoots = uniqueStrings(
+    [
+      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+    ].filter((entry): entry is string => Boolean(entry)),
+  );
 
   const candidates = packageRoots.map((packageRoot) =>
     path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH),
@@ -206,7 +208,7 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
     candidates.push(path.join(execDir, "channel-catalog.json"));
   }
 
-  return candidates.filter((entry, index, all) => entry && all.indexOf(entry) === index);
+  return uniqueStrings(candidates);
 }
 
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {

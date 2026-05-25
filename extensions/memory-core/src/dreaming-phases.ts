@@ -705,9 +705,7 @@ function resolveSessionAgentsForWorkspace(params: {
   if (!match) {
     return [];
   }
-  return match.agentIds
-    .filter((agentId, index, all) => agentId.trim().length > 0 && all.indexOf(agentId) === index)
-    .toSorted();
+  return uniqueStrings(match.agentIds.filter((agentId) => agentId.trim().length > 0)).toSorted();
 }
 
 async function appendSessionCorpusLines(params: {

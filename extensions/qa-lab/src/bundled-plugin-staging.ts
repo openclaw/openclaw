@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "image-generation-core",
@@ -77,9 +78,7 @@ export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; plug
   ];
   const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
   const manifestCandidates = findQaBundledPluginDirsByManifestId(params);
-  const allCandidates = [...existingCandidates, ...manifestCandidates].filter(
-    (candidate, index, all) => all.indexOf(candidate) === index,
-  );
+  const allCandidates = uniqueStrings([...existingCandidates, ...manifestCandidates]);
   if (allCandidates.length === 0) {
     return null;
   }
@@ -93,11 +92,12 @@ export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; plug
 }
 
 function resolveQaBundledPluginScanRoots(repoRoot: string) {
-  return [
+  const candidates = [
     path.join(repoRoot, "dist", "extensions"),
     path.join(repoRoot, "dist-runtime", "extensions"),
     path.join(repoRoot, "extensions"),
-  ].filter((candidate, index, all) => existsSync(candidate) && all.indexOf(candidate) === index);
+  ];
+  return uniqueStrings(candidates.filter((candidate) => existsSync(candidate)));
 }
 
 function readQaBundledManifestId(manifestPath: string): string | null {

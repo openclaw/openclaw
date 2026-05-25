@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -333,11 +333,9 @@ function normalizeCliStringList(values?: string[]): string[] | undefined {
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized.length > 0 ? normalized : undefined;
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  const uniqueValues = uniqueStrings(normalized);
+  return uniqueValues.length > 0 ? uniqueValues : undefined;
 }
 
 function collectCliValues(value: string, acc: string[] = []) {
