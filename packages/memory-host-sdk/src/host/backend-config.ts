@@ -18,7 +18,11 @@ import {
   splitShellArgs,
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
-import { normalizeLowercaseStringOrEmpty, uniqueStrings } from "./string-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "./string-utils.js";
 
 function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
@@ -396,13 +400,12 @@ export function resolveMemoryBackendConfig(params: {
   const agentEntry = params.cfg.agents?.list?.find(
     (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
   );
-  const mergedExtraPaths = [
-    ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
-    ...(agentEntry?.memorySearch?.extraPaths ?? []),
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const mergedExtraPaths = normalizeStringEntries(
+    [
+      ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
+      ...(agentEntry?.memorySearch?.extraPaths ?? []),
+    ].filter((value): value is string => typeof value === "string"),
+  );
   const dedupedExtraPaths = uniqueStrings(mergedExtraPaths);
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),

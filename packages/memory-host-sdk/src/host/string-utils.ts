@@ -18,6 +18,10 @@ export function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
 
+export function normalizeStringEntries(values: ReadonlyArray<unknown>): string[] {
+  return values.map((value) => normalizeOptionalString(String(value)) ?? "").filter(Boolean);
+}
+
 export function uniqueStrings(values: Iterable<string>): string[] {
   return [...new Set(values)];
 }

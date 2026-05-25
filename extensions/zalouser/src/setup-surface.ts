@@ -13,6 +13,7 @@ import {
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -38,10 +39,7 @@ const ZALOUSER_ALLOWLIST_TITLE = t("wizard.zalouser.allowlistTitle");
 const ZALOUSER_GROUPS_TITLE = t("wizard.zalouser.groupsTitle");
 
 function parseZalouserEntries(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
 function setZalouserAccountScopedConfig(

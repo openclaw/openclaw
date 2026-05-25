@@ -29,7 +29,7 @@ import {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
-import { uniqueStrings } from "./string-utils.js";
+import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -90,9 +90,7 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   if (!extraPaths?.length) {
     return [];
   }
-  const resolved = extraPaths
-    .map((value) => value.trim())
-    .filter(Boolean)
+  const resolved = normalizeStringEntries(extraPaths)
     .map((value) => expandHomePath(value))
     .map((value) =>
       path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),

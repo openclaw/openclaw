@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeStringEntries,
   uniqueStrings,
 } from "./string-utils.js";
 export { splitShellArgs } from "./openclaw-runtime-io.js";
@@ -318,9 +319,10 @@ export function resolveMemorySearchConfig(
   if (!enabled) {
     return null;
   }
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const rawPaths = normalizeStringEntries([
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]);
   return {
     enabled,
     extraPaths: uniqueStrings(rawPaths),

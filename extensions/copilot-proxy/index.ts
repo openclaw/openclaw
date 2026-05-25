@@ -1,4 +1,4 @@
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -44,10 +44,7 @@ function validateBaseUrl(value: string): string | undefined {
 }
 
 function parseModelIds(input: string): string[] {
-  const parsed = input
-    .split(/[\n,]/)
-    .map((model) => model.trim())
-    .filter(Boolean);
+  const parsed = normalizeStringEntries(input.split(/[\n,]/));
   return uniqueStrings(parsed);
 }
 

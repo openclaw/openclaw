@@ -32,7 +32,7 @@ import {
   normalizeNullableString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -346,11 +346,9 @@ function candidateBinaryNames(name: string): string[] {
   if (ext) {
     return [name];
   }
-  const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (item.startsWith(".") ? item : `.${item}`));
+  const pathext = normalizeStringEntries(
+    (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"),
+  ).map((item) => (item.startsWith(".") ? item : `.${item}`));
   return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
 }
 

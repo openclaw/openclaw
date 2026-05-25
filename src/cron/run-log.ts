@@ -10,7 +10,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
@@ -147,10 +147,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   await privateFileStore(path.dirname(filePath)).writeText(
     path.basename(filePath),
