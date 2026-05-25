@@ -73,6 +73,15 @@ function buildEvolutionRecordAdder(
 const _negativeFeedbackCount = new Map<string, number>();
 const NEGATIVE_FEEDBACK_THRESHOLD = 3;
 
+/** 知识缺口批量导出防抖（进程内；定时 evolution_weekly_export 负责跨重启周期导出） */
+const GAP_BATCH_EXPORT_DEBOUNCE_MS = 24 * 60 * 60 * 1000;
+let _lastGapBatchExportMs = 0;
+
+/** @internal 测试重置防抖时钟 */
+export function resetGapBatchExportDebounceForTests(): void {
+  _lastGapBatchExportMs = 0;
+}
+
 function getEvolveEngine(runtime: ClaworksRuntime): EvolveEngine | undefined {
   const rt = runtime as { evolveEngine?: EvolveEngine };
   if (rt.evolveEngine) {
@@ -235,6 +244,31 @@ export async function handleAutonomyLearnOpportunity(
       auto: true,
     });
     actions.push("evolution_simulation_requested");
+
+    const now = Date.now();
+    if (
+      now - _lastGapBatchExportMs >= GAP_BATCH_EXPORT_DEBOUNCE_MS &&
+      runtime.evolutionSync?.exportEvolutionData
+    ) {
+      try {
+        const exportData = await runtime.evolutionSync.exportEvolutionData(7);
+        await runtime.kb.ingest(JSON.stringify(exportData), {
+          source: "autonomy.gap_batch_export",
+          namespace: "evolution_exports",
+          title: `知识缺口批量导出 ${exportData.exported_at}`,
+        });
+        _lastGapBatchExportMs = now;
+        actions.push("evolution_batch_export");
+        await runtime.kernel.publish("evolution.gap_batch_exported", "autonomy-learn-handler", {
+          signal,
+          gap_type: gapType || signal,
+          days: 7,
+          exported_at: exportData.exported_at,
+        });
+      } catch {
+        // non-critical
+      }
+    }
   }
 
   const shouldProposeDraft =

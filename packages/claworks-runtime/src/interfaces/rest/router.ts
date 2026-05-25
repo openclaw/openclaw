@@ -261,7 +261,12 @@ export function createClaworksRestHandler(
       if (method === "GET" && parts[1] === "observation-events") {
         const url = new URL(req.url ?? "/", "http://localhost");
         const limit = Number(url.searchParams.get("limit") ?? 50);
-        sendJson(res, 200, { events: listObservationEvents(limit) });
+        const typeFilter = url.searchParams.get("type")?.trim();
+        let events = listObservationEvents(limit);
+        if (typeFilter) {
+          events = events.filter((e) => e.type === typeFilter);
+        }
+        sendJson(res, 200, { events });
         return true;
       }
 

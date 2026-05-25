@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { createAutonomyEngine, handleAutonomyLearnOpportunity } from "./autonomy-engine.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import {
+  createAutonomyEngine,
+  handleAutonomyLearnOpportunity,
+  resetGapBatchExportDebounceForTests,
+} from "./autonomy-engine.js";
 
 function makeRuntime(
   overrides: Partial<{
@@ -71,6 +75,10 @@ function makeRuntime(
 }
 
 describe("handleAutonomyLearnOpportunity", () => {
+  beforeEach(() => {
+    resetGapBatchExportDebounceForTests();
+  });
+
   it("writes KB/CBR and triggers evolution simulation on knowledge_gap", async () => {
     const { runtime, published, cbrCases } = makeRuntime();
 
@@ -146,6 +154,38 @@ describe("handleAutonomyLearnOpportunity", () => {
 
     expect(result.actions_taken).not.toContain("evolve_draft_proposed");
     expect(published.some((e) => e.type === "evolve.playbook_drafted")).toBe(false);
+  });
+
+  it("debounced batch export on knowledge_gap (once per 24h window)", async () => {
+    const exportData = {
+      version: "1.0",
+      exported_at: "2026-05-25T12:00:00.000Z",
+      robot_id: "r1",
+      days: 7,
+    };
+    const exportEvolutionData = vi.fn(async () => exportData);
+    const { runtime, published } = makeRuntime();
+    runtime.evolutionSync = { exportEvolutionData };
+
+    const payload = {
+      signal: "knowledge_gap",
+      description: "24h 内多次兜底",
+      metadata: { gap_type: "knowledge_gap", last_input: "查一下产线 OEE" },
+    };
+
+    const first = await handleAutonomyLearnOpportunity(runtime as never, payload);
+    expect(first.actions_taken).toContain("evolution_batch_export");
+    expect(exportEvolutionData).toHaveBeenCalledTimes(1);
+    expect(exportEvolutionData).toHaveBeenCalledWith(7);
+    expect(runtime.kb.ingest).toHaveBeenCalledWith(
+      JSON.stringify(exportData),
+      expect.objectContaining({ namespace: "evolution_exports" }),
+    );
+    expect(published.some((e) => e.type === "evolution.gap_batch_exported")).toBe(true);
+
+    const second = await handleAutonomyLearnOpportunity(runtime as never, payload);
+    expect(second.actions_taken).not.toContain("evolution_batch_export");
+    expect(exportEvolutionData).toHaveBeenCalledTimes(1);
   });
 });
 

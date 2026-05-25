@@ -583,16 +583,28 @@ export function createEvolveEngine(runtime: ClaworksRuntime): EvolveEngine {
         deployResult.test_output = verification.output;
       }
 
+      const deployedEventStatus =
+        req.verifyAfterDeploy !== false && deployResult.test_passed === true
+          ? "deployed"
+          : "deployed_unverified";
+
       await runtime.kernel.publish("evolve.playbook_deployed", source, {
         proposal_id: proposal.id,
         title: proposal.title,
         deployed: deployResult.deployed,
         playbook_path: deployResult.playbook_path,
-        status: deployResult.test_passed === false ? "deployed_unverified" : "deployed",
+        status: deployedEventStatus,
       });
 
+      const resultStatus =
+        req.verifyAfterDeploy === false
+          ? "deployed_unverified"
+          : deployResult.test_passed === true
+            ? "deployed"
+            : "deployed_unverified";
+
       return {
-        status: "deployed_unverified",
+        status: resultStatus,
         deployed: deployResult.deployed,
         proposal,
         deploy: deployResult,

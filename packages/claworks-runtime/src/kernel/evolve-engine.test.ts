@@ -236,6 +236,39 @@ describe("EvolveEngine", () => {
     expect(runtime._published.some((e) => e.type === "evolve.playbook_deployed")).toBe(true);
   });
 
+  it("promoteDraft verifyAfterDeploy=true 且 verify 通过时返回 deployed", async () => {
+    const runtime = makeEvolveRuntime();
+    runtime.packLoader.load = vi.fn(async () => ({
+      manifest: { id: "user_evolved" },
+      path: "/tmp",
+      objectTypes: [],
+      playbooks: [],
+    }));
+    runtime.playbookEngine.loadFromPacks = vi.fn(async () => undefined);
+    const engine = createEvolveEngine(runtime as never);
+    const proposal = await engine.proposeDraft({ description: "verify me" });
+
+    const origPublish = runtime.kernel.publish;
+    runtime.kernel.publish = vi.fn(
+      async (type: string, source: string, payload: Record<string, unknown>) => {
+        await origPublish(type, source, payload);
+        if (type === proposal.test_event) {
+          (runtime.kernel as ReturnType<typeof makeMockKernel>).emit("playbook.run.completed", {
+            playbook_id: proposal.id,
+          });
+        }
+      },
+    );
+
+    const result = await engine.promoteDraft({
+      proposalId: proposal.id,
+      approved: true,
+      verifyAfterDeploy: true,
+    });
+    expect(result.status).toBe("deployed");
+    expect(result.deploy?.test_passed).toBe(true);
+  });
+
   it("startDraftReviewPipeline 在 evolve.playbook_drafted 后发布 evolve.suggestions_ready", async () => {
     const runtime = makeEvolveRuntime();
     const engine = createEvolveEngine(runtime as never);
