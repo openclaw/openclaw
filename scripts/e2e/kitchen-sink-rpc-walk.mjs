@@ -28,6 +28,10 @@ const INSTALL_TIMEOUT_MS = readPositiveInt(
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
+const OUTPUT_CAPTURE_CHARS = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
+  1024 * 1024,
+);
 const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 
 let callGatewayModulePromise;
@@ -109,14 +113,30 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+export function appendBoundedOutput(buffer, chunk, maxChars = OUTPUT_CAPTURE_CHARS) {
+  const text = String(chunk);
+  const combined = `${buffer.text}${text}`;
+  const overflowChars = Math.max(0, combined.length - maxChars);
+  return {
+    text: overflowChars > 0 ? combined.slice(overflowChars) : combined,
+    truncatedChars: buffer.truncatedChars + overflowChars,
+  };
+}
+
+function formatCapturedOutput(label, buffer) {
+  return buffer.truncatedChars > 0
+    ? `[${label} truncated ${buffer.truncatedChars} chars]\n${buffer.text}`
+    : buffer.text;
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...options,
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout = { text: "", truncatedChars: 0 };
+    let stderr = { text: "", truncatedChars: 0 };
     const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -125,10 +145,10 @@ function runCommand(command, args, options = {}) {
       setTimeout(() => child.kill("SIGKILL"), 2000).unref();
     }, timeoutMs);
     child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedOutput(stderr, chunk);
     });
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -137,10 +157,21 @@ function runCommand(command, args, options = {}) {
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       if (status === 0) {
-        resolve({ stdout, stderr });
+        resolve({
+          stdout: stdout.text,
+          stderr: stderr.text,
+          stdoutTruncatedChars: stdout.truncatedChars,
+          stderrTruncatedChars: stderr.truncatedChars,
+        });
         return;
       }
-      const detail = [stdout, stderr].filter(Boolean).join("\n").trim();
+      const detail = [
+        formatCapturedOutput("stdout", stdout),
+        formatCapturedOutput("stderr", stderr),
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
       const failure = timedOut
         ? `timed out after ${timeoutMs}ms`
         : `failed with ${signal || status}`;

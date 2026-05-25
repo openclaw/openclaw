@@ -341,13 +341,34 @@ async function main() {
       message: "yes abcde",
       idempotencyKey: randomUUID(),
     });
-    const permission = await waitFor(
-      "Claude permission notification",
-      () =>
-        mcpHandle.rawMessages
-          .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
-          .find((entry) => entry.success && entry.data.params.request_id === "abcde")?.data.params,
-    );
+    let permission: { request_id: string; behavior: "allow" | "deny" };
+    try {
+      permission = await waitFor(
+        "Claude permission notification",
+        () =>
+          mcpHandle.rawMessages
+            .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+            .find((entry) => entry.success && entry.data.params.request_id === "abcde")?.data
+            .params,
+        60_000,
+      );
+    } catch (error) {
+      throw new Error(
+        `timeout waiting for Claude permission notification: ${JSON.stringify(
+          {
+            rawMessages: mcpHandle.rawMessages.slice(-10),
+            recentGatewayEvents: gateway.events.slice(-10).map((entry) => ({
+              event: entry.event,
+              sessionKey: entry.payload.sessionKey,
+              text: extractTextFromGatewayPayload(entry.payload),
+            })),
+          },
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
+    }
     assert(permission.behavior === "allow", "expected allow permission reply");
 
     process.stdout.write(
