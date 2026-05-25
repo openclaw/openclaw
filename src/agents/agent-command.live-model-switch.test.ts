@@ -26,7 +26,9 @@ const state = vi.hoisted(() => ({
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
-  resolveAgentSkillsFilterMock: vi.fn((): string[] | undefined => undefined),
+  resolveAgentSkillsFilterMock: vi.fn(
+    (_cfg?: unknown, _agentId?: string): string[] | undefined => undefined,
+  ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
@@ -313,7 +315,8 @@ vi.mock("./agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
   resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
   resolveSessionAgentId: () => "default",
-  resolveAgentSkillsFilter: (...args: unknown[]) => state.resolveAgentSkillsFilterMock(...args),
+  resolveAgentSkillsFilter: (cfg: unknown, agentId: string) =>
+    state.resolveAgentSkillsFilterMock(cfg, agentId),
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
 }));
 
