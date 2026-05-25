@@ -27,6 +27,7 @@ import {
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
   readLightStagedKeys,
@@ -1388,33 +1389,15 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
-function tokenizeSnippet(snippet: string): Set<string> {
-  return new Set(normalizeStringEntries(snippet.toLowerCase().split(/[^a-z0-9]+/i)));
-}
-
-function jaccardSimilarity(left: string, right: string): number {
-  const leftTokens = tokenizeSnippet(left);
-  const rightTokens = tokenizeSnippet(right);
-  if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : 0;
-  }
-  let intersection = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) {
-      intersection += 1;
-    }
-  }
-  const union = new Set([...leftTokens, ...rightTokens]).size;
-  return union > 0 ? intersection / union : 0;
-}
-
+// Use the shared CJK-aware similarity helper so close-but-not-identical CJK
+// snippets do not slip past the dedupe threshold via the old ASCII-only path.
 function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): ShortTermRecallEntry[] {
   const deduped: ShortTermRecallEntry[] = [];
   for (const entry of entries) {
     const duplicate = deduped.find(
       (candidate) =>
         candidate.path === entry.path &&
-        jaccardSimilarity(candidate.snippet, entry.snippet) >= threshold,
+        snippetSimilarity(candidate.snippet, entry.snippet) >= threshold,
     );
     if (duplicate) {
       if (entry.recallCount > duplicate.recallCount) {
@@ -1905,6 +1888,8 @@ async function runPhaseIfTriggered(
 export const testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  // Exposed for the #80613 regression test that exercises CJK-aware dedupe.
+  dedupeEntries,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
