@@ -153,7 +153,16 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
         },
       });
   if (persisted) {
-    await params.onUserMessagePersisted?.(persisted.message);
+    try {
+      const notification = params.onUserMessagePersisted?.(persisted.message);
+      if (notification) {
+        void Promise.resolve(notification).catch((error) => {
+          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+        });
+      }
+    } catch (error) {
+      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+    }
   }
 }
 

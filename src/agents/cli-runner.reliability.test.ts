@@ -871,6 +871,49 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("does not fail CLI execution when persistence notification fails", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello despite notification failure",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-notify-fail",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscript: { text: "display prompt" },
+          onUserMessagePersisted: () => {
+            throw new Error("notification failed");
+          },
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello despite notification failure" }]);
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists approved CLI media user turns without caller-side transcript shaping", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
