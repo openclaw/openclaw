@@ -24,9 +24,16 @@ export async function simulateDraftPlaybook(
     playbookYaml: string;
     playbookId: string;
     proposalId: string;
+    testPayload?: Record<string, unknown>;
   },
 ): Promise<DraftSimulationResult> {
   const source = `sandbox-draft:${opts.proposalId}`;
+  const simulatePayload = {
+    ...(opts.testPayload ?? {}),
+    _simulate: true,
+    _sandbox: true,
+    _draft_review: true,
+  };
   let loaded = false;
   const pb = runtime.playbookEngine;
   const pbExt = pb as typeof pb & {
@@ -65,7 +72,7 @@ export async function simulateDraftPlaybook(
             ? (trigEvent as Record<string, unknown>)
             : {},
           {
-            variables: { ...initVars, _simulate: true, _sandbox: true, _draft_review: true },
+            variables: simulatePayload,
           },
         );
         if (run?.steps) {
@@ -90,11 +97,9 @@ export async function simulateDraftPlaybook(
       }
     });
 
-    const result = await simulator.simulate(
-      opts.playbookId,
-      { _simulate: true, _sandbox: true, _draft_review: true },
-      { type: `draft.review.${opts.playbookId}` },
-    );
+    const result = await simulator.simulate(opts.playbookId, simulatePayload, {
+      type: `draft.review.${opts.playbookId}`,
+    });
 
     return {
       yaml_valid: true,
