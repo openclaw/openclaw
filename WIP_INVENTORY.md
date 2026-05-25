@@ -35,5 +35,5 @@
 
 ## 当前状态
 
-- **测试**：`pnpm test packages/claworks-runtime` → **395/395**（89 文件）
-- **工作区**：本批次 doctor/oxlint/文档更新待合入
+- **测试**：`pnpm test packages/claworks-runtime` → **397/397**（89 文件）
+- **工作区**：clean

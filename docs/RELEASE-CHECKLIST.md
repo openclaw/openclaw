@@ -94,8 +94,12 @@ CLAWORKS_PRODUCT=1 node claworks.mjs doctor
 docker compose -f docker-compose.prod.yml config
 
 # 运行中健康（需 gateway 已启动）
-curl -s http://127.0.0.1:18800/v1/health | head
-curl -s http://127.0.0.1:18800/v1/doctor -X POST | head
+curl -s http://127.0.0.1:18800/v1/health | head -c 400; echo
+curl -s http://127.0.0.1:18800/v1/metrics | head -5
+curl -s -X POST http://127.0.0.1:18800/v1/doctor | head -c 400; echo
+
+# 生产令牌（临时目录示例，不污染 ~/.claworks）
+# OPENCLAW_STATE_DIR=/tmp/claworks-secure-test/state CLAWORKS_INIT_SECURE=1 node scripts/claworks-init.mjs
 ```
 
 **扩展仓（OpenClaw 用户场景）**：
