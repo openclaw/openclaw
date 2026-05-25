@@ -414,7 +414,7 @@ function shouldResolvePluginSyntheticAuth(params: {
     return true;
   }
   const eligibleRefs = new Set(
-    syntheticAuthProviderRefs.map((ref) => normalizeProviderId(ref)).filter(Boolean),
+    normalizeUniqueStringEntries(syntheticAuthProviderRefs.map((ref) => normalizeProviderId(ref))),
   );
   if (eligibleRefs.size === 0) {
     return false;

@@ -1,5 +1,5 @@
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
   label: string;
@@ -35,7 +35,7 @@ export function buildEmptyExplicitToolAllowlistError(params: {
     params.disableTools === true
       ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
       : params.sources;
-  const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
+  const callableToolNames = normalizeToolList(params.callableToolNames);
   if (sources.length === 0 || callableToolNames.length > 0) {
     return null;
   }

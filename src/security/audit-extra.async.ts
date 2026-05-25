@@ -15,7 +15,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
 import type { SkillScanFinding } from "./skill-scanner.js";
@@ -190,7 +194,7 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  return normalizeTrimmedStringList(extensions);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
