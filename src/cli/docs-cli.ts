@@ -4,11 +4,12 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { productizeUserCopy } from "./product-surface.js";
 
 export function registerDocsCli(program: Command) {
   program
     .command("docs")
-    .description("Search the live OpenClaw docs")
+    .description(productizeUserCopy("Search the live OpenClaw docs"))
     .argument("[query...]", "Search query")
     .addHelpText(
       "after",
