@@ -4,6 +4,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   openAIProviderUsesCodexRuntimeByDefault,
+  resolveOpenAICompactionRuntimeProvider,
   resolveOpenAIRuntimeProviderForPi,
   resolveSelectedOpenAIPiRuntimeProvider,
 } from "./openai-codex-routing.js";
@@ -151,9 +152,18 @@ describe("OpenAI Codex routing policy", () => {
     ).toEqual(["openai-codex"]);
   });
 
-  it("routes OpenAI provider to OpenAI-Codex when Codex auth order is configured", () => {
+  it("routes selected OpenAI Codex runtime through OpenAI-Codex even before auth is configured", () => {
     expect(
       resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("routes OpenAI compaction to OpenAI-Codex when Codex auth order is configured", () => {
+    expect(
+      resolveOpenAICompactionRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
         config: {
@@ -167,9 +177,9 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("routes OpenAI provider to OpenAI-Codex when a Codex auth profile is configured", () => {
+  it("routes OpenAI compaction to OpenAI-Codex when a Codex auth profile is configured", () => {
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveOpenAICompactionRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
         config: {
@@ -186,7 +196,7 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("routes OpenAI provider to OpenAI-Codex when OpenAI auth order selects Codex", () => {
+  it("routes OpenAI compaction to OpenAI-Codex when OpenAI auth order selects Codex", () => {
     const config = {
       auth: {
         order: {
@@ -196,7 +206,7 @@ describe("OpenAI Codex routing policy", () => {
     } satisfies OpenClawConfig;
 
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveOpenAICompactionRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
         config,
@@ -204,9 +214,9 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("keeps OpenAI provider for Codex runtime when only direct API-key auth is implied", () => {
+  it("keeps OpenAI compaction on OpenAI when only direct API-key auth is implied", () => {
     expect(
-      resolveSelectedOpenAIPiRuntimeProvider({
+      resolveOpenAICompactionRuntimeProvider({
         provider: "openai",
         harnessRuntime: "codex",
       }),

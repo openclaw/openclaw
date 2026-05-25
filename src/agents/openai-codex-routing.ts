@@ -204,6 +204,32 @@ export function resolveSelectedOpenAIPiRuntimeProvider(params: {
   if (!isOpenAIProvider(params.provider)) {
     return params.provider;
   }
+  if (runtime === "codex") {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  return runtime === "pi" &&
+    !params.authProfileId?.trim() &&
+    configuredOpenAIAuthOrderStartsWithCodexProfile(params.config)
+    ? OPENAI_CODEX_PROVIDER_ID
+    : params.provider;
+}
+
+export function resolveOpenAICompactionRuntimeProvider(params: {
+  provider: string;
+  harnessRuntime?: string;
+  agentHarnessId?: string;
+  authProfileProvider?: string;
+  authProfileId?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string {
+  if (shouldRouteOpenAIPiThroughCodexAuthProvider(params)) {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
+  if (!isOpenAIProvider(params.provider)) {
+    return params.provider;
+  }
   if (
     runtime === "codex" &&
     (hasOpenAICodexAuthProfileOverride(params.authProfileId) ||

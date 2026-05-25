@@ -74,7 +74,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   resolveContextConfigProviderForRuntime,
-  resolveSelectedOpenAIPiRuntimeProvider,
+  resolveOpenAICompactionRuntimeProvider,
 } from "../openai-codex-routing.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
@@ -514,7 +514,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     sessionKey: params.sessionKey,
   });
   const selectedHarnessRuntime = params.agentHarnessId ?? runtimeHarnessPolicy.runtime;
-  const provider = resolveSelectedOpenAIPiRuntimeProvider({
+  const provider = resolveOpenAICompactionRuntimeProvider({
     provider: modelConfigProvider,
     harnessRuntime: runtimeHarnessPolicy.runtime,
     agentHarnessId: params.agentHarnessId,
