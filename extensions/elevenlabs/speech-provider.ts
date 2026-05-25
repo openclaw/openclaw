@@ -90,7 +90,11 @@ function normalizeElevenLabsProviderConfig(
       path: "messages.tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
-    voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
+    // Accept `voice` as an alias for `voiceId` (matches the realtime-config
+    // field name and reduces silent fallback to DEFAULT_ELEVENLABS_VOICE_ID
+    // when users follow the more natural `voice: "<id>"` shape). See #86180.
+    voiceId:
+      trimToUndefined(raw?.voiceId) ?? trimToUndefined(raw?.voice) ?? DEFAULT_ELEVENLABS_VOICE_ID,
     modelId: trimToUndefined(raw?.modelId) ?? DEFAULT_ELEVENLABS_MODEL_ID,
     seed: asFiniteNumber(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization) as
@@ -120,7 +124,10 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsP
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
+    voiceId:
+      trimToUndefined(config.voiceId) ??
+      trimToUndefined((config as Record<string, unknown>).voice) ??
+      defaults.voiceId,
     modelId: trimToUndefined(config.modelId) ?? defaults.modelId,
     seed: asFiniteNumber(config.seed) ?? defaults.seed,
     applyTextNormalization:
