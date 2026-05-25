@@ -1,6 +1,6 @@
 import type { ReactionTypeEmoji } from "grammy/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
@@ -121,7 +121,7 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
 ];
 
 function toUniqueNonEmpty(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  return uniqueStrings(values.map((value) => value.trim()).filter(Boolean));
 }
 
 export function resolveTelegramStatusReactionEmojis(params: {

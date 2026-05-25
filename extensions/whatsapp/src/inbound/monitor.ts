@@ -12,6 +12,7 @@ import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debo
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
@@ -266,9 +267,9 @@ export async function attachWebInboxToSocket(
     entries: QueuedInboundMessage[],
     error?: unknown,
   ): Promise<void> => {
-    const dedupeKeys = [
-      ...new Set(entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString)),
-    ];
+    const dedupeKeys = uniqueStrings(
+      entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString),
+    );
     const durableEntries = entries.filter(
       (entry): entry is QueuedInboundMessage & { durableId: string } =>
         isNonEmptyString(entry.durableId),
