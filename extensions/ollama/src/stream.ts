@@ -33,12 +33,17 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
 } from "./ollama-json.js";
 import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
+import {
+  createOllamaVisibleContentSanitizer,
+  sanitizeOllamaFinalVisibleContent,
+} from "./sanitizers/visible-content.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -356,68 +361,6 @@ function resolveOllamaTopLevelParams(
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
 }
 
-function isOllamaCloudKimiModelRef(modelId: string): boolean {
-  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
-}
-
-const KIMI_INLINE_REASONING_MIN_PREFIX_CHARS = 80;
-const KIMI_INLINE_REASONING_MAX_PENDING_CHARS = 512;
-const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
-
-type KimiInlineReasoningVisibleTextResolution =
-  | { kind: "visible"; text: string; bypassInlineReasoning?: boolean }
-  | { kind: "pending" };
-
-function resolveKimiInlineReasoningVisibleText(params: {
-  modelId: string;
-  text: string;
-  final: boolean;
-}): KimiInlineReasoningVisibleTextResolution {
-  if (!isOllamaCloudKimiModelRef(params.modelId)) {
-    return { kind: "visible", text: params.text };
-  }
-
-  const match = KIMI_INLINE_REASONING_BOUNDARY_RE.exec(params.text);
-  if (!match) {
-    if (!params.final && params.text.length <= KIMI_INLINE_REASONING_MAX_PENDING_CHARS) {
-      return { kind: "pending" };
-    }
-    return {
-      kind: "visible",
-      text: params.text,
-      bypassInlineReasoning:
-        !params.final && params.text.length > KIMI_INLINE_REASONING_MAX_PENDING_CHARS,
-    };
-  }
-
-  const boundaryStartIndex = match.index + match[1].length;
-  const boundaryEndIndex = match.index + match[0].length;
-  const prefix = params.text.slice(0, boundaryStartIndex).trim();
-  const answer = params.text.slice(boundaryEndIndex).trim();
-  if (prefix.length >= KIMI_INLINE_REASONING_MIN_PREFIX_CHARS && answer) {
-    return { kind: "visible", text: answer };
-  }
-
-  return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
-}
-
-function stripKimiInlineReasoningFromVisibleText(params: {
-  modelId: string;
-  text: string;
-}): string {
-  const resolution = resolveKimiInlineReasoningVisibleText({ ...params, final: true });
-  return resolution.kind === "visible" ? resolution.text : params.text;
-}
-
-function resolveStreamingVisibleText(params: {
-  modelId: string;
-  text: string;
-  final: boolean;
-}): KimiInlineReasoningVisibleTextResolution {
-  return resolveKimiInlineReasoningVisibleText(params);
-}
-
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
   if (!nextText) {
     return "";
@@ -475,7 +418,10 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 
-  if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
+  if (
+    normalizeProviderId(ctx.provider) === "ollama" &&
+    shouldWrapOllamaCompatMoonshotThinking(ctx.modelId)
+  ) {
     const thinkingType = resolveMoonshotThinkingType({
       configuredThinking: ctx.extraParams?.thinking,
       thinkingLevel: ctx.thinkingLevel,
@@ -863,7 +809,7 @@ type OllamaToolCallNameOptions = {
 };
 
 type OllamaAssistantMessageBuildOptions = OllamaToolCallNameOptions & {
-  sanitizeKimiInlineReasoning?: boolean;
+  sanitizeVisibleContent?: boolean;
 };
 
 function readOllamaToolCallId(value: unknown): string | undefined {
@@ -1029,9 +975,9 @@ export function buildAssistantMessage(
   }
   const rawText = response.message.content || "";
   const text =
-    options.sanitizeKimiInlineReasoning === false
+    options.sanitizeVisibleContent === false
       ? rawText
-      : stripKimiInlineReasoningFromVisibleText({
+      : sanitizeOllamaFinalVisibleContent({
           modelId: modelInfo.id,
           text: rawText,
         });
@@ -1211,7 +1157,7 @@ export function createOllamaStreamFn(
           let finalResponse: OllamaChatResponse | undefined;
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = { api: model.api, provider: model.provider, id: model.id };
-          let bypassKimiInlineReasoningSanitizer = false;
+          const visibleContentSanitizer = createOllamaVisibleContentSanitizer(model.id);
           let streamStarted = false;
           let thinkingStarted = false;
           let thinkingEnded = false;
@@ -1321,19 +1267,12 @@ export function createOllamaStreamFn(
           };
 
           const resolveVisibleContent = (final: boolean): string | undefined => {
-            if (bypassKimiInlineReasoningSanitizer) {
-              return accumulatedRawContent;
-            }
-            const resolution = resolveStreamingVisibleText({
-              modelId: model.id,
+            const resolution = visibleContentSanitizer.resolveStreamText({
               text: accumulatedRawContent,
               final,
             });
             if (resolution.kind === "pending") {
               return undefined;
-            }
-            if (resolution.bypassInlineReasoning) {
-              bypassKimiInlineReasoningSanitizer = true;
             }
             return resolution.text;
           };
@@ -1428,7 +1367,7 @@ export function createOllamaStreamFn(
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,
-            sanitizeKimiInlineReasoning: !bypassKimiInlineReasoningSanitizer,
+            sanitizeVisibleContent: visibleContentSanitizer.shouldSanitizeFinalMessage(),
           });
           closeThinkingBlock();
           closeTextBlock();
