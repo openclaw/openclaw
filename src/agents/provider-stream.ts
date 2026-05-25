@@ -1,13 +1,22 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { normalizeProviderId, findNormalizedProviderValue } from "./provider-id.js";
 import { createTransportAwareStreamFnForModel } from "./provider-transport-stream.js";
 
-function hasConfiguredProvider(params: { cfg?: OpenClawConfig; provider: string }): boolean {
-  return Boolean(findNormalizedProviderValue(params.cfg?.models?.providers, params.provider));
+function resolveConfiguredProvider(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+}): ModelProviderConfig | undefined {
+  return findNormalizedProviderValue(params.cfg?.models?.providers, params.provider);
+}
+
+function isGoogleGenerativeProviderConfig(providerConfig: ModelProviderConfig | undefined): boolean {
+  return normalizeOptionalString(providerConfig?.api) === "google-generative-ai";
 }
 
 function isGoogleGenerativeModel<TApi extends Api>(model: Model<TApi>): boolean {
@@ -21,11 +30,12 @@ function assertProviderConfigMatchesModel<TApi extends Api>(params: {
   if (!isGoogleGenerativeModel(params.model)) {
     return;
   }
-  if (hasConfiguredProvider({ cfg: params.cfg, provider: "google" })) {
+  const googleProviderConfig = resolveConfiguredProvider({ cfg: params.cfg, provider: "google" });
+  if (isGoogleGenerativeProviderConfig(googleProviderConfig)) {
     return;
   }
   throw new Error(
-    `Google model "google/${params.model.id}" requires models.providers.google. Configure the Google provider or remove this model from the primary/fallback model list.`,
+    `Google model "google/${params.model.id}" requires models.providers.google with api "google-generative-ai". Configure the Google provider or remove this model from the primary/fallback model list.`,
   );
 }
 
