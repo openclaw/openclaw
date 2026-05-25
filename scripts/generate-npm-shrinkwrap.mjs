@@ -76,14 +76,18 @@ function readPnpmLockPackages() {
   if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
   }
-  return new Set(
-    Object.keys(packages)
-      .map((packageKey) => {
-        const parsed = parsePnpmPackageKey(packageKey);
-        return parsed ? `${parsed.name}@${parsed.version}` : null;
-      })
-      .filter((packageKey) => packageKey !== null),
-  );
+  const packageKeys = new Set();
+  for (const [lockPackageKey, metadata] of Object.entries(packages)) {
+    const parsed = parsePnpmPackageKey(lockPackageKey);
+    if (!parsed) {
+      continue;
+    }
+    packageKeys.add(`${parsed.name}@${parsed.version}`);
+    if (metadata && typeof metadata === "object" && typeof metadata.version === "string") {
+      packageKeys.add(`${parsed.name}@${metadata.version}`);
+    }
+  }
+  return packageKeys;
 }
 
 function collectPnpmLockPackageVersions(lockfile) {
@@ -114,6 +118,7 @@ function readPnpmLockSingleVersionOverrides() {
     [...versionsByName.entries()]
       .filter(([, versions]) => versions.size === 1)
       .map(([name, versions]) => [name, [...versions][0]])
+      .filter(([, version]) => exactVersionFromOverrideSpec(version) !== null)
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
 }

@@ -25,8 +25,8 @@
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.2.7",
+        "@openclaw/prism": "https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced",
         "@openclaw/proxyline": "0.3.3",
-        "@silvia-odwyer/photon-node": "0.3.4",
         "ajv": "8.20.0",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
@@ -1408,6 +1408,18 @@
       "optionalDependencies": {
         "jszip": "^3.10.1",
         "tar": "7.5.13"
+      }
+    },
+    "node_modules/@openclaw/prism": {
+      "version": "0.1.0",
+      "resolved": "https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced",
+      "integrity": "sha512-yurmexjuVltBRvc40VibBnbTlQaQVdX2kVSmE9K5Rt5vTw4hrr42aZcjn8m8V+G6okYMekkdmi8ANdQB9aK9wQ==",
+      "license": "MIT",
+      "dependencies": {
+        "@silvia-odwyer/photon-node": "0.3.4"
+      },
+      "engines": {
+        "node": ">=20"
       }
     },
     "node_modules/@openclaw/proxyline": {

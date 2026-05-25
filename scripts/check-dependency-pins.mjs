@@ -12,6 +12,8 @@ const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.
 const EXACT_NPM_ALIAS_PATTERN =
   /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
+const PINNED_GITHUB_TARBALL_PATTERN =
+  /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 
 function listTrackedPackageJsonFiles(cwd) {
   return execFileSync("git", ["ls-files", "-z", "--", "*package.json"], {
@@ -48,6 +50,9 @@ function isAllowedPinnedSpec(spec) {
     return true;
   }
   if (spec === "workspace:*" || spec.startsWith("file:") || spec.startsWith("link:")) {
+    return true;
+  }
+  if (PINNED_GITHUB_TARBALL_PATTERN.test(spec)) {
     return true;
   }
   if (/^(?:git\+|github:|gitlab:|bitbucket:)/u.test(spec)) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer,
   createSolidPngBuffer,
@@ -8,19 +8,22 @@ import { getImageMetadata } from "../media/image-ops.js";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
-  const unavailableImageBackend = process.platform === "win32" ? "sips" : "windows-native";
-
   async function withUnavailableImageBackend<T>(fn: () => Promise<T>): Promise<T> {
-    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    process.env.OPENCLAW_IMAGE_BACKEND = unavailableImageBackend;
+    vi.resetModules();
+    vi.doMock("../media/media-services.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../media/media-services.js")>()),
+      getImageMetadata: vi.fn(async () => ({ width: 420, height: 120 })),
+      isImageProcessorUnavailableError: (err: unknown) =>
+        err instanceof Error && /image processor unavailable/i.test(err.message),
+      resizeToJpeg: vi.fn(async () => {
+        throw new Error("Image processor unavailable for resizeToJpeg");
+      }),
+    }));
     try {
       return await fn();
     } finally {
-      if (previousBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
-      }
+      vi.doUnmock("../media/media-services.js");
+      vi.resetModules();
     }
   }
 
@@ -107,9 +110,11 @@ describe("tool image sanitizing", () => {
       },
     ];
 
-    const out = await withUnavailableImageBackend(() =>
-      sanitizeContentBlocksImages(blocks, "test", { maxDimensionPx: 120 }),
-    );
+    const out = await withUnavailableImageBackend(async () => {
+      const { sanitizeContentBlocksImages: sanitizeWithMissingOptimizer } =
+        await import("./tool-images.js");
+      return await sanitizeWithMissingOptimizer(blocks, "test", { maxDimensionPx: 120 });
+    });
 
     expect(out).toHaveLength(1);
     expect(out[0].type).toBe("text");

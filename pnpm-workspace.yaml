@@ -102,6 +102,7 @@ allowBuilds:
   protobufjs: true
   tree-sitter-bash: false
   openclaw: true
+  "@openclaw/prism": true
   "@openclaw/proxyline": true
 
 packageExtensions:

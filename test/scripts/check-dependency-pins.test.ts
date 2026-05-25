@@ -62,6 +62,8 @@ describe("check-dependency-pins", () => {
         linked: "link:../linked",
         local: "file:../local",
         gitPinned: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
+        githubTarball:
+          "https://codeload.github.com/owner/repo/tar.gz/0123456789abcdef0123456789abcdef01234567",
       },
       devDependencies: {
         devExact: "4.5.6",
@@ -101,6 +103,7 @@ packageExtensions:
         tag: "latest",
         broad: ">=1 <2",
         gitFloating: "github:owner/repo#main",
+        githubTarballFloating: "https://codeload.github.com/owner/repo/tar.gz/main",
       },
     });
     writeJson(path.join(dir, "extensions", "demo", "package.json"), {
@@ -139,6 +142,12 @@ packageExtensions:
         section: "dependencies",
         name: "gitFloating",
         spec: "github:owner/repo#main",
+      },
+      {
+        file: "package.json",
+        section: "dependencies",
+        name: "githubTarballFloating",
+        spec: "https://codeload.github.com/owner/repo/tar.gz/main",
       },
     ]);
   });

@@ -444,25 +444,20 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
+    const unavailableMessage = "PRISM_IMAGE_PROCESSOR_UNAVAILABLE";
     vi.doMock("./media-services.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./media-services.js")>()),
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
+        throw new Error(unavailableMessage);
       }),
       isImageProcessorUnavailableError: (err: unknown) =>
-        err instanceof Error && err.message.includes("Photon did not expose"),
+        err instanceof Error && err.message.includes(unavailableMessage),
       optimizeImageToPng: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
+        throw new Error(unavailableMessage);
       }),
       resizeToJpeg: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
+        throw new Error(unavailableMessage);
       }),
     }));
     try {
@@ -492,7 +487,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Photon did not expose/);
+      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -522,7 +517,7 @@ describe("loadWebMedia", () => {
           maxBytes: 8,
           imageCompression: { models: [{ maxSidePx: 1024 }] },
         }),
-      ).rejects.toThrow(/Photon did not expose/);
+      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -536,7 +531,7 @@ describe("loadWebMedia", () => {
           maxBytes: 16 * 1024 * 1024,
           imageCompression: { models: [{ maxSidePx: 512 }] },
         }),
-      ).rejects.toThrow(/Photon did not expose/);
+      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 
@@ -652,7 +647,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Photon did not expose/);
+      ).rejects.toThrow(/PRISM_IMAGE_PROCESSOR_UNAVAILABLE/);
     });
   });
 

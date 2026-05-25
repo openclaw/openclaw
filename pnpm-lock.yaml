@@ -85,12 +85,12 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.2.7
         version: 0.2.7
+      '@openclaw/prism':
+        specifier: https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced
+        version: https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
-      '@silvia-odwyer/photon-node':
-        specifier: 0.3.4
-        version: 0.3.4
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -955,10 +955,6 @@ importers:
         version: link:../..
 
   extensions/media-understanding-core:
-    dependencies:
-      '@silvia-odwyer/photon-node':
-        specifier: 0.3.4
-        version: 0.3.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -3065,6 +3061,11 @@ packages:
   '@openclaw/fs-safe@0.2.7':
     resolution: {integrity: sha512-l/Yj3K2ChR/gI+bZo1wIe7rjKyTFwGOAw120cTCMRT8LZbVhJhTbiZLGIRBMv0Gc9GQjYE8EjPBza3RdrSSbyQ==}
     engines: {node: '>=20.11'}
+
+  '@openclaw/prism@https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced':
+    resolution: {gitHosted: true, integrity: sha512-yurmexjuVltBRvc40VibBnbTlQaQVdX2kVSmE9K5Rt5vTw4hrr42aZcjn8m8V+G6okYMekkdmi8ANdQB9aK9wQ==, tarball: https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced}
+    version: 0.1.0
+    engines: {node: '>=20'}
 
   '@openclaw/proxyline@0.3.3':
     resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
@@ -8647,6 +8648,10 @@ snapshots:
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15
+
+  '@openclaw/prism@https://codeload.github.com/openclaw/prism/tar.gz/a2b030f46524c037be247d213d533fd212d9eced':
+    dependencies:
+      '@silvia-odwyer/photon-node': 0.3.4
 
   '@openclaw/proxyline@0.3.3(undici@8.3.0)':
     dependencies:
