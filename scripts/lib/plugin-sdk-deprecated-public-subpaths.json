@@ -1,6 +1,7 @@
 [
   "agent-config-primitives",
   "channel-config-schema-legacy",
+  "channel-lifecycle",
   "channel-message",
   "channel-message-runtime",
   "channel-reply-pipeline",
@@ -27,6 +28,8 @@
   "memory-host-files",
   "memory-host-status",
   "music-generation-core",
+  "outbound-runtime",
+  "outbound-send-deps",
   "provider-auth-login",
   "provider-zai-endpoint",
   "reply-dedupe",

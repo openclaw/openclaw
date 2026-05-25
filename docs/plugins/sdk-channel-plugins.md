@@ -256,9 +256,9 @@ surfaces:
   `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` and
-  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates and payload planning
+- `openclaw/plugin-sdk/outbound-media` for media loading and
+  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
   explicit `replyToId`/`threadId` or recover the current `:thread:` session

@@ -127,13 +127,8 @@ New channel code should prefer `message` adapters and durable send helpers.
 
 ## Deprecated Imports
 
-These imports remain available for older third-party plugins, but bundled
-plugins and new code should not use them:
-
-- `openclaw/plugin-sdk/channel-message`
-- `openclaw/plugin-sdk/channel-message-runtime`
-- `openclaw/plugin-sdk/inbound-reply-dispatch`
-- `openclaw/plugin-sdk/channel-reply-pipeline`
-
-Use `channel-outbound` for outbound/message lifecycle helpers and
-`channel-inbound` for inbound receive/dispatch helpers.
+These imports remain available for older third-party plugins only:
+`channel-message`, `channel-message-runtime`, `inbound-reply-dispatch`,
+`channel-reply-pipeline`, `channel-lifecycle`, `outbound-runtime`, and
+`outbound-send-deps`. Use `channel-outbound` for outbound/message lifecycle
+helpers and `channel-inbound` for inbound receive/dispatch helpers.

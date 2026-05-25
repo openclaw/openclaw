@@ -32,6 +32,45 @@ export {
 } from "./channel-reply-core.js";
 
 export {
+  createFinalizableDraftLifecycle,
+  createFinalizableDraftStreamControls,
+  createFinalizableDraftStreamControlsForState,
+  clearFinalizableDraftMessage,
+  takeMessageIdAfterStop,
+} from "../channels/draft-stream-controls.js";
+export type { FinalizableDraftStreamState } from "../channels/draft-stream-controls.js";
+export { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
+export type { DraftStreamLoop } from "../channels/draft-stream-loop.js";
+export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
+export { createChannelRunQueue } from "./channel-lifecycle.core.js";
+export type {
+  ChannelRunQueue,
+  ChannelRunQueueParams,
+  ChannelRunQueueTaskContext,
+} from "./channel-lifecycle.core.js";
+export {
+  createAccountStatusSink,
+  keepHttpServerTaskAlive,
+  runPassiveAccountLifecycle,
+  waitUntilAbort,
+} from "./channel-lifecycle.core.js";
+export {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "../infra/outbound/payloads.js";
+export {
+  buildOutboundSessionContext,
+  type OutboundSessionContext,
+} from "../infra/outbound/session-context.js";
+export type { OutboundDeliveryFormattingOptions } from "../infra/outbound/formatting.js";
+export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
+export { createReplyToFanout } from "../infra/outbound/reply-policy.js";
+export type { ReplyToResolution } from "../infra/outbound/reply-policy.js";
+export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
+export {
   classifyDurableSendRecoveryState,
   createChannelMessageAdapterFromOutbound,
   createDurableInboundReceiveJournal,

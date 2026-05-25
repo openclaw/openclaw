@@ -341,6 +341,7 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       }
       return "automatic";
     },
+    resolveAgentOutboundIdentity: () => undefined,
   };
 });
 
@@ -522,10 +523,6 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
     Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
 }));
 
-vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
-  resolveAgentOutboundIdentity: () => undefined,
-}));
-
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
   createChannelHistoryWindow: () => ({
@@ -589,7 +586,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown) =>
+  isRecord: (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value),
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
   normalizeOptionalString: (value?: string) => value,

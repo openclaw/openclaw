@@ -44,7 +44,7 @@ export type {
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export { withFileLock } from "openclaw/plugin-sdk/file-lock";
-export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-lifecycle";
+export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-outbound";
 export {
   detectMime,
   extensionForMime,
