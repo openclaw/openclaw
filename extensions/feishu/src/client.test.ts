@@ -135,13 +135,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type HttpInstanceLike = {
+  request: (options?: Record<string, unknown>) => Promise<unknown>;
   get: (url: string, options?: Record<string, unknown>) => Promise<unknown>;
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
 function requireHttpInstance(value: unknown): HttpInstanceLike {
-  if (isRecord(value) && typeof value.get === "function" && typeof value.post === "function") {
+  if (
+    isRecord(value) &&
+    typeof value.request === "function" &&
+    typeof value.get === "function" &&
+    typeof value.post === "function"
+  ) {
     return {
+      request: value.request as HttpInstanceLike["request"],
       get: value.get as HttpInstanceLike["get"],
       post: value.post as HttpInstanceLike["post"],
     };
@@ -164,6 +171,7 @@ function firstWsClientOptions(): {
   onReady?: unknown;
   onReconnected?: unknown;
   onReconnecting?: unknown;
+  httpInstance?: unknown;
 } {
   const options = readCallOptions(wsClientCtorMock, 0);
   return {
@@ -173,6 +181,7 @@ function firstWsClientOptions(): {
     onReady: options.onReady,
     onReconnected: options.onReconnected,
     onReconnecting: options.onReconnecting,
+    httpInstance: options.httpInstance,
   };
 }
 
@@ -459,6 +468,31 @@ describe("createFeishuClient HTTP timeout", () => {
     createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
     expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 2);
   });
+
+  it("uses OpenClaw's ambient proxy agent for Feishu HTTP API requests", async () => {
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+
+    createFeishuClient({
+      appId: "app_11",
+      appSecret: "secret_11", // pragma: allowlist secret
+      accountId: "http-proxy-agent",
+    });
+
+    const httpInstance = readLastClientHttpInstance();
+    await httpInstance.post("https://example.com/api", { data: 1 });
+
+    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(1);
+    expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
+      "https://example.com/api",
+      { data: 1 },
+      {
+        timeout: FEISHU_HTTP_TIMEOUT_MS,
+        httpAgent: { proxied: true },
+        httpsAgent: { proxied: true },
+        proxy: false,
+      },
+    );
+  });
 });
 
 describe("createFeishuWSClient proxy handling", () => {
@@ -493,6 +527,26 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.wsConfig).toEqual({
       PingInterval: 30,
       PingTimeout: 3,
+    });
+  });
+
+  it("passes the proxy-aware HTTP instance to Lark.WSClient bootstrap requests", async () => {
+    process.env.HTTPS_PROXY = "http://upper-https:8002";
+
+    await createFeishuWSClient(baseAccount);
+
+    const options = firstWsClientOptions();
+    const httpInstance = requireHttpInstance(options.httpInstance);
+    await httpInstance.request({ url: "https://open.feishu.cn/open-apis/ws/v1" });
+
+    expect(proxyAgentCtorMock).toHaveBeenCalledTimes(2);
+    expect(options.agent).toEqual({ proxied: true });
+    expect(mockBaseHttpInstance.request).toHaveBeenCalledWith({
+      url: "https://open.feishu.cn/open-apis/ws/v1",
+      timeout: FEISHU_HTTP_TIMEOUT_MS,
+      httpAgent: { proxied: true },
+      httpsAgent: { proxied: true },
+      proxy: false,
     });
   });
 
