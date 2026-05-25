@@ -5445,7 +5445,12 @@ describe("runAgentTurnWithFallback", () => {
         attempts: [],
       };
     });
-    state.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (args: { onUserMessagePersisted?: (m: { role: "user"; content: string }) => void }) => {
+        args.onUserMessagePersisted?.({ role: "user", content: "queued" });
+        throw new Error("cli failed");
+      },
+    );
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {},
@@ -5457,6 +5462,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded fallback candidate", {
+      suppressNextUserMessagePersistence: true,
       suppressAssistantErrorPersistence: false,
     });
   });

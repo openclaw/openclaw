@@ -757,6 +757,10 @@ export function createFollowupRunner(params: {
                     agentAccountId: run.agentAccountId,
                     disableTools: opts?.disableTools,
                     abortSignal: queued.abortSignal,
+                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                    onUserMessagePersisted: () => {
+                      queuedUserMessagePersistedAcrossFallback = true;
+                    },
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta

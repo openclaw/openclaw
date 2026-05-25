@@ -222,6 +222,16 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
   expect(message.timestamp).toBeTypeOf("number");
 }
 
+function readTranscriptMessages(sessionFile: string): Array<Record<string, unknown>> {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+    .filter((entry) => entry.type === "message")
+    .map((entry) => requireRecord(entry.message, "transcript message"));
+}
+
 describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
@@ -413,6 +423,54 @@ describe("runCliAgent reliability", () => {
       expectTextMessage(messages[0], { role: "user", content: "earlier context" });
       expectTextMessage(messages[1], { role: "user", content: "hi" });
       expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the CLI user turn before backend failures can drop it", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "rate limit exceeded",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...buildPreparedContext({
+            sessionKey: "agent:main:main",
+            runId: "run-cli-user-before-failure",
+          }),
+          params: {
+            ...buildPreparedContext({
+              sessionKey: "agent:main:main",
+              runId: "run-cli-user-before-failure",
+            }).params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+            transcriptPrompt: "transcript-safe prompt",
+            onUserMessagePersisted,
+          },
+        }),
+      ).rejects.toThrow("rate limit exceeded");
+
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+      expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toHaveLength(1);
+      expectTextMessage(messages[0], { role: "user", content: "transcript-safe prompt" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

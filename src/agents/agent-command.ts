@@ -1611,6 +1611,7 @@ async function agentCommandInternal(
             sessionCwd: workspaceDir,
             config: cfg,
             embeddedAssistantGapFill,
+            skipUserMessage: attemptLifecycleState.currentTurnUserMessagePersisted,
           });
           if (suppressVisibleSessionEffects) {
             sessionEntry = prepared.sessionEntry;

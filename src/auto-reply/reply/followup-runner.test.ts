@@ -853,7 +853,14 @@ describe("createFollowupRunner runtime config", () => {
         };
       },
     );
-    runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    runCliAgentMock.mockImplementationOnce(
+      async (args: {
+        onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+      }) => {
+        args.onUserMessagePersisted?.({ role: "user", content: "queued" });
+        throw new Error("cli failed");
+      },
+    );
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
@@ -898,6 +905,7 @@ describe("createFollowupRunner runtime config", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const embeddedCall = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(embeddedCall.suppressNextUserMessagePersistence).toBe(true);
     expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
   });

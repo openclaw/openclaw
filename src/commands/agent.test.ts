@@ -527,6 +527,44 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not mirror the CLI user turn twice after the runner persisted it", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
+        async (params: {
+          onUserMessagePersisted?: (message: {
+            role: "user";
+            content: string;
+            timestamp: number;
+          }) => void;
+        }) => {
+          params.onUserMessagePersisted?.({
+            role: "user",
+            content: "hello from user",
+            timestamp: Date.now(),
+          });
+          const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+          return {
+            ...base,
+            meta: {
+              ...base.meta,
+              executionTrace: { runner: "cli" },
+            },
+          };
+        },
+      );
+
+      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
+
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(false);
+      expect(persistArgs?.skipUserMessage).toBe(true);
+    });
+  });
+
   it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

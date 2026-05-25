@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
@@ -107,6 +108,35 @@ function buildCliContextEngineAssistantMessage(params: {
   };
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
+}
+
+async function persistCliCurrentUserMessage(params: RunCliAgentParams): Promise<boolean> {
+  if (params.suppressNextUserMessagePersistence === true) {
+    return false;
+  }
+  const prompt = params.transcriptPrompt ?? params.prompt;
+  if (!prompt.trim()) {
+    return false;
+  }
+
+  try {
+    const { message } = await appendSessionTranscriptMessage({
+      transcriptPath: params.sessionFile,
+      sessionId: params.sessionId,
+      cwd: params.workspaceDir,
+      config: params.config,
+      message: {
+        role: "user",
+        content: prompt,
+        timestamp: Date.now(),
+      },
+    });
+    params.onUserMessagePersisted?.(message as Extract<AgentMessage, { role: "user" }>);
+    return true;
+  } catch (err) {
+    log.warn(`CLI run: failed to persist user transcript message: ${formatErrorMessage(err)}`);
+    return false;
+  }
 }
 
 type CliAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
@@ -368,6 +398,14 @@ export async function runPreparedCliAgent(
     },
   });
 
+  let currentUserMessagePersisted = false;
+  const persistCurrentUserMessage = async (): Promise<void> => {
+    if (currentUserMessagePersisted) {
+      return;
+    }
+    currentUserMessagePersisted = await persistCliCurrentUserMessage(params);
+  };
+
   const persistBlockedBeforeAgentRun = async (block: {
     message: string;
     pluginId: string;
@@ -620,6 +658,7 @@ export async function runPreparedCliAgent(
       }
     }
 
+    await persistCurrentUserMessage();
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,
@@ -658,6 +697,7 @@ export async function runPreparedCliAgent(
 
           // For now, retry without the session ID to create a new session
           try {
+            await persistCurrentUserMessage();
             const { output, lastAssistant } = await executeCliAttempt(undefined);
             const assistantText = output.text.trim();
             const effectiveCliSessionId = output.sessionId;
@@ -743,6 +783,8 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     images: params.images,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
+    suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+    onUserMessagePersisted: params.onUserMessagePersisted,
   };
 }
 

@@ -111,6 +111,7 @@ type PersistTextTurnTranscriptParams = {
     model: string;
     usage?: TranscriptUsage;
   };
+  skipUserMessage?: boolean;
 };
 
 type HarnessAuthProfileSelection = {
@@ -229,7 +230,7 @@ async function persistTextTurnTranscript(
     allowReentrant: true,
   });
   try {
-    if (promptText) {
+    if (promptText && !params.skipUserMessage) {
       await appendSessionTranscriptMessage({
         transcriptPath: sessionFile,
         sessionId: params.sessionId,
@@ -335,6 +336,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipUserMessage?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
@@ -355,6 +357,7 @@ export async function persistCliTurnTranscript(params: {
     sessionCwd: params.sessionCwd,
     config: params.config,
     embeddedAssistantGapFill: gapFill,
+    skipUserMessage: gapFill || params.skipUserMessage === true,
     assistant: {
       api: "cli",
       provider,
@@ -549,6 +552,8 @@ export function runAgentAttempt(params: {
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
+        suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+        onUserMessagePersisted: params.onUserMessagePersisted,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
       });

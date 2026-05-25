@@ -1802,6 +1802,10 @@ export async function runAgentTurnWithFallback(params: {
                 disableTools: params.opts?.disableTools,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 replyOperation: params.replyOperation,
+                suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                onUserMessagePersisted: () => {
+                  queuedUserMessagePersistedAcrossFallback = true;
+                },
               },
               transformResult: (rawResult) =>
                 isRoomEventCliRun && rawResult.meta.agentMeta

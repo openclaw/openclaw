@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -77,6 +78,8 @@ export type RunCliAgentParams = {
     source?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  suppressNextUserMessagePersistence?: boolean;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   replyOperation?: ReplyOperation;
   /**
    * Close any long-lived CLI live session created for this run after the run

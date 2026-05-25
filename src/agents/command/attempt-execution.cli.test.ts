@@ -562,6 +562,39 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("can append only the CLI assistant when the user turn is already persisted", async () => {
+    const sessionKey = "agent:main:subagent:cli-transcript-assistant-only";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-transcript-assistant-only",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const updatedEntry = await persistCliTurnTranscript({
+      body: "already durable",
+      result: makeCliResult("assistant only"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      skipUserMessage: true,
+    });
+
+    const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
+    expect(messages).toHaveLength(1);
+    expectRecordFields(requireRecord(messages[0], "assistant message"), {
+      role: "assistant",
+      provider: "claude-cli",
+      model: "opus",
+      content: [{ type: "text", text: "assistant only" }],
+    });
+  });
+
   it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
     const sessionKey = "agent:main:subagent:embedded-gap-fill";
     const sessionEntry: SessionEntry = {
