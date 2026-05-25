@@ -61,6 +61,16 @@ Status: branch-local checkpoint, not release notes.
   before observed-message or summary-duration fallback, and teaches Discord and
   live-transport importers to ingest gateway RSS summary metrics. `npm test -- scripts/import-discord-rtt.test.mjs scripts/import-live-transport-rtt.test.mjs`
   passed 19 tests and `npm run check` passed.
+- Branch commit `657538faff3` makes WhatsApp composing presence best-effort
+  before outbound sends. Focused wrapper proof:
+  `node scripts/run-vitest.mjs extensions/whatsapp/src/send.test.ts` passed 30
+  tests, `git diff --check` passed, and
+  `node scripts/run-oxlint.mjs -c .oxlintrc.json extensions/whatsapp/src/send.ts extensions/whatsapp/src/send.test.ts`
+  passed.
+- Testbox `tbx_01ksg810w0c20mpwd1ew3b991z` reran
+  `CI=1 OPENCLAW_TESTBOX=1 corepack pnpm check:changed` after fetching
+  `origin/main`; the command exited 0 after typecheck, lint, and runtime
+  import-cycle checks.
 
 ## Still weak
 
@@ -72,3 +82,11 @@ Status: branch-local checkpoint, not release notes.
   dashboard presentation of gateway RSS remains a later reporting decision.
 - Gitcrawl data was stale for the newest RTT window, so live `gh` history was
   the source of truth for 2026-05-16 and 2026-05-17 PR attribution.
+- Live WhatsApp RTT proof is currently blocked by Convex credential state, not
+  by the harness path. Run `26416240998` proved the branch workflow can request
+  `whatsapp_credential_role=maintainer`, but Actions does not currently expose
+  `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`. CI-role rerun `26416377533` still
+  leased logged-out credential fingerprint `6b2d34243bac` with driver archive
+  fingerprint `a8ebbdf4bbdd` and SUT archive fingerprint `c9a96833bbc0`, then
+  failed before scenario completion after the harness rejected the repeated
+  lease.
