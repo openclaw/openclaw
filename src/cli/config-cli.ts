@@ -9,7 +9,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, isClaworksProduct } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -306,6 +306,11 @@ const CONFIG_SET_DRY_RUN_DESCRIPTION =
 const CONFIG_PATCH_DRY_RUN_DESCRIPTION =
   "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)";
 const CONFIG_SCHEMA_DESCRIPTION = "Print the JSON schema for openclaw.json";
+
+function resolveConfigPathFallback(env: NodeJS.ProcessEnv = process.env): string {
+  return isClaworksProduct(env) ? "claworks.json" : "openclaw.json";
+}
+
 const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -2153,14 +2158,14 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   try {
     writeRuntimeJson(runtime, await buildCliConfigSchema());
   } catch (err) {
-    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.error(danger(productizeUserCopy(`Config schema error: ${String(err)}`)));
     runtime.exit(1);
   }
 }
 
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
-  let outputPath = CONFIG_PATH ?? "openclaw.json";
+  let outputPath = CONFIG_PATH ?? resolveConfigPathFallback();
 
   try {
     const snapshot = await readConfigFileSnapshot();
@@ -2207,7 +2212,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     if (opts.json) {
       writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
     } else {
-      runtime.error(danger(`Config validation error: ${String(err)}`));
+      runtime.error(danger(productizeUserCopy(`Config validation error: ${String(err)}`)));
     }
     runtime.exit(1);
   }
