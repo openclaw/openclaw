@@ -21,7 +21,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -1582,8 +1582,7 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
