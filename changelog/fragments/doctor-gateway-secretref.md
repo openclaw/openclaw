@@ -1,0 +1,1 @@
+- Doctor: resolve SecretRef-backed local Gateway tokens before warning that gateway auth is unavailable.

@@ -269,6 +269,86 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("does not warn when gateway token SecretRef resolves", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/gateway-auth");
+    const previousToken = process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+    process.env.OPENCLAW_TEST_GATEWAY_TOKEN = "resolved-token";
+    try {
+      const findings = await check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_GATEWAY_TOKEN",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+      });
+
+      expect(findings).toEqual([]);
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_TEST_GATEWAY_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("keeps warning when gateway token SecretRef is unresolved", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/gateway-auth");
+    const previousToken = process.env.OPENCLAW_TEST_MISSING_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_TEST_MISSING_GATEWAY_TOKEN;
+    try {
+      const findings = await check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_MISSING_GATEWAY_TOKEN",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+      });
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: "core/doctor/gateway-auth",
+          severity: "warning",
+          message: "Gateway token is managed via SecretRef and is currently unavailable.",
+        }),
+      );
+    } finally {
+      if (previousToken !== undefined) {
+        process.env.OPENCLAW_TEST_MISSING_GATEWAY_TOKEN = previousToken;
+      }
+    }
+  });
+
   it("converts workspace suggestions into info findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(

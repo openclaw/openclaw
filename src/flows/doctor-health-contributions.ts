@@ -190,6 +190,12 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     return;
   }
   if (gatewayTokenRef) {
+    const { resolveGatewayAuthTokenForService } =
+      await import("../commands/doctor-gateway-auth-token.js");
+    const resolved = await resolveGatewayAuthTokenForService(ctx.cfg, ctx.env ?? process.env);
+    if (resolved.token) {
+      return;
+    }
     note(
       [
         "Gateway token is managed via SecretRef and is currently unavailable.",

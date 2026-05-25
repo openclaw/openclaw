@@ -42,13 +42,15 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
+  randomToken: vi.fn(() => "generated-token"),
 }));
 
 vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
   shortenHomePath: mocks.shortenHomePath,
 }));
 
@@ -189,6 +191,43 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:command-owner")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("does not note gateway auth warning when token SecretRef resolves", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-auth");
+
+    await contribution.run({
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      env: {
+        OPENCLAW_TEST_GATEWAY_TOKEN: "resolved-token",
+      },
+    } as Parameters<(typeof contribution)["run"]>[0]);
+
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway token is managed via SecretRef"),
+      "Gateway auth",
+    );
   });
 
   it("checks skill readiness before final config writes", () => {

@@ -157,6 +157,12 @@ const gatewayAuthCheck: HealthCheck = {
       return [];
     }
     if (gatewayTokenRef) {
+      const { resolveGatewayAuthTokenForService } =
+        await import("../commands/doctor-gateway-auth-token.js");
+      const resolved = await resolveGatewayAuthTokenForService(ctx.cfg, process.env);
+      if (resolved.token) {
+        return [];
+      }
       return [
         {
           checkId: "core/doctor/gateway-auth",
