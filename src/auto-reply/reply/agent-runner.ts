@@ -109,6 +109,10 @@ import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js"
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  isStrandedMessageToolReply,
+  warnStrandedMessageToolReply,
+} from "./stranded-source-reply.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -2276,9 +2280,30 @@ export async function runReplyAgent(params: {
         runtimePolicySessionKey,
         opts,
       });
-      const pendingText = sourceReplyPolicy.suppressDelivery
-        ? ""
-        : buildPendingFinalDeliveryText(finalPayloads);
+      const finalDeliveryText = buildPendingFinalDeliveryText(finalPayloads);
+      // #85714: under message_tool_only the final text is kept private. If the
+      // model never invoked the delivery tool this turn, that private text is a
+      // silent message loss — surface it (without leaking the body) so the
+      // failure is observable instead of looking like an unresponsive bot.
+      if (
+        isStrandedMessageToolReply({
+          sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+          sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+          successfulSideEffectDelivery,
+          finalText: finalDeliveryText,
+        })
+      ) {
+        warnStrandedMessageToolReply({
+          sessionKey,
+          channel:
+            sessionCtx.OriginatingChannel ??
+            sessionCtx.Surface ??
+            sessionCtx.Provider ??
+            activeSessionEntry?.channel,
+          finalTextLength: finalDeliveryText.trim().length,
+        });
+      }
+      const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
       const heartbeatAckMaxChars = Math.max(
