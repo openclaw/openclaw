@@ -5,6 +5,7 @@ import path from "node:path";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
 export type CodexNativeAssetHit = {
   kind: "skill" | "plugin" | "config" | "hooks";
@@ -13,10 +14,6 @@ export type CodexNativeAssetHit = {
 
 const MAX_SCAN_DEPTH = 6;
 const MAX_DISCOVERED_DIRS = 2000;
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
 
 function resolveUserHome(env: NodeJS.ProcessEnv): string {
   return env.HOME?.trim() || os.homedir();
