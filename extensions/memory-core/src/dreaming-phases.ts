@@ -31,6 +31,7 @@ import {
   readLightStagedKeys,
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
+  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
@@ -1738,8 +1739,9 @@ async function runRemDreaming(params: {
     workspaceDir: params.workspaceDir,
     nowMs,
   });
-  const entries =
-    lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : allEntries;
+  const stagedEntries =
+    lightKeys.size > 0 ? allEntries.filter((entry) => lightKeys.has(entry.key)) : [];
+  const entries = stagedEntries.length > 0 ? stagedEntries : allEntries;
   const preview = previewRemDreaming({
     entries,
     limit: params.config.limit,
@@ -1753,6 +1755,13 @@ async function runRemDreaming(params: {
     timezone: params.config.timezone,
     storage: params.config.storage,
   });
+  if (stagedEntries.length > 0) {
+    await recordRemConsideredPhaseSignals({
+      workspaceDir: params.workspaceDir,
+      keys: stagedEntries.map((entry) => entry.key),
+      nowMs,
+    });
+  }
   await recordDreamingPhaseSignals({
     workspaceDir: params.workspaceDir,
     phase: "rem",

@@ -14,6 +14,7 @@ import {
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
+  recordRemConsideredPhaseSignals,
   recordShortTermRecalls,
   readLightStagedKeys,
   removeGroundedShortTermCandidates,
@@ -556,6 +557,16 @@ describe("short-term promotion", () => {
 
       await expect(readLightStagedKeys({ workspaceDir, nowMs: nowMs + 120_000 })).resolves.toEqual(
         new Set([pendingKey]),
+      );
+
+      await recordRemConsideredPhaseSignals({
+        workspaceDir,
+        keys: [pendingKey],
+        nowMs: nowMs + 180_000,
+      });
+
+      await expect(readLightStagedKeys({ workspaceDir, nowMs: nowMs + 240_000 })).resolves.toEqual(
+        new Set(),
       );
     });
   });
