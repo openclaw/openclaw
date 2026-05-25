@@ -195,7 +195,7 @@ describe("ensureCopilotSdkForModelSelection", () => {
     expect(result.installed).toBe(false);
     expect(result.status).toBe("failed");
     expect(note).toHaveBeenCalledOnce();
-    const noteMessage = (note as unknown as { mock: { calls: string[][] } }).mock.calls[0]![0]!;
+    const noteMessage = (note as unknown as { mock: { calls: string[][] } }).mock.calls[0][0];
     expect(noteMessage).toContain("network down");
     expect(noteMessage).toContain("copilot-sdk-install-manifest");
   });
@@ -238,7 +238,7 @@ describe("installCopilotSdk", () => {
         fs.readFileSync(path.join(manifestDir, "package-lock.json"), "utf8"),
       );
       // runInstall receives the manifestDir argument so it can rely on it.
-      const call = runInstall.mock.calls[0]![0];
+      const call = runInstall.mock.calls[0][0];
       expect(call.manifestDir).toBe(manifestDir);
       expect(call.dir).toBe(tmp);
       expect(result.installed).toBe(true);
