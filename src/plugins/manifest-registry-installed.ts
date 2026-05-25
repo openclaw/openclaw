@@ -17,7 +17,7 @@ import {
   type PackageManifest,
   type PluginPackageChannel,
 } from "./manifest.js";
-import { isPathInsideWithRealpath, safeRealpathSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   normalizePluginDependencySpecs,
@@ -33,18 +33,22 @@ function isRelativePathInsideOrEqual(relativePath: string): boolean {
   );
 }
 
-function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
+function resolvePackageJsonPath(
+  record: InstalledPluginIndexRecord,
+  realpathCache: Map<string, string>,
+): string | undefined {
   if (!record.packageJson?.path) {
     return undefined;
   }
   const rootDir = resolveInstalledPluginRootDir(record);
-  const realRootDir = safeRealpathSync(rootDir) ?? path.resolve(rootDir);
+  const realRootDir = safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir);
   const packageJsonPath = path.resolve(realRootDir, record.packageJson.path);
   const relative = path.relative(realRootDir, packageJsonPath);
   if (!isRelativePathInsideOrEqual(relative)) {
     return undefined;
   }
-  if (!isPathInsideWithRealpath(realRootDir, packageJsonPath)) {
+  const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
+  if (!packageJsonRealPath || !isPathInside(realRootDir, packageJsonRealPath)) {
     return undefined;
   }
   return packageJsonPath;
@@ -63,6 +67,7 @@ function safeFileSignature(filePath: string | undefined): string | undefined {
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
+  const realpathCache = new Map<string, string>();
   return {
     version: index.version,
     hostContractVersion: index.hostContractVersion,
@@ -72,7 +77,7 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
-      const packageJsonPath = resolvePackageJsonPath(record);
+      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
       return {
         pluginId: record.pluginId,
         packageName: record.packageName,
@@ -359,7 +364,10 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   return channel;
 }
 
-function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
+function resolveInstalledPackageMetadata(
+  record: InstalledPluginIndexRecord,
+  realpathCache: Map<string, string>,
+): {
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -370,7 +378,9 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
         channel: recordPackageChannel,
       }
     : undefined;
-  const packageJsonPath = record.packageJson?.path ? resolvePackageJsonPath(record) : undefined;
+  const packageJsonPath = record.packageJson?.path
+    ? resolvePackageJsonPath(record, realpathCache)
+    : undefined;
   if (!packageJsonPath) {
     return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
@@ -409,9 +419,12 @@ function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
   return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
 }
 
-function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {
+function toPluginCandidate(
+  record: InstalledPluginIndexRecord,
+  realpathCache: Map<string, string>,
+): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
-  const packageMetadata = resolveInstalledPackageMetadata(record);
+  const packageMetadata = resolveInstalledPackageMetadata(record, realpathCache);
   return {
     idHint: record.pluginId,
     source: record.source ?? resolveFallbackPluginSource(record),
@@ -452,6 +465,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       }
       const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+      const realpathCache = new Map<string, string>();
       const diagnostics = pluginIdSet
         ? params.index.diagnostics.filter((diagnostic) => {
             const pluginId = diagnostic.pluginId;
@@ -461,7 +475,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-        .map(toPluginCandidate);
+        .map((plugin) => toPluginCandidate(plugin, realpathCache));
       return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
