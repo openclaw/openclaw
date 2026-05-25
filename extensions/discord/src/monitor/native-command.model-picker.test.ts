@@ -927,4 +927,34 @@ describe("Discord model picker interactions", () => {
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");
   });
+
+  it("opens the current provider bucket on initial large-provider renders", async () => {
+    const context = createModelPickerContext();
+    const entries = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [
+        `provider-${String(i + 1).padStart(2, "0")}`,
+        ["model"],
+      ]),
+    );
+    const pickerData = createModelsProviderData(entries);
+    pickerData.resolvedDefault = { provider: "provider-30", model: "model" };
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    const interaction = createInteraction({ userId: "owner" });
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: context.cfg,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
+    expect(payload).toContain("provider-30");
+    expect(payload).toContain(";a=back;v=providers;");
+    expect(payload).toContain(";pb=");
+  });
 });

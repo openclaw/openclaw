@@ -555,9 +555,8 @@ function buildModelRows(params: {
     runtime: stateRuntime,
     providerPage: providerPage.page,
     modelIndex: params.pendingModelIndex,
-    // Carry both buckets through model pagination so prev/next within a
-    // bucket round-trips back to the same provider bucket on submit/back.
-    providerBucket: activeProviderBucket,
+    // Model navigation derives providerBucket from provider on interaction;
+    // carrying it here can exceed Discord's 100-char customId limit.
     modelBucket:
       params.modelPage.bucket && params.modelPage.bucket.id !== "all"
         ? params.modelPage.bucket.id

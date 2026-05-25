@@ -642,6 +642,36 @@ describe("Discord model picker rendering", () => {
     expect(parsed.runtime).toBeUndefined();
   });
 
+  it("model pagination derives provider buckets to stay under Discord's customId limit", () => {
+    const models = [
+      ...Array.from({ length: 30 }, (_, i) => `a-model-${String(i + 1).padStart(2, "0")}`),
+      "b-model-01",
+    ];
+    const data = createModelsProviderData({ "azure-openai-responses": models });
+
+    const rows = renderModelsViewRows({
+      command: "models",
+      userId: "12345678901234567890",
+      data,
+      provider: "azure-openai-responses",
+      page: 1,
+      providerPage: 1,
+      providerBucket: "a-z",
+      modelBucket: "a",
+    });
+
+    const navIds = rows
+      .flatMap((row) => row.components ?? [])
+      .map((component) => component.custom_id ?? "")
+      .filter((customId) => customId.includes(";a=nav;v=models;"));
+    expect(navIds.length).toBeGreaterThan(0);
+    for (const customId of navIds) {
+      expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+      expect(customId).not.toContain(";pb=");
+      expect(customId).toContain(";mb=a");
+    }
+  });
+
   it("provider pages use Discord's select-option cap when buckets are active", () => {
     const entries: Record<string, string[]> = {};
     for (let i = 1; i <= 30; i += 1) {
