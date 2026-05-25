@@ -64,10 +64,7 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
-const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
-const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Number of tasks to process before yielding to the event loop.
