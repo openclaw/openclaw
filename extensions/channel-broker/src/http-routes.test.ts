@@ -636,6 +636,39 @@ describe("channel-broker HTTP routes", () => {
     expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
   });
 
+  it("allows provider redelivery after a failed broker webhook dispatch", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    vi.mocked(pluginRuntime.channel.turn.run).mockRejectedValueOnce(new Error("transient"));
+    setChannelBrokerRuntime(pluginRuntime);
+
+    await expect(
+      handleChannelBrokerInboundHttpRequest({
+        cfg: config,
+        req: createRequest({ body, signature: sign(body, "broker-secret") }),
+        res: createResponse(),
+      }),
+    ).rejects.toThrow("transient");
+
+    const retry = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: retry,
+    });
+
+    expect(retry.statusCode).toBe(202);
+    expect(JSON.parse(retry.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+  });
+
   it("routes inbound progress and final deliveries through broker previews", async () => {
     const body = inboundBody();
     const config = brokerConfig("broker-secret", {
