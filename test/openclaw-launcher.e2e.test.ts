@@ -236,6 +236,14 @@ describe("openclaw launcher", () => {
         "    { message: \"Cannot find module './nested.js' from '/pkg/openclaw/dist/entry.js'\" },",
         "    './dist/entry.js',",
         "  ),",
+        "  nonModuleUrl: isDirectModuleNotFoundError(",
+        "    { message: 'boom', url: new URL('./dist/warning-filter.js', import.meta.url).href },",
+        "    './dist/warning-filter.js',",
+        "  ),",
+        "  nonModulePath: isDirectModuleNotFoundError(",
+        "    { message: `Cannot find module '${fileURLToPath(new URL('./dist/warning-filter.js', import.meta.url))}'` },",
+        "    './dist/warning-filter.js',",
+        "  ),",
         "};",
         "process.stdout.write(`${JSON.stringify(result)}\\n`);",
       ].join("\n"),
@@ -248,7 +256,12 @@ describe("openclaw launcher", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ direct: true, transitive: false });
+    expect(JSON.parse(result.stdout)).toEqual({
+      direct: true,
+      nonModulePath: false,
+      nonModuleUrl: false,
+      transitive: false,
+    });
   });
 
   it("uses precomputed root help when plugin config does not invalidate it", async () => {

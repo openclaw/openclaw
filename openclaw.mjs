@@ -262,16 +262,19 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     message.includes(`Cannot find module "${specifier}"`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
-    return true;
-  }
-
   const expectedPath = fileURLToPath(expectedUrl);
   const nodePathMiss =
     message.includes(`Cannot find module '${expectedPath}'`) ||
     message.includes(`Cannot find module "${expectedPath}"`);
 
-  return isModuleNotFoundError(err) ? nodePathMiss : bunSpecifierMiss;
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss;
+  }
+
+  return bunSpecifierMiss;
 };
 
 const installProcessWarningFilter = async () => {
