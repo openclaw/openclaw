@@ -121,7 +121,7 @@ describe("writeOpenClawCompactionMarker", () => {
     expect(written.marker.force).toBe(true);
     expect(written.marker.compacted).toBe(false);
     expect(writes).toHaveLength(1);
-    expect(JSON.parse(writes[0]!.contents)).toMatchObject({ force: true });
+    expect(JSON.parse(writes[0].contents)).toMatchObject({ force: true });
   });
 
   it("omits force / trigger / sdkSessionId / currentTokenCount when undefined", async () => {
@@ -145,7 +145,7 @@ describe("writeOpenClawCompactionMarker", () => {
       ts: 7,
       compacted: false,
     });
-    const parsed = JSON.parse(writes[0]!.contents);
+    const parsed = JSON.parse(writes[0].contents);
     expect(parsed).not.toHaveProperty("force");
     expect(parsed).not.toHaveProperty("trigger");
     expect(parsed).not.toHaveProperty("sdkSessionId");

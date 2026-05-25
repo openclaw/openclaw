@@ -145,6 +145,10 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
         return entry.state.promise;
       case "stopped":
         return [];
+      default: {
+        const exhaustive: never = entry.state;
+        return exhaustive;
+      }
     }
   };
 

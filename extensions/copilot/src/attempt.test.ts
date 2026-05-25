@@ -21,7 +21,7 @@ const dualWriteMock = vi.hoisted(() => ({
     const record = message as unknown as Record<string, unknown>;
     return {
       ...record,
-      __openclaw: { ...(record.__openclaw as object | undefined), mirrorIdentity: identity },
+      __openclaw: { ...(record["__openclaw"] as object | undefined), mirrorIdentity: identity },
     } as unknown as T;
   },
 }));
@@ -88,9 +88,11 @@ function flushAsync() {
   // resolveCopilotWorkspaceBootstrapContext, createSession, etc.).
   // Each chained `then` is one tick; tests rely on this to observe
   // `sdk.sessions[0]` being populated before they emit deltas.
+  /* oxlint-disable unicorn/no-useless-promise-resolve-reject -- inner Promise.resolve()s force additional microtask ticks; ordering of sdk.sessions[0] population depends on this. */
   return Promise.resolve()
     .then(() => Promise.resolve())
     .then(() => Promise.resolve());
+  /* oxlint-enable unicorn/no-useless-promise-resolve-reject */
 }
 
 function getPromptErrorCode(result: AgentHarnessAttemptResult): string | undefined {
@@ -443,7 +445,7 @@ describe("runCopilotAttempt", () => {
 
     expect(sdk.resumeSession).toHaveBeenCalledTimes(1);
     expect(sdk.createSession).toHaveBeenCalledTimes(0);
-    expect(result.promptError?.message).toContain("ECONNRESET");
+    expect((result.promptError as Error | undefined)?.message).toContain("ECONNRESET");
   });
 
   it("replay-shim: prior hadPotentialSideEffects propagates into result replayMetadata", async () => {
@@ -575,13 +577,16 @@ describe("runCopilotAttempt", () => {
     // F6: attempt params and sessionRef are threaded through so the
     // bridge can build PI-parity tool context and wire onYield to the
     // live SDK session once it exists. See tool-bridge.ts.
-    const bridgeCall = createToolBridge.mock.calls[0]?.[0] as {
+    const bridgeCall = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
       attemptParams?: unknown;
       sessionRef?: { current?: unknown };
     };
     expect(bridgeCall.attemptParams).toBeDefined();
     expect(bridgeCall.sessionRef).toBeDefined();
-    expect((sdk.createSession.mock.calls[0]?.[0] as { tools?: unknown[] }).tools).toBe(sdkTools);
+    expect(
+      ((sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as { tools?: unknown[] })
+        .tools,
+    ).toBe(sdkTools);
   });
 
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {
@@ -727,7 +732,7 @@ describe("runCopilotAttempt", () => {
     await runCopilotAttempt(makeParams(), { pool });
 
     const handler = (
-      sdk.createSession.mock.calls[0]?.[0] as {
+      (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
         onPermissionRequest: (
           request: { kind: string },
           invocation: { sessionId: string },
@@ -745,7 +750,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    const cfg = sdk.createSession.mock.calls[0]?.[0];
     // Per the SDK contract (types.d.ts: `When provided, enables the
     // ask_user tool allowing the agent to ask questions`), omitting the
     // handler hides ask_user from the model entirely. The MVP keeps it
@@ -760,7 +765,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    const cfg = sdk.createSession.mock.calls[0]?.[0];
     expect("enableSessionTelemetry" in cfg).toBe(false);
   });
 
@@ -770,7 +775,9 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams({ enableSessionTelemetry: true } as never), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as { enableSessionTelemetry?: boolean };
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      enableSessionTelemetry?: boolean;
+    };
     expect(cfg.enableSessionTelemetry).toBe(true);
   });
 
@@ -780,7 +787,9 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams({ enableSessionTelemetry: false } as never), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as { enableSessionTelemetry?: boolean };
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+      enableSessionTelemetry?: boolean;
+    };
     expect(cfg.enableSessionTelemetry).toBe(false);
   });
 
@@ -811,7 +820,7 @@ describe("runCopilotAttempt", () => {
 
     await runCopilotAttempt(makeParams(), { pool });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    const cfg = sdk.createSession.mock.calls[0]?.[0];
     expect("infiniteSessions" in cfg).toBe(false);
   });
 
@@ -850,7 +859,7 @@ describe("runCopilotAttempt", () => {
       // while layering OpenClaw context after it. See
       // workspace-bootstrap.ts and @github/copilot-sdk types.d.ts
       // L1052 (SystemMessageConfig).
-      const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+      const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
         systemMessage?: { mode?: string; content?: string };
       };
       expect(cfg.systemMessage).toBeDefined();
@@ -864,7 +873,7 @@ describe("runCopilotAttempt", () => {
 
       await runCopilotAttempt(makeParams(), { pool });
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+      const cfg = sdk.createSession.mock.calls[0]?.[0];
       // No rendered instructions => skip the systemMessage field so
       // the SDK default (foundation only) applies. Avoids polluting
       // session logs with an empty `append` and removes a no-op SDK
@@ -921,7 +930,7 @@ describe("runCopilotAttempt", () => {
       { pool },
     );
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
       infiniteSessions?: Record<string, unknown>;
     };
     expect(cfg.infiniteSessions).toEqual({
@@ -939,7 +948,7 @@ describe("runCopilotAttempt", () => {
       pool,
     });
 
-    const cfg = sdk.createSession.mock.calls[0]?.[0] as {
+    const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
       infiniteSessions?: Record<string, unknown>;
     };
     expect(cfg.infiniteSessions).toEqual({ enabled: false });
@@ -1208,8 +1217,10 @@ describe("runCopilotAttempt", () => {
       { pool },
     );
 
-    const key = pool.acquire.mock.calls[0]?.[0] as { authMode: string };
-    const options = pool.acquire.mock.calls[0]?.[1] as {
+    const key = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[0] as {
+      authMode: string;
+    };
+    const options = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[1] as {
       gitHubToken?: string;
       useLoggedInUser?: boolean;
     };
@@ -1242,12 +1253,12 @@ describe("runCopilotAttempt", () => {
       { pool },
     );
 
-    const key = pool.acquire.mock.calls[0]?.[0] as {
+    const key = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[0] as {
       authMode: string;
       authProfileId?: string;
       authProfileVersion?: string;
     };
-    const options = pool.acquire.mock.calls[0]?.[1] as {
+    const options = (vi.mocked(pool.acquire).mock.calls[0] as unknown[] | undefined)?.[1] as {
       gitHubToken?: string;
       useLoggedInUser?: boolean;
     };
@@ -1279,7 +1290,9 @@ describe("runCopilotAttempt", () => {
         { pool },
       );
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0] as { gitHubToken?: string };
+      const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        gitHubToken?: string;
+      };
       expect(cfg.gitHubToken).toBe("contract-token-xyz");
     });
 
@@ -1294,7 +1307,9 @@ describe("runCopilotAttempt", () => {
         { pool },
       );
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0] as { gitHubToken?: string };
+      const cfg = (sdk.createSession.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        gitHubToken?: string;
+      };
       expect(cfg.gitHubToken).toBe("explicit-token");
     });
 
@@ -1323,7 +1338,7 @@ describe("runCopilotAttempt", () => {
 
       await runCopilotAttempt(makeParams({ auth: { useLoggedInUser: true } as never }), { pool });
 
-      const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+      const cfg = sdk.createSession.mock.calls[0]?.[0];
       // Per the SDK contract, passing both useLoggedInUser and a
       // session-level gitHubToken would be contradictory. The
       // logged-in identity already determines content exclusion /
@@ -1344,11 +1359,15 @@ describe("runCopilotAttempt", () => {
       delete process.env.GITHUB_TOKEN;
       try {
         await runCopilotAttempt(makeParams({ auth: {} as never }), { pool });
-        const cfg = sdk.createSession.mock.calls[0]?.[0] as Record<string, unknown>;
+        const cfg = sdk.createSession.mock.calls[0]?.[0];
         expect("gitHubToken" in cfg).toBe(false);
       } finally {
-        if (prevOpenclaw !== undefined) process.env.OPENCLAW_GITHUB_TOKEN = prevOpenclaw;
-        if (prevGithub !== undefined) process.env.GITHUB_TOKEN = prevGithub;
+        if (prevOpenclaw !== undefined) {
+          process.env.OPENCLAW_GITHUB_TOKEN = prevOpenclaw;
+        }
+        if (prevGithub !== undefined) {
+          process.env.GITHUB_TOKEN = prevGithub;
+        }
       }
     });
   });
@@ -1422,7 +1441,7 @@ describe("runCopilotAttempt", () => {
         ) {
           continue;
         }
-        const identity = message.__openclaw?.mirrorIdentity ?? "";
+        const identity = message["__openclaw"]?.mirrorIdentity ?? "";
         // The terminal assistant carries the turn-stable
         // `${runId}:assistant:final` identity attached by attempt.ts
         // (rubber-duck-validated identity scheme — survives SDK session
@@ -1491,9 +1510,9 @@ describe("runCopilotAttempt", () => {
       expect(args.messages.length).toBe(2);
       expect(args.messages[0]?.role).toBe("user");
       expect(args.messages[0]?.content).toBe("what's my name?");
-      expect(args.messages[0]?.__openclaw?.mirrorIdentity).toBe("run-A:prompt");
+      expect(args.messages[0]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:prompt");
       expect(args.messages[1]?.role).toBe("assistant");
-      expect(args.messages[1]?.__openclaw?.mirrorIdentity).toBe("run-A:assistant:final");
+      expect(args.messages[1]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:assistant:final");
     });
 
     it("does not duplicate synthetic user when caller passed the same prompt as the messages tail", async () => {
@@ -1586,10 +1605,10 @@ describe("runCopilotAttempt", () => {
       const turn2User = turn2.messages.find((m) => m.role === "user");
       const turn1Assistant = turn1.messages.find((m) => m.role === "assistant");
       const turn2Assistant = turn2.messages.find((m) => m.role === "assistant");
-      expect(turn1User?.__openclaw?.mirrorIdentity).toBe("run-1:prompt");
-      expect(turn2User?.__openclaw?.mirrorIdentity).toBe("run-2:prompt");
-      expect(turn1Assistant?.__openclaw?.mirrorIdentity).toBe("run-1:assistant:final");
-      expect(turn2Assistant?.__openclaw?.mirrorIdentity).toBe("run-2:assistant:final");
+      expect(turn1User?.["__openclaw"]?.mirrorIdentity).toBe("run-1:prompt");
+      expect(turn2User?.["__openclaw"]?.mirrorIdentity).toBe("run-2:prompt");
+      expect(turn1Assistant?.["__openclaw"]?.mirrorIdentity).toBe("run-1:assistant:final");
+      expect(turn2Assistant?.["__openclaw"]?.mirrorIdentity).toBe("run-2:assistant:final");
     });
 
     it("two attempts with identical prompts but different runIds remain distinct (no content-fingerprint collapse)", async () => {
@@ -1623,12 +1642,12 @@ describe("runCopilotAttempt", () => {
         calls[0]?.[0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
-      ).messages.find((m) => m.role === "user")?.__openclaw?.mirrorIdentity;
+      ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
       const id2 = (
         calls[1]?.[0] as {
           messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
         }
-      ).messages.find((m) => m.role === "user")?.__openclaw?.mirrorIdentity;
+      ).messages.find((m) => m.role === "user")?.["__openclaw"]?.mirrorIdentity;
       expect(id1).toBe("run-X:prompt");
       expect(id2).toBe("run-Y:prompt");
       expect(id1).not.toBe(id2);
@@ -1667,7 +1686,7 @@ describe("runCopilotAttempt", () => {
       });
 
       expect(resolveSandboxContextOverride).toHaveBeenCalledTimes(1);
-      const bridgeArgs = createToolBridge.mock.calls[0]?.[0] as {
+      const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sandbox?: unknown;
         spawnWorkspaceDir?: unknown;
         workspaceDir?: unknown;
@@ -1694,7 +1713,7 @@ describe("runCopilotAttempt", () => {
         resolveSandboxContextOverride,
       });
 
-      const bridgeArgs = createToolBridge.mock.calls[0]?.[0] as {
+      const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sandbox?: unknown;
         spawnWorkspaceDir?: unknown;
         workspaceDir?: unknown;
@@ -1725,7 +1744,7 @@ describe("runCopilotAttempt", () => {
           resolveSandboxContextOverride,
         });
 
-        const bridgeArgs = createToolBridge.mock.calls[0]?.[0] as {
+        const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
           sandbox?: unknown;
           spawnWorkspaceDir?: unknown;
           workspaceDir?: unknown;
@@ -1759,7 +1778,7 @@ describe("runCopilotAttempt", () => {
         resolveSandboxContextOverride,
       });
 
-      const bridgeArgs = createToolBridge.mock.calls[0]?.[0] as {
+      const bridgeArgs = (createToolBridge.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sandbox?: unknown;
         workspaceDir?: unknown;
       };

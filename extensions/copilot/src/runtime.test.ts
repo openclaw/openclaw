@@ -85,12 +85,12 @@ function makeFake(options: FakeFactoryOptions = {}) {
 
     const client: FakeClient = {
       id,
-      copilotHome: String(clientOptions.copilotHome ?? ""),
+      copilotHome: clientOptions.copilotHome ?? "",
       start: vi.fn(async () => undefined),
       stop: vi.fn(async () => {
         stops.push(id);
         if (options.stop) {
-          return Promise.resolve(options.stop(client));
+          return options.stop(client);
         }
         return [];
       }),

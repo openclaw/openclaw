@@ -89,7 +89,6 @@ function toError(error: unknown): Error {
 }
 
 function defaultOnTraceContextError(info: CopilotTraceContextErrorInfo): void {
-  // eslint-disable-next-line no-console -- bridge has no host logger by design.
   console.warn(`[copilot:telemetry-bridge] ${info.part} source failed: ${info.error.message}`);
 }
 

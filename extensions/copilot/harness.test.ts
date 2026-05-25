@@ -364,7 +364,7 @@ describe("createCopilotAgentHarness", () => {
       });
       const harness = createCopilotAgentHarness({ pool });
 
-      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-1" } as any);
+      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-1" });
       await harness.reset?.({ sessionId: "oc-sess-1" });
 
       expect(deleteSession).toHaveBeenCalledTimes(1);
@@ -377,7 +377,7 @@ describe("createCopilotAgentHarness", () => {
       mocks.runCopilotAttempt.mockImplementation(async (_params, _deps) => ATTEMPT_RESULT);
       const harness = createCopilotAgentHarness({ pool });
 
-      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-2" } as any);
+      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-2" });
       await harness.reset?.({ sessionId: "oc-sess-2" });
 
       expect(deleteSession).not.toHaveBeenCalled();
@@ -396,7 +396,7 @@ describe("createCopilotAgentHarness", () => {
       });
       const harness = createCopilotAgentHarness({ pool });
 
-      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-3" } as any);
+      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-3" });
 
       await expect(harness.reset?.({ sessionId: "oc-sess-3" })).resolves.toBeUndefined();
       expect(deleteSession).toHaveBeenCalledTimes(1);
@@ -415,7 +415,7 @@ describe("createCopilotAgentHarness", () => {
       });
       const harness = createCopilotAgentHarness({ pool });
 
-      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-4" } as any);
+      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-4" });
       await harness.reset?.({ sessionId: "oc-sess-4" });
       await harness.reset?.({ sessionId: "oc-sess-4" });
 
@@ -435,7 +435,7 @@ describe("createCopilotAgentHarness", () => {
       });
       const harness = createCopilotAgentHarness({ pool });
 
-      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-A" } as any);
+      await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-A" });
       await harness.reset?.({ sessionId: "oc-B" });
 
       expect(deleteSession).not.toHaveBeenCalled();
@@ -455,7 +455,7 @@ describe("createCopilotAgentHarness", () => {
     });
     const harness = createCopilotAgentHarness({ pool });
 
-    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-disp" } as any);
+    await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-disp" });
     await harness.dispose?.();
     await harness.reset?.({ sessionId: "oc-disp" });
 
@@ -794,7 +794,7 @@ describe("createCopilotAgentHarness", () => {
         });
         const harness = createCopilotAgentHarness({ pool });
 
-        await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-tracked" } as any);
+        await harness.runAttempt({ ...ATTEMPT_PARAMS, sessionId: "oc-sess-tracked" });
         await harness.compact?.({
           sessionId: "oc-sess-tracked",
           workspaceDir,

@@ -199,7 +199,7 @@ export function attachEventBridge(
         lastAssistantEvent,
         startedCount,
         streamError,
-        toolMetas: toolMetas.map((toolMeta) => ({ ...toolMeta })),
+        toolMetas: toolMetas.map((toolMeta) => Object.assign({}, toolMeta)),
         usage: usage ? { ...usage } : undefined,
       };
     },
@@ -222,7 +222,7 @@ export function attachEventBridge(
         return;
       }
       detached = true;
-      for (const unsubscribe of [...unsubscribeFns].reverse()) {
+      for (const unsubscribe of [...unsubscribeFns].toReversed()) {
         try {
           unsubscribe();
         } catch {

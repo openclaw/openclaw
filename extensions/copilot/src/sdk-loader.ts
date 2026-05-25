@@ -34,14 +34,13 @@ export async function loadCopilotSdk(options: LoadCopilotSdkOptions = {}): Promi
   return promise;
 }
 
-export function _resetCopilotSdkCacheForTests(): void {
+export function resetCopilotSdkCacheForTests(): void {
   cached = undefined;
 }
 
 async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
   const fallbackDir = options.fallbackDir ?? COPILOT_SDK_FALLBACK_DIR;
-  const primaryImport =
-    options.primaryImport ?? (async () => (await import("@github/copilot-sdk")) as typeof Sdk);
+  const primaryImport = options.primaryImport ?? (async () => await import("@github/copilot-sdk"));
 
   let primaryErr: unknown;
   try {
@@ -68,7 +67,7 @@ async function doLoad(options: LoadCopilotSdkOptions): Promise<typeof Sdk> {
 
 function createMissingSdkError(
   primaryErr: unknown,
-  fallbackErr: unknown | undefined,
+  fallbackErr: unknown,
   fallbackPath: string,
 ): Error {
   const lines = [
@@ -95,12 +94,18 @@ function createMissingSdkError(
 }
 
 function summarizeError(value: unknown): string {
-  if (value === undefined || value === null) return "(none)";
-  if (value instanceof Error) return value.message || String(value);
-  if (typeof value === "string") return value;
+  if (value === undefined || value === null) {
+    return "(none)";
+  }
+  if (value instanceof Error) {
+    return value.message || String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
   try {
     return JSON.stringify(value);
   } catch {
-    return String(value);
+    return Object.prototype.toString.call(value);
   }
 }

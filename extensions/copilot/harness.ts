@@ -96,19 +96,19 @@ function computeSessionCompatKey(params: AgentHarnessAttemptParams): string {
     });
     authParts = [
       `auth.mode=${resolved.authMode}`,
-      `auth.profileId=${String(resolved.authProfileId ?? "")}`,
-      `auth.profileVersion=${String(resolved.authProfileVersion ?? "")}`,
+      `auth.profileId=${resolved.authProfileId ?? ""}`,
+      `auth.profileVersion=${resolved.authProfileVersion ?? ""}`,
     ];
   } catch {
     authParts = ["auth=unresolvable"];
   }
   const parts = [
-    `provider=${String(modelObj.provider ?? "")}`,
-    `model=${String(modelObj.id ?? "")}`,
-    `api=${String(modelObj.api ?? "")}`,
-    `cwd=${String(p.cwd ?? p.workspaceDir ?? "")}`,
-    `agentDir=${String(p.agentDir ?? "")}`,
-    `copilotHome=${String(p.copilotHome ?? "")}`,
+    `provider=${modelObj.provider ?? ""}`,
+    `model=${modelObj.id ?? ""}`,
+    `api=${modelObj.api ?? ""}`,
+    `cwd=${p.cwd ?? p.workspaceDir ?? ""}`,
+    `agentDir=${p.agentDir ?? ""}`,
+    `copilotHome=${p.copilotHome ?? ""}`,
     ...authParts,
   ];
   return parts.join("|");
@@ -129,7 +129,9 @@ export function createCopilotAgentHarness(
   const trackedSessions = new Map<string, TrackedSession>();
 
   async function getPool(): Promise<CopilotClientPool> {
-    if (options?.pool) return options.pool;
+    if (options?.pool) {
+      return options.pool;
+    }
     if (!poolPromise) {
       poolPromise = (async () => {
         const { createCopilotClientPool } = await import("./src/runtime.js");
@@ -197,7 +199,7 @@ export function createCopilotAgentHarness(
         ? ({
             ...params,
             initialReplayState: {
-              ...(params.initialReplayState ?? {}),
+              ...params.initialReplayState,
               sdkSessionId: resumableSessionId,
             },
           } as AgentHarnessAttemptParams)
@@ -306,11 +308,13 @@ export function createCopilotAgentHarness(
     },
 
     async dispose() {
-      if (disposePromise) return disposePromise;
+      if (disposePromise) {
+        return disposePromise;
+      }
       disposed = true;
       disposePromise = (async () => {
         if (inFlight.size > 0) {
-          await Promise.allSettled([...inFlight]);
+          await Promise.allSettled(inFlight);
         }
         trackedSessions.clear();
         if (createdPool) {

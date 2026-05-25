@@ -98,7 +98,7 @@ export const denyAllUserInputPolicy: CopilotUserInputPolicy = () => ({
  */
 export const firstChoicePolicy: CopilotUserInputPolicy = ({ request }) => {
   if (request.choices && request.choices.length > 0) {
-    return { answer: request.choices[0]!, wasFreeform: false };
+    return { answer: request.choices[0], wasFreeform: false };
   }
   return { answer: DENY_ALL_ANSWER, wasFreeform: true };
 };
@@ -148,13 +148,17 @@ export function delegatingUserInputPolicy(
   return async (ctx) => {
     try {
       const result = await onRequest(ctx);
-      if (result !== undefined) return result;
+      if (result !== undefined) {
+        return result;
+      }
       return { answer: DENY_ALL_ANSWER, wasFreeform: true };
     } catch (error) {
       if (onError) {
         try {
           const fallback = await onError(ctx);
-          if (fallback !== undefined) return fallback;
+          if (fallback !== undefined) {
+            return fallback;
+          }
         } catch {
           // fall through to error-message response
         }
@@ -181,7 +185,9 @@ export function composeUserInputPolicies(
     for (const policy of policies) {
       try {
         const result = await policy(ctx);
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+          return result;
+        }
       } catch (error) {
         return {
           answer: `${DENY_ALL_ANSWER} (host policy threw: ${formatError(error)})`,
@@ -213,7 +219,9 @@ export function createUserInputBridge(
     };
     try {
       const result = await policy(ctx);
-      if (result !== undefined) return result;
+      if (result !== undefined) {
+        return result;
+      }
     } catch (error) {
       return {
         answer: `${DENY_ALL_ANSWER} (host policy threw: ${formatError(error)})`,
@@ -225,7 +233,9 @@ export function createUserInputBridge(
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) {
+    return error.message;
+  }
   try {
     return JSON.stringify(error);
   } catch {

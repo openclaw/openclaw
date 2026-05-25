@@ -5,17 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COPILOT_SDK_FALLBACK_DIR,
   COPILOT_SDK_SPEC,
-  _resetCopilotSdkCacheForTests,
+  resetCopilotSdkCacheForTests,
   loadCopilotSdk,
 } from "./sdk-loader.js";
 
 const FAKE_SDK = {
-  CopilotClient: class FakeCopilotClient {},
+  CopilotClient: class FakeCopilotClient {
+    _fake = true;
+  },
 } as unknown as typeof import("@github/copilot-sdk");
 
 describe("sdk-loader", () => {
   beforeEach(() => {
-    _resetCopilotSdkCacheForTests();
+    resetCopilotSdkCacheForTests();
   });
 
   it("returns the primary import when it succeeds", async () => {
@@ -158,14 +160,20 @@ describe("sdk-loader", () => {
   });
 
   afterEach(() => {
-    _resetCopilotSdkCacheForTests();
+    resetCopilotSdkCacheForTests();
   });
 });
 
 describe("contract with core copilot-sdk-install", () => {
-  it("COPILOT_SDK_FALLBACK_DIR and COPILOT_SDK_SPEC match the core install command", async () => {
-    const core = await import("../../../src/commands/copilot-sdk-install.js");
-    expect(COPILOT_SDK_FALLBACK_DIR).toBe(core.COPILOT_SDK_FALLBACK_DIR);
-    expect(COPILOT_SDK_SPEC).toBe(core.COPILOT_SDK_SPEC);
+  // We assert literal values rather than importing core's exports because
+  // extension test files must stay on public plugin-sdk surfaces. The
+  // symmetric test in src/commands/copilot-sdk-install.test.ts asserts the
+  // same literals against core's exports, so any drift on either side fails
+  // one of the two tests.
+  it("COPILOT_SDK_FALLBACK_DIR matches the canonical core install fallback path", () => {
+    expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
+  });
+  it("COPILOT_SDK_SPEC pins the canonical SDK spec", () => {
+    expect(COPILOT_SDK_SPEC).toBe("@github/copilot-sdk@1.0.0-beta.4");
   });
 });

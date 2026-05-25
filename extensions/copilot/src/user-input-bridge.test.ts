@@ -101,9 +101,10 @@ describe("delegatingUserInputPolicy", () => {
       },
     });
     const result = await policy(makeCtx());
-    expect(result.wasFreeform).toBe(true);
-    expect(result.answer).toContain(DENY_ALL_ANSWER);
-    expect(result.answer).toContain("prompt timeout");
+    expect(result).toBeDefined();
+    expect(result!.wasFreeform).toBe(true);
+    expect(result!.answer).toContain(DENY_ALL_ANSWER);
+    expect(result!.answer).toContain("prompt timeout");
   });
 
   it("falls back to onError policy when onRequest throws", async () => {
@@ -131,7 +132,8 @@ describe("delegatingUserInputPolicy", () => {
       },
     });
     const result = await policy(makeCtx());
-    expect(result.answer).toContain("host boom");
+    expect(result).toBeDefined();
+    expect(result!.answer).toContain("host boom");
   });
 
   it("formats non-Error throws via JSON.stringify", async () => {
@@ -141,7 +143,8 @@ describe("delegatingUserInputPolicy", () => {
       },
     });
     const result = await policy(makeCtx());
-    expect(result.answer).toContain('"code":7');
+    expect(result).toBeDefined();
+    expect(result!.answer).toContain('"code":7');
   });
 });
 
@@ -171,7 +174,8 @@ describe("composeUserInputPolicies", () => {
       throw new Error("compose boom");
     }, later);
     const result = await policy(makeCtx());
-    expect(result.answer).toContain("compose boom");
+    expect(result).toBeDefined();
+    expect(result!.answer).toContain("compose boom");
     expect(later).not.toHaveBeenCalled();
   });
 });

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { isLiveTestEnabled } from "../../../src/agents/live-test-helpers.js";
 import { createCopilotAgentHarness, type CopilotClientPool } from "../harness.js";
 
 const liveToolState = vi.hoisted(() => ({
@@ -74,10 +74,12 @@ function createApproveAllPool(): CopilotClientPool {
       return {
         key,
         client: {
-          createSession: (config) =>
+          createSession: (config: Parameters<CopilotClient["createSession"]>[0]) =>
             client.createSession({ ...config, onPermissionRequest: approveAll }),
-          resumeSession: (sessionId, config) =>
-            client.resumeSession(sessionId, { ...config, onPermissionRequest: approveAll }),
+          resumeSession: (
+            sessionId: Parameters<CopilotClient["resumeSession"]>[0],
+            config: Parameters<CopilotClient["resumeSession"]>[1],
+          ) => client.resumeSession(sessionId, { ...config, onPermissionRequest: approveAll }),
           stop: () => client.stop(),
         } as unknown as CopilotClient,
       };

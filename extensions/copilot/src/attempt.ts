@@ -41,7 +41,7 @@ const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
-// TODO(plugin-sdk-widening): Remove AttemptParamsLike when
+// NOTE(plugin-sdk-widening): AttemptParamsLike can be removed once
 // openclaw/plugin-sdk/agent-harness-runtime declares auth, messages,
 // onAssistantDelta, and initialReplayState.sdkSessionId fields. Tracked by
 // project openclaw-copilot-harness; reviewer-attempt-bridge note.
@@ -777,7 +777,7 @@ function readTailUserText(messages: AgentMessage[]): string | undefined {
 // guard. See attempt.ts dual-write tagging block.
 function hasMirrorIdentity(message: AgentMessage): boolean {
   const record = message as unknown as { __openclaw?: unknown };
-  const meta = record.__openclaw;
+  const meta = record["__openclaw"];
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return false;
   }

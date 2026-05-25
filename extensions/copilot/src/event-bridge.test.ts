@@ -42,6 +42,7 @@ function createDeferred<T>() {
 }
 
 function flushAsync() {
+  // oxlint-disable-next-line unicorn/no-useless-promise-resolve-reject -- the inner Promise.resolve() forces an additional microtask tick so delta-chain ordering can be observed deterministically in tests.
   return Promise.resolve().then(() => Promise.resolve());
 }
 
@@ -729,7 +730,7 @@ describe("attachEventBridge", () => {
     bridge.detach();
     bridge.detach();
 
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].reverse());
+    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
     expect(session.off).toHaveBeenCalledTimes(REGISTERED_EVENT_TYPES.length);
   });
 
@@ -751,7 +752,7 @@ describe("attachEventBridge", () => {
       makeEvent("assistant.message_delta", { deltaContent: "ignored", messageId: "msg-1" }),
     );
 
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].reverse());
+    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });
 
@@ -774,7 +775,7 @@ describe("attachEventBridge", () => {
       makeEvent("assistant.message_delta", { deltaContent: "ignored", messageId: "msg-1" }),
     );
 
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].reverse());
+    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });
 
@@ -810,7 +811,7 @@ describe("attachEventBridge", () => {
 
     const first = bridge.snapshot();
     (first.assistantTexts as string[]).push("mutated");
-    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0]!.toolName = "mutated";
+    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0].toolName = "mutated";
     (first.usage as { input?: number }).input = 999;
 
     const second = bridge.snapshot();

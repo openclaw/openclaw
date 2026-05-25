@@ -204,7 +204,6 @@ describe("createTraceContextProvider", () => {
     const onError = vi.fn();
     const provider = createTraceContextProvider({
       getTraceparent: () => {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw "string-boom";
       },
       onError,

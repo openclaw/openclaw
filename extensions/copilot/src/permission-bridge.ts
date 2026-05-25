@@ -128,13 +128,17 @@ export function delegatingPolicy(options: DelegatingPolicyOptions): CopilotPermi
   return async (ctx) => {
     try {
       const result = await onRequest(ctx);
-      if (result !== undefined) return result;
+      if (result !== undefined) {
+        return result;
+      }
       return { kind: "reject", feedback: REJECT_ALL_FEEDBACK };
     } catch (error) {
       if (onError) {
         try {
           const fallback = await onError(ctx);
-          if (fallback !== undefined) return fallback;
+          if (fallback !== undefined) {
+            return fallback;
+          }
         } catch {
           // fall through to error-message reject
         }
@@ -160,7 +164,9 @@ export function composePolicies(...policies: CopilotPermissionPolicy[]): Copilot
     for (const policy of policies) {
       try {
         const result = await policy(ctx);
-        if (result !== undefined) return result;
+        if (result !== undefined) {
+          return result;
+        }
       } catch (error) {
         return {
           kind: "reject",
@@ -188,7 +194,9 @@ export function createPermissionBridge(
     };
     try {
       const result = await policy(ctx);
-      if (result !== undefined) return result;
+      if (result !== undefined) {
+        return result;
+      }
     } catch (error) {
       return {
         kind: "reject",
@@ -200,7 +208,9 @@ export function createPermissionBridge(
 }
 
 function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) {
+    return error.message;
+  }
   try {
     return JSON.stringify(error);
   } catch {

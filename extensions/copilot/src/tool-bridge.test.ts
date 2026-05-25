@@ -31,7 +31,7 @@ function createDeferred<T>() {
 }
 
 function flushAsync() {
-  return Promise.resolve().then(() => Promise.resolve());
+  return Promise.resolve().then(() => {});
 }
 
 function makeInvocation(overrides: Partial<ToolInvocation> = {}): ToolInvocation {
@@ -207,7 +207,11 @@ describe("createCopilotToolBridge", () => {
       const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
       return {
         createOpenClawCodingTools,
-        getOpts: () => createOpenClawCodingTools.mock.calls[0]?.[0] as Record<string, unknown>,
+        getOpts: () =>
+          (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as Record<
+            string,
+            unknown
+          >,
       };
     }
 
@@ -573,7 +577,7 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "session-1",
         workspaceDir: "/workspace",
       });
-      const opts = createOpenClawCodingTools.mock.calls[0]?.[0] as {
+      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sandbox?: unknown;
         spawnWorkspaceDir?: unknown;
         workspaceDir?: unknown;
@@ -599,7 +603,7 @@ describe("createCopilotToolBridge", () => {
         spawnWorkspaceDir: "/original-workspace",
         workspaceDir: "/sandbox/copy",
       });
-      const opts = createOpenClawCodingTools.mock.calls[0]?.[0] as {
+      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sandbox?: unknown;
         spawnWorkspaceDir?: unknown;
         workspaceDir?: unknown;
@@ -622,7 +626,7 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "session-1",
         workspaceDir: "/sandbox/copy",
       });
-      const opts = createOpenClawCodingTools.mock.calls[0]?.[0] as {
+      const opts = (createOpenClawCodingTools.mock.calls[0] as unknown[] | undefined)?.[0] as {
         spawnWorkspaceDir?: unknown;
       };
       // Fallback derives spawnWorkspaceDir from (effective) workspaceDir
@@ -973,7 +977,7 @@ describe("convertOpenClawToolToSdkTool", () => {
     const sourceTool = makeTool({
       execute: vi.fn(
         (_toolCallId: string, _args: unknown, signal?: AbortSignal) =>
-          new Promise((_, reject) => {
+          new Promise<never>((_, reject) => {
             signal?.addEventListener(
               "abort",
               () => {

@@ -23,7 +23,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
  * machinery here is much smaller than `ensureCodexRuntimePluginForModelSelection`.
  *
  * The constants `COPILOT_SDK_FALLBACK_DIR` and `COPILOT_SDK_SPEC` are
- * mirrored in `extensions/copilot/src/sdk-loader.ts`; a contract test
+ * mirrored in the copilot extension's sdk-loader module; a contract test
  * in that file asserts equality so the two never drift.
  */
 export const COPILOT_SDK_FALLBACK_DIR = path.join(homedir(), ".openclaw", "npm-runtime", "copilot");

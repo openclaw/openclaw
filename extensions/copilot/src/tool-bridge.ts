@@ -541,7 +541,7 @@ function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
   return [...counts.entries()]
     .filter(([, count]) => count > 1)
     .map(([name]) => name)
-    .sort();
+    .toSorted();
 }
 
 function readString(value: unknown, options: { allowEmpty?: boolean } = {}): string | undefined {

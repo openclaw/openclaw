@@ -59,7 +59,6 @@ const DEFAULT_HOOK_ERROR_HANDLER: NonNullable<CopilotHooksConfig["onHookError"]>
   hookName,
   error,
 }) => {
-  // eslint-disable-next-line no-console -- isolated diagnostic; subsystem logger lives outside the package boundary
   console.warn(`[copilot hooks-bridge] ${hookName} handler threw:`, error);
 };
 
@@ -74,7 +73,9 @@ function isolate<TArgs extends readonly unknown[], TResult>(
   handler: ((...args: TArgs) => TResult | Promise<TResult>) | undefined,
   onError: NonNullable<CopilotHooksConfig["onHookError"]>,
 ): ((...args: TArgs) => Promise<TResult | undefined>) | undefined {
-  if (!handler) return undefined;
+  if (!handler) {
+    return undefined;
+  }
   return async (...args: TArgs) => {
     try {
       return await handler(...args);
@@ -95,7 +96,9 @@ function isolate<TArgs extends readonly unknown[], TResult>(
  * supplied so the SDK skips the hook subsystem entirely.
  */
 export function createHooksBridge(config?: CopilotHooksConfig): SdkSessionHooks | undefined {
-  if (!config) return undefined;
+  if (!config) {
+    return undefined;
+  }
   const onError = config.onHookError ?? DEFAULT_HOOK_ERROR_HANDLER;
   const hooks: SdkSessionHooks = {};
   const pre = isolate("onPreToolUse", config.onPreToolUse, onError);
@@ -105,12 +108,24 @@ export function createHooksBridge(config?: CopilotHooksConfig): SdkSessionHooks 
   const sessionEnd = isolate("onSessionEnd", config.onSessionEnd, onError);
   const errorOccurred = isolate("onErrorOccurred", config.onErrorOccurred, onError);
 
-  if (pre) hooks.onPreToolUse = pre as PreToolUseHandler;
-  if (post) hooks.onPostToolUse = post as PostToolUseHandler;
-  if (userPrompt) hooks.onUserPromptSubmitted = userPrompt as UserPromptSubmittedHandler;
-  if (sessionStart) hooks.onSessionStart = sessionStart as SessionStartHandler;
-  if (sessionEnd) hooks.onSessionEnd = sessionEnd as SessionEndHandler;
-  if (errorOccurred) hooks.onErrorOccurred = errorOccurred as ErrorOccurredHandler;
+  if (pre) {
+    hooks.onPreToolUse = pre as PreToolUseHandler;
+  }
+  if (post) {
+    hooks.onPostToolUse = post as PostToolUseHandler;
+  }
+  if (userPrompt) {
+    hooks.onUserPromptSubmitted = userPrompt as UserPromptSubmittedHandler;
+  }
+  if (sessionStart) {
+    hooks.onSessionStart = sessionStart as SessionStartHandler;
+  }
+  if (sessionEnd) {
+    hooks.onSessionEnd = sessionEnd as SessionEndHandler;
+  }
+  if (errorOccurred) {
+    hooks.onErrorOccurred = errorOccurred as ErrorOccurredHandler;
+  }
 
   if (Object.keys(hooks).length === 0) {
     return undefined;

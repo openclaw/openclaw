@@ -4,12 +4,12 @@ import path from "node:path";
 import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  __testing,
+  TESTING_EXPORTS,
   renderCopilotWorkspaceBootstrapInstructions,
   resolveCopilotWorkspaceBootstrapContext,
 } from "./workspace-bootstrap.js";
 
-const { COPILOT_NATIVE_PROJECT_DOC_BASENAMES, compareCopilotContextFiles } = __testing;
+const { COPILOT_NATIVE_PROJECT_DOC_BASENAMES, compareCopilotContextFiles } = TESTING_EXPORTS;
 
 function makeAttempt(
   overrides: Partial<AgentHarnessAttemptParams> = {},

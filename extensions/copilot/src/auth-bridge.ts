@@ -203,7 +203,9 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
  */
 export function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim().toLowerCase();
-  if (!trimmed) return COPILOT_DEFAULT_AGENT_ID;
+  if (!trimmed) {
+    return COPILOT_DEFAULT_AGENT_ID;
+  }
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(trimmed)) {
     return COPILOT_DEFAULT_AGENT_ID;
   }
@@ -218,14 +220,18 @@ function resolveCopilotHome(args: {
   env: NodeJS.ProcessEnv;
   homeDir: () => string;
 }): string {
-  if (args.explicit) return resolve(args.explicit);
+  if (args.explicit) {
+    return resolve(args.explicit);
+  }
   // When the host hands us an agent directory we isolate the SDK CLI state
   // (config.json, logs/, session-store.db, session-state/) under a dedicated
   // "copilot" subdir so it cannot collide with OpenClaw's own files
   // (models.json, auth-profiles.json, ...) in the same agent directory.
   // This matches the documented layout and mirrors how the codex harness
   // isolates `<agentDir>/codex-home/`.
-  if (args.agentDir) return resolve(join(args.agentDir, "copilot"));
+  if (args.agentDir) {
+    return resolve(join(args.agentDir, "copilot"));
+  }
 
   const openClawHome = readString(args.env.OPENCLAW_HOME);
   const rootHome = openClawHome ? resolve(openClawHome) : safeHomeDir(args.homeDir);

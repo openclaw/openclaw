@@ -6,10 +6,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readPoolOptions(pluginConfig: unknown): { idleTtlMs: number } | undefined {
-  if (!isRecord(pluginConfig)) return undefined;
+  if (!isRecord(pluginConfig)) {
+    return undefined;
+  }
 
   const pool = pluginConfig.pool;
-  if (!isRecord(pool)) return undefined;
+  if (!isRecord(pool)) {
+    return undefined;
+  }
 
   const idleTtlMs = pool.idleTtlMs;
   if (typeof idleTtlMs !== "number" || !Number.isFinite(idleTtlMs) || idleTtlMs < 1) {

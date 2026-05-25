@@ -23,18 +23,18 @@ describe("copilot doctor contract", () => {
 
   it("declares exactly one session route state owner for copilot", () => {
     expect(sessionRouteStateOwners).toHaveLength(1);
-    const owner = sessionRouteStateOwners[0]!;
+    const owner = sessionRouteStateOwners[0];
     expect(owner.id).toBe("copilot");
     expect(owner.label).toBe("GitHub Copilot agent runtime");
   });
 
   it("claims the subscription Copilot providers (matches attempt.ts SUPPORTED_PROVIDERS)", () => {
-    const owner = sessionRouteStateOwners[0]!;
+    const owner = sessionRouteStateOwners[0];
     expect(owner.providerIds).toEqual(["github-copilot"]);
   });
 
   it("claims the copilot runtime, session key, and auth profile prefix", () => {
-    const owner = sessionRouteStateOwners[0]!;
+    const owner = sessionRouteStateOwners[0];
     expect(owner.runtimeIds).toEqual(["copilot"]);
     expect(owner.cliSessionKeys).toEqual(["copilot"]);
     expect(owner.authProfilePrefixes).toEqual(["github-copilot:"]);

@@ -139,8 +139,12 @@ function compareCopilotContextFiles(left: EmbeddedContextFile, right: EmbeddedCo
   }
   const leftPath = normalizeCopilotContextFilePath(left.path);
   const rightPath = normalizeCopilotContextFilePath(right.path);
-  if (leftPath < rightPath) return -1;
-  if (leftPath > rightPath) return 1;
+  if (leftPath < rightPath) {
+    return -1;
+  }
+  if (leftPath > rightPath) {
+    return 1;
+  }
   return 0;
 }
 
@@ -156,7 +160,7 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
-export const __testing = {
+export const TESTING_EXPORTS = {
   COPILOT_NATIVE_PROJECT_DOC_BASENAMES,
   COPILOT_BOOTSTRAP_CONTEXT_ORDER,
   compareCopilotContextFiles,
