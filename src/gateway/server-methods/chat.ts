@@ -1057,7 +1057,11 @@ async function prestageMediaPathOffloads(params: {
   }
 }
 
-function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]) {
+type ChatSendManagedMediaFields = Partial<
+  Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
+>;
+
+function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
   const mediaPaths = savedImages.map((entry) => entry.path);
   if (mediaPaths.length === 0) {
     return {};
@@ -1069,6 +1073,26 @@ function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]) {
     MediaType: mediaTypes[0],
     MediaTypes: mediaTypes,
   };
+}
+
+function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManagedMediaFields) {
+  if (!ctx.MediaStaged) {
+    Object.assign(ctx, fields);
+    return;
+  }
+
+  if (ctx.MediaPath === undefined && fields.MediaPath !== undefined) {
+    ctx.MediaPath = fields.MediaPath;
+  }
+  if (ctx.MediaPaths === undefined && fields.MediaPaths !== undefined) {
+    ctx.MediaPaths = fields.MediaPaths;
+  }
+  if (ctx.MediaType === undefined && fields.MediaType !== undefined) {
+    ctx.MediaType = fields.MediaType;
+  }
+  if (ctx.MediaTypes === undefined && fields.MediaTypes !== undefined) {
+    ctx.MediaTypes = fields.MediaTypes;
+  }
 }
 
 function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
@@ -2817,6 +2841,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
+          if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
+            beforeAgentRunBlocked = true;
+          }
           switch (info.kind) {
             case "block":
             case "final":
@@ -2841,7 +2868,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
-          Object.assign(ctx, await pluginBoundMediaFieldsPromise);
+          applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
           const userTurnInput = await userTurnInputPromise;
           const dispatchResult = await dispatchInboundMessage({
             ctx,
