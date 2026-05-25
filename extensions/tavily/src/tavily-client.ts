@@ -78,7 +78,7 @@ async function postTavilyJson(params: {
       url: resolveEndpoint(params.baseUrl, params.pathname),
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: params.body,
+      body: { ...params.body, api_key: params.apiKey },
       errorLabel: params.errorLabel,
       extraHeaders: { "X-Client-Source": "openclaw" },
     },
