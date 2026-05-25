@@ -253,6 +253,19 @@ describe("schema validator", () => {
           $ref: "#/$defs/Missing",
         },
       ],
+      [
+        "schema-validator.test.invalid-anchor-ref",
+        {
+          $defs: {
+            Other: {
+              $id: "other",
+              $anchor: "value",
+              type: "string",
+            },
+          },
+          $ref: "#value",
+        },
+      ],
     ] as const) {
       expect(() =>
         validateJsonSchemaValue({
@@ -262,6 +275,135 @@ describe("schema validator", () => {
         }),
       ).toThrow("invalid schema");
     }
+  });
+
+  it("accepts valid local refs to boolean schemas and anchors", () => {
+    const denied = expectValidationFailure({
+      cacheKey: "schema-validator.test.false-ref",
+      schema: {
+        $defs: {
+          Never: false,
+        },
+        $ref: "#/$defs/Never",
+      },
+      value: "anything",
+    });
+    expectValidationIssue(denied, "<root>");
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.anchor-ref",
+        schema: {
+          $defs: {
+            Value: {
+              $anchor: "value",
+              type: "string",
+            },
+          },
+          $ref: "#value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.nested-resource-anchor-ref",
+        schema: {
+          $defs: {
+            Other: {
+              $id: "other",
+              $defs: {
+                Value: {
+                  $anchor: "value",
+                  type: "string",
+                },
+              },
+              $ref: "#value",
+            },
+          },
+          $ref: "#/$defs/Other",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+  });
+
+  it("applies defaults through refs that target embedded schema resources", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.embedded-resource-default-ref",
+        schema: {
+          $defs: {
+            Other: {
+              $id: "other",
+              $defs: {
+                Defaulted: {
+                  type: "object",
+                  properties: {
+                    mode: {
+                      type: "string",
+                      default: "auto",
+                    },
+                  },
+                },
+              },
+              properties: {
+                settings: {
+                  $ref: "#/$defs/Defaulted",
+                },
+              },
+            },
+          },
+          $ref: "#/$defs/Other/properties/settings",
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.same-ref-text-nested-resource-default",
+        schema: {
+          $defs: {
+            Settings: {
+              $id: "settings",
+              type: "object",
+              $defs: {
+                Settings: {
+                  type: "object",
+                  properties: {
+                    mode: {
+                      type: "string",
+                      default: "nested",
+                    },
+                  },
+                },
+              },
+              properties: {
+                child: {
+                  $ref: "#/$defs/Settings",
+                },
+              },
+            },
+          },
+          $ref: "#/$defs/Settings",
+        },
+        value: {
+          child: {},
+        },
+        applyDefaults: true,
+      },
+      expectedValue: {
+        child: {
+          mode: "nested",
+        },
+      },
+    });
   });
 
   it("accepts draft-07 tuple item schemas", () => {

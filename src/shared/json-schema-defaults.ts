@@ -1,6 +1,11 @@
 import type { JsonSchemaObject } from "./json-schema.types.js";
 
 type JsonSchemaValue = JsonSchemaObject | boolean;
+type LocalRefResolution =
+  | { found: true; schema: JsonSchemaValue; resourceRoot: JsonSchemaValue }
+  | { found: false };
+const schemaResourceIds = new WeakMap<object, number>();
+let nextSchemaResourceId = 1;
 const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
@@ -70,6 +75,18 @@ function schemaTypeIncludes(schema: Record<string, unknown>, type: string): bool
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
 }
 
+function schemaResourceRefKey(resourceRoot: JsonSchemaValue, ref: string): string {
+  if (!isRecord(resourceRoot)) {
+    return `boolean:${String(resourceRoot)}:${ref}`;
+  }
+  let id = schemaResourceIds.get(resourceRoot);
+  if (id === undefined) {
+    id = nextSchemaResourceId++;
+    schemaResourceIds.set(resourceRoot, id);
+  }
+  return `schema:${id}:${ref}`;
+}
+
 function normalizeSchemaMap(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -129,23 +146,96 @@ function decodePointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
-function resolveLocalRef(root: JsonSchemaValue, ref: string): JsonSchemaValue | undefined {
-  if (ref === "#") {
-    return root;
-  }
-  if (!ref.startsWith("#/")) {
+function resolveLocalAnchor(
+  schema: JsonSchemaValue,
+  anchor: string,
+  isRoot = true,
+): JsonSchemaValue | undefined {
+  if (!isRecord(schema)) {
     return undefined;
   }
-  let current: unknown = root;
-  for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
+  if (!isRoot && typeof schema.$id === "string") {
+    return undefined;
   }
-  return typeof current === "boolean" || isRecord(current)
-    ? (current as JsonSchemaValue)
-    : undefined;
+  if (schema.$anchor === anchor || schema.$dynamicAnchor === anchor) {
+    return schema;
+  }
+  for (const key of schemaMapKeywords) {
+    const value = schema[key];
+    if (!isRecord(value)) {
+      continue;
+    }
+    for (const entry of Object.values(value)) {
+      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+  }
+  for (const key of schemaValueKeywords) {
+    const value = schema[key];
+    if (typeof value === "boolean" || isRecord(value)) {
+      const resolved = resolveLocalAnchor(value as JsonSchemaValue, anchor, false);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+      continue;
+    }
+    if (key === "items" && Array.isArray(value)) {
+      for (const entry of value) {
+        const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
+        if (resolved !== undefined) {
+          return resolved;
+        }
+      }
+    }
+  }
+  for (const key of schemaArrayKeywords) {
+    const value = schema[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      const resolved = resolveLocalAnchor(entry as JsonSchemaValue, anchor, false);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+    }
+  }
+  return undefined;
+}
+
+function resolveLocalRef(resourceRoot: JsonSchemaValue, ref: string): LocalRefResolution {
+  if (ref === "#") {
+    return { found: true, schema: resourceRoot, resourceRoot };
+  }
+  if (ref.startsWith("#/")) {
+    let current: unknown = resourceRoot;
+    let currentResourceRoot = resourceRoot;
+    for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
+      if (!isRecord(current)) {
+        return { found: false };
+      }
+      current = current[segment];
+      if (isRecord(current) && typeof current.$id === "string") {
+        currentResourceRoot = current as JsonSchemaValue;
+      }
+    }
+    return typeof current === "boolean" || isRecord(current)
+      ? {
+          found: true,
+          schema: current as JsonSchemaValue,
+          resourceRoot: currentResourceRoot,
+        }
+      : { found: false };
+  }
+  if (ref.startsWith("#")) {
+    const resolved = resolveLocalAnchor(resourceRoot, decodeURIComponent(ref.slice(1)));
+    return resolved === undefined
+      ? { found: false }
+      : { found: true, schema: resolved, resourceRoot };
+  }
+  return { found: false };
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -213,6 +303,7 @@ function findJsonSchemaNodeError(
   schema: unknown,
   path: string,
   root: JsonSchemaValue,
+  resourceRoot: JsonSchemaValue,
 ): string | undefined {
   if (typeof schema === "boolean") {
     return undefined;
@@ -230,11 +321,12 @@ function findJsonSchemaNodeError(
   if (keywordError) {
     return keywordError;
   }
+  const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   if (typeof schema.$ref === "string") {
     if (!schema.$ref.startsWith("#")) {
       return `${path}.$ref: only local refs are supported`;
     }
-    if (!resolveLocalRef(root, schema.$ref)) {
+    if (!resolveLocalRef(currentResourceRoot, schema.$ref).found) {
       return `${path}.$ref: unresolved local ref`;
     }
   }
@@ -247,7 +339,12 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: expected schema map`;
     }
     for (const [entryKey, entry] of Object.entries(value)) {
-      const error = findJsonSchemaNodeError(entry, `${path}.${key}.${entryKey}`, root);
+      const error = findJsonSchemaNodeError(
+        entry,
+        `${path}.${key}.${entryKey}`,
+        root,
+        currentResourceRoot,
+      );
       if (error) {
         return error;
       }
@@ -263,14 +360,19 @@ function findJsonSchemaNodeError(
         return `${path}.${key}: expected schema`;
       }
       for (const [index, entry] of value.entries()) {
-        const error = findJsonSchemaNodeError(entry, `${path}.${key}.${index}`, root);
+        const error = findJsonSchemaNodeError(
+          entry,
+          `${path}.${key}.${index}`,
+          root,
+          currentResourceRoot,
+        );
         if (error) {
           return error;
         }
       }
       continue;
     }
-    const error = findJsonSchemaNodeError(value, `${path}.${key}`, root);
+    const error = findJsonSchemaNodeError(value, `${path}.${key}`, root, currentResourceRoot);
     if (error) {
       return error;
     }
@@ -284,7 +386,12 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: expected schema array`;
     }
     for (const [index, entry] of value.entries()) {
-      const error = findJsonSchemaNodeError(entry, `${path}.${key}.${index}`, root);
+      const error = findJsonSchemaNodeError(
+        entry,
+        `${path}.${key}.${index}`,
+        root,
+        currentResourceRoot,
+      );
       if (error) {
         return error;
       }
@@ -294,7 +401,7 @@ function findJsonSchemaNodeError(
 }
 
 export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
-  return findJsonSchemaNodeError(schema, "<schema>", schema);
+  return findJsonSchemaNodeError(schema, "<schema>", schema, schema);
 }
 
 function cloneDefault<T>(value: T): T {
@@ -316,6 +423,7 @@ function applySchemaDefaults(
   value: unknown,
   root = schema,
   resolvingRefs = new Set<string>(),
+  resourceRoot = root,
 ): unknown {
   if (value === undefined) {
     const defaultValue = getDefault(schema);
@@ -327,19 +435,36 @@ function applySchemaDefaults(
     return value;
   }
 
+  const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
   let nextValue = value;
-  if (typeof schema.$ref === "string" && !resolvingRefs.has(schema.$ref)) {
-    const target = resolveLocalRef(root, schema.$ref);
-    if (target) {
-      resolvingRefs.add(schema.$ref);
-      nextValue = applySchemaDefaults(target, nextValue, root, resolvingRefs);
-      resolvingRefs.delete(schema.$ref);
+  const refKey =
+    typeof schema.$ref === "string"
+      ? schemaResourceRefKey(currentResourceRoot, schema.$ref)
+      : undefined;
+  if (typeof schema.$ref === "string" && refKey !== undefined && !resolvingRefs.has(refKey)) {
+    const target = resolveLocalRef(currentResourceRoot, schema.$ref);
+    if (target.found) {
+      resolvingRefs.add(refKey);
+      nextValue = applySchemaDefaults(
+        target.schema,
+        nextValue,
+        root,
+        resolvingRefs,
+        target.resourceRoot,
+      );
+      resolvingRefs.delete(refKey);
     }
   }
 
   const composedSchemas = [...(Array.isArray(schema.allOf) ? schema.allOf : [])];
   for (const branch of composedSchemas) {
-    nextValue = applySchemaDefaults(branch as JsonSchemaValue, nextValue, root, resolvingRefs);
+    nextValue = applySchemaDefaults(
+      branch as JsonSchemaValue,
+      nextValue,
+      root,
+      resolvingRefs,
+      currentResourceRoot,
+    );
   }
 
   if (
@@ -354,6 +479,7 @@ function applySchemaDefaults(
         currentValue,
         root,
         resolvingRefs,
+        currentResourceRoot,
       );
       if (defaultedValue !== currentValue || currentValue === undefined) {
         if (defaultedValue !== undefined) {
@@ -380,6 +506,7 @@ function applySchemaDefaults(
             nextValue[key],
             root,
             resolvingRefs,
+            currentResourceRoot,
           );
         }
       }
@@ -390,7 +517,13 @@ function applySchemaDefaults(
         if (Object.prototype.hasOwnProperty.call(properties, key) || patternMatchedKeys.has(key)) {
           continue;
         }
-        nextValue[key] = applySchemaDefaults(additionalSchema, nextValue[key], root, resolvingRefs);
+        nextValue[key] = applySchemaDefaults(
+          additionalSchema,
+          nextValue[key],
+          root,
+          resolvingRefs,
+          currentResourceRoot,
+        );
       }
     }
     return nextValue;
@@ -406,14 +539,26 @@ function applySchemaDefaults(
         const itemSchema = tupleSchemas[index];
         return itemSchema === undefined
           ? item
-          : applySchemaDefaults(itemSchema as JsonSchemaValue, item, root, resolvingRefs);
+          : applySchemaDefaults(
+              itemSchema as JsonSchemaValue,
+              item,
+              root,
+              resolvingRefs,
+              currentResourceRoot,
+            );
       });
     }
     if (!isRecord(schema.items)) {
       return nextValue;
     }
     return nextValue.map((item) =>
-      applySchemaDefaults(schema.items as JsonSchemaValue, item, root, resolvingRefs),
+      applySchemaDefaults(
+        schema.items as JsonSchemaValue,
+        item,
+        root,
+        resolvingRefs,
+        currentResourceRoot,
+      ),
     );
   }
 

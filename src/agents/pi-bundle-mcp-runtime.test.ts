@@ -271,11 +271,65 @@ describe("session MCP runtime", () => {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         $ref: "#/$defs/Missing",
       },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $defs: {
+          Other: {
+            $id: "other",
+            $anchor: "value",
+            type: "string",
+          },
+        },
+        $ref: "#value",
+      },
     ] as const) {
       expect(() => createBundleMcpJsonSchemaValidator().getValidator(schema as never)).toThrow(
         "Invalid MCP draft-2020-12 JSON Schema",
       );
     }
+  });
+
+  it("accepts draft-2020-12 local refs to boolean schemas and anchors", () => {
+    const neverValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Never: false,
+      },
+      $ref: "#/$defs/Never",
+    });
+    expect(neverValidator("anything").valid).toBe(false);
+
+    const anchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $anchor: "value",
+          type: "string",
+        },
+      },
+      $ref: "#value",
+    });
+    expect(anchorValidator("ok").valid).toBe(true);
+    expect(anchorValidator(1).valid).toBe(false);
+
+    const nestedAnchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Other: {
+          $id: "other",
+          $defs: {
+            Value: {
+              $anchor: "value",
+              type: "string",
+            },
+          },
+          $ref: "#value",
+        },
+      },
+      $ref: "#/$defs/Other",
+    });
+    expect(nestedAnchorValidator("ok").valid).toBe(true);
+    expect(nestedAnchorValidator(1).valid).toBe(false);
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
