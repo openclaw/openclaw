@@ -53,6 +53,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
@@ -927,20 +928,6 @@ async function persistChatSendImages(params: {
     saved.push(offloaded);
   }
   return saved;
-}
-
-function buildChatSendTranscriptMessage(params: {
-  message: string;
-  savedImages: SavedMedia[];
-  timestamp: number;
-}) {
-  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
-  return {
-    role: "user" as const,
-    content: params.message,
-    timestamp: params.timestamp,
-    ...mediaFields,
-  };
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -2757,9 +2744,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               emitSessionTranscriptUpdate({
                 sessionFile: transcriptPath,
                 sessionKey,
-                message: buildChatSendTranscriptMessage({
-                  message: parsedMessage,
-                  savedImages: persistedImages,
+                message: buildPersistedUserTurnMessage({
+                  text: parsedMessage,
+                  media: persistedImages,
                   timestamp: now,
                 }),
               });
