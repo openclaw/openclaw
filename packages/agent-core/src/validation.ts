@@ -1,7 +1,7 @@
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
-import type { Tool, ToolCall } from "../types.js";
+import type { Tool, ToolCall } from "./llm.js";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
@@ -154,19 +154,17 @@ function applySchemaObjectCoercion(value: Record<string, unknown>, schema: JsonS
 
   if (properties) {
     for (const [key, propertySchema] of Object.entries(properties)) {
-      if (!(key in value)) {
-        continue;
+      if (key in value) {
+        value[key] = coerceWithJsonSchema(value[key], propertySchema);
       }
-      value[key] = coerceWithJsonSchema(value[key], propertySchema);
     }
   }
 
   if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
     for (const [key, propertyValue] of Object.entries(value)) {
-      if (definedKeys.has(key)) {
-        continue;
+      if (!definedKeys.has(key)) {
+        value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties);
       }
-      value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties);
     }
   }
 }
@@ -175,10 +173,9 @@ function applySchemaArrayCoercion(value: unknown[], schema: JsonSchemaObject): v
   if (Array.isArray(schema.items)) {
     for (let index = 0; index < value.length; index++) {
       const itemSchema = schema.items[index];
-      if (!itemSchema) {
-        continue;
+      if (itemSchema) {
+        value[index] = coerceWithJsonSchema(value[index], itemSchema);
       }
-      value[index] = coerceWithJsonSchema(value[index], itemSchema);
     }
     return;
   }
@@ -257,9 +254,8 @@ function getValidator(schema: Tool["parameters"]): ReturnType<typeof Compile> {
 
 function formatValidationPath(error: TLocalizedValidationError): string {
   if (error.keyword === "required") {
-    const requiredProperties = (error.params as { requiredProperties?: string[] })
-      .requiredProperties;
-    const requiredProperty = requiredProperties?.[0];
+    const requiredProperty = (error.params as { requiredProperties?: string[] })
+      .requiredProperties?.[0];
     if (requiredProperty) {
       const basePath = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
       return basePath ? `${basePath}.${requiredProperty}` : requiredProperty;
@@ -269,13 +265,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
-/**
- * Finds a tool by name and validates the tool call arguments against its TypeBox schema
- * @param tools Array of tool definitions
- * @param toolCall The tool call from the LLM
- * @returns The validated arguments
- * @throws Error if tool is not found or validation fails
- */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   const tool = tools.find((t) => t.name === toolCall.name);
   if (!tool) {
@@ -284,13 +273,6 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   return validateToolArguments(tool, toolCall);
 }
 
-/**
- * Validates tool call arguments against the tool's TypeBox schema
- * @param tool The tool definition with TypeBox schema
- * @param toolCall The tool call from the LLM
- * @returns The validated (and potentially coerced) arguments
- * @throws Error with formatted message if validation fails
- */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const args = structuredClone(toolCall.arguments);
   Value.Convert(tool.parameters, args);
@@ -320,7 +302,7 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
       .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
       .join("\n") || "Unknown validation error";
 
-  const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
-
-  throw new Error(errorMessage);
+  throw new Error(
+    `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
+  );
 }

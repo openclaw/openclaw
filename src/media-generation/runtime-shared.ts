@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveCapabilityModelRefForProviders } from "./capability-model-ref.js";
 import type {
   MediaGenerationNormalizationMetadataInput,
   MediaNormalizationEntry,
@@ -178,36 +179,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-function resolveProviderModelOnlyRef(params: {
-  raw: string;
-  providers: CapabilityProviderCandidate[];
-}): ParsedProviderModelRef | null {
-  const model = normalizeOptionalString(params.raw);
-  if (!model) {
-    return null;
-  }
-  const provider = params.providers.find((candidate) => {
-    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
-    return models.some((entry) => normalizeOptionalString(entry) === model);
-  });
-  return provider ? { provider: provider.id, model } : null;
-}
-
-function hasCapabilityProviderId(params: {
-  providerId: string | undefined;
-  providers: CapabilityProviderCandidate[];
-}): boolean {
-  const providerId = normalizeOptionalString(params.providerId);
-  if (!providerId) {
-    return false;
-  }
-  return params.providers.some(
-    (provider) =>
-      provider.id === providerId ||
-      (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === providerId),
-  );
-}
-
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -229,20 +200,14 @@ export function resolveCapabilityModelCandidates(params: {
     if (!trimmed) {
       return null;
     }
-    const parsed = params.parseModelRef(raw);
     if (!options.useProviderMetadata) {
-      return parsed;
+      return params.parseModelRef(raw);
     }
-    if (
-      parsed &&
-      hasCapabilityProviderId({
-        providerId: parsed.provider,
-        providers: getProviders(),
-      })
-    ) {
-      return parsed;
-    }
-    return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;
+    return resolveCapabilityModelRefForProviders({
+      raw: trimmed,
+      providers: getProviders(),
+      parseModelRef: params.parseModelRef,
+    });
   };
   const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
     const candidate = resolveCandidate(raw, options);

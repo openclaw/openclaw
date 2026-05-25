@@ -18,6 +18,7 @@ import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { writeJsonlEntry } from "./transcript-jsonl.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
   streamSessionTranscriptLines,
@@ -38,10 +39,7 @@ async function ensureSessionHeader(params: {
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
   const header = createSessionTranscriptHeader({ sessionId: params.sessionId });
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  await writeJsonlEntry(params.sessionFile, header, { mode: 0o600 });
 }
 
 export type SessionTranscriptAppendResult =

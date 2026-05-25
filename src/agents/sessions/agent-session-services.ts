@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
 import type { ThinkingLevel } from "../runtime/index.js";
 import { AuthStorage } from "./auth-storage.js";

@@ -1,3 +1,4 @@
+import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -5,12 +6,11 @@ import type {
   Message,
   Model,
   SimpleStreamOptions,
-  streamSimple,
+  StreamFn as LlmStreamFn,
   TextContent,
   Tool,
   ToolResultMessage,
-} from "openclaw/plugin-sdk/llm";
-import type { Static, TSchema } from "typebox";
+} from "./llm.js";
 
 /**
  * Stream function used by the agent loop.
@@ -21,9 +21,7 @@ import type { Static, TSchema } from "typebox";
  * - Failures must be encoded in the returned stream via protocol events and a
  *   final AssistantMessage with stopReason "error" or "aborted" and errorMessage.
  */
-export type StreamFn = (
-  ...args: Parameters<typeof streamSimple>
-) => ReturnType<typeof streamSimple> | Promise<ReturnType<typeof streamSimple>>;
+export type StreamFn = LlmStreamFn;
 
 /**
  * Configuration for how tool calls from a single assistant message are executed.

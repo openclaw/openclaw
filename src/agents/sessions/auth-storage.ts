@@ -8,15 +8,18 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  findEnvKeys,
-  getEnvApiKey,
-  type OAuthCredentials,
-  type OAuthLoginCallbacks,
-  type OAuthProviderId,
-} from "openclaw/plugin-sdk/llm";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "openclaw/plugin-sdk/llm-oauth";
 import lockfile from "proper-lockfile";
+import { findEnvKeys, getEnvApiKey } from "../../llm/env-api-keys.js";
+import {
+  getOAuthApiKey,
+  getOAuthProvider,
+  getOAuthProviders,
+} from "../../llm/utils/oauth/index.js";
+import type {
+  OAuthCredentials,
+  OAuthLoginCallbacks,
+  OAuthProviderId,
+} from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 

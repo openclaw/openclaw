@@ -1,6 +1,7 @@
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
 
 const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 
@@ -46,9 +47,9 @@ function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
 }
 
 function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
+  stream: MutableAssistantMessageEventStream,
   transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();

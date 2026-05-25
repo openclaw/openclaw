@@ -5,7 +5,7 @@ import {
   type ThinkingConfig,
 } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, clampThinkingLevel } from "../models.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
   AssistantMessage,

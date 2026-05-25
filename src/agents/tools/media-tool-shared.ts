@@ -1,7 +1,11 @@
-import { type Model } from "openclaw/plugin-sdk/llm";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import type { Model } from "../../llm/types.js";
+import {
+  findCapabilityProviderById,
+  resolveCapabilityModelRefForProviders,
+} from "../../media-generation/capability-model-ref.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
@@ -147,45 +151,17 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-function findCapabilityProviderById<T extends CapabilityProvider>(params: {
-  providers: T[];
-  providerId?: string;
-}): T | undefined {
-  const selectedProvider = normalizeProviderId(params.providerId ?? "");
-  return params.providers.find(
-    (provider) =>
-      normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
-  );
-}
-
 function parseCapabilityModelRefForProviders(params: {
   providers: CapabilityProvider[];
   raw?: string;
   parseModelRef: ParseGenerationModelRef;
 }): GenerationModelRef | null {
-  const raw = normalizeOptionalString(params.raw);
-  if (!raw) {
-    return null;
-  }
-  const parsed = params.parseModelRef(raw);
-  if (
-    parsed &&
-    findCapabilityProviderById({
-      providers: params.providers,
-      providerId: parsed.provider,
-    })
-  ) {
-    return parsed;
-  }
-  const provider = params.providers.find((candidate) => {
-    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
-    return models.some((model) => normalizeOptionalString(model) === raw);
+  return resolveCapabilityModelRefForProviders({
+    providers: params.providers,
+    raw: params.raw,
+    parseModelRef: params.parseModelRef,
+    normalizeProviderId,
   });
-  if (provider) {
-    return { provider: provider.id, model: raw };
-  }
-  return parsed;
 }
 
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
@@ -202,6 +178,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     findCapabilityProviderById({
       providers: params.providers,
       providerId: params.providerId,
+      normalizeProviderId,
     });
   if (!provider) {
     return params.providerId
@@ -252,6 +229,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   return findCapabilityProviderById({
     providers: params.providers,
     providerId: selectedRef.provider,
+    normalizeProviderId,
   });
 }
 

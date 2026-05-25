@@ -5,13 +5,14 @@ import {
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { MODELS } from "../llm/models.generated.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { buildModelCatalogMergeKey } from "../model-catalog/refs.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
@@ -294,8 +295,33 @@ function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   );
 }
 
-function collectConfiguredAgentModelProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+type ManifestModelProviderLookup = {
+  modelApis: ReadonlyMap<string, string>;
+  providerIds: ReadonlySet<string>;
+};
+
+function buildManifestModelProviderLookup(
+  manifestRegistry: PluginManifestRegistry,
+): ManifestModelProviderLookup {
+  const modelApis = new Map(
+    planManifestModelCatalogRows({ registry: manifestRegistry }).rows.flatMap((row) =>
+      row.api ? [[row.mergeKey, row.api] as const] : [],
+    ),
+  );
+  return {
+    modelApis,
+    providerIds: new Set(
+      manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
+    ),
+  };
+}
+
+function collectConfiguredAgentModelProviderIds(
+  config: OpenClawConfig,
+  manifestRegistry: PluginManifestRegistry,
+): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
+  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
@@ -329,7 +355,12 @@ function collectConfiguredAgentModelProviderIds(config: OpenClawConfig): Readonl
     [...modelIdsByProvider.entries()]
       .filter(([providerId, modelIds]) => {
         return [...modelIds].some((modelId) =>
-          configuredModelProviderNeedsRuntimePlugin({ config, providerId, modelId }),
+          configuredModelProviderNeedsRuntimePlugin({
+            config,
+            manifestModelProviders,
+            providerId,
+            modelId,
+          }),
         );
       })
       .map(([providerId]) => providerId),
@@ -338,6 +369,7 @@ function collectConfiguredAgentModelProviderIds(config: OpenClawConfig): Readonl
 
 function configuredModelProviderNeedsRuntimePlugin(params: {
   config: OpenClawConfig;
+  manifestModelProviders: ManifestModelProviderLookup;
   providerId: string;
   modelId: string;
 }): boolean {
@@ -346,10 +378,13 @@ function configuredModelProviderNeedsRuntimePlugin(params: {
   const modelApi =
     configuredModel?.api ??
     providerConfig?.api ??
-    (MODELS as Record<string, Record<string, { api?: string }> | undefined>)[params.providerId]?.[
-      params.modelId
-    ]?.api;
-  return typeof modelApi === "string" && !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
+    params.manifestModelProviders.modelApis.get(
+      buildModelCatalogMergeKey(params.providerId, params.modelId),
+    );
+  if (typeof modelApi === "string") {
+    return !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
+  }
+  return params.manifestModelProviders.providerIds.has(params.providerId);
 }
 
 function manifestOwnsConfiguredModelProvider(params: {
@@ -907,7 +942,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
-  const configuredModelProviderIds = collectConfiguredAgentModelProviderIds(activationSourceConfig);
+  const configuredModelProviderIds = collectConfiguredAgentModelProviderIds(
+    activationSourceConfig,
+    params.manifestRegistry,
+  );
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {

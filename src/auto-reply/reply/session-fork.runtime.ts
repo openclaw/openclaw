@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   parseSessionEntries,
   type FileEntry,
@@ -18,6 +17,7 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 

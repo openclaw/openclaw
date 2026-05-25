@@ -12,17 +12,13 @@ import type {
   ResponseOutputMessage,
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
-import {
-  calculateCost,
-  createAssistantMessageEventStream,
-  getEnvApiKey,
-  parseStreamingJson,
-  type Api,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
 import { convertMessages } from "openclaw/plugin-sdk/llm-openai-completions";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { calculateCost } from "../llm/model-utils.js";
+import type { Api, Context, Model } from "../llm/types.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";

@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
-import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { stripAnsi } from "../../utils/ansi.js";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";

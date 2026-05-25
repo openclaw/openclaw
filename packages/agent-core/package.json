@@ -21,9 +21,21 @@
       "types": "./dist/agent-loop.d.ts",
       "default": "./dist/agent-loop.js"
     },
+    "./llm": {
+      "types": "./dist/llm.d.ts",
+      "default": "./dist/llm.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
+    },
+    "./runtime-deps": {
+      "types": "./dist/runtime-deps.d.ts",
+      "default": "./dist/runtime-deps.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "default": "./dist/validation.js"
     },
     "./types": {
       "types": "./dist/types.d.ts",
@@ -100,7 +112,6 @@
   },
   "dependencies": {
     "ignore": "7.0.5",
-    "openclaw": "workspace:*",
     "typebox": "1.1.38",
     "yaml": "2.9.0"
   }

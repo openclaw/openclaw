@@ -1,12 +1,10 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
-type SimpleStream = ReturnType<typeof streamSimple>;
-
 export function wrapStreamObjectEvents(
-  stream: SimpleStream,
+  stream: MutableAssistantMessageEventStream,
   onEvent: (event: Record<string, unknown>) => void | Promise<void>,
-): SimpleStream {
+): MutableAssistantMessageEventStream {
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {

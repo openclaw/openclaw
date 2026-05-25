@@ -7,12 +7,18 @@ import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
-import { CURRENT_SESSION_VERSION } from "../../agents/sessions/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import {
+  appendJsonlEntry,
+  serializeJsonlLine,
+  writeJsonlEntry,
+  writeJsonlLines,
+} from "./transcript-jsonl.js";
 import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -145,7 +151,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     }
     const record = parsed as Record<string, unknown>;
     if (record.type === "session") {
-      output.push(JSON.stringify({ ...record, version: CURRENT_SESSION_VERSION }));
+      output.push(serializeJsonlLine({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
     const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
@@ -156,12 +162,9 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     }
     previousId = id;
     leafId = id;
-    output.push(JSON.stringify(record));
+    output.push(serializeJsonlLine(record));
   }
-  await fs.writeFile(transcriptPath, `${output.join("\n")}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  await writeJsonlLines(transcriptPath, output, { mode: 0o600 });
   const result: { leafId?: string } = {};
   if (leafId) {
     result.leafId = leafId;
@@ -179,8 +182,7 @@ async function ensureTranscriptHeader(
   }
   await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
   const header = createSessionTranscriptHeader(params);
-  await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
+  await writeJsonlEntry(transcriptPath, header, {
     mode: 0o600,
     flag: stat?.isFile() ? "w" : "wx",
   });
@@ -316,6 +318,6 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     timestamp: new Date(now).toISOString(),
     message: finalMessage,
   };
-  await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
+  await appendJsonlEntry(params.transcriptPath, entry);
   return { messageId, message: finalMessage };
 }

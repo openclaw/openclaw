@@ -1,6 +1,7 @@
-import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js";
 
@@ -40,7 +41,7 @@ function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
 function buildUnhandledStopReasonErrorStream(
   model: Parameters<StreamFn>[0],
   errorMessage: string,
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
     stream.push({
@@ -62,8 +63,8 @@ function buildUnhandledStopReasonErrorStream(
 
 function wrapStreamHandleUnhandledStopReason(
   model: Parameters<StreamFn>[0],
-  stream: ReturnType<typeof streamSimple>,
-): ReturnType<typeof streamSimple> {
+  stream: MutableAssistantMessageEventStream,
+): MutableAssistantMessageEventStream {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     try {

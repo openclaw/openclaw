@@ -1746,9 +1746,6 @@ importers:
       ignore:
         specifier: 7.0.5
         version: 7.0.5
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
       typebox:
         specifier: 1.1.38
         version: 1.1.38

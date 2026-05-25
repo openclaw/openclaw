@@ -1,7 +1,7 @@
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
@@ -270,7 +270,7 @@ export function streamWithIdleTimeout(
       throw error;
     }
 
-    const wrapStream = (stream: ReturnType<typeof streamSimple>) => {
+    const wrapStream = (stream: MutableAssistantMessageEventStream) => {
       const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
       (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
         function () {

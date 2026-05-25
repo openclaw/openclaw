@@ -6,6 +6,7 @@ export * from "./env-api-keys.js";
 export * from "./image-models.js";
 export * from "./images.js";
 export * from "./images-api-registry.js";
+export * from "./model-utils.js";
 export * from "./models.js";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./providers/bedrock-shared.js";
 export { supportsBedrockPromptCaching } from "./providers/bedrock-shared.js";
@@ -48,4 +49,7 @@ export type {
 } from "./utils/oauth/types.js";
 export * from "./utils/overflow.js";
 export * from "./utils/typebox-helpers.js";
-export * from "./utils/validation.js";
+export {
+  validateToolArguments,
+  validateToolCall,
+} from "../../packages/agent-core/src/validation.js";

@@ -6,7 +6,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "openclaw/plugin-sdk/llm";
+} from "openclaw/plugin-sdk/llm-provider-runtime";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,

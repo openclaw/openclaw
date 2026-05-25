@@ -12,7 +12,6 @@ import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-age
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
-import { CURRENT_SESSION_VERSION } from "../../agents/sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -23,6 +22,7 @@ import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
+import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,

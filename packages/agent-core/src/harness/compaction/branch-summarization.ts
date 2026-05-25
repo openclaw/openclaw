@@ -1,5 +1,8 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { completeSimple } from "openclaw/plugin-sdk/llm";
+import type { Model, StreamFn } from "../../llm.js";
+import {
+  type AgentCoreCompletionRuntimeDeps,
+  resolveAgentCoreCompleteFn,
+} from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import {
   convertToLlm,
@@ -8,7 +11,7 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.js";
-import { BranchSummaryError, err, ok, type Result, SessionError } from "../types.js";
+import { BranchSummaryError, err, ok, type Result } from "../types.js";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
   computeFileLists,
@@ -47,6 +50,18 @@ export interface CollectEntriesResult {
   commonAncestorId: string | null;
 }
 
+export interface BranchPathEntry {
+  id: string;
+  parentId: string | null;
+}
+
+export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> {
+  /** Entries to summarize in chronological order. */
+  entries: TEntry[];
+  /** Deepest common ancestor between the previous leaf and target entry. */
+  commonAncestorId: string | null;
+}
+
 /** Options for generating a branch summary. */
 export interface GenerateBranchSummaryOptions {
   /** Model used for summarization. */
@@ -57,12 +72,37 @@ export interface GenerateBranchSummaryOptions {
   headers?: Record<string, string>;
   /** Abort signal for the summarization request. */
   signal: AbortSignal;
+  /** Runtime used to complete the summarization request. */
+  runtime?: AgentCoreCompletionRuntimeDeps;
+  /** Optional stream implementation used instead of the runtime complete function. */
+  streamFn?: StreamFn;
   /** Optional instructions appended to or replacing the default prompt. */
   customInstructions?: string;
   /** Replace the default prompt with custom instructions instead of appending them. */
   replaceInstructions?: boolean;
   /** Tokens reserved for prompt and model output. Defaults to 16384. */
   reserveTokens?: number;
+}
+
+/** Collect entries that should be summarized before navigating to a different session tree entry. */
+export function collectEntriesForBranchSummaryFromBranches<TEntry extends BranchPathEntry>(
+  oldBranch: readonly TEntry[],
+  targetBranch: readonly TEntry[],
+): CollectBranchPathEntriesResult<TEntry> {
+  const oldPath = new Set(oldBranch.map((entry) => entry.id));
+  let commonAncestorId: string | null = null;
+  for (let i = targetBranch.length - 1; i >= 0; i--) {
+    if (oldPath.has(targetBranch[i].id)) {
+      commonAncestorId = targetBranch[i].id;
+      break;
+    }
+  }
+
+  const firstSummarizedIndex =
+    commonAncestorId === null
+      ? 0
+      : oldBranch.findIndex((entry) => entry.id === commonAncestorId) + 1;
+  return { entries: oldBranch.slice(firstSummarizedIndex), commonAncestorId };
 }
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
@@ -74,29 +114,9 @@ export async function collectEntriesForBranchSummary(
   if (!oldLeafId) {
     return { entries: [], commonAncestorId: null };
   }
-  const oldPath = new Set((await session.getBranch(oldLeafId)).map((e) => e.id));
+  const oldBranch = await session.getBranch(oldLeafId);
   const targetPath = await session.getBranch(targetId);
-  let commonAncestorId: string | null = null;
-  for (let i = targetPath.length - 1; i >= 0; i--) {
-    if (oldPath.has(targetPath[i].id)) {
-      commonAncestorId = targetPath[i].id;
-      break;
-    }
-  }
-  const entries: SessionTreeEntry[] = [];
-  let current: string | null = oldLeafId;
-
-  while (current && current !== commonAncestorId) {
-    const entry = await session.getEntry(current);
-    if (!entry) {
-      throw new SessionError("invalid_session", `Entry ${current} not found`);
-    }
-    entries.push(entry);
-    current = entry.parentId;
-  }
-  entries.reverse();
-
-  return { entries, commonAncestorId };
+  return collectEntriesForBranchSummaryFromBranches(oldBranch, targetPath);
 }
 function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
@@ -255,11 +275,11 @@ export async function generateBranchSummary(
       timestamp: Date.now(),
     },
   ];
-  const response = await completeSimple(
-    model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    { apiKey, headers, signal, maxTokens: 2048 },
-  );
+  const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+  const streamOptions = { apiKey, headers, signal, maxTokens: 2048 };
+  const response = options.streamFn
+    ? await (await options.streamFn(model, context, streamOptions)).result()
+    : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
   if (response.stopReason === "aborted") {
     return err(
       new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),

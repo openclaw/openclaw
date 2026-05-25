@@ -4,28 +4,31 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { type Static, Type } from "typebox";
+import { Compile } from "typebox/compile";
+import type { TLocalizedValidationError } from "typebox/error";
+import { registerApiProvider } from "../../llm/api-registry.js";
+import { resetApiProviders } from "../../llm/providers/register-builtins.js";
 import {
   type AnthropicMessagesCompat,
   type Api,
   type AssistantMessageEventStream,
   type Context,
-  getModels,
-  getProviders,
-  type KnownProvider,
   type Model,
-  type OAuthProviderInterface,
   type OpenAICompletionsCompat,
   type OpenAIResponsesCompat,
-  registerApiProvider,
-  resetApiProviders,
   type SimpleStreamOptions,
-} from "openclaw/plugin-sdk/llm";
-import { registerOAuthProvider, resetOAuthProviders } from "openclaw/plugin-sdk/llm-oauth";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
-import type { TLocalizedValidationError } from "typebox/error";
+} from "../../llm/types.js";
+import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
+import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
+import {
+  getBuiltInProviderModelDefaults,
+  isBuiltInModelProvider,
+  listBuiltInModelProviders,
+  listBuiltInModelsForProvider,
+} from "./built-in-model-catalog.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   clearConfigValueCache,
@@ -436,8 +439,8 @@ export class ModelRegistry {
     overrides: Map<string, ProviderOverride>,
     modelOverrides: Map<string, Map<string, ModelOverride>>,
   ): Model[] {
-    return getProviders().flatMap((provider) => {
-      const models = getModels(provider) as Model[];
+    return listBuiltInModelProviders().flatMap((provider) => {
+      const models = listBuiltInModelsForProvider(provider);
       const providerOverride = overrides.get(provider);
       const perModelOverrides = modelOverrides.get(provider);
 
@@ -540,10 +543,8 @@ export class ModelRegistry {
   }
 
   private validateConfig(config: ModelsConfig): void {
-    const builtInProviders = new Set<string>(getProviders());
-
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-      const isBuiltIn = builtInProviders.has(providerName);
+      const isBuiltIn = isBuiltInModelProvider(providerName);
       const hasProviderApi = !!providerConfig.api;
       const models = providerConfig.models ?? [];
       const hasModelOverrides =
@@ -603,27 +604,6 @@ export class ModelRegistry {
 
   private parseModels(config: ModelsConfig): Model[] {
     const models: Model[] = [];
-    const builtInProviders = new Set<string>(getProviders());
-
-    // Cache built-in defaults (api, baseUrl) per provider, extracted from first model.
-    const builtInDefaultsCache = new Map<string, { api: string; baseUrl: string }>();
-    const getBuiltInDefaults = (
-      providerName: string,
-    ): { api: string; baseUrl: string } | undefined => {
-      if (!builtInProviders.has(providerName)) {
-        return undefined;
-      }
-      if (builtInDefaultsCache.has(providerName)) {
-        return builtInDefaultsCache.get(providerName);
-      }
-      const builtIn = getModels(providerName as KnownProvider) as Model[];
-      if (builtIn.length === 0) {
-        return undefined;
-      }
-      const defaults = { api: builtIn[0].api, baseUrl: builtIn[0].baseUrl };
-      builtInDefaultsCache.set(providerName, defaults);
-      return defaults;
-    };
 
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
       const modelDefs = providerConfig.models ?? [];
@@ -631,7 +611,7 @@ export class ModelRegistry {
         continue;
       } // Override-only, no custom models
 
-      const builtInDefaults = getBuiltInDefaults(providerName);
+      const builtInDefaults = getBuiltInProviderModelDefaults(providerName);
 
       for (const modelDef of modelDefs) {
         const api = modelDef.api ?? providerConfig.api ?? builtInDefaults?.api;
