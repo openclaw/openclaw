@@ -96,6 +96,8 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
 
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
+    expect(setupNodeAction).toContain("Normalize container toolcache");
+    expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
     expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
 
     for (const workflowPath of workflowPaths()) {
@@ -484,14 +486,15 @@ describe("package artifact reuse", () => {
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
     expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toContain("use_github_hosted_runners:");
     expect(workflow).toMatch(
-      /validate_repo_e2e:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+      /validate_repo_e2e:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toMatch(
-      /validate_special_e2e:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+      /validate_special_e2e:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toMatch(
-      /validate_live_provider_suites:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+      /validate_live_provider_suites:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
@@ -536,6 +539,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
     expect(workflow).toContain("Advisory live suite failed with exit code");
     expect(workflow).toMatch(
+      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}[\s\S]*?shell: bash[\s\S]*?Advisory live suite failed with exit code/u,
+    );
+    expect(workflow).toMatch(
       /suite_id: live-gateway-advisory-docker-deepseek-fireworks[\s\S]*?advisory: true/u,
     );
     expect(workflow).toMatch(
@@ -548,7 +554,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
     expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?runs-on: \$\{\{ github\.event_name == 'workflow_call' && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+      /validate_live_media_provider_suites:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
     expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
     expect(workflow).toContain("ffmpeg -version | head -1");
