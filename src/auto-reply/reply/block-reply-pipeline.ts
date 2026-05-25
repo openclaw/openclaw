@@ -248,8 +248,17 @@ export function createBlockReplyPipeline(params: {
       { trimText: true },
     );
     if (reply.hasMedia || hasNonTextContent) {
-      void coalescer?.flush({ force: true });
-      sendPayload(payload, /* bypassSeenCheck */ false);
+      // Merge any buffered text into the media payload so the channel sends
+      // one combined message (text + attachment) instead of two separate ones.
+      const bufferedText = coalescer?.hasBuffered() ? coalescer.drainBufferedText() : "";
+      if (bufferedText) {
+        bufferedAssistantMessageIndex = undefined;
+        bufferedKeys.clear();
+        const mergedText = reply.hasText ? `${bufferedText}${payload.text}` : bufferedText;
+        sendPayload({ ...payload, text: mergedText }, /* bypassSeenCheck */ false);
+      } else {
+        sendPayload(payload, /* bypassSeenCheck */ false);
+      }
       return;
     }
     if (coalescer) {

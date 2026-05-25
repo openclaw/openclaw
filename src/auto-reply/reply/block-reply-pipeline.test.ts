@@ -317,6 +317,53 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     );
   });
 
+  it("merges coalesced text into media payload as a single delivery", async () => {
+    const sent: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrl: payload.mediaUrl, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    pipeline.enqueue({ text: "Here is the image:" });
+    pipeline.enqueue({ mediaUrl: "file:///photo.jpg" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("Here is the image:");
+    expect(sent[0].mediaUrl).toBe("file:///photo.jpg");
+  });
+
+  it("sends media-only payload without merging when no text is buffered", async () => {
+    const sent: Array<{ text?: string; mediaUrl?: string }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrl: payload.mediaUrl });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    pipeline.enqueue({ mediaUrl: "file:///photo.jpg" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBeUndefined();
+    expect(sent[0].mediaUrl).toBe("file:///photo.jpg");
+  });
+
   it("does not suppress unrelated shorter text that appears inside streamed content", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

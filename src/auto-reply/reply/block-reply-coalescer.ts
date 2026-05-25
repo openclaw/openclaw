@@ -6,6 +6,7 @@ import type { BlockStreamingCoalescing } from "./block-streaming.js";
 export type BlockReplyCoalescer = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
+  drainBufferedText: () => string;
   hasBuffered: () => boolean;
   stop: () => void;
 };
@@ -94,8 +95,17 @@ export function createBlockReplyCoalescer(params: {
     const text = reply.text;
     const hasText = reply.hasText;
     if (hasMedia) {
-      void flush({ force: true });
-      void onFlush(payload);
+      if (bufferText) {
+        // Merge buffered text into the media payload so the channel sends one
+        // combined message (text caption + attachment) instead of two.
+        const mergedText = hasText ? `${bufferText}${joiner}${text}` : bufferText;
+        const replyToId = payload.replyToId ?? bufferReplyToId;
+        clearIdleTimer();
+        resetBuffer();
+        void onFlush({ ...payload, text: mergedText, replyToId });
+      } else {
+        void onFlush(payload);
+      }
       return;
     }
     if (!hasText) {
@@ -180,9 +190,17 @@ export function createBlockReplyCoalescer(params: {
     scheduleIdleFlush();
   };
 
+  const drainBufferedText = (): string => {
+    clearIdleTimer();
+    const text = bufferText;
+    resetBuffer();
+    return text;
+  };
+
   return {
     enqueue,
     flush,
+    drainBufferedText,
     hasBuffered: () => Boolean(bufferText),
     stop: () => clearIdleTimer(),
   };

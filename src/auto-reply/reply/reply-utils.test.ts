@@ -967,7 +967,7 @@ describe("block reply coalescer", () => {
     }
   });
 
-  it("flushes buffered text before media payloads", () => {
+  it("merges buffered text into media payload as caption", () => {
     const flushes: Array<{ text?: string; mediaUrls?: string[] }> = [];
     const coalescer = createBlockReplyCoalescer({
       config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
@@ -985,8 +985,31 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
     void coalescer.flush({ force: true });
 
+    expect(flushes).toHaveLength(1);
     expect(flushes[0].text).toBe("Hello world");
-    expect(flushes[1].mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(flushes[0].mediaUrls).toEqual(["https://example.com/a.png"]);
+    coalescer.stop();
+  });
+
+  it("passes media-only payload through without merging", () => {
+    const flushes: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          mediaUrls: payload.mediaUrls,
+        });
+      },
+    });
+
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"] });
+    void coalescer.flush({ force: true });
+
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].text).toBeUndefined();
+    expect(flushes[0].mediaUrls).toEqual(["https://example.com/a.png"]);
     coalescer.stop();
   });
 });
