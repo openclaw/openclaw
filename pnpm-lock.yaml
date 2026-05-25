@@ -896,9 +896,6 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.5.22
         version: 2026.5.22
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
       typebox:
         specifier: 1.1.38
         version: 1.1.38
