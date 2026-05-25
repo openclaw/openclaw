@@ -298,22 +298,6 @@ export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): stri
   });
 }
 
-// Returns model pricing ONLY when the operator explicitly configured it under
-// `models.providers` in their OpenClaw config. Unlike resolveModelCostConfig this
-// ignores the generated model catalog (models.json) and the gateway pricing cache, so
-// callers can tell an intentional operator-set price (e.g. a deliberately free local
-// model priced at 0) apart from a price the catalog merely defaulted to zero.
-export function resolveConfiguredModelCost(params: {
-  provider?: string;
-  model?: string;
-  config?: OpenClawConfig;
-}): ModelCostConfig | undefined {
-  return (
-    findConfiguredProviderCost({ ...params, allowPluginNormalization: false }) ??
-    findConfiguredProviderCost(params)
-  );
-}
-
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
