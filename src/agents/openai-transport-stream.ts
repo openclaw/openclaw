@@ -997,6 +997,17 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function buildResponsesInputTextContent(text: string): ResponseInputMessageContentList {
+  return [{ type: "input_text", text }] as ResponseInputMessageContentList;
+}
+
+function buildResponsesMessageInputItem(
+  role: "system" | "developer" | "user",
+  content: ResponseInputMessageContentList,
+): ResponseInputItem {
+  return { type: "message", role, content } as ResponseInputItem;
+}
+
 function convertResponsesMessages(
   model: Model<Api>,
   context: Context,
@@ -1065,19 +1076,25 @@ function convertResponsesMessages(
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
-    messages.push({
-      role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-    });
+    messages.push(
+      buildResponsesMessageInputItem(
+        model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
+        buildResponsesInputTextContent(
+          sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        ),
+      ),
+    );
   }
   let msgIndex = 0;
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
-        messages.push({
-          role: "user",
-          content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-        });
+        messages.push(
+          buildResponsesMessageInputItem(
+            "user",
+            buildResponsesInputTextContent(sanitizeTransportPayloadText(msg.content)),
+          ),
+        );
       } else {
         const content = (
           msg.content.map((item) =>
@@ -1091,7 +1108,7 @@ function convertResponsesMessages(
           ) as ResponseInputMessageContentList
         ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
-          messages.push({ role: "user", content });
+          messages.push(buildResponsesMessageInputItem("user", content));
         }
       }
     } else if (msg.role === "assistant") {
@@ -1990,6 +2007,7 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
     );
   }
   messages.push({
+    type: "message",
     role: "user",
     content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
   });
