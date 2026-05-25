@@ -9,7 +9,7 @@ type SessionActivity = {
   sessionKey?: string;
   activeEmbeddedRuns: Set<string>;
   activeTools: Map<string, ActiveTool>;
-  activeModelCalls: Map<string, ActiveModelCall>;
+  activeModelCalls: Set<string>;
   lastProgressAt: number;
   lastProgressReason?: string;
 };
@@ -21,10 +21,6 @@ type ActiveTool = {
   lastProgressAt: number;
 };
 
-type ActiveModelCall = {
-  allowActiveAbort: boolean;
-};
-
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
@@ -32,7 +28,7 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type DiagnosticModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "allowActiveAbort"
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model"
 >;
 
 export type DiagnosticSessionActivitySnapshot = {
@@ -41,7 +37,6 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
-  activeModelCallAllowActiveAbort?: boolean;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
 };
@@ -98,8 +93,8 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
   }
-  for (const [key, call] of source.activeModelCalls) {
-    target.activeModelCalls.set(key, call);
+  for (const key of source.activeModelCalls) {
+    target.activeModelCalls.add(key);
   }
   if (source.lastProgressAt > target.lastProgressAt) {
     target.lastProgressAt = source.lastProgressAt;
@@ -148,7 +143,7 @@ function resolveSessionActivity(params: {
     sessionKey: params.sessionKey,
     activeEmbeddedRuns: new Set(),
     activeTools: new Map(),
-    activeModelCalls: new Map(),
+    activeModelCalls: new Set(),
     lastProgressAt: Date.now(),
   };
   registerSessionActivityRefs(created, params);
@@ -210,9 +205,7 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (!activity) {
     return;
   }
-  activity.activeModelCalls.set(modelCallKey(event), {
-    allowActiveAbort: event.allowActiveAbort !== false,
-  });
+  activity.activeModelCalls.add(modelCallKey(event));
   touchSessionActivity(activity, "model_call:started");
 }
 
@@ -228,11 +221,20 @@ function recordModelEnded(
 }
 
 function recordRunProgress(event: Extract<DiagnosticEventPayload, { type: "run.progress" }>): void {
-  const activity = resolveSessionActivity({ ...event, create: true });
+  markDiagnosticRunProgress(event);
+}
+
+export function markDiagnosticRunProgress(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  reason: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  touchSessionActivity(activity, event.reason);
+  touchSessionActivity(activity, params.reason);
 }
 
 function recordRunCompleted(
@@ -308,24 +310,12 @@ export function getDiagnosticSessionActivitySnapshot(
       activeTool = tool;
     }
   }
-  let activeModelCallAllowActiveAbort: boolean | undefined;
-  if (activity.activeModelCalls.size > 0) {
-    activeModelCallAllowActiveAbort = true;
-    for (const call of activity.activeModelCalls.values()) {
-      if (!call.allowActiveAbort) {
-        activeModelCallAllowActiveAbort = false;
-        break;
-      }
-    }
-  }
-
   return {
     activeWorkKind,
     ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
-    activeModelCallAllowActiveAbort,
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };
@@ -337,11 +327,7 @@ export function markDiagnosticRunProgressForTest(params: {
   runId?: string;
   reason: string;
 }): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
-  if (!activity) {
-    return;
-  }
-  touchSessionActivity(activity, params.reason);
+  markDiagnosticRunProgress(params);
 }
 
 export function markDiagnosticToolStartedForTest(params: {
@@ -363,32 +349,44 @@ export function markDiagnosticModelStartedForTest(
 export function resetDiagnosticRunActivityForTest(): void {
   activityByRef.clear();
   activityByRunId.clear();
+  unregisterDiagnosticRunActivityListener?.();
+  unregisterDiagnosticRunActivityListener = undefined;
+  registerDiagnosticRunActivityListener();
 }
 
-onInternalDiagnosticEvent((event) => {
-  switch (event.type) {
-    case "tool.execution.started":
-      recordToolStarted(event);
-      return;
-    case "tool.execution.completed":
-    case "tool.execution.error":
-    case "tool.execution.blocked":
-      recordToolEnded(event);
-      return;
-    case "model.call.started":
-      recordModelStarted(event);
-      return;
-    case "model.call.completed":
-    case "model.call.error":
-      recordModelEnded(event);
-      return;
-    case "run.progress":
-      recordRunProgress(event);
-      return;
-    case "run.completed":
-      recordRunCompleted(event);
-      return;
-    default:
-      return;
+let unregisterDiagnosticRunActivityListener: (() => void) | undefined;
+
+function registerDiagnosticRunActivityListener(): void {
+  if (unregisterDiagnosticRunActivityListener) {
+    return;
   }
-});
+  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event) => {
+    switch (event.type) {
+      case "tool.execution.started":
+        recordToolStarted(event);
+        return;
+      case "tool.execution.completed":
+      case "tool.execution.error":
+      case "tool.execution.blocked":
+        recordToolEnded(event);
+        return;
+      case "model.call.started":
+        recordModelStarted(event);
+        return;
+      case "model.call.completed":
+      case "model.call.error":
+        recordModelEnded(event);
+        return;
+      case "run.progress":
+        recordRunProgress(event);
+        return;
+      case "run.completed":
+        recordRunCompleted(event);
+        return;
+      default:
+        return;
+    }
+  });
+}
+
+registerDiagnosticRunActivityListener();

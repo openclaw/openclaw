@@ -6,8 +6,13 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
+  waitForDiagnosticEventsDrained,
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -100,11 +105,16 @@ function requireMockRecordArg(
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticRunActivityForTest();
     resetGlobalHookRunner();
   });
 
   afterEach(() => {
+    resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
+    resetDiagnosticRunActivityForTest();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("emits started and completed events for async streams", async () => {
@@ -182,27 +192,74 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
   });
 
-  it("emits the diagnostic active-abort override on started events", async () => {
+  it("updates diagnostic run activity from throttled stream chunks", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     async function* stream() {
-      yield { type: "text", text: "ok" };
+      yield { type: "text_delta", delta: "first" };
+      yield { type: "text_delta", delta: "second" };
+      yield { type: "text_delta", delta: "third" };
     }
+    const runProgressEvents: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress") {
+        runProgressEvents.push(event);
+      }
+    });
     const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
       (() => stream()) as unknown as StreamFn,
       {
         runId: "run-1",
-        provider: "lmstudio",
-        model: "gemma-4-e4b-it",
-        allowActiveAbort: false,
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
         trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-1",
+        nextCallId: () => "call-stream",
       },
     );
 
-    const events = await collectModelCallEvents(async () => {
-      await drain((await wrapped({} as never, {} as never, {} as never)) as AsyncIterable<unknown>);
-    });
+    const returned = wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>;
+    const iterator = returned[Symbol.asyncIterator]();
 
-    expect(getEvent(events, 0).allowActiveAbort).toBe(false);
+    try {
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      let snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.activeWorkKind).toBe("model_call");
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(1);
+
+      now += 10_000;
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(1);
+
+      now += 30_000;
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+      snapshot = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "session-key",
+        sessionId: "session-id",
+      });
+      expect(snapshot.lastProgressReason).toBe("model_call:stream_progress");
+      expect(snapshot.lastProgressAgeMs).toBe(0);
+      expect(runProgressEvents).toHaveLength(2);
+    } finally {
+      await iterator.return?.();
+      await waitForDiagnosticEventsDrained();
+      stop();
+    }
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
