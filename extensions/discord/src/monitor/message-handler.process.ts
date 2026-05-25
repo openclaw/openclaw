@@ -70,6 +70,10 @@ import {
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
 } from "./timeouts.js";
 import { sendTyping } from "./typing.js";
+import {
+  recordVerifiedInboundMessage,
+  selectVerifiedInboundRawText,
+} from "./verified-inbound-recorder.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -403,6 +407,20 @@ export async function processDiscordMessage(
   observer?.onReplyPlanResolved?.({
     createdThreadId: replyPlan.createdThreadId,
     sessionKey: persistedSessionKey,
+  });
+
+  // Provenance hook: record verified inbound human message after preflight/access
+  // gating accepted it and before the agent turn runs. No-op unless configured via
+  // env; fail-closed only when the recorder is marked required.
+  await recordVerifiedInboundMessage({
+    env: process.env,
+    sourceMessageId: ctxPayload.MessageSid ?? ctx.canonicalMessageId ?? message.id,
+    sourceSenderId: ctx.sender.id,
+    rawText: selectVerifiedInboundRawText(ctxPayload.BodyForAgent, text),
+    provider: "discord",
+    channel: "discord",
+    surface: "discord",
+    log: logVerbose,
   });
 
   const typingChannelId = deliverTarget.startsWith("channel:")
