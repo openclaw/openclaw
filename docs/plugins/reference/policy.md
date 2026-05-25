@@ -47,7 +47,9 @@ as sandbox or ingress can join the same container after their evidence carries
 agent identity. Every scope present in `policy.jsonc` must be valid and
 enforceable for its selector. Overlay rules are additional claims, so they do
 not weaken top-level policy and can produce their own findings when the same
-observed config violates both scopes.
+observed config violates both scopes. Runtime agent ids that are not explicitly
+listed in `agents.list[]` are checked against inherited global/default posture
+rather than silently passing with no evidence.
 
 ## Related docs
 

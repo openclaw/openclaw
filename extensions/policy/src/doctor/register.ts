@@ -60,7 +60,6 @@ const CHECK_IDS = {
   policyUnknownToolRisk: "policy/tools-unknown-risk-level",
   policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
 } as const;
-const DEFAULT_SCOPED_AGENT_ID = "main";
 
 export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyMissingFile,
@@ -2360,7 +2359,7 @@ function agentWorkspaceFindings(
       evidence,
       () => true,
     ),
-    ...agentScopedWorkspaceFindings(policy, policyDocName, evidence),
+    ...agentScopedWorkspaceFindings(policy, policyPath, policyDocName, evidence),
   ];
 }
 
@@ -2445,9 +2444,13 @@ function agentWorkspaceToolDenyFindings(
 
 function agentScopedWorkspaceFindings(
   policy: unknown,
+  policyPath: string,
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
+  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
+    return [];
+  }
   const findings: HealthFinding[] = [];
   for (const target of agentScopedPolicyTargets(policy)) {
     const scopedAgents = isRecord(target.overlay.agents) ? target.overlay.agents : {};
@@ -2493,6 +2496,9 @@ function toolPostureFindings(
       ...toolPostureFindingsForRule(policy.tools, policyDocName, "tools", evidence, () => true),
     );
   }
+  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
+    return findings;
+  }
   for (const target of agentScopedPolicyTargets(policy)) {
     if (!isRecord(target.overlay.tools)) {
       continue;
@@ -2521,6 +2527,13 @@ function toolPostureFindings(
   return findings;
 }
 
+function hasValidScopedPolicy(policy: unknown, policyPath: string, policyDocName: string): boolean {
+  return (
+    isRecord(policy) &&
+    scopedPolicyShapeFinding(policy.scopes, { policyDocName, policyPath, policy }) === undefined
+  );
+}
+
 function scopedWorkspaceAgentMatches(
   entry: PolicyAgentWorkspaceEvidence,
   policyAgentId: string,
@@ -2529,16 +2542,7 @@ function scopedWorkspaceAgentMatches(
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
-  return (
-    normalizeAgentId(policyAgentId) === DEFAULT_SCOPED_AGENT_ID &&
-    entry.scope === "defaults" &&
-    !entries.some(
-      (candidate) =>
-        candidate.scope === "agent" &&
-        candidate.kind === entry.kind &&
-        scopedAgentIdMatches(candidate.agentId, policyAgentId),
-    )
-  );
+  return entry.scope === "defaults" && !hasScopedAgentEvidence(entries, entry.kind, policyAgentId);
 }
 
 function scopedToolAgentMatches(
@@ -2549,15 +2553,32 @@ function scopedToolAgentMatches(
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
-  return (
-    normalizeAgentId(policyAgentId) === DEFAULT_SCOPED_AGENT_ID &&
-    entry.scope === "global" &&
-    !entries.some(
-      (candidate) =>
-        candidate.scope === "agent" &&
-        candidate.kind === entry.kind &&
-        scopedAgentIdMatches(candidate.agentId, policyAgentId),
-    )
+  return entry.scope === "global" && !hasScopedToolEvidence(entries, entry.kind, policyAgentId);
+}
+
+function hasScopedAgentEvidence(
+  entries: readonly PolicyAgentWorkspaceEvidence[],
+  kind: PolicyAgentWorkspaceEvidence["kind"],
+  policyAgentId: string,
+): boolean {
+  return entries.some(
+    (candidate) =>
+      candidate.scope === "agent" &&
+      candidate.kind === kind &&
+      scopedAgentIdMatches(candidate.agentId, policyAgentId),
+  );
+}
+
+function hasScopedToolEvidence(
+  entries: readonly PolicyToolPostureEvidence[],
+  kind: PolicyToolPostureEvidence["kind"],
+  policyAgentId: string,
+): boolean {
+  return entries.some(
+    (candidate) =>
+      candidate.scope === "agent" &&
+      candidate.kind === kind &&
+      scopedAgentIdMatches(candidate.agentId, policyAgentId),
   );
 }
 

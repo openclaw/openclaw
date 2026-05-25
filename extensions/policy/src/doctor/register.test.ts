@@ -3190,6 +3190,71 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("applies non-main agent-scoped claims to inherited default posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: { exec: { host: "node" } },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+        list: [
+          {
+            id: "support",
+            sandbox: { mode: "all", workspaceAccess: "ro" },
+            tools: { exec: { host: "sandbox" } },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          "release-lockdown": {
+            agentIds: ["release-agent"],
+            agents: {
+              workspace: {
+                allowedAccess: ["ro"],
+              },
+            },
+            tools: {
+              exec: { allowHosts: ["sandbox"] },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/agents-workspace-access-denied",
+          ocPath: "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+          requirement: "oc://policy.jsonc/scopes/release-lockdown/agents/workspace/allowedAccess",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-exec-host-unapproved",
+          ocPath: "oc://openclaw.config/tools/exec/host",
+          requirement: "oc://policy.jsonc/scopes/release-lockdown/tools/exec/allowHosts",
+        }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ocPath: "oc://openclaw.config/agents/list/#0/sandbox/workspaceAccess",
+        }),
+      ]),
+    );
+  });
+
   it("reports tool posture denied by policy", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
@@ -3367,7 +3432,7 @@ describe("registerPolicyDoctorChecks", () => {
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
         tools: {
-          exec: { allowHosts: ["sandbox"] },
+          exec: { allowHosts: ["sandbox", "gateway"] },
         },
         scopes: {
           sebby: {
@@ -3463,7 +3528,7 @@ describe("registerPolicyDoctorChecks", () => {
           sebby: {
             agentIds: ["sebby"],
             tools: {
-              alsoAllow: { expected: ["read", "exec"] },
+              alsoAllow: { expected: ["read", "message"] },
             },
           },
         },

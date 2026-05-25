@@ -184,7 +184,9 @@ claims still run, and a scoped claim can emit its own finding against the same
 observed config. See [Agent-scoped policy overlays](/plan/policy-agent-scoped-overlays).
 Every scope present in `policy.jsonc` must be valid and enforceable. Scopes
 currently require `agentIds`, and that selector supports only `tools.*` and
-`agents.workspace.*`.
+`agents.workspace.*`. If an `agentIds` entry is not present in `agents.list[]`,
+the scoped rule is evaluated against the inherited global/default posture for
+that runtime agent id instead of being skipped.
 
 #### Channels
 
