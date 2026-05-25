@@ -108,8 +108,8 @@ export async function sendTelegramText(
     silent: opts?.silent,
   });
   // Add link_preview_options when link preview is disabled.
-  const linkPreviewEnabled = opts?.linkPreview ?? true;
-  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+  // Use explicit `=== false` to avoid ?? vs ?: precedence collapse after minification (#86630).
+  const linkPreviewOptions = opts?.linkPreview === false ? { is_disabled: true } : undefined;
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
