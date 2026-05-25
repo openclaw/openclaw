@@ -361,42 +361,44 @@ function isOllamaCloudKimiModelRef(modelId: string): boolean {
   return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
 }
 
-const KIMI_INLINE_REASONING_BOUNDARY = "️";
 const KIMI_INLINE_REASONING_MIN_PREFIX_CHARS = 80;
-const KIMI_INLINE_REASONING_MIN_ANSWER_CHARS = 8;
-const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F(?=\S)/u;
+const KIMI_INLINE_REASONING_BOUNDARY_RE = /(^|\s)\uFE0F\s*/u;
 
-function findKimiInlineReasoningBoundaryIndex(text: string): number {
-  const match = KIMI_INLINE_REASONING_BOUNDARY_RE.exec(text);
-  if (!match) {
-    return -1;
+type KimiInlineReasoningVisibleTextResolution =
+  | { kind: "visible"; text: string }
+  | { kind: "pending" };
+
+function resolveKimiInlineReasoningVisibleText(params: {
+  modelId: string;
+  text: string;
+  final: boolean;
+}): KimiInlineReasoningVisibleTextResolution {
+  if (!isOllamaCloudKimiModelRef(params.modelId)) {
+    return { kind: "visible", text: params.text };
   }
-  return match.index + match[1].length;
+
+  const match = KIMI_INLINE_REASONING_BOUNDARY_RE.exec(params.text);
+  if (!match) {
+    return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
+  }
+
+  const boundaryStartIndex = match.index + match[1].length;
+  const boundaryEndIndex = match.index + match[0].length;
+  const prefix = params.text.slice(0, boundaryStartIndex).trim();
+  const answer = params.text.slice(boundaryEndIndex).trim();
+  if (prefix.length >= KIMI_INLINE_REASONING_MIN_PREFIX_CHARS && answer) {
+    return { kind: "visible", text: answer };
+  }
+
+  return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
 }
 
 function stripKimiInlineReasoningFromVisibleText(params: {
   modelId: string;
   text: string;
 }): string {
-  if (!isOllamaCloudKimiModelRef(params.modelId)) {
-    return params.text;
-  }
-  const boundaryIndex = findKimiInlineReasoningBoundaryIndex(params.text);
-  if (boundaryIndex < 0) {
-    return params.text;
-  }
-  const prefix = params.text.slice(0, boundaryIndex).trim();
-  const answer = params.text.slice(boundaryIndex + KIMI_INLINE_REASONING_BOUNDARY.length).trim();
-  if (!prefix || !answer) {
-    return params.text;
-  }
-  if (prefix.length < KIMI_INLINE_REASONING_MIN_PREFIX_CHARS) {
-    return params.text;
-  }
-  if (answer.length < KIMI_INLINE_REASONING_MIN_ANSWER_CHARS) {
-    return params.text;
-  }
-  return answer;
+  const resolution = resolveKimiInlineReasoningVisibleText({ ...params, final: true });
+  return resolution.kind === "visible" ? resolution.text : params.text;
 }
 
 function resolveStreamingVisibleText(params: {
@@ -404,27 +406,8 @@ function resolveStreamingVisibleText(params: {
   text: string;
   final: boolean;
 }): string | undefined {
-  if (!isOllamaCloudKimiModelRef(params.modelId)) {
-    return params.text;
-  }
-
-  const boundaryIndex = findKimiInlineReasoningBoundaryIndex(params.text);
-  if (boundaryIndex < 0) {
-    return params.final ? params.text : undefined;
-  }
-
-  const prefix = params.text.slice(0, boundaryIndex).trim();
-  const answer = params.text.slice(boundaryIndex + KIMI_INLINE_REASONING_BOUNDARY.length).trim();
-  if (
-    prefix &&
-    answer &&
-    prefix.length >= KIMI_INLINE_REASONING_MIN_PREFIX_CHARS &&
-    answer.length >= KIMI_INLINE_REASONING_MIN_ANSWER_CHARS
-  ) {
-    return answer;
-  }
-
-  return params.final ? params.text : undefined;
+  const resolution = resolveKimiInlineReasoningVisibleText(params);
+  return resolution.kind === "visible" ? resolution.text : undefined;
 }
 
 function resolveStreamingTextDelta(previousText: string, nextText: string): string {
