@@ -10,20 +10,70 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Scripts: build CLI startup artifacts before the gateway CPU startup bench so fresh Linux runners do not report false `n/a` readiness and process metrics.
+- Scripts: keep intentional Knip unused-file findings optional so full CI and sparse proof workspaces stay aligned.
+- Tests: normalize bundled plugin lifecycle probe paths and state-root lookup so native Windows release sweeps accept valid packaged plugin installs.
+- Config: keep benign legacy metadata write anomalies out of default doctor and config command output while preserving explicit anomaly logging for diagnostics.
+- Codex: log when implicit app-server `never` approvals are promoted for OpenClaw tool policy, including whether the trigger was a `before_tool_call` hook or trusted tool policy.
+- Google Vertex: support production ADC modes such as Workload Identity Federation, service-account credentials, and metadata-server ADC for the native Vertex transport. (#83971) Thanks @damianFelixPago.
+- Telegram: route normal `[telegram][diag]` polling diagnostics through `runtime.log` while keeping non-diag warnings and persistence failures on `runtime.error`, so healthy polling startup no longer looks like an error. Fixes #82957. (#82958) Thanks @galiniliev.
+
+## 2026.5.25
+
+### Fixes
+
+- Installer: let the local-prefix CLI installer use Alpine's `apk` Node.js, npm, and Git packages on musl Linux instead of downloading glibc Node tarballs that fail `node:sqlite`.
+- Scripts: use `git grep` to prefilter tracked conflict-marker scans so changed checks avoid reading every repository file on clean runs.
+- Plugins: allow linked local plugin paths to probe TypeScript source entries without requiring compiled package output, restoring source-checkout plugin development on native Windows.
+- CLI: route source-checkout build output to stderr before launching OpenClaw commands so stale local builds do not corrupt `--json` stdout.
+- Installer: install Node.js through `apk` on Alpine Linux instead of falling through to the NodeSource package-manager path.
+- Agents/perf: cache manifest-backed CLI provider descriptors and fallback provider resolution so model fallback retries avoid repeated bundled provider runtime scans while still invalidating across plugin reloads.
+- Installer: detect musl Linux shells such as Alpine as Linux instead of rejecting them before npm install.
+- Scripts: run direct Node package scripts with env overrides through a cross-platform launcher so gateway, TUI, and Docker-all entrypoints work on native Windows.
+- Tests: run Vitest import timing entrypoints through a Node wrapper so native Windows package scripts can collect import diagnostics.
+- Control UI: split large build-time runtime dependencies into stable chunks so Linux/Docker install and package builds stay below the app chunk warning threshold.
+- Tests: run `test:max` and `test:changed:max` through a Node wrapper so high-worker Vitest entrypoints work on native Windows.
+- Tests: retry transient loopback HTTP resets in the kitchen-sink RPC walk so native Windows readiness probes do not fail after the gateway is already ready.
+- Tests: run `test:serial` through a Node wrapper so targeted serial Vitest commands work on native Windows.
+- Tests: normalize Vitest config path assertions so the infra config suite runs on native Windows paths.
+- Scripts: run the optional Discord native opus installer through the shared pnpm launcher and Windows CI coverage so native Windows installs avoid shell-mode package-manager shims.
+- Installer: avoid the incompatible generated `--before` install filter when raw npm `min-release-age` config is present. (#85491) Thanks @TurboTheTurtle.
+- Agents/MCP: bound bundled MCP `tools/list` catalog discovery so hung MCP servers do not block session tool materialization. (#85063) Thanks @nxmxbbd.
+- Scripts: run generated-module formatting through the shared pnpm launcher and Windows CI coverage so native Windows generator checks avoid shell-mode package-manager shims.
+- Channels/iMessage: recover malformed anchorless group watch payloads by GUID before debounce/routing, and drop unrecoverable payloads instead of replying to the sender DM. Fixes #84470. Refs #84503. Thanks @zhangguiping-xydt and @zqchris.
+- Channels/iMessage: advance the startup catchup cursor from live-handled rows after a completed catchup pass, including rows received while catchup is still running, so restarts do not replay them. (#85475) Thanks @TurboTheTurtle.
+- Tests: mount the shared Windows command helper into bare Docker E2E harness containers so published upgrade-survivor config walks can start on Linux.
+- Tests: keep the plugin binding command escape Docker smoke focused on its intended Vitest cases and skip source-only install lifecycle scripts.
+- Tests: let the generic plugin install E2E assertions use a configurable temp root and Windows home-relative install paths.
+- Tests: keep kitchen-sink plugin assertion fixtures on a configurable temp root so native Windows runs no longer skip full-surface diagnostic coverage.
+- Tests: fail Gateway startup benchmarks when a child startup never produces ready probes or process metrics instead of reporting all `n/a` samples as passing.
+- Config/secrets: allow exec SecretRef ids to include `#` selectors so AWS-style `secret#json_key` ids validate consistently. (#80731) Thanks @TurboTheTurtle.
+- Tests: keep the Telegram user credential helper on platform temp and path APIs so native Windows credential export and restore commands do not write through POSIX-only paths.
+- Installer: include the optional verify phase in the progress counter so `--verify` shows `[4/4] Verifying installation` instead of `[4/3]`.
+- Crabbox: let the wrapper find a sibling Crabbox checkout from linked Git worktrees so Codex worktrees can run remote gates without a PATH shim.
+- Scripts: tolerate the standard `--` option separator in shared script flag parsing so perf/test helpers accept package-manager argument forwarding.
+- Tests: preserve `--` passthrough arguments in live-media, live-shard, and extension batch harnesses so Vitest filters are not misread or silently ignored.
+- Crabbox: default AWS macOS runner requests to on-demand capacity so EC2 Mac proof commands do not fail on the unsupported Spot market default.
+- Tests: run upgrade-survivor config recipe commands through the Windows npm shim so native Windows package walks keep baseline config coverage.
+- Image tool: use bundled Anthropic media limits when resolving image compression policy without provider-runtime hooks.
 - Tests: fail the kitchen-sink RPC Docker walk when gateway RSS sampling is unavailable instead of silently disabling the per-process memory guard.
 - Tests: suppress the current Rolldown plugin timing warning format in the Vitest wrapper so tiny focused runs do not drown useful stderr in repeated build-timing noise.
 - Models/OpenRouter: use endpoint-specific OpenRouter context limits from `top_provider` metadata so provider-routed models no longer overstate available context. (#85949) Thanks @TurboTheTurtle.
 - Crabbox: sync clean sparse-checkout remote changed gates from a temporary full checkout with local-only commits overlaid as worktree changes so git-backed script checks can seed the runner repository.
+- Agents: avoid loading bundled channel plugins while resolving completion delivery policy and queue defaults on subagent handoff paths.
+- Tests: allow split Vitest config shards through the explicit-target preflight so CI shard jobs run their intended projects.
 - Tests: make startup memory and startup bench smoke scripts build CLI startup artifacts when run from a fresh source checkout.
 - iMessage: mark authorized slash-command turns as text-sourced commands so `/status`, `/new`, and `/restart` acknowledgements return to the source conversation. (#82642) thanks @homer-byte.
 - Crabbox: install Corepack shims into the writable hydration `PNPM_HOME` so local AWS runner hydration no longer tries to overwrite `/usr/local/bin/pnpm`.
 - Live tests: fail Gateway live model sweeps when selected coverage is lost to timeouts or stale high-signal filters instead of reporting false missing-profile coverage, and pin Docker OpenAI gateway coverage to the current `gpt-5.5` lane.
 - Tests: fail Docker resource-ceiling checks when stats samples or configured limits are invalid instead of silently reporting zero peaks.
+- Agents: fail closed when provider-less session models match multiple provider-prefixed runtime policies so CLI runtime routing no longer depends on config order. (#85970) Thanks @potterdigital.
 
 ## 2026.5.24
 
 ### Changes
 
+- iMessage: support thumb-approval reactions — `👍` (Like tapback) resolves an approval as `allow-once` and `👎` resolves as `deny`, with the explicit-approver allowlist read from `channels.imessage.allowFrom`; `allow-always` stays on the manual `/approve <id> allow-always` text fallback. Mirrors the WhatsApp behavior from #85477.
 - Gateway/perf: reuse process-stable channel catalog reads, avoid repeated bundled-channel boundary checks, and rotate gateway watch CPU profiles so benchmark runs do not accumulate unbounded artifacts.
 - Gateway/perf: cache stable install-record, channel-catalog, bundled-channel, and Telegram session-store metadata during process-local hot paths to reduce repeated JSON and manifest reads.
 - Gateway/perf: reuse immutable plugin metadata snapshots across startup, config, model, channel, setup, and secret metadata readers so hot paths avoid repeated plugin file stats and manifest registry reloads.
@@ -84,6 +134,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/update: avoid fetching unrelated tags during dev-channel git updates so moved release tags do not block branch-based updates. (#84737) Thanks @rubencu.
+- CLI/update: suppress the expected future-config warning while an old update parent hands off to the freshly installed post-core process.
 - MiniMax: store OAuth token expiry as an absolute millisecond timestamp so OAuth profiles no longer appear expired on every request. (#83480) Thanks @NianJiuZst.
 - Agents/Anthropic: strip missing or blank thinking signatures for signed-thinking providers even when recovery supplies a narrow replay policy without signature preservation. Fixes #84430. (#84448) Thanks @NianJiuZst.
 - Agents/channels: send a visible notice when an aborted main session cannot be resumed after restart, including Telegram group targets. (#85805) Thanks @pfrederiksen.
@@ -110,11 +161,13 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: tighten timeout, numeric option, media payload, permission, profile/TLS, plugin metadata, JSON, and remote URL handling; prevent stuck progress/app-server/IRC/Synology/Twitch waits; and keep imported chat history ordering stable.
 - Telegram/config: suppress the missing `accounts.default` warning when `channels.telegram.defaultAccount` names a configured account that also sorts first. Fixes #83948. Thanks @crypto86m.
 - Telegram: serialize visible topic replies through core reply-lane admission so heartbeat and queued follow-up turns cannot continue ownerless or misroute responses. (#85709) Thanks @jalehman.
+- CLI/node: print node status recovery hints on stdout consistently while keeping status errors on stderr. Fixes #83925. Thanks @davinci282828.
 - WebChat: summarize internal message-tool source replies so tool cards no longer duplicate the visible reply body. (#84773) Thanks @jason-allen-oneal.
 - Gateway/WebChat: hide duplicate `gateway-injected` assistant rows when Cursor ACP already persisted the same `acp-runtime` reply. Fixes #85741. Thanks @lxf-lxf.
 - WebChat: scope the visible attachment button to its own composer file input so clicking Upload reliably opens the file picker. (#83952, fixes #47983) Thanks @jason-allen-oneal.
 - Gateway: preserve deferred lifecycle-error cleanup across later non-terminal events so provider timeouts can persist failed session state instead of leaving sessions stuck running. (#85256, fixes #63819) Thanks @samzong.
 - Gateway/update: stop treating inherited macOS `XPC_SERVICE_NAME` values as launchd supervision during update respawn, so GUI-spawned gateways use detached respawn instead of exiting for a missing LaunchAgent. Fixes #85224. Thanks @richardmqq.
+- Gateway: stop sending duplicate message-phase `sessions.changed` websocket events after displayable `session.message` transcript updates. (#84834)
 - Agents/subagents: report tool-only child progress during timeout summaries instead of showing no visible output.
 - Telegram/ACP: preserve explicit `:topic:` conversation suffixes when inbound ACP targets do not carry a separate thread id.
 - Browser/proxy: bypass the managed proxy for the exact local managed Chrome CDP readiness and DevTools WebSocket endpoints, so `openclaw browser start` works when the operator proxy blocks loopback egress. (#83255) Thanks @lightcap.
@@ -131,6 +184,7 @@ Docs: https://docs.openclaw.ai
 - Release/Windows: run cross-OS release check `.cmd` shims through explicit `cmd.exe` wrapping so native Windows install and gateway probes avoid Node shell-argv handling.
 - Control UI/Windows: run i18n Pi, npm, and pnpm helper commands through explicit Windows runners so native Windows translation sync avoids brittle `.cmd` launches.
 - Scripts/Windows: run the Z.AI fallback repro through the shared pnpm runner so native Windows avoids raw `.cmd` launches.
+- Codex/Windows: run app-server protocol formatting through the shared pnpm runner so native Windows avoids raw `.cmd` launches.
 - Plugins/Windows: run plugin npm package staging through the shared npm runner so native Windows release checks avoid bare `npm` lookup and `.cmd` shell-argv handling.
 - Checks/Windows: route full `pnpm check` stage commands through the managed child runner so Windows avoids Node shell-argv deprecation warnings there too.
 - Agents/fs: allow workspace-only host write/edit tools to write through in-workspace symlink directory parents while preserving outside-workspace symlink rejection. Fixes #84696. Thanks @garbagenetwork.
@@ -144,6 +198,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/update: recognize junction-backed source checkouts as git installs by comparing canonical paths before showing package-manager update guidance. Fixes #82215. Thanks @igormf.
 - Channels: honor `/verbose on` for tool/progress summaries across direct chats, groups, channels, and forum topics while preserving quiet default behavior. (#85488) Thanks @kurplunkin.
 - Update: keep the detached gateway restart handoff best-effort when the restart script process cannot be spawned. (#83892) Thanks @davinci282828.
+- Windows/config: skip POSIX login-shell env fallback on native Windows so startup no longer warns about missing `/bin/sh`. Fixes #84795. Thanks @JIRBOY.
 - Telegram: persist the prompt-context message cache through plugin state and record bot-authored replies after sends and draft streaming so later turns can include prior assistant replies without relying on the JSON sidecar. (#85231) Thanks @keshavbotagent.
 - Agents/subagents: keep Codex persona and user workspace files turn-scoped so native Codex subagents inherit only shared tool guidance by default. (#85811) Thanks @lastguru-net.
 - CLI/skills: show an all-ready note with next-step commands when skill setup has no missing dependencies to install. (#85032) Thanks @aniruddhaadak80.
@@ -185,6 +240,7 @@ Docs: https://docs.openclaw.ai
 - TUI: keep quiet active runs busy after the response watchdog notice instead of reopening the prompt and encouraging duplicate submissions while the backend turn is still running. Thanks @shakkernerd.
 - Agents: preserve the latest assistant thinking blocks while stripping invalid replay signatures from older turns, and retry Anthropic thinking failures without thinking replay. Fixes #85557. Thanks @bryanbaer.
 - Agents: keep parallel OpenAI-compatible tool-call deltas in separate argument buffers so interleaved tool calls no longer corrupt streamed arguments. (#82263) Thanks @luna-system.
+- Telegram: avoid false pairing prompts after transient pairing-store read failures while preserving configured `allowFrom` and per-DM pairing authorization. (#85555)
 - Memory/doctor: report missing or unusable QMD workspace directories as workspace failures instead of generic binary failures. (#63167) Thanks @sercada.
 - Debug proxy: record CONNECT client-socket errors and destroy the paired upstream socket so abrupt client disconnects no longer leak tunnel resources. (#82444) Thanks @SebTardif.
 - Diffs: continue hydrating later diff cards when one card fails so a single broken card no longer blanks the whole diff viewer. (#84775) Thanks @cosmopolitan033.

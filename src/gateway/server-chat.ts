@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { isDiagnosticQueuePressureBackoffActive } from "../logging/diagnostic.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -175,6 +176,12 @@ function readChatErrorKind(value: unknown): ErrorKind | undefined {
     : undefined;
 }
 
+const TERMINAL_TOOL_EVENT_PHASES = new Set(["end", "error", "result"]);
+
+function isTerminalToolEventPhase(phase: string): boolean {
+  return TERMINAL_TOOL_EVENT_PHASES.has(phase);
+}
+
 type BroadcastDelta = { deltaText: string; replace?: true };
 
 function resolveBroadcastDelta(params: {
@@ -213,6 +220,7 @@ export type AgentEventHandlerOptions = {
   loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
+  shouldBackoffLowPrioritySessionToolEvents?: () => boolean;
 };
 
 export function createAgentEventHandler({
@@ -228,6 +236,7 @@ export function createAgentEventHandler({
   loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
+  shouldBackoffLowPrioritySessionToolEvents = isDiagnosticQueuePressureBackoffActive,
 }: AgentEventHandlerOptions) {
   type TerminalLifecycleOptions = { skipChatErrorFinal?: boolean };
   type PendingTerminalLifecycleError = {
@@ -910,7 +919,14 @@ export function createAgentEventHandler({
       // not know the runId in advance, so they cannot register as run-scoped
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
-      if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
+      const shouldMirrorSessionToolEvent =
+        !shouldBackoffLowPrioritySessionToolEvents() || isTerminalToolEventPhase(toolPhase);
+      if (
+        isControlUiVisible &&
+        sessionKey &&
+        !suppressHeartbeatToolEvents &&
+        shouldMirrorSessionToolEvent
+      ) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(

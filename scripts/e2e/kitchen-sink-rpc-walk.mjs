@@ -292,25 +292,58 @@ async function retryRpcCall(method, params, options) {
 function isRetryableGatewayCallError(error) {
   const text = error instanceof Error ? error.message : String(error);
   return (
+    isRetryableTransientNetworkError(error) ||
     text.includes("gateway starting") ||
     text.includes("gateway closed") ||
     text.includes("handshake timeout") ||
-    text.includes("GatewayTransportError") ||
-    text.includes("ECONNREFUSED") ||
-    text.includes("fetch failed")
+    text.includes("GatewayTransportError")
   );
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  const text = await response.text();
-  let body = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
+function isRetryableTransientNetworkError(error, seen = new Set()) {
+  if (!error || seen.has(error)) {
+    return false;
   }
-  return { ok: response.ok, status: response.status, body };
+  seen.add(error);
+  const candidate = error;
+  const message = candidate instanceof Error ? candidate.message : String(candidate);
+  const code = typeof candidate === "object" && candidate !== null ? candidate.code : undefined;
+  const text = `${String(code ?? "")} ${message}`;
+  if (
+    /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH)\b/iu.test(text) ||
+    /\b(?:fetch failed|socket hang up|connection reset)\b/iu.test(text)
+  ) {
+    return true;
+  }
+  if (typeof candidate === "object" && candidate !== null && "cause" in candidate) {
+    return isRetryableTransientNetworkError(candidate.cause, seen);
+  }
+  return false;
+}
+
+export async function fetchJson(url, options = {}) {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await (options.fetchImpl ?? fetch)(url);
+      const text = await response.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      return { ok: response.ok, status: response.status, body };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isRetryableTransientNetworkError(error)) {
+        throw error;
+      }
+      await delay(options.retryDelayMs ?? 250);
+    }
+  }
+  throw lastError ?? new Error(`fetch ${url} failed`);
 }
 
 function configureKitchenSink(env, port) {
@@ -529,6 +562,25 @@ export async function sampleProcess(pid, options = {}) {
   return samplePosixProcess(pid, run);
 }
 
+export function summarizeProcessSamples(samples) {
+  const validSamples = samples.filter((sample) => sample && Number.isFinite(sample.rssMiB));
+  if (validSamples.length === 0) {
+    return null;
+  }
+  const peakRssSample = validSamples.reduce((peak, sample) =>
+    sample.rssMiB > peak.rssMiB ? sample : peak,
+  );
+  const numericCpuSamples = validSamples
+    .map((sample) => sample.cpuPercent)
+    .filter((value) => Number.isFinite(value));
+  return {
+    ...peakRssSample,
+    sampleCount: validSamples.length,
+    peakCpuPercent:
+      numericCpuSamples.length > 0 ? Math.max(...numericCpuSamples) : peakRssSample.cpuPercent,
+  };
+}
+
 async function samplePosixProcess(pid, run) {
   try {
     const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
@@ -663,9 +715,22 @@ export async function main() {
   assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
   const child = await startGateway(runner, port, env, logPath);
+  const processSamples = [];
+  const sampleGateway = async () => {
+    const sample = await sampleProcess(child.pid);
+    if (sample) {
+      processSamples.push(sample);
+    }
+    return sample;
+  };
+  let sampleTimer;
   try {
     await waitForGatewayReady(child, port, logPath);
-    const initialSample = await sampleProcess(child.pid);
+    const initialSample = await sampleGateway();
+    sampleTimer = setInterval(() => {
+      void sampleGateway().catch(() => {});
+    }, 1000);
+    sampleTimer.unref?.();
     const healthz = await fetchJson(`http://127.0.0.1:${port}/healthz`);
     const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
     if (!healthz.ok || healthz.body?.status !== "live") {
@@ -743,8 +808,10 @@ export async function main() {
       );
     }
     await retryRpcCall("diagnostics.stability", {}, { runner, port, env });
-    const finalSample = await sampleProcess(child.pid);
+    const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
+    const peakSample = summarizeProcessSamples(processSamples);
+    assertResourceCeiling(peakSample);
     assertNoErrorLogs(logPath);
 
     console.log(
@@ -757,6 +824,7 @@ export async function main() {
           channelAccount,
           initialSample,
           finalSample,
+          peakSample,
         },
         null,
         2,
@@ -767,6 +835,9 @@ export async function main() {
     console.error(tailFile(logPath));
     throw error;
   } finally {
+    if (sampleTimer) {
+      clearInterval(sampleTimer);
+    }
     await stopGateway(child);
   }
 }

@@ -855,6 +855,7 @@ class NodeRuntime(
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatHistoryLoading: StateFlow<Boolean> = chat.historyLoading
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
@@ -1443,7 +1444,7 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    if (operatorConnected || operatorStatusText == "Connecting…") {
+    if (operatorConnected) {
       return
     }
     val operatorAuth =

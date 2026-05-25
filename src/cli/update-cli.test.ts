@@ -896,6 +896,10 @@ describe("update-cli", () => {
     expect(call?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE).toBe("1");
     expect(call?.[2]?.env?.OPENCLAW_UPDATE_POST_CORE_CHANNEL).toBe("dev");
     expect(call?.[2]?.env?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("1.0.0");
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls[1]?.[0]).toEqual({
+      skipPluginValidation: true,
+      suppressFutureVersionWarning: true,
+    });
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
@@ -1179,7 +1183,11 @@ describe("update-cli", () => {
     expect(
       vi
         .mocked(readConfigFileSnapshot)
-        .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+        .mock.calls.some(
+          ([options]) =>
+            options?.skipPluginValidation === true &&
+            options.suppressFutureVersionWarning === true,
+        ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
