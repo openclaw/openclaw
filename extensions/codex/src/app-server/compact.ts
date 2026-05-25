@@ -3,6 +3,7 @@ import {
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
@@ -115,12 +116,6 @@ function readAgentIdFromSessionKey(sessionKey: string | undefined): string | und
     return undefined;
   }
   return parts[1]?.trim() || undefined;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 async function compactCodexNativeThread(
