@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayServiceCommand } from "../../daemon/service.ts";
+import type { NodeHostConfig } from "../../node-host/config.ts";
 import { runNodeDaemonInstall, runNodeDaemonStatus } from "./daemon.js";
 
 const actionState = vi.hoisted(() => ({
@@ -19,7 +21,7 @@ const mocks = vi.hoisted(() => {
     stop: vi.fn(),
     restart: vi.fn(),
     isLoaded: vi.fn(async () => true),
-    readCommand: vi.fn(async () => null),
+    readCommand: vi.fn<() => Promise<GatewayServiceCommand | null>>(async () => null),
     readRuntime: vi.fn<() => Promise<GatewayServiceRuntime>>(async () => ({ status: "running" })),
   };
   return {
@@ -30,7 +32,7 @@ const mocks = vi.hoisted(() => {
       environmentValueSources: {},
       description: "OpenClaw node host",
     })),
-    loadNodeHostConfig: vi.fn(async () => null),
+    loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
     installDaemonServiceAndEmit: vi.fn(async (_params?: unknown) => {}),
     runtime: {
       log: vi.fn<(line: string) => void>(),
