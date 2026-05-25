@@ -1,0 +1,6 @@
+      .paypal-recovery { grid-column: span 4; }
+
+      .metric-value-large {
+        font-size: clamp(1.9rem, 4vw, 2.8rem);
+        line-height: 1;
+      }

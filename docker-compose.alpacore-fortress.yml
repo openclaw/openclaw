@@ -1,0 +1,154 @@
+name: alpacore-fortress
+
+services:
+  alpacore-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: alpacoredb
+      POSTGRES_USER: alpacoreadmin
+      POSTGRES_PASSWORD: alpacore-local-dev
+    volumes:
+      - alpacore-fortress-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${ALPACORE_FORTRESS_POSTGRES_PORT:-55433}:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U alpacoreadmin -d alpacoredb",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  alpacore:
+    build:
+      context: .
+      dockerfile: Dockerfile.alpacore-fortress
+    depends_on:
+      alpacore-postgres:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      HARVESTER_PORT: 8080
+      HARVESTER_WORKERS: 1
+      HARVESTER_PUBLIC_URL: http://127.0.0.1:5143
+      HARVESTER_STEALTH_MODE: 1
+      HARVESTER_LOAD_DEFAULT_TARGETS: 0
+      HARVESTER_ALLOW_STARTUP_NETWORK: 0
+      DATABASE_HOST: alpacore-postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: alpacoredb
+      DATABASE_USER: alpacoreadmin
+      DATABASE_PASSWORD: alpacore-local-dev
+      DATABASE_SSLMODE: disable
+      AIRTABLE_API_BASE_URL: ${AIRTABLE_API_BASE_URL:-}
+      AIRTABLE_API_TOKEN: ${AIRTABLE_API_TOKEN:-}
+      AIRTABLE_ENTERPRISE_KEY: ${AIRTABLE_ENTERPRISE_KEY:-}
+      AIRTABLE_TRANSFER_BASE_ID: ${AIRTABLE_TRANSFER_BASE_ID:-}
+      AIRTABLE_BASE_ID: ${AIRTABLE_BASE_ID:-}
+      AIRTABLE_TRANSFER_TABLE_ID_OR_NAME: ${AIRTABLE_TRANSFER_TABLE_ID_OR_NAME:-}
+      AIRTABLE_TABLE_ID_OR_NAME: ${AIRTABLE_TABLE_ID_OR_NAME:-}
+      AIRTABLE_TRANSFER_VIEW: ${AIRTABLE_TRANSFER_VIEW:-}
+      AIRTABLE_TRANSFER_PAGE_SIZE: ${AIRTABLE_TRANSFER_PAGE_SIZE:-}
+      AIRTABLE_TRANSFER_MAX_RECORDS: ${AIRTABLE_TRANSFER_MAX_RECORDS:-}
+      REVOLUT_API_BASE_URL: ${REVOLUT_API_BASE_URL:-}
+      REVOLUT_BASE_URL: ${REVOLUT_BASE_URL:-}
+      REVOLUT_API_SECRET: ${REVOLUT_API_SECRET:-}
+      REVOLUT_CLIENT_ID: ${REVOLUT_CLIENT_ID:-}
+      REVOLUT_REFRESH_TOKEN: ${REVOLUT_REFRESH_TOKEN:-}
+      REVOLUT_MERCHANT_API_BASE_URL: ${REVOLUT_MERCHANT_API_BASE_URL:-}
+      REVOLUT_MERCHANT_API_KEY: ${REVOLUT_MERCHANT_API_KEY:-}
+      REVOLUT_MERCHANT_API_VERSION: ${REVOLUT_MERCHANT_API_VERSION:-}
+      REVOLUT_MERCHANT_CREATE_ORDER_PATH: ${REVOLUT_MERCHANT_CREATE_ORDER_PATH:-}
+      REVOLUT_SIGNER_BASE_URL: ${REVOLUT_SIGNER_BASE_URL:-}
+      REVOLUT_SIGNER_PATH: ${REVOLUT_SIGNER_PATH:-}
+      REVOLUT_SIGNER_SERVICE_TOKEN: ${REVOLUT_SIGNER_SERVICE_TOKEN:-}
+      REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID: ${REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID:-}
+      REVOLUT_TRANSFER_COUNTERPARTY_ID: ${REVOLUT_TRANSFER_COUNTERPARTY_ID:-}
+      REVOLUT_TRANSFER_RECEIVER_ACCOUNT_ID: ${REVOLUT_TRANSFER_RECEIVER_ACCOUNT_ID:-}
+      REVOLUT_TRANSFER_RECEIVER_CARD_ID: ${REVOLUT_TRANSFER_RECEIVER_CARD_ID:-}
+      REVOLUT_TRANSFER_CURRENCY: ${REVOLUT_TRANSFER_CURRENCY:-}
+      REVOLUT_TRANSFER_REFERENCE_PREFIX: ${REVOLUT_TRANSFER_REFERENCE_PREFIX:-}
+      REVOLUT_TRANSFER_REASON_CODE: ${REVOLUT_TRANSFER_REASON_CODE:-}
+      REVOLUT_TRANSFER_CHARGE_BEARER: ${REVOLUT_TRANSFER_CHARGE_BEARER:-}
+      REVOLUT_TRANSFER_EXECUTION_ENABLED: ${REVOLUT_TRANSFER_EXECUTION_ENABLED:-}
+      REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE: ${REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE:-}
+      ALPHABET_PAYPAL_RECOVERY_PRINCIPAL_EUR: ${ALPHABET_PAYPAL_RECOVERY_PRINCIPAL_EUR:-}
+      ALPHABET_PAYPAL_RECOVERY_APR: ${ALPHABET_PAYPAL_RECOVERY_APR:-}
+      ALPHABET_PAYPAL_RECOVERY_TARGET_DATE: ${ALPHABET_PAYPAL_RECOVERY_TARGET_DATE:-}
+      PAYPAL_SANDBOX_CLIENT_ID: ${PAYPAL_SANDBOX_CLIENT_ID:-}
+      PAYPAL_SANDBOX_CLIENT_SECRET: ${PAYPAL_SANDBOX_CLIENT_SECRET:-}
+      PAYPAL_SANDBOX_WEBHOOK_ID: ${PAYPAL_SANDBOX_WEBHOOK_ID:-}
+      PAYPAL_SANDBOX_API_BASE_URL: ${PAYPAL_SANDBOX_API_BASE_URL:-}
+      STRIPE_SECRET_KEY: ""
+      SHOPIFY_API_SECRET: ""
+      HARVESTER_GITHUB_TOKEN: ""
+      HARVESTER_HF_TOKEN: ""
+      HARVESTER_HUGGINGFACE_TOKEN: ""
+      GITHUB_TOKEN: ""
+      HUGGINGFACE_TOKEN: ""
+      HUGGING_FACE_HUB_TOKEN: ""
+      GH_TOKEN: ""
+      HF_TOKEN: ""
+      OPENCLAW_GH_TOKEN: ""
+      NODE_OPTIONS: --max-old-space-size=512
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/api/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  arni-terminal:
+    image: nginx:1.27-alpine
+    depends_on:
+      alpacore:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5143:5143"
+    volumes:
+      - ./local-fortress/arni_ceo_terminal.html:/usr/share/nginx/html/arni_ceo_terminal.html:ro
+      - ./local-fortress/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://127.0.0.1:5143/ready >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  alpacore-tsgo:
+    image: node:24-bookworm
+    profiles: ["tools"]
+    working_dir: /workspace
+    environment:
+      COREPACK_HOME: /tmp/corepack
+      OPENCLAW_PREFER_PNPM: 1
+    volumes:
+      - ./:/workspace
+      - alpacore-fortress-pnpm:/pnpm/store
+    command:
+      [
+        "sh",
+        "-lc",
+        "corepack enable && pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile && node scripts/run-tsgo.mjs",
+      ]
+    restart: "no"
+
+volumes:
+  alpacore-fortress-postgres:
+  alpacore-fortress-pnpm:

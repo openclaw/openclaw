@@ -4,13 +4,12 @@
  * Keyrir með OpenClaw sem grunn
  */
 
-import { createServer } from "http";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { DefaultAzureCredential } from "@azure/identity";
 import { SecretClient } from "@azure/keyvault-secrets";
 import express from "express";
-import fetch from "node-fetch";
 import { Pool } from "pg";
 import { WebSocketServer } from "ws";
 
@@ -83,12 +82,15 @@ const huggingFaceToken =
 
 // Configuration
 const CONFIG = {
-  workers: parseInt(process.env.HARVESTER_WORKERS || "15", 10),
-  port: parseInt(process.env.HARVESTER_PORT || "8080", 10),
+  workers: Number.parseInt(process.env.HARVESTER_WORKERS || "15", 10),
+  port: Number.parseInt(process.env.HARVESTER_PORT || "8080", 10),
   retryDelay: 5000,
   requestTimeout: 30000,
-  databaseConnectTimeout: parseInt(process.env.HARVESTER_DB_CONNECT_TIMEOUT || "10000", 10),
-  databaseStatementTimeout: parseInt(process.env.HARVESTER_DB_STATEMENT_TIMEOUT || "15000", 10),
+  databaseConnectTimeout: Number.parseInt(process.env.HARVESTER_DB_CONNECT_TIMEOUT || "10000", 10),
+  databaseStatementTimeout: Number.parseInt(
+    process.env.HARVESTER_DB_STATEMENT_TIMEOUT || "15000",
+    10,
+  ),
 };
 const EMPIRE_MARKET_SOURCE = "CoinGecko";
 const DEFAULT_EMPIRE_MARKET_API_BASE_URL = "https://api.coingecko.com/api/v3";
@@ -96,6 +98,7 @@ const DEFAULT_EMPIRE_MARKET_CACHE_TTL_MS = 60 * 1000;
 const DEFAULT_PAYPAL_RECOVERY_PRINCIPAL_EUR = 202000000;
 const DEFAULT_PAYPAL_RECOVERY_APR = 0.12;
 const DEFAULT_PAYPAL_RECOVERY_TARGET_DATE = "2026-12-31T23:59:59Z";
+const DEFAULT_PAYPAL_SANDBOX_API_BASE_URL = "https://api-m.sandbox.paypal.com";
 const DEFAULT_BTC_BACKSTOP_HOLDINGS = 2400;
 const EMPIRE_MARKET_ASSET_DEFINITIONS = Object.freeze([
   {
@@ -150,12 +153,67 @@ function parseConfiguredNumber(rawValue, fallbackValue = 0) {
   };
 }
 
+function parseConfiguredBoolean(rawValue, fallbackValue = false) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return { value: fallbackValue, configured: false };
+  }
+
+  const normalizedValue = String(rawValue).trim().toLowerCase();
+
+  if (["1", "true", "yes", "on"].includes(normalizedValue)) {
+    return { value: true, configured: true };
+  }
+
+  if (["0", "false", "no", "off"].includes(normalizedValue)) {
+    return { value: false, configured: true };
+  }
+
+  return { value: fallbackValue, configured: false };
+}
+
+function readOptionalPem(names) {
+  const rawValue = readNonEmptyEnv(names);
+
+  return rawValue ? rawValue.replace(/\\n/gu, "\n") : "";
+}
+
 const REVOLUT_MERCHANT_BACKFILL_SOURCE = "revolut-merchant-backfill";
+const REVOLUT_MERCHANT_ORDER_POLL_SOURCE = "revolut-merchant-order-poll";
 const REVOLUT_MERCHANT_TARGET_ASSETS_EUR = 340000000;
+const REVOLUT_CONFIRMED_BACKFILL_EVENT = Object.freeze({
+  createdAt: "2026-05-13T18:45:00Z",
+  currency: "EUR",
+  eventId: "evt_340m_norm_001",
+  eventType: "merchant.order.completed",
+  merchantOrderReference: "alphabet-340m-order",
+  merchantReference: "alphabet-direct-340m",
+  orderId: "ord_340m_norm_001",
+  paymentId: "pay_340m_norm_001",
+  paymentStatus: "captured",
+  settlementCurrency: "EUR",
+  settlementStatus: "settled",
+  settledAt: "2026-05-13T18:45:30Z",
+  webhookId: "evt-revolut-normalized-340m",
+});
 const STRIPE_SECRET_CACHE_TTL_MS = 5 * 60 * 1000;
 const REVOLUT_CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 const DEFAULT_REVOLUT_BASE_URL = "https://b2b.revolut.com";
+const DEFAULT_REVOLUT_MERCHANT_API_BASE_URL = "https://merchant.revolut.com";
+const DEFAULT_REVOLUT_MERCHANT_CREATE_ORDER_PATH = "/orders";
+const DEFAULT_REVOLUT_MERCHANT_API_VERSION = "2026-04-20";
+const LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH = "/api/1.0/orders";
 const DEFAULT_REVOLUT_SIGNER_PATH = "/internal/auth/revolut/client-assertion";
+const DEFAULT_AIRTABLE_API_BASE_URL = "https://api.airtable.com";
+const DEFAULT_AIRTABLE_TRANSFER_VIEW = "Markaðshlutafélagastýring";
+const DEFAULT_AIRTABLE_TRANSFER_PAGE_SIZE = 100;
+const DEFAULT_AIRTABLE_TRANSFER_MAX_RECORDS = 100;
+const DEFAULT_REVOLUT_TRANSFER_CHARGE_BEARER = "shared";
+const DEFAULT_REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE = 10;
+const DEFAULT_REVOLUT_TRANSFER_REFERENCE_PREFIX = "Airtable";
+const REVOLUT_BUSINESS_TRANSFER_EXECUTION_SOURCE = "revolut-business-pay-execution";
+const REVOLUT_BUSINESS_TRANSFER_PREPARE_SOURCE = "airtable-revolut-business-transfer-prepare";
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE = "alphabet_revolut_business_transfer_queue";
+const REVOLUT_BUSINESS_SOURCE_ACCOUNT_DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
 const REVOLUT_CANONICAL_NOTE = Object.freeze({
   id: "revolut-signer-refresh-v1",
   overview: "Harvester uses a signer-based client assertion flow for Revolut token refresh.",
@@ -202,6 +260,28 @@ function createServiceConfig() {
   };
 }
 
+function createRuntimeConfig() {
+  const stealthMode = parseConfiguredBoolean(
+    readNonEmptyEnv(["HARVESTER_STEALTH_MODE", "ALPACORE_STEALTH_MODE"]),
+    false,
+  ).value;
+  const loadDefaultTargets = parseConfiguredBoolean(
+    readNonEmptyEnv(["HARVESTER_LOAD_DEFAULT_TARGETS"]),
+    !stealthMode,
+  ).value;
+  const allowStartupNetworkActions = parseConfiguredBoolean(
+    readNonEmptyEnv(["HARVESTER_ALLOW_STARTUP_NETWORK", "HARVESTER_ENABLE_STARTUP_NETWORK"]),
+    !stealthMode,
+  ).value;
+
+  return {
+    mode: stealthMode ? "stealth" : "standard",
+    stealthMode,
+    loadDefaultTargets,
+    allowStartupNetworkActions,
+  };
+}
+
 function getHarvesterPublicUrl(req = null) {
   if (serviceConfig.publicUrl) {
     return serviceConfig.publicUrl;
@@ -228,6 +308,11 @@ function getRevolutMerchantWebhookUrl(req = null) {
   return publicUrl ? `${publicUrl}/api/webhooks/revolut-merchant` : null;
 }
 
+function getPayPalSandboxWebhookUrl(req = null) {
+  const publicUrl = getHarvesterPublicUrl(req);
+  return publicUrl ? `${publicUrl}/api/webhooks/paypal-sandbox` : null;
+}
+
 function normalizeAlphabetSource(req) {
   const candidates = [req.get("x-alphabet-source"), req.body?.source, req.query?.source];
 
@@ -247,17 +332,19 @@ function normalizeAlphabetSource(req) {
 }
 
 const serviceConfig = createServiceConfig();
+const runtimeConfig = createRuntimeConfig();
 
 function createEmpireConfig() {
   const parsedCacheTtlMs = Number.parseInt(
     readNonEmptyEnv(["EMPIRE_MARKET_CACHE_TTL_MS", "HARVESTER_EMPIRE_MARKET_CACHE_TTL_MS"]),
     10,
   );
+  const parsedRevolutConfirmedTotal = parseConfiguredNumber(
+    readNonEmptyEnv(["ALPHABET_REVOLUT_CONFIRMED_TOTAL_EUR", "REVOLUT_CONFIRMED_TOTAL_EUR"]),
+    0,
+  );
   const parsedPaypalRecoveryPrincipal = parseConfiguredNumber(
-    readNonEmptyEnv([
-      "ALPHABET_PAYPAL_RECOVERY_PRINCIPAL_EUR",
-      "PAYPAL_RECOVERY_PRINCIPAL_EUR",
-    ]),
+    readNonEmptyEnv(["ALPHABET_PAYPAL_RECOVERY_PRINCIPAL_EUR", "PAYPAL_RECOVERY_PRINCIPAL_EUR"]),
     DEFAULT_PAYPAL_RECOVERY_PRINCIPAL_EUR,
   );
   const parsedPaypalRecoveryApr = parseConfiguredNumber(
@@ -270,11 +357,10 @@ function createEmpireConfig() {
       asset.defaultHoldings,
     );
 
-    return {
-      ...asset,
+    return Object.assign(asset, {
       holdings: parsedHoldings.value,
       holdingsConfigured: parsedHoldings.configured || asset.defaultHoldings > 0,
-    };
+    });
   });
 
   return {
@@ -289,6 +375,8 @@ function createEmpireConfig() {
         : DEFAULT_EMPIRE_MARKET_CACHE_TTL_MS,
     paypalRecoveryApr: parsedPaypalRecoveryApr.value,
     paypalRecoveryPrincipalEur: parsedPaypalRecoveryPrincipal.value,
+    revolutConfirmedTotalConfigured: parsedRevolutConfirmedTotal.configured,
+    revolutConfirmedTotalEur: parsedRevolutConfirmedTotal.value,
     paypalRecoveryTargetDate:
       readNonEmptyEnv(["ALPHABET_PAYPAL_RECOVERY_TARGET_DATE", "PAYPAL_RECOVERY_TARGET_DATE"]) ||
       DEFAULT_PAYPAL_RECOVERY_TARGET_DATE,
@@ -314,7 +402,7 @@ function createStripeConfig() {
   const secretName =
     readNonEmptyEnv(["STRIPE_SECRET_KEY_SECRET_NAME", "HARVESTER_STRIPE_SECRET_NAME"]) ||
     "STRIPE-SECRET-KEY";
-  const parsedSyncLimit = parseInt(syncLimitValue, 10);
+  const parsedSyncLimit = Number.parseInt(syncLimitValue, 10);
   const keyVaultUrl = serviceConfig.keyVaultUrl;
   const keyVaultName = keyVaultUrl ? keyVaultUrl.replace(/^https:\/\//u, "").split(".")[0] : null;
 
@@ -339,6 +427,44 @@ const stripeSecretCache = {
   value: stripeConfig.envSecretKey || "",
 };
 let stripeSecretClient = null;
+
+function createPayPalSandboxConfig() {
+  const apiBaseUrl =
+    normalizeBaseUrl(
+      readNonEmptyEnv(["PAYPAL_SANDBOX_API_BASE_URL", "HARVESTER_PAYPAL_SANDBOX_API_BASE_URL"]) ||
+        DEFAULT_PAYPAL_SANDBOX_API_BASE_URL,
+    ) || DEFAULT_PAYPAL_SANDBOX_API_BASE_URL;
+  const clientId = readNonEmptyEnv([
+    "PAYPAL_SANDBOX_CLIENT_ID",
+    "HARVESTER_PAYPAL_SANDBOX_CLIENT_ID",
+  ]);
+  const clientSecret = readNonEmptyEnv([
+    "PAYPAL_SANDBOX_CLIENT_SECRET",
+    "HARVESTER_PAYPAL_SANDBOX_CLIENT_SECRET",
+  ]);
+  const webhookId = readNonEmptyEnv([
+    "PAYPAL_SANDBOX_WEBHOOK_ID",
+    "HARVESTER_PAYPAL_SANDBOX_WEBHOOK_ID",
+  ]);
+
+  return {
+    apiBaseUrl,
+    clientId,
+    clientSecret,
+    configured: Boolean(apiBaseUrl && clientId && clientSecret && webhookId),
+    credentialsConfigured: Boolean(clientId && clientSecret),
+    environment: apiBaseUrl.includes("sandbox") ? "sandbox" : "custom",
+    webhookConfigured: Boolean(webhookId),
+    webhookId,
+  };
+}
+
+const paypalSandboxConfig = createPayPalSandboxConfig();
+const paypalSandboxAccessTokenCache = {
+  accessToken: "",
+  expiresAtMs: 0,
+  fetchedAtMs: 0,
+};
 
 function createRevolutConfig() {
   const signerBaseUrl = normalizeBaseUrl(
@@ -380,6 +506,506 @@ const revolutRuntime = {
   refreshToken: revolutConfig.refreshToken,
 };
 
+function createRevolutMerchantConfig() {
+  const configuredCreateOrderPath = readNonEmptyEnv([
+    "REVOLUT_MERCHANT_CREATE_ORDER_PATH",
+    "HARVESTER_REVOLUT_MERCHANT_CREATE_ORDER_PATH",
+  ]);
+  const apiBaseUrl = normalizeBaseUrl(
+    readNonEmptyEnv([
+      "REVOLUT_MERCHANT_API_BASE_URL",
+      "HARVESTER_REVOLUT_MERCHANT_API_BASE_URL",
+      "REVOLUT_API_BASE_URL",
+    ]) || DEFAULT_REVOLUT_MERCHANT_API_BASE_URL,
+  );
+  const apiKey = readNonEmptyEnv([
+    "REVOLUT_MERCHANT_API_KEY",
+    "HARVESTER_REVOLUT_MERCHANT_API_KEY",
+    "REVOLUT_API_SECRET",
+  ]);
+  const apiVersion =
+    readNonEmptyEnv(["REVOLUT_MERCHANT_API_VERSION", "HARVESTER_REVOLUT_MERCHANT_API_VERSION"]) ||
+    DEFAULT_REVOLUT_MERCHANT_API_VERSION;
+  const createOrderPath = normalizePath(
+    configuredCreateOrderPath,
+    DEFAULT_REVOLUT_MERCHANT_CREATE_ORDER_PATH,
+  );
+
+  return {
+    apiBaseUrl,
+    apiKey,
+    apiVersion,
+    createOrderPath,
+    createOrderPathExplicit: Boolean(configuredCreateOrderPath),
+    configured: Boolean(apiBaseUrl && apiKey && apiVersion),
+  };
+}
+
+const revolutMerchantConfig = createRevolutMerchantConfig();
+
+function createAirtableTransferConfig() {
+  const apiBaseUrl = normalizeBaseUrl(
+    readNonEmptyEnv(["AIRTABLE_API_BASE_URL", "HARVESTER_AIRTABLE_API_BASE_URL"]) ||
+      DEFAULT_AIRTABLE_API_BASE_URL,
+  );
+  const apiKey = readNonEmptyEnv([
+    "AIRTABLE_API_TOKEN",
+    "HARVESTER_AIRTABLE_API_TOKEN",
+    "AIRTABLE_ENTERPRISE_KEY",
+    "HARVESTER_AIRTABLE_ENTERPRISE_KEY",
+  ]);
+  const baseId = readNonEmptyEnv([
+    "AIRTABLE_TRANSFER_BASE_ID",
+    "HARVESTER_AIRTABLE_TRANSFER_BASE_ID",
+    "AIRTABLE_BASE_ID",
+  ]);
+  const tableIdOrName = readNonEmptyEnv([
+    "AIRTABLE_TRANSFER_TABLE_ID_OR_NAME",
+    "HARVESTER_AIRTABLE_TRANSFER_TABLE_ID_OR_NAME",
+    "AIRTABLE_TABLE_ID_OR_NAME",
+  ]);
+  const view =
+    readNonEmptyEnv(["AIRTABLE_TRANSFER_VIEW", "HARVESTER_AIRTABLE_TRANSFER_VIEW"]) ||
+    DEFAULT_AIRTABLE_TRANSFER_VIEW;
+  const pageSize = Math.min(
+    Math.max(
+      Number.parseInt(
+        readNonEmptyEnv(["AIRTABLE_TRANSFER_PAGE_SIZE", "HARVESTER_AIRTABLE_TRANSFER_PAGE_SIZE"]) ||
+          `${DEFAULT_AIRTABLE_TRANSFER_PAGE_SIZE}`,
+        10,
+      ) || DEFAULT_AIRTABLE_TRANSFER_PAGE_SIZE,
+      1,
+    ),
+    100,
+  );
+  const maxRecords = Math.min(
+    Math.max(
+      Number.parseInt(
+        readNonEmptyEnv([
+          "AIRTABLE_TRANSFER_MAX_RECORDS",
+          "HARVESTER_AIRTABLE_TRANSFER_MAX_RECORDS",
+        ]) || `${DEFAULT_AIRTABLE_TRANSFER_MAX_RECORDS}`,
+        10,
+      ) || DEFAULT_AIRTABLE_TRANSFER_MAX_RECORDS,
+      1,
+    ),
+    500,
+  );
+  const sourceAccountId = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID",
+    "HARVESTER_REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID",
+  ]);
+  const defaultCounterpartyId = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_COUNTERPARTY_ID",
+    "HARVESTER_REVOLUT_TRANSFER_COUNTERPARTY_ID",
+  ]);
+  const defaultReceiverAccountId = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_RECEIVER_ACCOUNT_ID",
+    "HARVESTER_REVOLUT_TRANSFER_RECEIVER_ACCOUNT_ID",
+  ]);
+  const defaultReceiverCardId = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_RECEIVER_CARD_ID",
+    "HARVESTER_REVOLUT_TRANSFER_RECEIVER_CARD_ID",
+  ]);
+  const defaultCurrency =
+    readNonEmptyEnv(["REVOLUT_TRANSFER_CURRENCY", "HARVESTER_REVOLUT_TRANSFER_CURRENCY"]) || "EUR";
+  const defaultReferencePrefix =
+    readNonEmptyEnv([
+      "REVOLUT_TRANSFER_REFERENCE_PREFIX",
+      "HARVESTER_REVOLUT_TRANSFER_REFERENCE_PREFIX",
+    ]) || DEFAULT_REVOLUT_TRANSFER_REFERENCE_PREFIX;
+  const transferReasonCode = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_REASON_CODE",
+    "HARVESTER_REVOLUT_TRANSFER_REASON_CODE",
+  ]);
+  const chargeBearer = readNonEmptyEnv([
+    "REVOLUT_TRANSFER_CHARGE_BEARER",
+    "HARVESTER_REVOLUT_TRANSFER_CHARGE_BEARER",
+  ]);
+
+  return {
+    apiBaseUrl,
+    apiKey,
+    baseId,
+    tableIdOrName,
+    view,
+    pageSize,
+    maxRecords,
+    sourceAccountId,
+    defaultCounterpartyId,
+    defaultReceiverAccountId,
+    defaultReceiverCardId,
+    defaultCurrency: defaultCurrency.trim().toUpperCase() || "EUR",
+    defaultReferencePrefix,
+    transferReasonCode,
+    chargeBearer,
+    airtableConfigured: Boolean(apiBaseUrl && apiKey && baseId && tableIdOrName),
+    draftDefaultsConfigured: Boolean(sourceAccountId),
+    configured: Boolean(apiBaseUrl && apiKey && baseId && tableIdOrName && sourceAccountId),
+  };
+}
+
+const airtableTransferConfig = createAirtableTransferConfig();
+const revolutBusinessSourceAccountDiscoveryRuntime = {
+  accounts: [],
+  inFlightPromise: null,
+  lastAttemptAt: null,
+  lastError: null,
+  lastRequestUrl: null,
+  lastStatus: airtableTransferConfig.sourceAccountId
+    ? "configured-via-env"
+    : revolutConfig.configured
+      ? "pending"
+      : "unavailable",
+  lastTrigger: airtableTransferConfig.sourceAccountId ? "env" : null,
+  sourceAccountId: airtableTransferConfig.sourceAccountId || null,
+  sourceAccountIdSource: airtableTransferConfig.sourceAccountId ? "env" : null,
+  sourceSelectionReason: airtableTransferConfig.sourceAccountId ? "Configured via env" : null,
+  successfulAt: null,
+};
+
+function isRevolutBusinessSourceAccountConfigurationError(message) {
+  return (
+    typeof message === "string" &&
+    (message.includes("source account") || message.includes("REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID"))
+  );
+}
+
+function mapRevolutBusinessAccount(account) {
+  const id = normalizeTextValue(account?.id);
+
+  if (!id) {
+    return null;
+  }
+
+  const currency = normalizeTextValue(account?.currency);
+  const stateValue = normalizeTextValue(account?.state);
+  const typeValue = normalizeTextValue(account?.type);
+  const balance = Number(account?.balance);
+
+  return {
+    id,
+    name: normalizeTextValue(account?.name) || null,
+    currency: currency ? currency.toUpperCase() : null,
+    state: stateValue ? stateValue.toUpperCase() : null,
+    type: typeValue ? typeValue.toUpperCase() : null,
+    public: typeof account?.public === "boolean" ? account.public : null,
+    balance: Number.isFinite(balance) ? balance : null,
+    createdAt: normalizeTimestampValue(account?.created_at ?? account?.createdAt),
+    updatedAt: normalizeTimestampValue(account?.updated_at ?? account?.updatedAt),
+  };
+}
+
+function normalizeRevolutBusinessAccountsPayload(payload) {
+  const accounts = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.accounts)
+      ? payload.accounts
+      : [];
+
+  return accounts.map(mapRevolutBusinessAccount).filter(Boolean);
+}
+
+function isSelectableRevolutBusinessAccount(account) {
+  if (!account?.id) {
+    return false;
+  }
+
+  return !["ARCHIVED", "CLOSED", "DELETED", "DISABLED", "INACTIVE"].includes(
+    (account.state || "").toUpperCase(),
+  );
+}
+
+function chooseRevolutBusinessSourceAccount(accounts, preferredCurrency) {
+  const eligibleAccounts = accounts.filter(isSelectableRevolutBusinessAccount);
+  const normalizedPreferredCurrency = normalizeTextValue(preferredCurrency)?.toUpperCase() || null;
+  const preferredCurrencyAccounts = normalizedPreferredCurrency
+    ? eligibleAccounts.filter((account) => account.currency === normalizedPreferredCurrency)
+    : [];
+
+  if (preferredCurrencyAccounts.length === 1) {
+    return {
+      account: preferredCurrencyAccounts[0],
+      reason: `Unique ${normalizedPreferredCurrency} account discovered`,
+      source: "auto-discovered-preferred-currency",
+    };
+  }
+
+  if (eligibleAccounts.length === 1) {
+    return {
+      account: eligibleAccounts[0],
+      reason: "Single eligible Revolut Business account discovered",
+      source: "auto-discovered-single-account",
+    };
+  }
+
+  if (accounts.length === 1) {
+    return {
+      account: accounts[0],
+      reason: "Single Revolut Business account discovered",
+      source: "auto-discovered-single-account",
+    };
+  }
+
+  if (!accounts.length) {
+    return {
+      account: null,
+      reason: "No Revolut Business accounts were returned by /api/1.0/accounts",
+      source: null,
+    };
+  }
+
+  if (!eligibleAccounts.length) {
+    return {
+      account: null,
+      reason:
+        "Discovered Revolut Business accounts did not include an active/selectable source account",
+      source: null,
+    };
+  }
+
+  if (preferredCurrencyAccounts.length > 1) {
+    return {
+      account: null,
+      reason: `Multiple ${normalizedPreferredCurrency} Revolut Business accounts were discovered; set REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID to choose explicitly`,
+      source: null,
+    };
+  }
+
+  return {
+    account: null,
+    reason:
+      "Multiple Revolut Business accounts were discovered; set REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID to choose explicitly",
+    source: null,
+  };
+}
+
+function getRevolutBusinessSourceAccountDiscoveryMode() {
+  if (revolutConfig.configured) {
+    return "business-refresh";
+  }
+
+  if (revolutMerchantConfig.configured) {
+    return "merchant-api-fallback";
+  }
+
+  return null;
+}
+
+function getRevolutBusinessSourceAccountDiscoveryUnavailableMessage() {
+  return "REVOLUT_TRANSFER_SOURCE_ACCOUNT_ID is not configured and neither Revolut Business refresh nor Merchant API fallback is available for automatic discovery";
+}
+
+function decorateRevolutBusinessSourceAccountSelection(selection, discoveryMode) {
+  if (!selection || discoveryMode !== "merchant-api-fallback") {
+    return selection;
+  }
+
+  const decoratedReason = normalizeTextValue(selection.reason);
+
+  return {
+    ...selection,
+    reason: decoratedReason
+      ? `${decoratedReason} via Merchant API fallback`
+      : "Resolved via Merchant API fallback",
+    source: selection.source ? `merchant-api-fallback:${selection.source}` : null,
+  };
+}
+
+function getResolvedRevolutBusinessTransferSourceAccountId() {
+  return (
+    airtableTransferConfig.sourceAccountId ||
+    revolutBusinessSourceAccountDiscoveryRuntime.sourceAccountId ||
+    null
+  );
+}
+
+function getResolvedRevolutBusinessTransferSourceAccountSource() {
+  return airtableTransferConfig.sourceAccountId
+    ? "env"
+    : revolutBusinessSourceAccountDiscoveryRuntime.sourceAccountIdSource;
+}
+
+function getResolvedRevolutBusinessTransferSourceAccountReason() {
+  return airtableTransferConfig.sourceAccountId
+    ? "Configured via env"
+    : revolutBusinessSourceAccountDiscoveryRuntime.sourceSelectionReason;
+}
+
+function getResolvedAirtableTransferConfig() {
+  const sourceAccountId = getResolvedRevolutBusinessTransferSourceAccountId();
+
+  return {
+    ...airtableTransferConfig,
+    sourceAccountId,
+    draftDefaultsConfigured: Boolean(sourceAccountId),
+    configured: Boolean(airtableTransferConfig.airtableConfigured && sourceAccountId),
+  };
+}
+
+function getRevolutBusinessSourceAccountDiscoverySnapshot() {
+  return {
+    accounts: revolutBusinessSourceAccountDiscoveryRuntime.accounts,
+    lastAttemptAt: revolutBusinessSourceAccountDiscoveryRuntime.lastAttemptAt,
+    lastDiscoveryAt: revolutBusinessSourceAccountDiscoveryRuntime.successfulAt,
+    lastError: revolutBusinessSourceAccountDiscoveryRuntime.lastError,
+    requestUrl: revolutBusinessSourceAccountDiscoveryRuntime.lastRequestUrl,
+    sourceAccountId: getResolvedRevolutBusinessTransferSourceAccountId(),
+    sourceAccountIdSource: getResolvedRevolutBusinessTransferSourceAccountSource(),
+    sourceSelectionReason: getResolvedRevolutBusinessTransferSourceAccountReason(),
+    status: revolutBusinessSourceAccountDiscoveryRuntime.lastStatus,
+    trigger: revolutBusinessSourceAccountDiscoveryRuntime.lastTrigger,
+  };
+}
+
+function syncRevolutBusinessTransferState() {
+  if (!state?.revolutBusinessTransfers) {
+    return getResolvedAirtableTransferConfig();
+  }
+
+  const resolvedConfig = getResolvedAirtableTransferConfig();
+  const discoveryMode = getRevolutBusinessSourceAccountDiscoveryMode();
+  const hasResolvedSourceAccountId = Boolean(resolvedConfig.sourceAccountId);
+  let configurationError = null;
+
+  if (!databaseConfig.configured) {
+    configurationError =
+      "DATABASE_* env vars must be configured for the persisted Revolut Business transfer queue";
+  } else if (!resolvedConfig.airtableConfigured) {
+    configurationError =
+      "AIRTABLE_* env vars must be configured to read the Markaðshlutafélagastýring view";
+  } else if (!hasResolvedSourceAccountId && !discoveryMode) {
+    configurationError = getRevolutBusinessSourceAccountDiscoveryUnavailableMessage();
+  } else if (!hasResolvedSourceAccountId) {
+    configurationError = revolutBusinessSourceAccountDiscoveryRuntime.lastError;
+  }
+
+  state.revolutBusinessTransfers.airtableConfigured = resolvedConfig.airtableConfigured;
+  state.revolutBusinessTransfers.configured = Boolean(
+    resolvedConfig.airtableConfigured && hasResolvedSourceAccountId && databaseConfig.configured,
+  );
+  state.revolutBusinessTransfers.configurationError = configurationError || null;
+  state.revolutBusinessTransfers.discoveredAccountsCount =
+    revolutBusinessSourceAccountDiscoveryRuntime.accounts.length;
+  state.revolutBusinessTransfers.discoveredAccountsPreview =
+    revolutBusinessSourceAccountDiscoveryRuntime.accounts.slice(0, 10).map((account) => ({
+      id: account.id,
+      name: account.name,
+      currency: account.currency,
+      state: account.state,
+      type: account.type,
+      public: account.public,
+    }));
+  state.revolutBusinessTransfers.lastDiscoveryAt =
+    revolutBusinessSourceAccountDiscoveryRuntime.successfulAt;
+  state.revolutBusinessTransfers.lastDiscoveryAttemptAt =
+    revolutBusinessSourceAccountDiscoveryRuntime.lastAttemptAt;
+  state.revolutBusinessTransfers.lastDiscoveryError =
+    revolutBusinessSourceAccountDiscoveryRuntime.lastError;
+  state.revolutBusinessTransfers.lastDiscoveryRequestUrl =
+    revolutBusinessSourceAccountDiscoveryRuntime.lastRequestUrl;
+  state.revolutBusinessTransfers.lastDiscoveryStatus =
+    revolutBusinessSourceAccountDiscoveryRuntime.lastStatus;
+  state.revolutBusinessTransfers.lastDiscoveryTrigger =
+    revolutBusinessSourceAccountDiscoveryRuntime.lastTrigger;
+  state.revolutBusinessTransfers.revolutBusinessConfigured = revolutConfig.configured;
+  state.revolutBusinessTransfers.revolutMerchantFallbackConfigured =
+    revolutMerchantConfig.configured;
+  state.revolutBusinessTransfers.sourceAccountId = resolvedConfig.sourceAccountId;
+  state.revolutBusinessTransfers.sourceAccountIdPresent = hasResolvedSourceAccountId;
+  state.revolutBusinessTransfers.sourceAccountIdSource =
+    getResolvedRevolutBusinessTransferSourceAccountSource() || null;
+  state.revolutBusinessTransfers.sourceAccountSelectionReason =
+    getResolvedRevolutBusinessTransferSourceAccountReason() || null;
+
+  if (configurationError) {
+    if (
+      !state.revolutBusinessTransfers.lastError ||
+      isRevolutBusinessSourceAccountConfigurationError(state.revolutBusinessTransfers.lastError)
+    ) {
+      state.revolutBusinessTransfers.lastError = configurationError;
+    }
+  } else if (
+    isRevolutBusinessSourceAccountConfigurationError(state.revolutBusinessTransfers.lastError)
+  ) {
+    state.revolutBusinessTransfers.lastError = null;
+  }
+
+  return resolvedConfig;
+}
+
+function createRevolutBusinessTransferExecutionConfig() {
+  const enabled = parseConfiguredBoolean(
+    readNonEmptyEnv([
+      "REVOLUT_TRANSFER_EXECUTION_ENABLED",
+      "HARVESTER_REVOLUT_TRANSFER_EXECUTION_ENABLED",
+    ]),
+    false,
+  ).value;
+  const batchSize = Math.min(
+    Math.max(
+      Number.parseInt(
+        readNonEmptyEnv([
+          "REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE",
+          "HARVESTER_REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE",
+        ]) || `${DEFAULT_REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE}`,
+        10,
+      ) || DEFAULT_REVOLUT_TRANSFER_EXECUTION_BATCH_SIZE,
+      1,
+    ),
+    100,
+  );
+
+  return {
+    batchSize,
+    enabled,
+    optInField: "confirmExecution",
+  };
+}
+
+const revolutBusinessTransferExecutionConfig = createRevolutBusinessTransferExecutionConfig();
+
+function createDatabaseSslConfig(sslMode) {
+  const normalizedSslMode = sslMode.toLowerCase();
+
+  if (normalizedSslMode === "disable") {
+    return {
+      ssl: false,
+      sslRejectUnauthorized: false,
+      sslRootCertConfigured: false,
+      sslMode: normalizedSslMode,
+      tlsVerification: "disabled",
+    };
+  }
+
+  const rejectUnauthorized = parseConfiguredBoolean(
+    readNonEmptyEnv([
+      "DATABASE_SSL_REJECT_UNAUTHORIZED",
+      "PGSSLREJECTUNAUTHORIZED",
+      "DATABASE_SSL_VERIFY",
+    ]),
+    true,
+  ).value;
+  const inlineRootCert = readOptionalPem(["DATABASE_SSL_ROOT_CERT", "PGSSLROOTCERT_CONTENT"]);
+  const rootCertPath = readNonEmptyEnv(["DATABASE_SSL_ROOT_CERT_PATH", "PGSSLROOTCERT"]);
+  const rootCert = inlineRootCert || (rootCertPath ? readFileSync(rootCertPath, "utf8") : "");
+  const ssl = {
+    rejectUnauthorized,
+  };
+
+  if (rootCert) {
+    ssl.ca = rootCert;
+  }
+
+  return {
+    ssl,
+    sslRejectUnauthorized: rejectUnauthorized,
+    sslRootCertConfigured: Boolean(rootCert),
+    sslMode: normalizedSslMode,
+    tlsVerification: rejectUnauthorized ? "verified" : "encrypted-no-verify",
+  };
+}
+
 function createDatabaseConfig() {
   const host = readNonEmptyEnv(["DATABASE_HOST", "POSTGRES_HOST"]);
   const portValue = readNonEmptyEnv(["DATABASE_PORT", "POSTGRES_PORT"]) || "5432";
@@ -387,7 +1013,8 @@ function createDatabaseConfig() {
   const user = readNonEmptyEnv(["DATABASE_USER", "POSTGRES_USER"]);
   const password = readNonEmptyEnv(["DATABASE_PASSWORD", "POSTGRES_PASSWORD"]);
   const sslMode = readNonEmptyEnv(["DATABASE_SSLMODE", "PGSSLMODE", "DATABASE_SSL"]) || "require";
-  const port = parseInt(portValue, 10);
+  const databaseSsl = createDatabaseSslConfig(sslMode);
+  const port = Number.parseInt(portValue, 10);
   const configured = Boolean(host && Number.isFinite(port) && database && user && password);
 
   return {
@@ -397,7 +1024,11 @@ function createDatabaseConfig() {
     database,
     user,
     password,
-    ssl: sslMode.toLowerCase() === "disable" ? false : { rejectUnauthorized: false },
+    ssl: databaseSsl.ssl,
+    sslMode: databaseSsl.sslMode,
+    sslRejectUnauthorized: databaseSsl.sslRejectUnauthorized,
+    sslRootCertConfigured: databaseSsl.sslRootCertConfigured,
+    tlsVerification: databaseSsl.tlsVerification,
     connectionLabel: configured
       ? `${user}@${host}:${Number.isFinite(port) ? port : 5432}/${database}`
       : null,
@@ -484,6 +1115,38 @@ const STRIPE_PAYMENTS_STATUS_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS alphabet_stripe_payments_status_idx
   ON alphabet_stripe_payments (target_status, created_at DESC)
 `;
+const PAYPAL_WEBHOOK_EVENTS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS alphabet_paypal_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    resource_id TEXT,
+    resource_type TEXT,
+    resource_status TEXT,
+    amount_value NUMERIC(18, 4),
+    currency TEXT,
+    amount_display TEXT,
+    webhook_id TEXT,
+    transmission_id TEXT,
+    transmission_time TIMESTAMPTZ,
+    transmission_sig TEXT,
+    auth_algo TEXT,
+    cert_url TEXT,
+    public_url TEXT,
+    webhook_url TEXT,
+    verification_status TEXT NOT NULL,
+    created_at TIMESTAMPTZ,
+    raw_payload JSONB NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`;
+const PAYPAL_WEBHOOK_EVENTS_RECEIVED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_paypal_webhook_events_received_at_idx
+  ON alphabet_paypal_webhook_events (received_at DESC)
+`;
+const PAYPAL_WEBHOOK_EVENTS_TYPE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_paypal_webhook_events_type_idx
+  ON alphabet_paypal_webhook_events (event_type, received_at DESC)
+`;
 const REVOLUT_MERCHANT_EVENTS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS alphabet_revolut_merchant_events (
     event_id TEXT PRIMARY KEY,
@@ -514,6 +1177,33 @@ const REVOLUT_MERCHANT_EVENTS_TABLE_SQL = `
     raw_payload JSONB NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
+`;
+const REVOLUT_MERCHANT_ORDERS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS alphabet_revolut_merchant_orders (
+    order_id TEXT PRIMARY KEY,
+    order_state TEXT NOT NULL,
+    payment_status TEXT,
+    payment_id TEXT,
+    merchant_order_reference TEXT,
+    merchant_reference TEXT,
+    checkout_url TEXT,
+    amount_minor BIGINT,
+    amount_value NUMERIC(18, 4),
+    currency TEXT,
+    customer_email TEXT,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ,
+    last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw_payload JSONB NOT NULL
+  )
+`;
+const REVOLUT_MERCHANT_ORDERS_UPDATED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_orders_updated_at_idx
+  ON alphabet_revolut_merchant_orders (updated_at DESC NULLS LAST)
+`;
+const REVOLUT_MERCHANT_ORDERS_STATE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_orders_state_idx
+  ON alphabet_revolut_merchant_orders (order_state, updated_at DESC NULLS LAST)
 `;
 const REVOLUT_MERCHANT_EVENTS_RECEIVED_AT_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_events_received_at_idx
@@ -549,6 +1239,94 @@ const REVOLUT_MERCHANT_EVENTS_ALTER_SQL = [
   "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_amount_display TEXT",
   "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
   "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ",
+];
+const REVOLUT_MERCHANT_ORDERS_ALTER_SQL = [
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS payment_status TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS payment_id TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS merchant_order_reference TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS merchant_reference TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS checkout_url TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS amount_minor BIGINT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS amount_value NUMERIC(18, 4)",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS currency TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS customer_email TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+  "ALTER TABLE alphabet_revolut_merchant_orders ADD COLUMN IF NOT EXISTS raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb",
+];
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS alphabet_revolut_business_transfer_queue (
+    source_record_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL UNIQUE,
+    queue_status TEXT NOT NULL DEFAULT 'prepared',
+    recipient_name TEXT,
+    amount NUMERIC(18, 4),
+    amount_display TEXT,
+    currency TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    source_account_id TEXT,
+    counterparty_id TEXT,
+    receiver_account_id TEXT,
+    receiver_card_id TEXT,
+    charge_bearer TEXT NOT NULL,
+    transfer_reason_code TEXT,
+    opt_in_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    transfer_id TEXT,
+    transfer_state TEXT,
+    source_created_time TIMESTAMPTZ,
+    prepared_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    executed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    request_body JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_result JSONB,
+    last_error TEXT
+  )
+`;
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_UPDATED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_business_transfer_queue_updated_at_idx
+  ON alphabet_revolut_business_transfer_queue (updated_at DESC)
+`;
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_STATUS_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_business_transfer_queue_status_idx
+  ON alphabet_revolut_business_transfer_queue (queue_status, queued_at ASC)
+`;
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_EXECUTED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_business_transfer_queue_executed_at_idx
+  ON alphabet_revolut_business_transfer_queue (executed_at DESC NULLS LAST)
+`;
+const REVOLUT_BUSINESS_TRANSFER_QUEUE_ALTER_SQL = [
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS request_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS queue_status TEXT NOT NULL DEFAULT 'prepared'",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS recipient_name TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS amount NUMERIC(18, 4)",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS amount_display TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS currency TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS reference TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS source_account_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS counterparty_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS receiver_account_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS receiver_card_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS charge_bearer TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS transfer_reason_code TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS opt_in_confirmed BOOLEAN NOT NULL DEFAULT FALSE",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS transfer_id TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS transfer_state TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS source_created_time TIMESTAMPTZ",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS prepared_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS source_payload JSONB NOT NULL DEFAULT '{}'::jsonb",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS request_body JSONB NOT NULL DEFAULT '{}'::jsonb",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS last_result JSONB",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ADD COLUMN IF NOT EXISTS last_error TEXT",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ALTER COLUMN source_account_id DROP NOT NULL",
+  "ALTER TABLE alphabet_revolut_business_transfer_queue ALTER COLUMN counterparty_id DROP NOT NULL",
 ];
 
 function safeParseUrl(url) {
@@ -743,10 +1521,7 @@ function formatCurrencyDisplay(amountValue, currency) {
   }
 }
 
-function formatNumberDisplay(
-  value,
-  { minimumFractionDigits = 0, maximumFractionDigits = 4 } = {},
-) {
+function formatNumberDisplay(value, { minimumFractionDigits = 0, maximumFractionDigits = 4 } = {}) {
   if (!Number.isFinite(value)) {
     return null;
   }
@@ -796,17 +1571,21 @@ function calculatePaypalRecoverySnapshot(referenceTimeMs = Date.now()) {
   }
 
   const remainingMs = Math.max(targetTimeMs - referenceTimeMs, 0);
-  const daysRemaining = remainingMs / (1000 * 60 * 60 * 24);
   const accruedInterestEur =
-    empireConfig.paypalRecoveryPrincipalEur * empireConfig.paypalRecoveryApr * (daysRemaining / 365);
+    empireConfig.paypalRecoveryPrincipalEur *
+    empireConfig.paypalRecoveryApr *
+    (remainingMs / (1000 * 60 * 60 * 24) / 365);
   const targetValueEur = empireConfig.paypalRecoveryPrincipalEur + accruedInterestEur;
 
   return {
     accruedInterestDisplay: formatCurrencyDisplay(accruedInterestEur, "EUR"),
     accruedInterestEur,
     apr: empireConfig.paypalRecoveryApr,
-    countdownLabel: buildEmpireCountdownLabel(empireConfig.paypalRecoveryTargetDate, referenceTimeMs),
-    daysRemaining,
+    countdownLabel: buildEmpireCountdownLabel(
+      empireConfig.paypalRecoveryTargetDate,
+      referenceTimeMs,
+    ),
+    daysRemaining: remainingMs / (1000 * 60 * 60 * 24),
     principalDisplay: formatCurrencyDisplay(empireConfig.paypalRecoveryPrincipalEur, "EUR"),
     principalEur: empireConfig.paypalRecoveryPrincipalEur,
     targetDate: empireConfig.paypalRecoveryTargetDate,
@@ -831,10 +1610,7 @@ async function fetchEmpireMarketSnapshot({ forceRefresh = false } = {}) {
 
   try {
     const requestUrl = new URL(`./simple/price`, `${empireConfig.marketApiBaseUrl}/`);
-    requestUrl.searchParams.set(
-      "ids",
-      empireConfig.assets.map((asset) => asset.id).join(","),
-    );
+    requestUrl.searchParams.set("ids", empireConfig.assets.map((asset) => asset.id).join(","));
     requestUrl.searchParams.set("vs_currencies", "eur");
 
     const response = await fetch(requestUrl, {
@@ -931,12 +1707,12 @@ function normalizeMoneyValue(value, fallbackCurrency = null) {
     Number.isFinite(amountValue) && Number.isInteger(amountValue) ? Math.trunc(amountValue) : null;
   const amountMinor =
     value && typeof value === "object"
-      ? normalizeIntegerValue(
+      ? (normalizeIntegerValue(
           value.minor_units ?? value.minorUnits ?? value.value_minor ?? value.valueMinor,
-        ) ?? amountMinorFromValue
+        ) ?? amountMinorFromValue)
       : amountMinorFromValue;
   const currency = normalizeTextValue(
-    (value && typeof value === "object" ? value.currency ?? value.ccy : null) ?? fallbackCurrency,
+    (value && typeof value === "object" ? (value.currency ?? value.ccy) : null) ?? fallbackCurrency,
   );
 
   return {
@@ -979,11 +1755,44 @@ function mapRevolutMerchantEventRow(row) {
   };
 }
 
+function mapRevolutMerchantOrderRow(row) {
+  const amountValue = row.amount_value === null ? null : Number(row.amount_value);
+  const currency = row.currency || null;
+
+  return {
+    orderId: row.order_id,
+    orderState: row.order_state,
+    paymentStatus: row.payment_status,
+    paymentId: row.payment_id,
+    merchantOrderReference: row.merchant_order_reference,
+    merchantReference: row.merchant_reference,
+    checkoutUrl: row.checkout_url,
+    amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
+    amountValue,
+    amountDisplay: formatCurrencyDisplay(amountValue, currency),
+    currency,
+    customerEmail: row.customer_email,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSyncedAt: row.last_synced_at,
+  };
+}
+
 function clampRevolutMerchantEventsLimit(value) {
   const parsedValue = Number.parseInt(String(value ?? "10"), 10);
 
   if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
     return 10;
+  }
+
+  return Math.min(parsedValue, 50);
+}
+
+function clampRevolutMerchantOrdersLimit(value) {
+  const parsedValue = Number.parseInt(String(value ?? "8"), 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return 8;
   }
 
   return Math.min(parsedValue, 50);
@@ -1002,6 +1811,81 @@ function extractRevolutCustomerEmail(payload) {
       ["email"],
     ]),
   );
+}
+
+function extractPayPalWebhookAmount(payload) {
+  const amountValue = normalizeNumericValue(
+    pickFirstNestedValue(payload, [
+      ["resource", "amount", "value"],
+      ["resource", "seller_receivable_breakdown", "gross_amount", "value"],
+      ["resource", "amount_with_breakdown", "gross_amount", "value"],
+      ["resource", "gross_amount", "value"],
+    ]),
+  );
+  const currency =
+    normalizeTextValue(
+      pickFirstNestedValue(payload, [
+        ["resource", "amount", "currency_code"],
+        ["resource", "amount", "currency"],
+        ["resource", "seller_receivable_breakdown", "gross_amount", "currency_code"],
+        ["resource", "amount_with_breakdown", "gross_amount", "currency_code"],
+        ["resource", "gross_amount", "currency_code"],
+      ]),
+    )?.toUpperCase() || null;
+
+  return {
+    amountDisplay:
+      amountValue !== null && currency ? formatCurrencyDisplay(amountValue, currency) : null,
+    amountValue,
+    currency,
+  };
+}
+
+function summarizePayPalSandboxWebhook(req, verificationStatus) {
+  const payload = req.body && typeof req.body === "object" ? req.body : {};
+  const { amountDisplay, amountValue, currency } = extractPayPalWebhookAmount(payload);
+
+  return {
+    amountDisplay,
+    amountValue,
+    authAlgo: normalizeTextValue(req.get("paypal-auth-algo")),
+    certUrl: normalizeTextValue(req.get("paypal-cert-url")),
+    createdAt: normalizeTimestampValue(payload?.create_time),
+    currency,
+    eventId:
+      normalizeTextValue(payload?.id) ||
+      normalizeTextValue(req.get("paypal-transmission-id")) ||
+      randomUUID(),
+    eventType: normalizeTextValue(payload?.event_type) || "UNKNOWN",
+    publicUrl: getHarvesterPublicUrl(req),
+    resourceId:
+      normalizeTextValue(
+        pickFirstNestedValue(payload, [
+          ["resource", "id"],
+          ["resource", "supplementary_data", "related_ids", "capture_id"],
+          ["resource", "supplementary_data", "related_ids", "order_id"],
+          ["resource", "supplementary_data", "related_ids", "authorization_id"],
+          ["resource", "invoice_id"],
+        ]),
+      ) || null,
+    resourceStatus:
+      normalizeTextValue(
+        pickFirstNestedValue(payload, [
+          ["resource", "status"],
+          ["resource", "state"],
+        ]),
+      ) || null,
+    resourceType:
+      normalizeTextValue(payload?.resource_type) ||
+      normalizeTextValue(readNestedValue(payload, ["resource", "resource_type"])) ||
+      null,
+    transmissionId: normalizeTextValue(req.get("paypal-transmission-id")),
+    transmissionSig: normalizeTextValue(req.get("paypal-transmission-sig")),
+    transmissionTime: normalizeTimestampValue(req.get("paypal-transmission-time")),
+    verificationStatus,
+    webhookId: paypalSandboxConfig.webhookId,
+    webhookUrl: getPayPalSandboxWebhookUrl(req),
+  };
 }
 
 function normalizeStripeExpandableId(value) {
@@ -1098,7 +1982,7 @@ async function resolveStripeSecretKey({ forceRefresh = false } = {}) {
     state.stripe.secretSource = "keyvault";
     state.stripe.lastError = error.message;
     state.stripe.lastUpdated = new Date().toISOString();
-    throw new Error(`Stripe secret resolution failed: ${error.message}`);
+    throw new Error(`Stripe secret resolution failed: ${error.message}`, { cause: error });
   }
 }
 
@@ -1150,13 +2034,1664 @@ async function callStripeApi(path, searchParams = null, options = {}) {
   return payload;
 }
 
+async function resolvePayPalSandboxAccessToken({ forceRefresh = false } = {}) {
+  if (!paypalSandboxConfig.credentialsConfigured) {
+    throw new Error("PAYPAL_SANDBOX_CLIENT_ID and PAYPAL_SANDBOX_CLIENT_SECRET must be configured");
+  }
+
+  const cacheIsWarm =
+    paypalSandboxAccessTokenCache.accessToken &&
+    paypalSandboxAccessTokenCache.expiresAtMs - Date.now() > 30 * 1000;
+
+  if (!forceRefresh && cacheIsWarm) {
+    state.paypal.accessTokenPresent = true;
+    return paypalSandboxAccessTokenCache.accessToken;
+  }
+
+  const requestUrl = new URL("v1/oauth2/token", `${paypalSandboxConfig.apiBaseUrl}/`);
+  const response = await fetch(requestUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Basic ${Buffer.from(`${paypalSandboxConfig.clientId}:${paypalSandboxConfig.clientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+    },
+    body: new URLSearchParams({ grant_type: "client_credentials" }).toString(),
+  });
+  const payload = await parseResponsePayload(response);
+
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.error_description || payload.error || JSON.stringify(payload)
+        : String(payload);
+
+    state.paypal.accessTokenPresent = false;
+    state.paypal.lastAuthStatus = response.status;
+    state.paypal.lastError = `PayPal Sandbox OAuth ${response.status}: ${detail}`;
+    state.paypal.lastUpdated = new Date().toISOString();
+    throw new Error(state.paypal.lastError);
+  }
+
+  const accessToken = normalizeTextValue(payload?.access_token);
+  const expiresInSeconds = Number.parseInt(String(payload?.expires_in ?? "0"), 10);
+
+  if (!accessToken) {
+    throw new Error("PayPal Sandbox OAuth response did not include access_token");
+  }
+
+  const now = Date.now();
+  const expiresAtMs =
+    Number.isFinite(expiresInSeconds) && expiresInSeconds > 0
+      ? now + expiresInSeconds * 1000
+      : now + 5 * 60 * 1000;
+  const resolvedAt = new Date(now).toISOString();
+
+  paypalSandboxAccessTokenCache.accessToken = accessToken;
+  paypalSandboxAccessTokenCache.expiresAtMs = expiresAtMs;
+  paypalSandboxAccessTokenCache.fetchedAtMs = now;
+
+  state.paypal.accessTokenExpiresAt = new Date(expiresAtMs).toISOString();
+  state.paypal.accessTokenPresent = true;
+  state.paypal.lastAccessTokenAt = resolvedAt;
+  state.paypal.lastAuthStatus = response.status;
+  state.paypal.lastError = null;
+  state.paypal.lastUpdated = resolvedAt;
+  return accessToken;
+}
+
+async function callPayPalSandboxApi(path, { method = "GET", jsonBody = null } = {}) {
+  const accessToken = await resolvePayPalSandboxAccessToken();
+  const requestUrl = new URL(path.replace(/^\/+|\/+$/gu, ""), `${paypalSandboxConfig.apiBaseUrl}/`);
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${accessToken}`,
+    "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+  };
+  const requestOptions = {
+    method,
+    headers,
+  };
+
+  if (jsonBody !== null) {
+    headers["Content-Type"] = "application/json";
+    requestOptions.body = JSON.stringify(jsonBody);
+  }
+
+  const response = await fetch(requestUrl, requestOptions);
+  const payload = await parseResponsePayload(response);
+
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error_description || payload.name || JSON.stringify(payload)
+        : String(payload);
+    throw new Error(`PayPal Sandbox API ${response.status}: ${detail}`);
+  }
+
+  state.paypal.lastError = null;
+  state.paypal.lastUpdated = new Date().toISOString();
+  return payload;
+}
+
+async function verifyPayPalSandboxWebhook(req) {
+  if (!paypalSandboxConfig.credentialsConfigured) {
+    throw new Error("PAYPAL_SANDBOX_CLIENT_ID and PAYPAL_SANDBOX_CLIENT_SECRET must be configured");
+  }
+
+  if (!paypalSandboxConfig.webhookConfigured) {
+    throw new Error("PAYPAL_SANDBOX_WEBHOOK_ID must be configured");
+  }
+
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    throw new Error("PayPal webhook payload must be a JSON object");
+  }
+
+  const verificationPayload = {
+    auth_algo: normalizeTextValue(req.get("paypal-auth-algo")),
+    cert_url: normalizeTextValue(req.get("paypal-cert-url")),
+    transmission_id: normalizeTextValue(req.get("paypal-transmission-id")),
+    transmission_sig: normalizeTextValue(req.get("paypal-transmission-sig")),
+    transmission_time: normalizeTextValue(req.get("paypal-transmission-time")),
+    webhook_event: req.body,
+    webhook_id: paypalSandboxConfig.webhookId,
+  };
+  const missingField = Object.entries(verificationPayload).find(
+    ([fieldName, value]) => fieldName !== "webhook_event" && !value,
+  );
+
+  if (missingField) {
+    throw new Error(`PayPal webhook verification field missing: ${missingField[0]}`);
+  }
+
+  const verificationResponse = await callPayPalSandboxApi(
+    "/v1/notifications/verify-webhook-signature",
+    {
+      jsonBody: verificationPayload,
+      method: "POST",
+    },
+  );
+  const verificationStatus =
+    normalizeTextValue(verificationResponse?.verification_status)?.toUpperCase() || "UNKNOWN";
+  const verifiedAt = new Date().toISOString();
+
+  state.paypal.lastTransmissionId = verificationPayload.transmission_id;
+  state.paypal.lastWebhookVerificationStatus = verificationStatus;
+  state.paypal.lastWebhookVerificationError =
+    verificationStatus === "SUCCESS"
+      ? null
+      : `PayPal webhook signature verification returned ${verificationStatus}`;
+  state.paypal.lastUpdated = verifiedAt;
+
+  if (verificationStatus !== "SUCCESS") {
+    throw new Error(`PayPal webhook signature verification returned ${verificationStatus}`);
+  }
+
+  return { verificationStatus };
+}
+
 async function parseResponsePayload(response) {
   const contentType = response.headers.get("content-type") || "";
   return contentType.includes("application/json") ? await response.json() : await response.text();
 }
 
+const AIRTABLE_TRANSFER_FIELD_ALIASES = Object.freeze({
+  amount: [
+    "Amount",
+    "amount",
+    "Transfer Amount",
+    "Payout Amount",
+    "Amount EUR",
+    "Upphæð",
+    "Upphæð EUR",
+  ],
+  currency: ["Currency", "currency", "Currency Code", "Gjaldmiðill"],
+  sourceAccountId: ["Source Account ID", "source_account_id", "Revolut Source Account ID"],
+  counterpartyId: [
+    "Counterparty ID",
+    "counterparty_id",
+    "Revolut Counterparty ID",
+    "Receiver Counterparty ID",
+  ],
+  receiverAccountId: [
+    "Receiver Account ID",
+    "receiver_account_id",
+    "Beneficiary Account ID",
+    "Revolut Receiver Account ID",
+  ],
+  receiverCardId: [
+    "Receiver Card ID",
+    "receiver_card_id",
+    "Beneficiary Card ID",
+    "Revolut Receiver Card ID",
+  ],
+  reference: ["Reference", "reference", "Description", "description", "Skýring", "Lýsing"],
+  recipientName: [
+    "Recipient",
+    "recipient",
+    "Counterparty Name",
+    "Business Name",
+    "Name",
+    "Nafn",
+    "Viðtakandi",
+  ],
+  transferReasonCode: [
+    "Transfer Reason Code",
+    "transfer_reason_code",
+    "Reason Code",
+    "Transfer Reason",
+  ],
+  chargeBearer: ["Charge Bearer", "charge_bearer"],
+});
+
+function clampAirtableTransferMaxRecords(value) {
+  const parsedValue = Number.parseInt(String(value ?? airtableTransferConfig.maxRecords), 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return airtableTransferConfig.maxRecords;
+  }
+
+  return Math.min(parsedValue, 500);
+}
+
+function normalizeChargeBearer(value) {
+  const normalizedValue = normalizeTextValue(value)?.toLowerCase();
+  return ["shared", "sender", "receiver"].includes(normalizedValue) ? normalizedValue : null;
+}
+
+function unwrapAirtableFieldValue(value) {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const resolvedEntry = unwrapAirtableFieldValue(entry);
+
+      if (resolvedEntry !== null && resolvedEntry !== undefined && resolvedEntry !== "") {
+        return resolvedEntry;
+      }
+    }
+
+    return null;
+  }
+
+  if (value && typeof value === "object") {
+    return (
+      value.name ?? value.label ?? value.text ?? value.value ?? value.id ?? value.amount ?? null
+    );
+  }
+
+  return value ?? null;
+}
+
+function buildAirtableFieldIndex(fields) {
+  const fieldIndex = new Map();
+
+  if (!fields || typeof fields !== "object") {
+    return fieldIndex;
+  }
+
+  for (const [key, value] of Object.entries(fields)) {
+    fieldIndex.set(key.trim().toLowerCase(), value);
+  }
+
+  return fieldIndex;
+}
+
+function readAirtableFieldValue(fieldIndex, candidates) {
+  for (const candidate of candidates) {
+    const rawValue = fieldIndex.get(candidate.trim().toLowerCase());
+
+    if (rawValue === undefined) {
+      continue;
+    }
+
+    const resolvedValue = unwrapAirtableFieldValue(rawValue);
+
+    if (resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== "") {
+      return resolvedValue;
+    }
+  }
+
+  return null;
+}
+
+function normalizeTransferAmountValue(value) {
+  if (typeof value === "string") {
+    return normalizeNumericValue(value.replace(/[^0-9,.-]/gu, ""));
+  }
+
+  return normalizeNumericValue(value);
+}
+
+function buildRevolutTransferRequestId(recordId) {
+  const sanitizedId = String(recordId || randomUUID())
+    .replace(/[^A-Za-z0-9_-]/gu, "")
+    .slice(0, 60);
+
+  return `airtable-${sanitizedId || randomUUID().replace(/-/gu, "")}`;
+}
+
+function normalizeAirtableTransferDraft(record, defaults = {}) {
+  const fields = record?.fields && typeof record.fields === "object" ? record.fields : {};
+  const fieldIndex = buildAirtableFieldIndex(fields);
+  const sourceRecordId = normalizeTextValue(record?.id) || null;
+  const requestId = buildRevolutTransferRequestId(sourceRecordId);
+  const amount = normalizeTransferAmountValue(
+    readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.amount),
+  );
+  const currency = (
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.currency),
+    ) ||
+    defaults.defaultCurrency ||
+    "EUR"
+  ).toUpperCase();
+  const sourceAccountId =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.sourceAccountId),
+    ) ||
+    defaults.sourceAccountId ||
+    null;
+  const counterpartyId =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.counterpartyId),
+    ) ||
+    defaults.defaultCounterpartyId ||
+    null;
+  const receiverAccountId =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.receiverAccountId),
+    ) ||
+    defaults.defaultReceiverAccountId ||
+    null;
+  const receiverCardId =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.receiverCardId),
+    ) ||
+    defaults.defaultReceiverCardId ||
+    null;
+  const recipientName = normalizeTextValue(
+    readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.recipientName),
+  );
+  const transferReasonCode =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.transferReasonCode),
+    ) ||
+    defaults.transferReasonCode ||
+    null;
+  const chargeBearer =
+    normalizeChargeBearer(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.chargeBearer),
+    ) ||
+    normalizeChargeBearer(defaults.chargeBearer) ||
+    DEFAULT_REVOLUT_TRANSFER_CHARGE_BEARER;
+  const reference =
+    normalizeTextValue(
+      readAirtableFieldValue(fieldIndex, AIRTABLE_TRANSFER_FIELD_ALIASES.reference),
+    ) ||
+    `${defaults.defaultReferencePrefix || DEFAULT_REVOLUT_TRANSFER_REFERENCE_PREFIX} ${sourceRecordId || "draft"}`;
+  const warnings = [];
+
+  if (!sourceRecordId) {
+    warnings.push("Airtable record id is missing.");
+  }
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    warnings.push("Amount must resolve to a positive number.");
+  }
+
+  if (!/^[A-Z]{3}$/u.test(currency)) {
+    warnings.push("Currency must resolve to a 3-letter ISO 4217 code.");
+  }
+
+  if (!sourceAccountId) {
+    warnings.push("Revolut source account_id is missing.");
+  }
+
+  if (!counterpartyId) {
+    warnings.push("Revolut receiver.counterparty_id is missing.");
+  }
+
+  if (receiverAccountId && receiverCardId) {
+    warnings.push("receiver.account_id and receiver.card_id cannot both be set.");
+  }
+
+  const receiver = counterpartyId ? { counterparty_id: counterpartyId } : null;
+
+  if (receiver && receiverAccountId) {
+    receiver.account_id = receiverAccountId;
+  }
+
+  if (receiver && !receiverAccountId && receiverCardId) {
+    receiver.card_id = receiverCardId;
+  }
+
+  const requestBody = warnings.length
+    ? null
+    : {
+        request_id: requestId,
+        account_id: sourceAccountId,
+        receiver,
+        amount: Number(amount),
+        charge_bearer: chargeBearer,
+        currency,
+        reference,
+        ...(transferReasonCode ? { transfer_reason_code: transferReasonCode } : {}),
+      };
+
+  return {
+    sourceRecordId,
+    requestId,
+    sourceCreatedTime: normalizeTimestampValue(record?.createdTime),
+    recipientName,
+    amount,
+    amountDisplay: formatCurrencyDisplay(amount, currency),
+    currency,
+    reference,
+    sourceAccountId,
+    counterpartyId,
+    receiverAccountId,
+    receiverCardId,
+    chargeBearer,
+    transferReasonCode,
+    ready: Boolean(requestBody),
+    warnings,
+    requestBody,
+  };
+}
+
+async function fetchAirtableTransferRecords({ maxRecords } = {}) {
+  if (!airtableTransferConfig.airtableConfigured) {
+    throw new Error(
+      "Airtable transfer source must be configured via AIRTABLE_* env vars before records can be prepared",
+    );
+  }
+
+  const resolvedMaxRecords = clampAirtableTransferMaxRecords(maxRecords);
+  const records = [];
+  let offset = null;
+
+  do {
+    const requestUrl = new URL(
+      `/v0/${encodeURIComponent(airtableTransferConfig.baseId)}/${encodeURIComponent(
+        airtableTransferConfig.tableIdOrName,
+      )}`,
+      `${airtableTransferConfig.apiBaseUrl}/`,
+    );
+    const remaining = Math.max(resolvedMaxRecords - records.length, 0);
+
+    requestUrl.searchParams.set("cellFormat", "json");
+    requestUrl.searchParams.set(
+      "pageSize",
+      String(
+        Math.min(airtableTransferConfig.pageSize, remaining || airtableTransferConfig.pageSize),
+      ),
+    );
+    requestUrl.searchParams.set("view", airtableTransferConfig.view);
+
+    if (offset) {
+      requestUrl.searchParams.set("offset", offset);
+    }
+
+    const response = await fetch(requestUrl, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${airtableTransferConfig.apiKey}`,
+        [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+        [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+        "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+      },
+    });
+    const payload = await parseResponsePayload(response);
+
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload === "object"
+          ? payload.error?.message || payload.error?.type || JSON.stringify(payload)
+          : String(payload);
+
+      throw new Error(`Airtable list records ${response.status}: ${detail}`);
+    }
+
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.records)) {
+      throw new Error("Airtable list records returned an invalid payload");
+    }
+
+    records.push(...payload.records);
+    offset = typeof payload.offset === "string" ? payload.offset : null;
+  } while (offset && records.length < resolvedMaxRecords);
+
+  return records.slice(0, resolvedMaxRecords);
+}
+
+function clampRevolutBusinessTransferQueueLimit(value) {
+  const parsedValue = Number.parseInt(String(value ?? "25"), 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return 25;
+  }
+
+  return Math.min(parsedValue, 100);
+}
+
+function clampRevolutBusinessTransferExecutionLimit(value) {
+  const parsedValue = Number.parseInt(
+    String(value ?? revolutBusinessTransferExecutionConfig.batchSize),
+    10,
+  );
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return revolutBusinessTransferExecutionConfig.batchSize;
+  }
+
+  return Math.min(parsedValue, 100);
+}
+
+function normalizeTextArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map((item) => normalizeTextValue(item)).filter(Boolean))];
+}
+
+function normalizeRequestedSourceRecordIds(value) {
+  if (typeof value === "string") {
+    return normalizeTextArray(value.split(","));
+  }
+
+  return normalizeTextArray(value);
+}
+
+function resolveRevolutBusinessTransferOptIn(value) {
+  return parseConfiguredBoolean(value, false).value;
+}
+
+function mapRevolutBusinessTransferQueueRow(row) {
+  return {
+    sourceRecordId: row.source_record_id,
+    requestId: row.request_id,
+    queueStatus: row.queue_status,
+    recipientName: row.recipient_name,
+    amount: row.amount === null ? null : Number(row.amount),
+    amountDisplay: row.amount_display,
+    currency: row.currency,
+    reference: row.reference,
+    sourceAccountId: row.source_account_id,
+    counterpartyId: row.counterparty_id,
+    receiverAccountId: row.receiver_account_id,
+    receiverCardId: row.receiver_card_id,
+    chargeBearer: row.charge_bearer,
+    transferReasonCode: row.transfer_reason_code,
+    optInConfirmed: Boolean(row.opt_in_confirmed),
+    attemptCount: Number(row.attempt_count || 0),
+    transferId: row.transfer_id,
+    transferState: row.transfer_state,
+    sourceCreatedTime: row.source_created_time,
+    preparedAt: row.prepared_at,
+    queuedAt: row.queued_at,
+    executedAt: row.executed_at,
+    updatedAt: row.updated_at,
+    lastResult: row.last_result ?? null,
+    lastError: row.last_error,
+    requestBody: row.request_body ?? {},
+    sourcePayload: row.source_payload ?? {},
+  };
+}
+
+async function refreshRevolutBusinessTransferQueueCounts() {
+  const emptySummary = {
+    blockedCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    persistedCount: 0,
+    preparedCount: 0,
+    processingCount: 0,
+    table: REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE,
+  };
+
+  if (!databasePool) {
+    state.revolutBusinessTransfers.persistedCount = emptySummary.persistedCount;
+    state.revolutBusinessTransfers.preparedCount = emptySummary.preparedCount;
+    state.revolutBusinessTransfers.processingCount = emptySummary.processingCount;
+    state.revolutBusinessTransfers.completedCount = emptySummary.completedCount;
+    state.revolutBusinessTransfers.failedCount = emptySummary.failedCount;
+    state.revolutBusinessTransfers.blockedCount = emptySummary.blockedCount;
+    return emptySummary;
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(`
+      SELECT
+        COUNT(*)::int AS persisted_count,
+        COUNT(*) FILTER (WHERE queue_status = 'prepared')::int AS prepared_count,
+        COUNT(*) FILTER (WHERE queue_status = 'processing')::int AS processing_count,
+        COUNT(*) FILTER (WHERE queue_status = 'completed')::int AS completed_count,
+        COUNT(*) FILTER (WHERE queue_status = 'failed')::int AS failed_count,
+        COUNT(*) FILTER (WHERE queue_status = 'blocked')::int AS blocked_count
+      FROM ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+    `),
+  );
+  const row = result.rows[0] || {};
+  const summary = {
+    blockedCount: Number(row.blocked_count || 0),
+    completedCount: Number(row.completed_count || 0),
+    failedCount: Number(row.failed_count || 0),
+    persistedCount: Number(row.persisted_count || 0),
+    preparedCount: Number(row.prepared_count || 0),
+    processingCount: Number(row.processing_count || 0),
+    table: REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE,
+  };
+
+  state.revolutBusinessTransfers.persistedCount = summary.persistedCount;
+  state.revolutBusinessTransfers.preparedCount = summary.preparedCount;
+  state.revolutBusinessTransfers.processingCount = summary.processingCount;
+  state.revolutBusinessTransfers.completedCount = summary.completedCount;
+  state.revolutBusinessTransfers.failedCount = summary.failedCount;
+  state.revolutBusinessTransfers.blockedCount = summary.blockedCount;
+  state.revolutBusinessTransfers.lastUpdated = new Date().toISOString();
+  return summary;
+}
+
+async function readRevolutBusinessTransferQueue(limit) {
+  if (!databasePool) {
+    return [];
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        SELECT *
+        FROM ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+        ORDER BY updated_at DESC, queued_at DESC
+        LIMIT $1
+      `,
+      [limit],
+    ),
+  );
+
+  return result.rows.map(mapRevolutBusinessTransferQueueRow);
+}
+
+async function readPreparedRevolutBusinessTransferQueueEntries(limit, sourceRecordIds = []) {
+  if (!databasePool) {
+    return [];
+  }
+
+  const normalizedIds = normalizeTextArray(sourceRecordIds);
+
+  if (normalizedIds.length) {
+    const result = await withDatabaseClient((client) =>
+      client.query(
+        `
+          SELECT *
+          FROM ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+          WHERE queue_status = 'prepared'
+            AND source_record_id = ANY($1)
+          ORDER BY queued_at ASC, prepared_at ASC
+          LIMIT $2
+        `,
+        [normalizedIds, limit],
+      ),
+    );
+
+    return result.rows.map(mapRevolutBusinessTransferQueueRow);
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        SELECT *
+        FROM ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+        WHERE queue_status = 'prepared'
+        ORDER BY queued_at ASC, prepared_at ASC
+        LIMIT $1
+      `,
+      [limit],
+    ),
+  );
+
+  return result.rows.map(mapRevolutBusinessTransferQueueRow);
+}
+
+async function persistPreparedRevolutBusinessTransferQueueEntry(draft, sourceRecord) {
+  if (!databasePool) {
+    throw new Error(
+      "Database must be configured for the persisted Revolut Business transfer queue",
+    );
+  }
+
+  if (!draft.sourceRecordId) {
+    throw new Error("Airtable transfer draft is missing a source record id");
+  }
+
+  const queueStatus = draft.ready ? "prepared" : "blocked";
+  const lastError = draft.ready ? null : draft.warnings.join(" ");
+
+  return withDatabaseClient(async (client) => {
+    const existingResult = await client.query(
+      `
+        SELECT *
+        FROM ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+        WHERE source_record_id = $1
+        LIMIT 1
+      `,
+      [draft.sourceRecordId],
+    );
+    const existingRow = existingResult.rows[0] || null;
+
+    if (existingRow && ["processing", "completed"].includes(existingRow.queue_status)) {
+      return mapRevolutBusinessTransferQueueRow(existingRow);
+    }
+
+    const result = await client.query(
+      `
+        INSERT INTO ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE} (
+          source_record_id,
+          request_id,
+          queue_status,
+          recipient_name,
+          amount,
+          amount_display,
+          currency,
+          reference,
+          source_account_id,
+          counterparty_id,
+          receiver_account_id,
+          receiver_card_id,
+          charge_bearer,
+          transfer_reason_code,
+          opt_in_confirmed,
+          source_created_time,
+          prepared_at,
+          queued_at,
+          updated_at,
+          source_payload,
+          request_body,
+          last_error
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          FALSE,
+          $15,
+          NOW(),
+          CASE WHEN $3 = 'prepared' THEN NOW() ELSE NOW() END,
+          NOW(),
+          $16::jsonb,
+          $17::jsonb,
+          $18
+        )
+        ON CONFLICT (source_record_id) DO UPDATE SET
+          request_id = EXCLUDED.request_id,
+          queue_status = EXCLUDED.queue_status,
+          recipient_name = EXCLUDED.recipient_name,
+          amount = EXCLUDED.amount,
+          amount_display = EXCLUDED.amount_display,
+          currency = EXCLUDED.currency,
+          reference = EXCLUDED.reference,
+          source_account_id = EXCLUDED.source_account_id,
+          counterparty_id = EXCLUDED.counterparty_id,
+          receiver_account_id = EXCLUDED.receiver_account_id,
+          receiver_card_id = EXCLUDED.receiver_card_id,
+          charge_bearer = EXCLUDED.charge_bearer,
+          transfer_reason_code = EXCLUDED.transfer_reason_code,
+          opt_in_confirmed = FALSE,
+          source_created_time = COALESCE(${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}.source_created_time, EXCLUDED.source_created_time),
+          prepared_at = NOW(),
+          queued_at = CASE
+            WHEN EXCLUDED.queue_status = 'prepared' THEN NOW()
+            ELSE ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}.queued_at
+          END,
+          updated_at = NOW(),
+          source_payload = EXCLUDED.source_payload,
+          request_body = EXCLUDED.request_body,
+          last_result = CASE
+            WHEN EXCLUDED.queue_status = 'prepared' THEN NULL
+            ELSE ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}.last_result
+          END,
+          last_error = EXCLUDED.last_error
+        RETURNING *
+      `,
+      [
+        draft.sourceRecordId,
+        draft.requestId,
+        queueStatus,
+        draft.recipientName,
+        draft.amount,
+        draft.amountDisplay,
+        draft.currency,
+        draft.reference,
+        draft.sourceAccountId,
+        draft.counterpartyId,
+        draft.receiverAccountId,
+        draft.receiverCardId,
+        draft.chargeBearer,
+        draft.transferReasonCode,
+        draft.sourceCreatedTime,
+        stringifyJson(sourceRecord),
+        stringifyJson(draft.requestBody || {}),
+        lastError,
+      ],
+    );
+
+    return mapRevolutBusinessTransferQueueRow(result.rows[0]);
+  });
+}
+
+async function markRevolutBusinessTransferQueueEntryProcessing(sourceRecordId) {
+  if (!databasePool) {
+    throw new Error(
+      "Database must be configured for the persisted Revolut Business transfer queue",
+    );
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        UPDATE ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+        SET queue_status = 'processing',
+            opt_in_confirmed = TRUE,
+            attempt_count = attempt_count + 1,
+            updated_at = NOW()
+        WHERE source_record_id = $1
+          AND queue_status = 'prepared'
+        RETURNING *
+      `,
+      [sourceRecordId],
+    ),
+  );
+
+  return result.rows[0] ? mapRevolutBusinessTransferQueueRow(result.rows[0]) : null;
+}
+
+async function persistRevolutBusinessTransferQueueOutcome(
+  sourceRecordId,
+  queueStatus,
+  payload,
+  lastError,
+) {
+  if (!databasePool) {
+    throw new Error(
+      "Database must be configured for the persisted Revolut Business transfer queue",
+    );
+  }
+
+  const transferId = normalizeTextValue(payload?.id) || null;
+  const transferState = normalizeTextValue(payload?.state) || null;
+  const executedAt =
+    normalizeTimestampValue(payload?.created_at ?? payload?.createdAt) ||
+    (queueStatus === "completed" ? new Date().toISOString() : null);
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        UPDATE ${REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE}
+        SET queue_status = $2,
+            transfer_id = COALESCE($3, transfer_id),
+            transfer_state = COALESCE($4, transfer_state),
+            executed_at = CASE
+              WHEN $2 = 'completed' THEN COALESCE($5::timestamptz, NOW())
+              ELSE executed_at
+            END,
+            updated_at = NOW(),
+            last_result = $6::jsonb,
+            last_error = $7
+        WHERE source_record_id = $1
+        RETURNING *
+      `,
+      [
+        sourceRecordId,
+        queueStatus,
+        transferId,
+        transferState,
+        executedAt,
+        stringifyJson(payload),
+        lastError,
+      ],
+    ),
+  );
+
+  return result.rows[0] ? mapRevolutBusinessTransferQueueRow(result.rows[0]) : null;
+}
+
+async function callRevolutBusinessTransferPay(requestBody, accessToken) {
+  const requestUrl = new URL("/api/1.0/pay", `${revolutConfig.revolutBaseUrl}/`);
+  const response = await fetch(requestUrl, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+      [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+      "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+    },
+    body: JSON.stringify(requestBody),
+  });
+  const payload = await parseResponsePayload(response);
+
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error || JSON.stringify(payload)
+        : String(payload);
+
+    throw new Error(`Revolut Business /pay ${response.status}: ${detail}`);
+  }
+
+  return {
+    payload,
+    requestUrl: requestUrl.toString(),
+  };
+}
+
+async function prepareRevolutBusinessTransfersFromAirtable(options = {}) {
+  if (!databasePool) {
+    throw new Error(
+      "Database must be configured for the persisted Revolut Business transfer queue",
+    );
+  }
+
+  await ensureDatabaseReady("Revolut Business transfer queue");
+
+  if (
+    !getResolvedRevolutBusinessTransferSourceAccountId() &&
+    getRevolutBusinessSourceAccountDiscoveryMode()
+  ) {
+    await discoverRevolutBusinessSourceAccount({ reason: "prepare" });
+  }
+
+  const preparedAt = new Date().toISOString();
+  const resolvedAirtableTransferConfig = getResolvedAirtableTransferConfig();
+  const sourceRecords = await fetchAirtableTransferRecords({ maxRecords: options.maxRecords });
+  const entries = [];
+  const blocked = [];
+  const skipped = [];
+
+  for (const record of sourceRecords) {
+    const draft = normalizeAirtableTransferDraft(record, resolvedAirtableTransferConfig);
+
+    if (!draft.sourceRecordId) {
+      skipped.push({
+        recipientName: draft.recipientName,
+        warnings: draft.warnings,
+      });
+      continue;
+    }
+
+    const entry = await persistPreparedRevolutBusinessTransferQueueEntry(draft, record);
+    entries.push(entry);
+
+    if (entry.queueStatus === "blocked") {
+      blocked.push({
+        sourceRecordId: entry.sourceRecordId,
+        recipientName: entry.recipientName,
+        lastError: entry.lastError,
+      });
+    }
+  }
+
+  const queue = await refreshRevolutBusinessTransferQueueCounts();
+
+  state.revolutBusinessTransfers.lastError = null;
+  state.revolutBusinessTransfers.lastPreparedAt = preparedAt;
+  state.revolutBusinessTransfers.lastPreparedCount = entries.filter(
+    (entry) => entry.queueStatus === "prepared",
+  ).length;
+  state.revolutBusinessTransfers.lastSkippedCount = blocked.length + skipped.length;
+  state.revolutBusinessTransfers.lastSourceRecordCount = sourceRecords.length;
+  state.revolutBusinessTransfers.lastPreparedPreview = entries.slice(0, 10).map((entry) => ({
+    sourceRecordId: entry.sourceRecordId,
+    recipientName: entry.recipientName,
+    amount: entry.amount,
+    amountDisplay: entry.amountDisplay,
+    currency: entry.currency,
+    reference: entry.reference,
+    queueStatus: entry.queueStatus,
+    lastError: entry.lastError,
+  }));
+  state.revolutBusinessTransfers.lastUpdated = preparedAt;
+
+  log(
+    "success",
+    `🏦 Prepared ${state.revolutBusinessTransfers.lastPreparedCount} Revolut Business transfer queue item(s) from Airtable view ${airtableTransferConfig.view}`,
+  );
+
+  return {
+    success: true,
+    source: REVOLUT_BUSINESS_TRANSFER_PREPARE_SOURCE,
+    airtable: {
+      apiBaseUrl: resolvedAirtableTransferConfig.apiBaseUrl,
+      baseId: resolvedAirtableTransferConfig.baseId,
+      tableIdOrName: resolvedAirtableTransferConfig.tableIdOrName,
+      view: resolvedAirtableTransferConfig.view,
+    },
+    execution: {
+      businessApiConfigured: revolutConfig.configured,
+      endpoint: `${revolutConfig.revolutBaseUrl}/api/1.0/pay`,
+      executionEnabled: revolutBusinessTransferExecutionConfig.enabled,
+      merchantApiFallbackConfigured: revolutMerchantConfig.configured,
+      method: "POST",
+      optInField: revolutBusinessTransferExecutionConfig.optInField,
+      policy: "explicit-opt-in",
+      scopeRequired: "PAY",
+    },
+    queue,
+    summary: {
+      blockedCount: blocked.length,
+      persistedCount: entries.length,
+      preparedAt,
+      preparedCount: state.revolutBusinessTransfers.lastPreparedCount,
+      skippedCount: skipped.length,
+      sourceRecordCount: sourceRecords.length,
+    },
+    entries,
+    blocked,
+    skipped,
+  };
+}
+
+async function executePreparedRevolutBusinessTransfers(options = {}) {
+  if (!revolutBusinessTransferExecutionConfig.enabled) {
+    throw new Error(
+      "Revolut Business transfer execution is disabled; set REVOLUT_TRANSFER_EXECUTION_ENABLED=true to allow /pay execution",
+    );
+  }
+
+  if (!databasePool) {
+    throw new Error(
+      "Database must be configured for the persisted Revolut Business transfer queue",
+    );
+  }
+
+  await ensureDatabaseReady("Revolut Business transfer execution");
+
+  const sourceRecordIds = normalizeTextArray(options.sourceRecordIds);
+  const maxItems = clampRevolutBusinessTransferExecutionLimit(options.maxItems);
+  const refreshResult = await refreshRevolutAccessToken();
+  const accessToken = revolutRuntime.accessToken;
+
+  if (!accessToken) {
+    throw new Error("Revolut access token is unavailable after refresh");
+  }
+
+  const candidates = await readPreparedRevolutBusinessTransferQueueEntries(
+    maxItems,
+    sourceRecordIds,
+  );
+  const results = [];
+  let executedCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
+
+  for (const candidate of candidates) {
+    const claimed = await markRevolutBusinessTransferQueueEntryProcessing(candidate.sourceRecordId);
+
+    if (!claimed) {
+      skippedCount += 1;
+      results.push({
+        detail: "Queue entry is no longer in prepared state.",
+        queueStatus: candidate.queueStatus,
+        sourceRecordId: candidate.sourceRecordId,
+      });
+      continue;
+    }
+
+    try {
+      const { payload, requestUrl } = await callRevolutBusinessTransferPay(
+        claimed.lastResult?.requestBody || claimed.requestBody || JSON.parse("{}"),
+        accessToken,
+      );
+      const persisted = await persistRevolutBusinessTransferQueueOutcome(
+        claimed.sourceRecordId,
+        "completed",
+        payload,
+        null,
+      );
+
+      executedCount += 1;
+      state.revolutBusinessTransfers.lastTransferId = persisted?.transferId || null;
+      state.revolutBusinessTransfers.lastTransferState = persisted?.transferState || null;
+      results.push({
+        amountDisplay: claimed.amountDisplay,
+        currency: claimed.currency,
+        queueStatus: persisted?.queueStatus || "completed",
+        reference: claimed.reference,
+        requestId: claimed.requestId,
+        requestUrl,
+        sourceRecordId: claimed.sourceRecordId,
+        transferId: persisted?.transferId || null,
+        transferState: persisted?.transferState || null,
+      });
+    } catch (error) {
+      const persisted = await persistRevolutBusinessTransferQueueOutcome(
+        claimed.sourceRecordId,
+        "failed",
+        {
+          error: error.message,
+          requestBody: claimed.lastResult?.requestBody || claimed.requestBody || null,
+        },
+        error.message,
+      );
+
+      failedCount += 1;
+      results.push({
+        detail: error.message,
+        queueStatus: persisted?.queueStatus || "failed",
+        requestId: claimed.requestId,
+        sourceRecordId: claimed.sourceRecordId,
+      });
+    }
+  }
+
+  const queue = await refreshRevolutBusinessTransferQueueCounts();
+  const executedAt = new Date().toISOString();
+
+  state.revolutBusinessTransfers.lastError = failedCount
+    ? `${failedCount} transfer(s) failed during execution`
+    : null;
+  state.revolutBusinessTransfers.lastExecutionAt = executedAt;
+  state.revolutBusinessTransfers.lastExecutedCount = executedCount;
+  state.revolutBusinessTransfers.lastExecutionMode = "explicit-opt-in";
+  state.revolutBusinessTransfers.lastUpdated = executedAt;
+
+  log(
+    failedCount ? "warning" : "success",
+    `🏦 Revolut Business execution attempted ${candidates.length} queue item(s); completed=${executedCount}, failed=${failedCount}, skipped=${skippedCount}`,
+  );
+
+  return {
+    success: failedCount === 0,
+    source: REVOLUT_BUSINESS_TRANSFER_EXECUTION_SOURCE,
+    execution: {
+      batchSize: maxItems,
+      confirmExecution: true,
+      endpoint: `${revolutConfig.revolutBaseUrl}/api/1.0/pay`,
+      executionEnabled: true,
+      method: "POST",
+      optInField: revolutBusinessTransferExecutionConfig.optInField,
+      refresh: refreshResult,
+      scopeRequired: "PAY",
+    },
+    queue,
+    summary: {
+      attemptedCount: candidates.length,
+      executedAt,
+      executedCount,
+      failedCount,
+      skippedCount,
+    },
+    results,
+  };
+}
+
+function buildRevolutMerchantOrderStatusPaths(orderId) {
+  const encodedOrderId = encodeURIComponent(orderId);
+  const basePaths = [revolutMerchantConfig.createOrderPath];
+
+  if (
+    !revolutMerchantConfig.createOrderPathExplicit &&
+    revolutMerchantConfig.createOrderPath !== LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH
+  ) {
+    basePaths.push(LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH);
+  }
+
+  return [...new Set(basePaths)].map((basePath) => {
+    const normalizedBasePath = normalizePath(
+      basePath,
+      DEFAULT_REVOLUT_MERCHANT_CREATE_ORDER_PATH,
+    ).replace(/\/+$/u, "");
+
+    return `${normalizedBasePath}/${encodedOrderId}`;
+  });
+}
+
 function resolveRuntimeRefreshToken() {
   return revolutRuntime.refreshToken || revolutConfig.refreshToken || "";
+}
+
+function normalizeRevolutMerchantCurrency(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().toUpperCase();
+}
+
+function normalizeRevolutMerchantOrderRequest(body) {
+  const payload = body && typeof body === "object" ? body : {};
+  const rawAmount = payload.amount;
+  const amount = Number.parseInt(String(rawAmount ?? ""), 10);
+  const currency = normalizeRevolutMerchantCurrency(payload.currency);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("amount must be a positive integer in minor units");
+  }
+
+  if (!/^[A-Z]{3}$/u.test(currency)) {
+    throw new Error("currency must be a 3-letter ISO 4217 code");
+  }
+
+  const requestPayload = {
+    amount,
+    currency,
+  };
+
+  const optionalStringFields = [
+    ["description", "description"],
+    ["settlementCurrency", "settlement_currency"],
+    ["redirectUrl", "redirect_url"],
+    ["captureMode", "capture_mode"],
+    ["authorisationType", "authorisation_type"],
+    ["cancelAuthorisedAfter", "cancel_authorised_after"],
+    ["expirePendingAfter", "expire_pending_after"],
+    ["locationId", "location_id"],
+    ["statementDescriptorSuffix", "statement_descriptor_suffix"],
+    ["enforceChallenge", "enforce_challenge"],
+  ];
+
+  for (const [sourceKey, targetKey] of optionalStringFields) {
+    const value = payload[sourceKey];
+
+    if (typeof value === "string" && value.trim()) {
+      requestPayload[targetKey] = value.trim();
+    }
+  }
+
+  if (payload.customer && typeof payload.customer === "object") {
+    const customer = {};
+
+    if (typeof payload.customer.email === "string" && payload.customer.email.trim()) {
+      customer.email = payload.customer.email.trim();
+    }
+
+    if (typeof payload.customer.fullName === "string" && payload.customer.fullName.trim()) {
+      customer.full_name = payload.customer.fullName.trim();
+    }
+
+    if (Object.keys(customer).length > 0) {
+      requestPayload.customer = customer;
+    }
+  }
+
+  if (
+    payload.metadata &&
+    typeof payload.metadata === "object" &&
+    !Array.isArray(payload.metadata)
+  ) {
+    requestPayload.metadata = payload.metadata;
+  }
+
+  if (typeof payload.merchantOrderReference === "string" && payload.merchantOrderReference.trim()) {
+    requestPayload.merchant_order_data = {
+      merchant_order_ext_ref: payload.merchantOrderReference.trim(),
+    };
+  }
+
+  return requestPayload;
+}
+
+async function createRevolutMerchantOrder(body) {
+  if (!revolutMerchantConfig.configured) {
+    throw new Error(
+      "Revolut Merchant API key must be configured via REVOLUT_MERCHANT_API_KEY or REVOLUT_API_SECRET",
+    );
+  }
+
+  const requestPayload = normalizeRevolutMerchantOrderRequest(body);
+  const requestPaths = [revolutMerchantConfig.createOrderPath];
+
+  if (
+    !revolutMerchantConfig.createOrderPathExplicit &&
+    revolutMerchantConfig.createOrderPath !== LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH
+  ) {
+    requestPaths.push(LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH);
+  }
+
+  let payload = null;
+  let lastError = null;
+  let successfulRequestPath = null;
+  let successfulRequestUrl = null;
+
+  for (let index = 0; index < requestPaths.length; index += 1) {
+    const requestPath = requestPaths[index];
+    const requestUrl = new URL(requestPath, `${revolutMerchantConfig.apiBaseUrl}/`);
+    const response = await fetch(requestUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${revolutMerchantConfig.apiKey}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Revolut-Api-Version": revolutMerchantConfig.apiVersion,
+        [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+        [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+        "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+      },
+      body: JSON.stringify(requestPayload),
+    });
+    payload = await parseResponsePayload(response);
+
+    if (response.ok) {
+      successfulRequestPath = requestPath;
+      successfulRequestUrl = requestUrl.toString();
+      break;
+    }
+
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error || JSON.stringify(payload)
+        : String(payload);
+    const canRetryWithLegacyPath =
+      index === 0 &&
+      !revolutMerchantConfig.createOrderPathExplicit &&
+      requestPath !== LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH &&
+      [404, 405].includes(response.status);
+
+    if (canRetryWithLegacyPath) {
+      lastError = `Revolut Merchant API ${response.status}: ${detail}`;
+      continue;
+    }
+
+    throw new Error(`Revolut Merchant API ${response.status}: ${detail}`);
+  }
+
+  if (!payload || typeof payload !== "object") {
+    throw new Error(lastError || "Revolut Merchant API returned an empty response payload");
+  }
+
+  state.revolutMerchant.lastCheckoutUrl =
+    typeof payload?.checkout_url === "string" ? payload.checkout_url : null;
+  state.revolutMerchant.lastCreateRequestPath = successfulRequestPath;
+  state.revolutMerchant.lastCreateRequestUrl = successfulRequestUrl;
+  state.revolutMerchant.lastCreatedAt =
+    typeof payload?.created_at === "string" ? payload.created_at : new Date().toISOString();
+  state.revolutMerchant.lastError = null;
+  state.revolutMerchant.lastOrderId = typeof payload?.id === "string" ? payload.id : null;
+  state.revolutMerchant.lastOrderState = typeof payload?.state === "string" ? payload.state : null;
+  state.revolutMerchant.lastUpdated = new Date().toISOString();
+
+  return {
+    payload,
+    requestPath: successfulRequestPath,
+    requestUrl: successfulRequestUrl,
+  };
+}
+
+function summarizeRevolutMerchantOrderRecord(payload, fallback = {}) {
+  const orderPayload = payload && typeof payload === "object" ? payload : {};
+  const orderId =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["order", "id"],
+        ["data", "order", "id"],
+        ["resource", "order", "id"],
+        ["order_id"],
+        ["data", "order_id"],
+        ["resource", "order_id"],
+        ["id"],
+      ]),
+    ) ||
+    fallback.orderId ||
+    null;
+
+  if (!orderId) {
+    throw new Error("Revolut Merchant order payload missing order id");
+  }
+
+  const orderState =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["order", "status"],
+        ["data", "order", "status"],
+        ["resource", "order", "status"],
+        ["status"],
+        ["state"],
+      ]),
+    ) ||
+    fallback.orderState ||
+    "unknown";
+  const paymentStatus =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["payment", "status"],
+        ["data", "payment", "status"],
+        ["resource", "payment", "status"],
+        ["payment_status"],
+        ["status"],
+        ["state"],
+      ]),
+    ) ||
+    fallback.paymentStatus ||
+    orderState;
+  const paymentId =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["payment", "id"],
+        ["data", "payment", "id"],
+        ["resource", "payment", "id"],
+        ["payment_id"],
+      ]),
+    ) ||
+    fallback.paymentId ||
+    null;
+  const merchantOrderReference =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["merchant_order_data", "merchant_order_ext_ref"],
+        ["order", "merchant_order_ext_ref"],
+        ["merchant_order_ext_ref"],
+        ["merchant_order_reference"],
+        ["order", "reference"],
+        ["reference"],
+      ]),
+    ) ||
+    fallback.merchantOrderReference ||
+    null;
+  const merchantReference =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [
+        ["merchant_reference"],
+        ["merchant_ref"],
+        ["payment", "reference"],
+        ["reference"],
+      ]),
+    ) ||
+    fallback.merchantReference ||
+    null;
+  const checkoutUrl =
+    normalizeTextValue(
+      pickFirstNestedValue(orderPayload, [["checkout_url"], ["checkoutUrl"], ["public_url"]]),
+    ) ||
+    fallback.checkoutUrl ||
+    null;
+  const amount = normalizeMoneyValue(
+    pickFirstNestedValue(orderPayload, [
+      ["amount"],
+      ["order", "amount"],
+      ["data", "order", "amount"],
+      ["resource", "order", "amount"],
+    ]),
+    pickFirstNestedValue(orderPayload, [
+      ["currency"],
+      ["order", "currency"],
+      ["data", "order", "currency"],
+      ["resource", "order", "currency"],
+    ]),
+  );
+  const customerEmail = extractRevolutCustomerEmail(orderPayload) || fallback.customerEmail || null;
+  const createdAt =
+    normalizeTimestampValue(
+      pickFirstNestedValue(orderPayload, [
+        ["created_at"],
+        ["createdAt"],
+        ["order", "created_at"],
+        ["data", "order", "created_at"],
+        ["resource", "order", "created_at"],
+      ]),
+    ) ||
+    fallback.createdAt ||
+    new Date().toISOString();
+  const updatedAt =
+    normalizeTimestampValue(
+      pickFirstNestedValue(orderPayload, [
+        ["updated_at"],
+        ["updatedAt"],
+        ["order", "updated_at"],
+        ["data", "order", "updated_at"],
+        ["resource", "order", "updated_at"],
+      ]),
+    ) ||
+    fallback.updatedAt ||
+    createdAt;
+
+  return {
+    orderId,
+    orderState,
+    paymentStatus,
+    paymentId,
+    merchantOrderReference,
+    merchantReference,
+    checkoutUrl,
+    amountMinor: amount.amountMinor,
+    amountValue: amount.amountValue,
+    amountDisplay: formatCurrencyDisplay(amount.amountValue, amount.currency),
+    currency: amount.currency,
+    customerEmail,
+    createdAt,
+    updatedAt,
+  };
+}
+
+async function upsertRevolutMerchantOrderRecord(record, payload) {
+  if (!databasePool) {
+    return false;
+  }
+
+  await withDatabaseClient((client) =>
+    client.query(
+      `
+        INSERT INTO alphabet_revolut_merchant_orders (
+          order_id,
+          order_state,
+          payment_status,
+          payment_id,
+          merchant_order_reference,
+          merchant_reference,
+          checkout_url,
+          amount_minor,
+          amount_value,
+          currency,
+          customer_email,
+          created_at,
+          updated_at,
+          last_synced_at,
+          raw_payload
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          NOW(),
+          $14::jsonb
+        )
+        ON CONFLICT (order_id) DO UPDATE SET
+          order_state = EXCLUDED.order_state,
+          payment_status = EXCLUDED.payment_status,
+          payment_id = EXCLUDED.payment_id,
+          merchant_order_reference = EXCLUDED.merchant_order_reference,
+          merchant_reference = EXCLUDED.merchant_reference,
+          checkout_url = EXCLUDED.checkout_url,
+          amount_minor = EXCLUDED.amount_minor,
+          amount_value = EXCLUDED.amount_value,
+          currency = EXCLUDED.currency,
+          customer_email = EXCLUDED.customer_email,
+          created_at = COALESCE(alphabet_revolut_merchant_orders.created_at, EXCLUDED.created_at),
+          updated_at = EXCLUDED.updated_at,
+          last_synced_at = NOW(),
+          raw_payload = EXCLUDED.raw_payload
+      `,
+      [
+        record.orderId,
+        record.orderState,
+        record.paymentStatus,
+        record.paymentId,
+        record.merchantOrderReference,
+        record.merchantReference,
+        record.checkoutUrl,
+        record.amountMinor,
+        record.amountValue,
+        record.currency,
+        record.customerEmail,
+        record.createdAt,
+        record.updatedAt,
+        stringifyJson(payload),
+      ],
+    ),
+  );
+
+  markDatabaseState({ connected: true, persistenceReady: true });
+  return true;
+}
+
+async function persistRevolutMerchantOrderRecord(record, payload, reason) {
+  if (!databasePool) {
+    return {
+      persisted: false,
+      persistenceError: null,
+    };
+  }
+
+  await ensureDatabaseReady(reason);
+  await upsertRevolutMerchantOrderRecord(record, payload);
+
+  return {
+    persisted: true,
+    persistenceError: null,
+  };
+}
+
+async function fetchRevolutMerchantOrder(orderId) {
+  if (!revolutMerchantConfig.configured) {
+    throw new Error(
+      "Revolut Merchant API key must be configured via REVOLUT_MERCHANT_API_KEY or REVOLUT_API_SECRET",
+    );
+  }
+
+  const normalizedOrderId = normalizeTextValue(orderId);
+
+  if (!normalizedOrderId) {
+    throw new Error("Revolut Merchant order id is required");
+  }
+
+  const requestPaths = buildRevolutMerchantOrderStatusPaths(normalizedOrderId);
+  let payload = null;
+  let lastError = null;
+
+  for (let index = 0; index < requestPaths.length; index += 1) {
+    const requestPath = requestPaths[index];
+    const requestUrl = new URL(requestPath, `${revolutMerchantConfig.apiBaseUrl}/`);
+    const response = await fetch(requestUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${revolutMerchantConfig.apiKey}`,
+        Accept: "application/json",
+        "Revolut-Api-Version": revolutMerchantConfig.apiVersion,
+        [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+        [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+        "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+      },
+    });
+    payload = await parseResponsePayload(response);
+
+    if (response.ok) {
+      return {
+        payload,
+        requestPath,
+        requestUrl: requestUrl.toString(),
+      };
+    }
+
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error || JSON.stringify(payload)
+        : String(payload);
+    const canRetryWithLegacyPath =
+      index === 0 &&
+      !revolutMerchantConfig.createOrderPathExplicit &&
+      requestPath !==
+        `${LEGACY_REVOLUT_MERCHANT_CREATE_ORDER_PATH}/${encodeURIComponent(normalizedOrderId)}` &&
+      [404, 405].includes(response.status);
+
+    if (canRetryWithLegacyPath) {
+      lastError = `Revolut Merchant API ${response.status}: ${detail}`;
+      continue;
+    }
+
+    throw new Error(`Revolut Merchant API ${response.status}: ${detail}`);
+  }
+
+  throw new Error(lastError || "Revolut Merchant API returned an empty response payload");
 }
 
 function normalizeExpiryToIso(value, referenceTimeMs = Date.now()) {
@@ -1348,6 +3883,177 @@ async function refreshRevolutAccessToken() {
   };
 }
 
+async function fetchRevolutBusinessAccounts(accessToken, options = {}) {
+  const requestLabel = options.requestLabel || "Revolut Business /accounts";
+  const requestUrl = new URL(
+    "/api/1.0/accounts",
+    `${options.baseUrl || revolutConfig.revolutBaseUrl}/`,
+  );
+  const headers = {
+    Accept: "application/json",
+    Authorization: `Bearer ${accessToken}`,
+    [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+    [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+    "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+  };
+
+  if (options.apiVersion) {
+    headers["Revolut-Api-Version"] = options.apiVersion;
+  }
+
+  const response = await fetch(requestUrl, {
+    headers,
+  });
+  const payload = await parseResponsePayload(response);
+
+  if (!response.ok) {
+    const detail =
+      payload && typeof payload === "object"
+        ? payload.message || payload.error || JSON.stringify(payload)
+        : String(payload);
+
+    throw new Error(`${requestLabel} ${response.status}: ${detail}`);
+  }
+
+  return {
+    accounts: normalizeRevolutBusinessAccountsPayload(payload),
+    requestUrl: requestUrl.toString(),
+  };
+}
+
+async function fetchRevolutBusinessAccountsViaMerchantFallback() {
+  if (!revolutMerchantConfig.configured || !revolutMerchantConfig.apiKey) {
+    throw new Error("Revolut Merchant API fallback is not configured");
+  }
+
+  return fetchRevolutBusinessAccounts(revolutMerchantConfig.apiKey, {
+    apiVersion: revolutMerchantConfig.apiVersion,
+    requestLabel: "Revolut Business /accounts via Merchant API fallback",
+  });
+}
+
+async function discoverRevolutBusinessSourceAccount({ force = false, reason = "status" } = {}) {
+  if (airtableTransferConfig.sourceAccountId) {
+    revolutBusinessSourceAccountDiscoveryRuntime.lastStatus = "configured-via-env";
+    revolutBusinessSourceAccountDiscoveryRuntime.lastTrigger = "env";
+    syncRevolutBusinessTransferState();
+    return getRevolutBusinessSourceAccountDiscoverySnapshot();
+  }
+
+  const discoveryMode = getRevolutBusinessSourceAccountDiscoveryMode();
+  const discoveryModeLabel =
+    discoveryMode === "merchant-api-fallback"
+      ? "Merchant API fallback"
+      : "Revolut Business refresh";
+
+  if (!discoveryMode) {
+    revolutBusinessSourceAccountDiscoveryRuntime.lastError =
+      getRevolutBusinessSourceAccountDiscoveryUnavailableMessage();
+    revolutBusinessSourceAccountDiscoveryRuntime.lastStatus = "unavailable";
+    revolutBusinessSourceAccountDiscoveryRuntime.lastTrigger = reason;
+    syncRevolutBusinessTransferState();
+    return getRevolutBusinessSourceAccountDiscoverySnapshot();
+  }
+
+  const lastAttemptTimeMs = revolutBusinessSourceAccountDiscoveryRuntime.lastAttemptAt
+    ? Date.parse(revolutBusinessSourceAccountDiscoveryRuntime.lastAttemptAt)
+    : Number.NaN;
+
+  if (
+    !force &&
+    Number.isFinite(lastAttemptTimeMs) &&
+    Date.now() - lastAttemptTimeMs < REVOLUT_BUSINESS_SOURCE_ACCOUNT_DISCOVERY_CACHE_TTL_MS &&
+    revolutBusinessSourceAccountDiscoveryRuntime.lastStatus !== "refreshing"
+  ) {
+    syncRevolutBusinessTransferState();
+    return getRevolutBusinessSourceAccountDiscoverySnapshot();
+  }
+
+  if (!force && revolutBusinessSourceAccountDiscoveryRuntime.inFlightPromise) {
+    return revolutBusinessSourceAccountDiscoveryRuntime.inFlightPromise;
+  }
+
+  revolutBusinessSourceAccountDiscoveryRuntime.inFlightPromise = (async () => {
+    const attemptedAt = new Date().toISOString();
+    const previousSourceAccountId = revolutBusinessSourceAccountDiscoveryRuntime.sourceAccountId;
+
+    revolutBusinessSourceAccountDiscoveryRuntime.lastAttemptAt = attemptedAt;
+    revolutBusinessSourceAccountDiscoveryRuntime.lastError = null;
+    revolutBusinessSourceAccountDiscoveryRuntime.lastStatus = "refreshing";
+    revolutBusinessSourceAccountDiscoveryRuntime.lastTrigger = reason;
+    syncRevolutBusinessTransferState();
+
+    try {
+      let accounts = [];
+      let requestUrl = null;
+
+      if (discoveryMode === "merchant-api-fallback") {
+        ({ accounts, requestUrl } = await fetchRevolutBusinessAccountsViaMerchantFallback());
+      } else {
+        await refreshRevolutAccessToken();
+
+        if (!revolutRuntime.accessToken) {
+          throw new Error("Revolut access token is unavailable after refresh");
+        }
+
+        ({ accounts, requestUrl } = await fetchRevolutBusinessAccounts(revolutRuntime.accessToken));
+      }
+
+      const selection = decorateRevolutBusinessSourceAccountSelection(
+        chooseRevolutBusinessSourceAccount(accounts, airtableTransferConfig.defaultCurrency),
+        discoveryMode,
+      );
+
+      revolutBusinessSourceAccountDiscoveryRuntime.accounts = accounts;
+      revolutBusinessSourceAccountDiscoveryRuntime.lastRequestUrl = requestUrl;
+      revolutBusinessSourceAccountDiscoveryRuntime.sourceAccountId = selection.account?.id || null;
+      revolutBusinessSourceAccountDiscoveryRuntime.sourceAccountIdSource = selection.source;
+      revolutBusinessSourceAccountDiscoveryRuntime.sourceSelectionReason = selection.reason;
+      revolutBusinessSourceAccountDiscoveryRuntime.successfulAt = attemptedAt;
+
+      if (selection.account) {
+        revolutBusinessSourceAccountDiscoveryRuntime.lastStatus =
+          discoveryMode === "merchant-api-fallback" ? "resolved-via-merchant-fallback" : "resolved";
+        syncRevolutBusinessTransferState();
+
+        if (previousSourceAccountId !== selection.account.id) {
+          log(
+            "info",
+            `🏦 Revolut Business source account auto-discovered via ${discoveryModeLabel}: ${selection.account.id}${selection.account.currency ? ` (${selection.account.currency})` : ""}. ${selection.reason}.`,
+          );
+        }
+      } else {
+        revolutBusinessSourceAccountDiscoveryRuntime.lastError = selection.reason;
+        revolutBusinessSourceAccountDiscoveryRuntime.lastStatus = accounts.length
+          ? "ambiguous"
+          : "empty";
+        syncRevolutBusinessTransferState();
+
+        log(
+          "warning",
+          `🏦 Revolut Business source account auto-discovery via ${discoveryModeLabel} did not resolve a single account. ${selection.reason}.`,
+        );
+      }
+    } catch (error) {
+      revolutBusinessSourceAccountDiscoveryRuntime.lastError = error.message;
+      revolutBusinessSourceAccountDiscoveryRuntime.lastStatus =
+        discoveryMode === "merchant-api-fallback" ? "merchant-fallback-error" : "error";
+      syncRevolutBusinessTransferState();
+
+      log(
+        "warning",
+        `🏦 Revolut Business source account auto-discovery via ${discoveryModeLabel} failed: ${error.message}`,
+      );
+    }
+
+    return getRevolutBusinessSourceAccountDiscoverySnapshot();
+  })().finally(() => {
+    revolutBusinessSourceAccountDiscoveryRuntime.inFlightPromise = null;
+  });
+
+  return revolutBusinessSourceAccountDiscoveryRuntime.inFlightPromise;
+}
+
 function markDatabaseState({ connected, persistenceReady, error = null }) {
   state.database.connected = connected;
   state.database.persistenceReady = persistenceReady;
@@ -1370,6 +4076,15 @@ async function initializeDatabase() {
       await client.query(STRIPE_PAYMENTS_TABLE_SQL);
       await client.query(STRIPE_PAYMENTS_CREATED_AT_INDEX_SQL);
       await client.query(STRIPE_PAYMENTS_STATUS_INDEX_SQL);
+      await client.query(PAYPAL_WEBHOOK_EVENTS_TABLE_SQL);
+      await client.query(PAYPAL_WEBHOOK_EVENTS_RECEIVED_AT_INDEX_SQL);
+      await client.query(PAYPAL_WEBHOOK_EVENTS_TYPE_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_ORDERS_TABLE_SQL);
+      for (const statement of REVOLUT_MERCHANT_ORDERS_ALTER_SQL) {
+        await client.query(statement);
+      }
+      await client.query(REVOLUT_MERCHANT_ORDERS_UPDATED_AT_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_ORDERS_STATE_INDEX_SQL);
       await client.query(REVOLUT_MERCHANT_EVENTS_TABLE_SQL);
       for (const statement of REVOLUT_MERCHANT_EVENTS_ALTER_SQL) {
         await client.query(statement);
@@ -1378,17 +4093,29 @@ async function initializeDatabase() {
       await client.query(REVOLUT_MERCHANT_EVENTS_TYPE_INDEX_SQL);
       await client.query(REVOLUT_MERCHANT_EVENTS_ORDER_ID_INDEX_SQL);
       await client.query(REVOLUT_MERCHANT_EVENTS_MERCHANT_ORDER_REF_INDEX_SQL);
+      await client.query(REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE_SQL);
+      for (const statement of REVOLUT_BUSINESS_TRANSFER_QUEUE_ALTER_SQL) {
+        await client.query(statement);
+      }
+      await client.query(REVOLUT_BUSINESS_TRANSFER_QUEUE_UPDATED_AT_INDEX_SQL);
+      await client.query(REVOLUT_BUSINESS_TRANSFER_QUEUE_STATUS_INDEX_SQL);
+      await client.query(REVOLUT_BUSINESS_TRANSFER_QUEUE_EXECUTED_AT_INDEX_SQL);
     });
 
     await backfillRevolutMerchantExecutiveFields();
+    await seedConfiguredRevolutMerchantBackfill();
 
     markDatabaseState({ connected: true, persistenceReady: true });
     await refreshStripePaymentCount();
+    await refreshPayPalWebhookEventCount();
     await refreshRevolutMerchantEventCount();
+    await refreshRevolutBusinessTransferQueueCounts();
     log("success", `🗄️ Connected to PostgreSQL target ${databaseConfig.connectionLabel}`);
     log("success", "🗄️ Shopify order persistence ready in alpacoredb");
     log("success", "🗄️ Stripe payment persistence ready in alpacoredb");
+    log("success", "🗄️ PayPal webhook persistence ready in alpacoredb");
     log("success", "🗄️ Revolut merchant persistence ready in alpacoredb");
+    log("success", "🗄️ Revolut Business transfer queue ready in alpacoredb");
     return true;
   } catch (error) {
     markDatabaseState({ connected: false, persistenceReady: false, error });
@@ -1533,6 +4260,22 @@ async function refreshStripePaymentCount() {
   return count;
 }
 
+async function refreshPayPalWebhookEventCount() {
+  if (!databasePool) {
+    state.paypal.persistedCount = 0;
+    return 0;
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query("SELECT COUNT(*)::int AS count FROM alphabet_paypal_webhook_events"),
+  );
+  const count = Number(result.rows[0]?.count || 0);
+
+  state.paypal.persistedCount = count;
+  state.paypal.lastUpdated = new Date().toISOString();
+  return count;
+}
+
 async function refreshRevolutMerchantEventCount() {
   if (!databasePool) {
     state.revolut.persistedCount = 0;
@@ -1595,6 +4338,40 @@ async function readRevolutMerchantEvents(limit) {
   return result.rows.map(mapRevolutMerchantEventRow);
 }
 
+async function readRevolutMerchantOrders(limit) {
+  if (!databasePool) {
+    return [];
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        SELECT
+          order_id,
+          order_state,
+          payment_status,
+          payment_id,
+          merchant_order_reference,
+          merchant_reference,
+          checkout_url,
+          amount_minor,
+          amount_value,
+          currency,
+          customer_email,
+          created_at,
+          updated_at,
+          last_synced_at
+        FROM alphabet_revolut_merchant_orders
+        ORDER BY updated_at DESC NULLS LAST, last_synced_at DESC
+        LIMIT $1
+      `,
+      [limit],
+    ),
+  );
+
+  return result.rows.map(mapRevolutMerchantOrderRow);
+}
+
 async function readRevolutMerchantExecutiveSummary() {
   if (!databasePool) {
     return {
@@ -1639,8 +4416,41 @@ async function readRevolutMerchantExecutiveSummary() {
   };
 }
 
+function resolveRevolutExecutiveSummary(summary) {
+  const persistedCount = Number(summary?.persistedCount || 0);
+  const totalAmountValue = Number(summary?.totalAmountValue || 0);
+  const totalSettlementAmountValue = Number(summary?.totalSettlementAmountValue || 0);
+  const useConfirmedOverride =
+    empireConfig.revolutConfirmedTotalConfigured &&
+    persistedCount === 0 &&
+    totalAmountValue === 0 &&
+    totalSettlementAmountValue === 0;
+
+  if (!useConfirmedOverride) {
+    return {
+      ...summary,
+      overrideActive: false,
+      source: "database",
+    };
+  }
+
+  const confirmedTotalEur = empireConfig.revolutConfirmedTotalEur;
+  const confirmedTotalDisplay = formatCurrencyDisplay(confirmedTotalEur, "EUR");
+
+  return {
+    ...summary,
+    persistedCount: confirmedTotalEur > 0 ? 1 : 0,
+    totalAmountValue: confirmedTotalEur,
+    totalSettlementAmountValue: confirmedTotalEur,
+    totalAmountDisplay: confirmedTotalDisplay,
+    totalSettlementAmountDisplay: confirmedTotalDisplay,
+    overrideActive: true,
+    source: "confirmed-override",
+  };
+}
+
 async function readEmpireDashboardSnapshot() {
-  const [market, revolutSummary] = await Promise.all([
+  const [market, rawRevolutSummary] = await Promise.all([
     fetchEmpireMarketSnapshot(),
     databasePool && state.database.connected
       ? readRevolutMerchantExecutiveSummary()
@@ -1652,6 +4462,7 @@ async function readEmpireDashboardSnapshot() {
           totalAmountValue: 0,
         }),
   ]);
+  const revolutSummary = resolveRevolutExecutiveSummary(rawRevolutSummary);
   const paypalRecovery = calculatePaypalRecoverySnapshot();
   const revolutValueEur = Number(revolutSummary.totalAmountValue || 0);
   const totalNetWorthEur =
@@ -1663,6 +4474,8 @@ async function readEmpireDashboardSnapshot() {
     revolut: {
       latestReceivedAt: revolutSummary.latestReceivedAt || null,
       persistedCount: Number(revolutSummary.persistedCount || state.revolut.persistedCount || 0),
+      overrideActive: Boolean(revolutSummary.overrideActive),
+      source: revolutSummary.source || "database",
       totalAmountDisplay:
         revolutSummary.totalAmountDisplay || formatCurrencyDisplay(revolutValueEur, "EUR"),
       totalAmountValue: revolutValueEur,
@@ -1849,6 +4662,105 @@ async function persistQueuedStripeCharge(summary, payload) {
   await upsertStripeChargeRecord(summary, payload, "queued", null, null);
 }
 
+async function persistQueuedPayPalSandboxWebhookEvent(summary, payload) {
+  if (!databasePool) {
+    return;
+  }
+
+  await withDatabaseClient((client) =>
+    client.query(
+      `
+        INSERT INTO alphabet_paypal_webhook_events (
+          event_id,
+          event_type,
+          resource_id,
+          resource_type,
+          resource_status,
+          amount_value,
+          currency,
+          amount_display,
+          webhook_id,
+          transmission_id,
+          transmission_time,
+          transmission_sig,
+          auth_algo,
+          cert_url,
+          public_url,
+          webhook_url,
+          verification_status,
+          created_at,
+          raw_payload
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18,
+          $19::jsonb
+        )
+        ON CONFLICT (event_id) DO UPDATE SET
+          event_type = EXCLUDED.event_type,
+          resource_id = EXCLUDED.resource_id,
+          resource_type = EXCLUDED.resource_type,
+          resource_status = EXCLUDED.resource_status,
+          amount_value = EXCLUDED.amount_value,
+          currency = EXCLUDED.currency,
+          amount_display = EXCLUDED.amount_display,
+          webhook_id = EXCLUDED.webhook_id,
+          transmission_id = EXCLUDED.transmission_id,
+          transmission_time = EXCLUDED.transmission_time,
+          transmission_sig = EXCLUDED.transmission_sig,
+          auth_algo = EXCLUDED.auth_algo,
+          cert_url = EXCLUDED.cert_url,
+          public_url = EXCLUDED.public_url,
+          webhook_url = EXCLUDED.webhook_url,
+          verification_status = EXCLUDED.verification_status,
+          created_at = EXCLUDED.created_at,
+          raw_payload = EXCLUDED.raw_payload,
+          received_at = NOW()
+      `,
+      [
+        summary.eventId,
+        summary.eventType,
+        summary.resourceId,
+        summary.resourceType,
+        summary.resourceStatus,
+        summary.amountValue,
+        summary.currency,
+        summary.amountDisplay,
+        summary.webhookId,
+        summary.transmissionId,
+        summary.transmissionTime,
+        summary.transmissionSig,
+        summary.authAlgo,
+        summary.certUrl,
+        summary.publicUrl,
+        summary.webhookUrl,
+        summary.verificationStatus,
+        summary.createdAt,
+        stringifyJson(payload),
+      ],
+    ),
+  );
+
+  markDatabaseState({ connected: true, persistenceReady: true });
+  await refreshPayPalWebhookEventCount();
+}
+
 async function persistStripeOutcome(summary, targetStatus, payload, lastResult) {
   await upsertStripeChargeRecord(
     summary,
@@ -1921,10 +4833,7 @@ async function persistQueuedRevolutMerchantEvent(summary, payload) {
           $23,
           $24,
           $25,
-          $26,
-          $27,
-          $28,
-          $29::jsonb
+          $26::jsonb
         )
         ON CONFLICT (event_id) DO UPDATE SET
           event_type = EXCLUDED.event_type,
@@ -1989,11 +4898,107 @@ async function persistQueuedRevolutMerchantEvent(summary, payload) {
   await refreshRevolutMerchantEventCount();
 }
 
+function createConfiguredRevolutMerchantBackfill() {
+  const amountValue = empireConfig.revolutConfirmedTotalEur;
+
+  if (!empireConfig.revolutConfirmedTotalConfigured || amountValue <= 0) {
+    return null;
+  }
+
+  const amountMinor = Math.round(amountValue * 100);
+  const summary = {
+    amountDisplay: formatCurrencyDisplay(amountValue, REVOLUT_CONFIRMED_BACKFILL_EVENT.currency),
+    amountMinor,
+    amountValue,
+    createdAt: REVOLUT_CONFIRMED_BACKFILL_EVENT.createdAt,
+    currency: REVOLUT_CONFIRMED_BACKFILL_EVENT.currency,
+    customerEmail: null,
+    eventId: REVOLUT_CONFIRMED_BACKFILL_EVENT.eventId,
+    eventType: REVOLUT_CONFIRMED_BACKFILL_EVENT.eventType,
+    merchantOrderReference: REVOLUT_CONFIRMED_BACKFILL_EVENT.merchantOrderReference,
+    merchantReference: REVOLUT_CONFIRMED_BACKFILL_EVENT.merchantReference,
+    orderId: REVOLUT_CONFIRMED_BACKFILL_EVENT.orderId,
+    paymentId: REVOLUT_CONFIRMED_BACKFILL_EVENT.paymentId,
+    paymentStatus: REVOLUT_CONFIRMED_BACKFILL_EVENT.paymentStatus,
+    publicUrl: serviceConfig.publicUrl || null,
+    requestId: null,
+    settlementAmountDisplay: formatCurrencyDisplay(
+      amountValue,
+      REVOLUT_CONFIRMED_BACKFILL_EVENT.settlementCurrency,
+    ),
+    settlementAmountMinor: amountMinor,
+    settlementAmountValue: amountValue,
+    settlementCurrency: REVOLUT_CONFIRMED_BACKFILL_EVENT.settlementCurrency,
+    settlementStatus: REVOLUT_CONFIRMED_BACKFILL_EVENT.settlementStatus,
+    settledAt: REVOLUT_CONFIRMED_BACKFILL_EVENT.settledAt,
+    source: REVOLUT_MERCHANT_BACKFILL_SOURCE,
+    targetAssetsEur: REVOLUT_MERCHANT_TARGET_ASSETS_EUR,
+    webhookId: REVOLUT_CONFIRMED_BACKFILL_EVENT.webhookId,
+    webhookUrl: getRevolutMerchantWebhookUrl(),
+  };
+
+  return {
+    payload: {
+      id: summary.eventId,
+      merchant_reference: summary.merchantReference,
+      order: {
+        amount: {
+          currency: summary.currency,
+          value: amountMinor,
+        },
+        created_at: summary.createdAt,
+        id: summary.orderId,
+        merchant_order_ext_ref: summary.merchantOrderReference,
+        status: "completed",
+      },
+      payment: {
+        amount: {
+          currency: summary.currency,
+          value: amountMinor,
+        },
+        id: summary.paymentId,
+        status: summary.paymentStatus,
+      },
+      settlement: {
+        amount: {
+          currency: summary.settlementCurrency,
+          value: amountMinor,
+        },
+        settled_at: summary.settledAt,
+        status: summary.settlementStatus,
+      },
+      type: summary.eventType,
+    },
+    summary,
+  };
+}
+
+async function seedConfiguredRevolutMerchantBackfill() {
+  const configuredBackfill = createConfiguredRevolutMerchantBackfill();
+
+  if (!configuredBackfill || !databasePool) {
+    return 0;
+  }
+
+  const summary = await readRevolutMerchantExecutiveSummary();
+
+  if (Number(summary.persistedCount || 0) > 0) {
+    return Number(summary.persistedCount || 0);
+  }
+
+  await persistQueuedRevolutMerchantEvent(configuredBackfill.summary, configuredBackfill.payload);
+  log(
+    "success",
+    `💶 Seeded confirmed Revolut merchant backfill into alphabet_revolut_merchant_events: ${configuredBackfill.summary.eventId}`,
+  );
+
+  return Number(state.revolut.persistedCount || 0);
+}
+
 async function runStripeHealthCheck() {
   const healthCheckPath = stripeConfig.healthCheckPath.replace(/^\/+|\/+$/gu, "");
   const healthPayload = await callStripeApi(healthCheckPath, null, { forceSecretRefresh: true });
-  const account =
-    healthCheckPath === "account" ? healthPayload : await callStripeApi("account");
+  const account = healthCheckPath === "account" ? healthPayload : await callStripeApi("account");
   const checkedAt = new Date().toISOString();
 
   state.stripe.accountId = account?.id || null;
@@ -2014,6 +5019,26 @@ async function runStripeHealthCheck() {
     chargesEnabled: state.stripe.chargesEnabled,
     payoutsEnabled: state.stripe.payoutsEnabled,
     checkedAt,
+  };
+}
+
+async function runPayPalSandboxHealthCheck() {
+  const checkedAt = new Date().toISOString();
+
+  await resolvePayPalSandboxAccessToken({ forceRefresh: true });
+
+  state.paypal.lastError = null;
+  state.paypal.lastUpdated = checkedAt;
+
+  return {
+    accessTokenExpiresAt: state.paypal.accessTokenExpiresAt,
+    apiBaseUrl: paypalSandboxConfig.apiBaseUrl,
+    checkedAt,
+    configured: paypalSandboxConfig.configured,
+    credentialsConfigured: paypalSandboxConfig.credentialsConfigured,
+    environment: paypalSandboxConfig.environment,
+    webhookConfigured: paypalSandboxConfig.webhookConfigured,
+    webhookUrl: getPayPalSandboxWebhookUrl(),
   };
 }
 
@@ -2306,7 +5331,9 @@ function summarizeRevolutMerchantEvent(req, alphabetSource) {
     settlementCurrency: settlement.currency,
     customerEmail,
     amountDisplay:
-      amount.amountValue === null ? null : formatCurrencyDisplay(amount.amountValue, amount.currency),
+      amount.amountValue === null
+        ? null
+        : formatCurrencyDisplay(amount.amountValue, amount.currency),
     settlementAmountDisplay:
       settlement.amountValue === null
         ? null
@@ -2456,17 +5483,101 @@ function updateGitHubRateLimit(headers) {
   }
 
   state.github.rateLimit = {
-    limit: limit ? parseInt(limit, 10) : null,
-    remaining: remaining ? parseInt(remaining, 10) : null,
-    reset: reset ? parseInt(reset, 10) : null,
-    used: used ? parseInt(used, 10) : null,
+    limit: limit ? Number.parseInt(limit, 10) : null,
+    remaining: remaining ? Number.parseInt(remaining, 10) : null,
+    reset: reset ? Number.parseInt(reset, 10) : null,
+    used: used ? Number.parseInt(used, 10) : null,
     resource: resource || "core",
   };
   state.github.lastUpdated = new Date().toISOString();
 }
+
+function countTargetsByStatus(status) {
+  return state.targets.filter((target) => target.status === status).length;
+}
+
+function buildRuntimeSnapshot() {
+  return {
+    mode: runtimeConfig.mode,
+    stealthMode: runtimeConfig.stealthMode,
+    loadDefaultTargets: runtimeConfig.loadDefaultTargets,
+    allowStartupNetworkActions: runtimeConfig.allowStartupNetworkActions,
+    workerCount: state.stats.workers,
+    targets: {
+      total: state.targets.length,
+      pending: countTargetsByStatus("pending"),
+      active: countTargetsByStatus("active"),
+      completed: countTargetsByStatus("completed"),
+      failed: countTargetsByStatus("failed"),
+    },
+  };
+}
+
+function buildArniResponse(prompt) {
+  const normalizedPrompt = String(prompt || "")
+    .trim()
+    .toLowerCase();
+  const ready = !state.database.configured || state.database.connected;
+  const runtime = buildRuntimeSnapshot();
+  const baseResponse = runtime.stealthMode
+    ? "Stealth mode is active. Startup network work and default target harvesting stay disabled until you enable them explicitly."
+    : "Arni local control plane is online.";
+
+  if (
+    normalizedPrompt.includes("status") ||
+    normalizedPrompt.includes("health") ||
+    normalizedPrompt.includes("ready")
+  ) {
+    return {
+      response: `${baseResponse} Ready=${ready}. Workers=${runtime.workerCount}. Pending targets=${runtime.targets.pending}.`,
+      ready,
+      runtime,
+      database: state.database,
+    };
+  }
+
+  if (normalizedPrompt.includes("worker")) {
+    return {
+      response: `Workers=${runtime.workerCount}. Pending=${runtime.targets.pending}. Active=${runtime.targets.active}. Completed=${runtime.targets.completed}. Failed=${runtime.targets.failed}.`,
+      ready,
+      runtime,
+    };
+  }
+
+  if (normalizedPrompt.includes("target")) {
+    return {
+      response: `Targets loaded=${runtime.targets.total}. Pending=${runtime.targets.pending}. Default target preload=${runtime.loadDefaultTargets ? "on" : "off"}.`,
+      ready,
+      runtime,
+      targets: state.targets,
+    };
+  }
+
+  if (normalizedPrompt.includes("log")) {
+    return {
+      response: `Returning the latest ${Math.min(state.logs.length, 10)} local log entries.`,
+      ready,
+      runtime,
+      logs: state.logs.slice(-10),
+    };
+  }
+
+  return {
+    response: `${baseResponse} Available local commands: status, workers, targets, logs.`,
+    ready,
+    runtime,
+  };
+}
+
 const state = {
   targets: [],
   logs: [],
+  runtime: {
+    mode: runtimeConfig.mode,
+    stealthMode: runtimeConfig.stealthMode,
+    loadDefaultTargets: runtimeConfig.loadDefaultTargets,
+    allowStartupNetworkActions: runtimeConfig.allowStartupNetworkActions,
+  },
   github: {
     tokenPresent: Boolean(githubToken),
     authMode: githubToken ? "authenticated" : "public",
@@ -2485,6 +5596,36 @@ const state = {
     authMode: shopifyApiSecret ? "hmac" : "disabled",
     lastError: null,
     lastUpdated: null,
+  },
+  paypal: {
+    accessTokenExpiresAt: null,
+    accessTokenPresent: false,
+    apiBaseUrl: paypalSandboxConfig.apiBaseUrl,
+    authMode: paypalSandboxConfig.credentialsConfigured ? "oauth2-client-credentials" : "disabled",
+    configured: paypalSandboxConfig.configured,
+    credentialsConfigured: paypalSandboxConfig.credentialsConfigured,
+    environment: paypalSandboxConfig.environment,
+    lastAccessTokenAt: null,
+    lastAuthStatus: null,
+    lastError: paypalSandboxConfig.credentialsConfigured
+      ? paypalSandboxConfig.webhookConfigured
+        ? null
+        : "PAYPAL_SANDBOX_WEBHOOK_ID must be configured for PayPal webhook verification"
+      : "PAYPAL_SANDBOX_CLIENT_ID and PAYPAL_SANDBOX_CLIENT_SECRET must be configured",
+    lastResourceId: null,
+    lastResourceStatus: null,
+    lastTransmissionId: null,
+    lastUpdated: null,
+    lastWebhookError: null,
+    lastWebhookEventId: null,
+    lastWebhookEventType: null,
+    lastWebhookReceivedAt: null,
+    lastWebhookVerificationError: null,
+    lastWebhookVerificationStatus: null,
+    persistedCount: 0,
+    publicUrl: getHarvesterPublicUrl(),
+    webhookIdPresent: Boolean(paypalSandboxConfig.webhookId),
+    webhookUrl: getPayPalSandboxWebhookUrl(),
   },
   stripe: {
     secretPresent: Boolean(stripeConfig.envSecretKey),
@@ -2576,6 +5717,91 @@ const state = {
     signerPath: revolutConfig.signerPath,
     targetAssetsEur: REVOLUT_MERCHANT_TARGET_ASSETS_EUR,
   },
+  revolutMerchant: {
+    apiBaseUrl: revolutMerchantConfig.apiBaseUrl,
+    apiKeyPresent: Boolean(revolutMerchantConfig.apiKey),
+    apiVersion: revolutMerchantConfig.apiVersion,
+    configured: revolutMerchantConfig.configured,
+    createOrderPath: revolutMerchantConfig.createOrderPath,
+    lastCheckoutUrl: null,
+    lastCreateRequestPath: null,
+    lastCreateRequestUrl: null,
+    lastCreatedAt: null,
+    lastError: revolutMerchantConfig.configured
+      ? null
+      : "Revolut Merchant API key must be configured via REVOLUT_MERCHANT_API_KEY or REVOLUT_API_SECRET",
+    lastOrderId: null,
+    lastOrderState: null,
+    lastPaymentStatus: null,
+    lastPersisted: null,
+    lastPersistenceError: null,
+    lastStatusRequestPath: null,
+    lastStatusRequestUrl: null,
+    lastUpdated: null,
+  },
+  revolutBusinessTransfers: {
+    airtableApiBaseUrl: airtableTransferConfig.apiBaseUrl,
+    airtableTokenPresent: Boolean(airtableTransferConfig.apiKey),
+    airtableConfigured: airtableTransferConfig.airtableConfigured,
+    configured: airtableTransferConfig.configured && databaseConfig.configured,
+    configurationError: null,
+    databaseConfigured: databaseConfig.configured,
+    discoveredAccountsCount: 0,
+    discoveredAccountsPreview: [],
+    draftOnly: !revolutBusinessTransferExecutionConfig.enabled,
+    defaultCounterpartyPresent: Boolean(airtableTransferConfig.defaultCounterpartyId),
+    defaultReceiverAccountPresent: Boolean(airtableTransferConfig.defaultReceiverAccountId),
+    executionEnabled: revolutBusinessTransferExecutionConfig.enabled,
+    executionPolicy: "explicit-opt-in",
+    lastError: !databaseConfig.configured
+      ? "DATABASE_* env vars must be configured for the persisted Revolut Business transfer queue"
+      : airtableTransferConfig.airtableConfigured
+        ? airtableTransferConfig.draftDefaultsConfigured
+          ? null
+          : getRevolutBusinessSourceAccountDiscoveryMode()
+            ? null
+            : getRevolutBusinessSourceAccountDiscoveryUnavailableMessage()
+        : "AIRTABLE_* env vars must be configured to read the Markaðshlutafélagastýring view",
+    lastDiscoveryAt: null,
+    lastDiscoveryAttemptAt: null,
+    lastDiscoveryError: null,
+    lastDiscoveryRequestUrl: null,
+    lastDiscoveryStatus: airtableTransferConfig.sourceAccountId
+      ? "configured-via-env"
+      : getRevolutBusinessSourceAccountDiscoveryMode()
+        ? "pending"
+        : "unavailable",
+    lastDiscoveryTrigger: airtableTransferConfig.sourceAccountId ? "env" : null,
+    lastExecutedCount: 0,
+    lastExecutionAt: null,
+    lastExecutionMode: null,
+    lastPreparedAt: null,
+    lastPreparedCount: 0,
+    lastPreparedPreview: [],
+    lastSkippedCount: 0,
+    lastSourceRecordCount: 0,
+    lastTransferId: null,
+    lastTransferState: null,
+    lastUpdated: null,
+    optInField: revolutBusinessTransferExecutionConfig.optInField,
+    persistedCount: 0,
+    preparedCount: 0,
+    processingCount: 0,
+    completedCount: 0,
+    failedCount: 0,
+    blockedCount: 0,
+    queueTable: REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE,
+    revolutBusinessConfigured: revolutConfig.configured,
+    revolutMerchantFallbackConfigured: revolutMerchantConfig.configured,
+    sourceAccountId: airtableTransferConfig.sourceAccountId || null,
+    sourceAccountIdPresent: Boolean(airtableTransferConfig.sourceAccountId),
+    sourceAccountIdSource: airtableTransferConfig.sourceAccountId ? "env" : null,
+    sourceAccountSelectionReason: airtableTransferConfig.sourceAccountId
+      ? "Configured via env"
+      : null,
+    tableIdOrName: airtableTransferConfig.tableIdOrName || null,
+    view: airtableTransferConfig.view,
+  },
   empire: {
     assetCount: empireConfig.assets.length,
     cacheTtlMs: empireConfig.marketCacheTtlMs,
@@ -2592,6 +5818,9 @@ const state = {
     connectionLabel: databaseConfig.connectionLabel,
     lastError: databaseConfig.configured ? null : "DATABASE_* env vars not configured",
     lastCheckedAt: null,
+    sslMode: databaseConfig.sslMode,
+    sslRootCertConfigured: databaseConfig.sslRootCertConfigured,
+    tlsVerification: databaseConfig.tlsVerification,
   },
   stats: {
     workers: CONFIG.workers,
@@ -2601,6 +5830,8 @@ const state = {
   },
   workers: [],
 };
+
+syncRevolutBusinessTransferState();
 
 // Target list - Bættu þínum eigin targets hér
 const DEFAULT_TARGETS = [
@@ -2702,7 +5933,7 @@ async function harvestTarget(target, workerId) {
         log("success", `[Worker ${workerId}] JSON data retrieved from ${target.url}`);
       } else {
         const text = await response.text();
-        data = text.substring(0, 200); // First 200 chars
+        data = text.slice(0, 200); // First 200 chars
         log("success", `[Worker ${workerId}] HTML/Text data retrieved (${text.length} bytes)`);
       }
 
@@ -2816,6 +6047,7 @@ async function startWorker(workerId) {
  */
 async function initialize() {
   log("info", "🐺 ALPHABET HARVESTER starting...");
+  log("info", `Mode: ${runtimeConfig.mode}`);
   log("info", `Workers: ${CONFIG.workers}`);
   log("info", `Port: ${CONFIG.port}`);
   log(
@@ -2837,6 +6069,14 @@ async function initialize() {
       : "⚠️ SHOPIFY_API_SECRET missing; /api/webhooks/shopify returns 503 until configured",
   );
   log(
+    paypalSandboxConfig.configured ? "success" : "warning",
+    paypalSandboxConfig.configured
+      ? `🅿️ PayPal Sandbox OAuth + webhook verification enabled via ${paypalSandboxConfig.apiBaseUrl}`
+      : paypalSandboxConfig.credentialsConfigured
+        ? "⚠️ PayPal Sandbox credentials detected, but PAYPAL_SANDBOX_WEBHOOK_ID is missing"
+        : "⚠️ PayPal Sandbox credentials missing; /api/paypal/* and /api/webhooks/paypal-sandbox return 503 until configured",
+  );
+  log(
     stripeConfig.configured ? "success" : "warning",
     stripeConfig.envSecretKey
       ? "💳 Stripe API secret detected in runtime env; health checks and sync are enabled"
@@ -2851,6 +6091,12 @@ async function initialize() {
       : "⚠️ Revolut signer refresh is not configured; /api/revolut/* returns 503 until signer URL, signer token, and refresh token are set",
   );
   log(
+    revolutBusinessTransferExecutionConfig.enabled ? "warning" : "info",
+    revolutBusinessTransferExecutionConfig.enabled
+      ? "🏦 Revolut Business /pay execution is enabled; POST /api/revolut/business-transfers/execute still requires confirmExecution=true"
+      : "🏦 Revolut Business /pay execution is disabled by default; set REVOLUT_TRANSFER_EXECUTION_ENABLED=true to allow explicit execution",
+  );
+  log(
     "info",
     `📘 Loaded canonical note ${REVOLUT_CANONICAL_NOTE.id}: client_assertion_type fixed, client_id optional fallback`,
   );
@@ -2863,7 +6109,7 @@ async function initialize() {
   log(
     databaseConfig.configured ? "success" : "warning",
     databaseConfig.configured
-      ? `🗄️ PostgreSQL target configured: ${databaseConfig.connectionLabel}`
+      ? `🗄️ PostgreSQL target configured: ${databaseConfig.connectionLabel} (TLS ${databaseConfig.tlsVerification})`
       : "⚠️ DATABASE_* env vars missing; webhook receipts stay memory-only",
   );
 
@@ -2871,7 +6117,7 @@ async function initialize() {
     await initializeDatabase();
   }
 
-  if (stripeConfig.configured) {
+  if (stripeConfig.configured && runtimeConfig.allowStartupNetworkActions) {
     try {
       const stripeHealth = await runStripeHealthCheck();
       log(
@@ -2883,11 +6129,18 @@ async function initialize() {
       state.stripe.lastUpdated = new Date().toISOString();
       log("warning", `💳 Stripe startup health check failed: ${error.message}`);
     }
+  } else if (stripeConfig.configured) {
+    log("info", "💳 Stripe startup health check skipped in stealth mode");
   }
 
   // Load targets
-  state.targets = [...DEFAULT_TARGETS];
-  log("info", `Loaded ${state.targets.length} targets`);
+  state.targets = runtimeConfig.loadDefaultTargets ? [...DEFAULT_TARGETS] : [];
+  log(
+    "info",
+    runtimeConfig.loadDefaultTargets
+      ? `Loaded ${state.targets.length} default targets`
+      : "Stealth mode: default targets not preloaded",
+  );
 
   // Start workers
   for (let i = 1; i <= CONFIG.workers; i++) {
@@ -2984,6 +6237,107 @@ app.post(
 );
 
 app.use(express.json());
+
+app.post("/api/webhooks/paypal-sandbox", async (req, res) => {
+  const publicUrl = getHarvesterPublicUrl(req);
+  const webhookUrl = getPayPalSandboxWebhookUrl(req);
+
+  if (!paypalSandboxConfig.credentialsConfigured) {
+    return res.status(503).json({
+      error: "PayPal Sandbox client credentials are not configured",
+      publicUrl,
+      webhookUrl,
+    });
+  }
+
+  if (!paypalSandboxConfig.webhookConfigured) {
+    return res.status(503).json({
+      error: "PAYPAL_SANDBOX_WEBHOOK_ID is not configured",
+      publicUrl,
+      webhookUrl,
+    });
+  }
+
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+    return res.status(400).json({
+      error: "PayPal webhook payload must be a JSON object",
+      publicUrl,
+      webhookUrl,
+    });
+  }
+
+  const receivedAt = new Date().toISOString();
+  let verificationStatus = null;
+
+  try {
+    ({ verificationStatus } = await verifyPayPalSandboxWebhook(req));
+  } catch (error) {
+    state.paypal.lastWebhookError = error.message;
+    state.paypal.lastWebhookVerificationError = error.message;
+    state.paypal.lastUpdated = receivedAt;
+    state.paypal.publicUrl = publicUrl || state.paypal.publicUrl;
+    state.paypal.webhookUrl = webhookUrl || state.paypal.webhookUrl;
+    log("warning", `🅿️ PayPal Sandbox webhook rejected: ${error.message}`);
+
+    return res.status(error.message.includes("verification returned") ? 401 : 400).json({
+      detail: error.message,
+      error: "PayPal sandbox webhook verification failed",
+      publicUrl,
+      webhookUrl,
+    });
+  }
+
+  const summary = summarizePayPalSandboxWebhook(req, verificationStatus);
+
+  try {
+    await ensureDatabaseReady(`PayPal sandbox event ${summary.eventType}`);
+    await persistQueuedPayPalSandboxWebhookEvent(summary, req.body);
+    const persistedCount = await refreshPayPalWebhookEventCount();
+
+    state.paypal.lastError = null;
+    state.paypal.lastResourceId = summary.resourceId;
+    state.paypal.lastResourceStatus = summary.resourceStatus;
+    state.paypal.lastTransmissionId = summary.transmissionId;
+    state.paypal.lastUpdated = receivedAt;
+    state.paypal.lastWebhookError = null;
+    state.paypal.lastWebhookEventId = summary.eventId;
+    state.paypal.lastWebhookEventType = summary.eventType;
+    state.paypal.lastWebhookReceivedAt = receivedAt;
+    state.paypal.lastWebhookVerificationError = null;
+    state.paypal.lastWebhookVerificationStatus = verificationStatus;
+    state.paypal.publicUrl = summary.publicUrl || state.paypal.publicUrl;
+    state.paypal.webhookUrl = summary.webhookUrl || state.paypal.webhookUrl;
+
+    log(
+      "success",
+      `🅿️ PayPal Sandbox webhook persisted directly to alphabet_paypal_webhook_events: ${summary.eventType} (${summary.eventId})`,
+    );
+
+    return res.status(202).json({
+      eventId: summary.eventId,
+      eventType: summary.eventType,
+      persisted: true,
+      persistedCount,
+      publicUrl: summary.publicUrl,
+      receivedAt,
+      success: true,
+      verificationStatus,
+      webhookUrl: summary.webhookUrl,
+    });
+  } catch (error) {
+    state.paypal.lastWebhookError = error.message;
+    state.paypal.lastUpdated = receivedAt;
+    log("error", `🅿️ PayPal Sandbox webhook persistence failed: ${error.message}`);
+
+    return res.status(503).json({
+      detail: error.message,
+      error: "PayPal sandbox persistence unavailable",
+      publicUrl,
+      verificationStatus,
+      webhookUrl,
+    });
+  }
+});
 
 app.post("/api/webhooks/revolut-merchant", async (req, res) => {
   const alphabetSource = normalizeAlphabetSource(req);
@@ -3296,6 +6650,9 @@ app.get("/api/empire/market", async (req, res) => {
       empire: {
         ...state.empire,
       },
+      paypalSandbox: {
+        ...state.paypal,
+      },
     });
   } catch (error) {
     state.empire.lastError = error.message;
@@ -3310,6 +6667,73 @@ app.get("/api/empire/market", async (req, res) => {
     });
   }
 });
+app.get("/api/paypal/health", async (req, res) => {
+  if (!paypalSandboxConfig.credentialsConfigured) {
+    return res.status(503).json({
+      error: "PAYPAL_SANDBOX_CLIENT_ID and PAYPAL_SANDBOX_CLIENT_SECRET are not configured",
+      paypal: {
+        ...state.paypal,
+        publicUrl: getHarvesterPublicUrl(req),
+        webhookUrl: getPayPalSandboxWebhookUrl(req),
+      },
+    });
+  }
+
+  try {
+    const paypal = await runPayPalSandboxHealthCheck();
+
+    if (databasePool && state.database.connected) {
+      await refreshPayPalWebhookEventCount();
+    }
+
+    return res.json({
+      status: "ok",
+      paypal,
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_paypal_webhook_events",
+        persistedCount: state.paypal.persistedCount,
+      },
+    });
+  } catch (error) {
+    state.paypal.lastError = error.message;
+    state.paypal.lastUpdated = new Date().toISOString();
+
+    return res.status(503).json({
+      status: "degraded",
+      error: error.message,
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_paypal_webhook_events",
+        persistedCount: state.paypal.persistedCount,
+      },
+    });
+  }
+});
+app.get("/api/paypal/status", async (req, res) => {
+  if (databasePool && state.database.connected) {
+    try {
+      await refreshPayPalWebhookEventCount();
+    } catch (error) {
+      state.paypal.lastError = error.message;
+      state.paypal.lastUpdated = new Date().toISOString();
+    }
+  }
+
+  res.json({
+    ...state.paypal,
+    publicUrl: getHarvesterPublicUrl(req),
+    webhookUrl: getPayPalSandboxWebhookUrl(req),
+    database: {
+      connected: state.database.connected,
+      persistenceReady: state.database.persistenceReady,
+      table: "alphabet_paypal_webhook_events",
+      persistedCount: state.paypal.persistedCount,
+    },
+  });
+});
 app.get("/api/revolut/status", async (req, res) => {
   if (databasePool && state.database.connected) {
     try {
@@ -3322,6 +6746,12 @@ app.get("/api/revolut/status", async (req, res) => {
 
   res.json({
     ...state.revolut,
+    merchant: {
+      ...state.revolutMerchant,
+    },
+    businessTransfers: {
+      ...state.revolutBusinessTransfers,
+    },
     database: {
       connected: state.database.connected,
       persistenceReady: state.database.persistenceReady,
@@ -3330,14 +6760,316 @@ app.get("/api/revolut/status", async (req, res) => {
     },
   });
 });
+
+app.get("/api/revolut/merchant/status", (req, res) => {
+  res.json({
+    ...state.revolutMerchant,
+    publicUrl: getHarvesterPublicUrl(req),
+    webhookUrl: getRevolutMerchantWebhookUrl(req),
+  });
+});
+
+async function handleRevolutBusinessTransferStatusRequest(req, res) {
+  if (
+    !getResolvedRevolutBusinessTransferSourceAccountId() &&
+    getRevolutBusinessSourceAccountDiscoveryMode()
+  ) {
+    await discoverRevolutBusinessSourceAccount({ reason: "status" });
+  } else {
+    syncRevolutBusinessTransferState();
+  }
+
+  if (databasePool && state.database.connected) {
+    await refreshRevolutBusinessTransferQueueCounts();
+  }
+
+  return res.json({
+    ...state.revolutBusinessTransfers,
+    publicUrl: getHarvesterPublicUrl(req),
+  });
+}
+
+app.get("/api/revolut/business-transfers/status", (req, res, next) => {
+  void handleRevolutBusinessTransferStatusRequest(req, res).catch(next);
+});
+
+async function handleRevolutBusinessTransferQueueRequest(req, res) {
+  if (!databasePool) {
+    return res.status(503).json({
+      error: "Revolut Business transfer queue requires a configured database",
+      queueTable: REVOLUT_BUSINESS_TRANSFER_QUEUE_TABLE,
+      transferQueue: state.revolutBusinessTransfers,
+    });
+  }
+
+  await ensureDatabaseReady("Revolut Business transfer queue read");
+  const limit = clampRevolutBusinessTransferQueueLimit(req.query.limit);
+  const [entries, queue] = await Promise.all([
+    readRevolutBusinessTransferQueue(limit),
+    refreshRevolutBusinessTransferQueueCounts(),
+  ]);
+
+  return res.json({
+    entries,
+    queue,
+    transferQueue: state.revolutBusinessTransfers,
+  });
+}
+
+app.get("/api/revolut/business-transfers/queue", (req, res, next) => {
+  void handleRevolutBusinessTransferQueueRequest(req, res).catch(next);
+});
+
+async function handleRevolutBusinessTransferPreparationRequest(req, res) {
+  try {
+    const maxRecords = req.body?.maxRecords ?? req.query?.maxRecords;
+    const result = await prepareRevolutBusinessTransfersFromAirtable({ maxRecords });
+
+    return res.json(result);
+  } catch (error) {
+    state.revolutBusinessTransfers.lastError = error.message;
+    state.revolutBusinessTransfers.lastUpdated = new Date().toISOString();
+    log("error", `🏦 Revolut Business transfer preparation failed: ${error.message}`);
+
+    return res.status(503).json({
+      error: "Revolut Business transfer preparation failed",
+      detail: error.message,
+      transferPreparation: state.revolutBusinessTransfers,
+    });
+  }
+}
+
+app.get("/api/revolut/business-transfers/prepare", (req, res, next) => {
+  void handleRevolutBusinessTransferPreparationRequest(req, res).catch(next);
+});
+
+app.post("/api/revolut/business-transfers/prepare", (req, res, next) => {
+  void handleRevolutBusinessTransferPreparationRequest(req, res).catch(next);
+});
+
+async function handleRevolutBusinessTransferExecutionRequest(req, res) {
+  const confirmExecution = resolveRevolutBusinessTransferOptIn(
+    req.body?.confirmExecution ?? req.query?.confirmExecution,
+  );
+
+  if (!revolutBusinessTransferExecutionConfig.enabled) {
+    return res.status(409).json({
+      error:
+        "Revolut Business transfer execution is disabled; set REVOLUT_TRANSFER_EXECUTION_ENABLED=true to allow /pay execution",
+      optInField: revolutBusinessTransferExecutionConfig.optInField,
+      transferQueue: state.revolutBusinessTransfers,
+    });
+  }
+
+  if (!confirmExecution) {
+    return res.status(409).json({
+      error: "Explicit opt-in is required before executing queued Revolut Business transfers",
+      detail: `Pass ${revolutBusinessTransferExecutionConfig.optInField}=true in the request body or query string.`,
+      optInField: revolutBusinessTransferExecutionConfig.optInField,
+      transferQueue: state.revolutBusinessTransfers,
+    });
+  }
+
+  try {
+    const sourceRecordIds = normalizeRequestedSourceRecordIds(
+      req.body?.sourceRecordIds ?? req.query?.sourceRecordIds,
+    );
+    const maxItems = req.body?.maxItems ?? req.query?.maxItems;
+    const result = await executePreparedRevolutBusinessTransfers({
+      maxItems,
+      sourceRecordIds,
+    });
+
+    return res.json(result);
+  } catch (error) {
+    state.revolutBusinessTransfers.lastError = error.message;
+    state.revolutBusinessTransfers.lastUpdated = new Date().toISOString();
+    log("error", `🏦 Revolut Business execution failed: ${error.message}`);
+
+    return res.status(503).json({
+      error: "Revolut Business transfer execution failed",
+      detail: error.message,
+      transferQueue: state.revolutBusinessTransfers,
+    });
+  }
+}
+
+app.post("/api/revolut/business-transfers/execute", (req, res, next) => {
+  void handleRevolutBusinessTransferExecutionRequest(req, res).catch(next);
+});
+
+async function handleRevolutMerchantOrderRequest(req, res) {
+  try {
+    const createResult = await createRevolutMerchantOrder(req.body || {});
+    const payload = createResult.payload;
+    const record = summarizeRevolutMerchantOrderRecord(payload, {
+      checkoutUrl: typeof payload?.checkout_url === "string" ? payload.checkout_url : null,
+      orderId: typeof payload?.id === "string" ? payload.id : null,
+      orderState: typeof payload?.state === "string" ? payload.state : null,
+    });
+    const persistence = await persistRevolutMerchantOrderRecord(
+      record,
+      payload,
+      `Revolut merchant order ${record.orderId}`,
+    );
+
+    state.revolutMerchant.lastError = persistence.persistenceError;
+    state.revolutMerchant.lastPaymentStatus = record.paymentStatus;
+    state.revolutMerchant.lastPersisted = persistence.persisted;
+    state.revolutMerchant.lastPersistenceError = persistence.persistenceError;
+
+    return res.status(201).json({
+      success: true,
+      localRequestPath: req.path,
+      upstreamRequestPath: createResult.requestPath,
+      upstreamRequestUrl: createResult.requestUrl,
+      orderId: payload?.id || null,
+      checkoutUrl: payload?.checkout_url || null,
+      orderState: payload?.state || null,
+      paymentStatus: record.paymentStatus,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      persisted: persistence.persisted,
+      persistenceError: persistence.persistenceError,
+      payload,
+    });
+  } catch (error) {
+    state.revolutMerchant.lastError = error.message;
+    state.revolutMerchant.lastUpdated = new Date().toISOString();
+    log("error", `💶 Revolut merchant order creation failed: ${error.message}`);
+
+    return res.status(503).json({
+      error: "Revolut merchant order creation failed",
+      detail: error.message,
+      configured: state.revolutMerchant.configured,
+      merchant: state.revolutMerchant,
+    });
+  }
+}
+
+app.post("/api/revolut/merchant/orders", (req, res, next) => {
+  void handleRevolutMerchantOrderRequest(req, res).catch(next);
+});
+
+app.post("/api/revolut/merchant/create-order", (req, res, next) => {
+  void handleRevolutMerchantOrderRequest(req, res).catch(next);
+});
+
+app.get("/api/revolut/merchant/orders", async (req, res) => {
+  try {
+    const limit = clampRevolutMerchantOrdersLimit(req.query.limit);
+
+    if (databasePool) {
+      await ensureDatabaseReady("Revolut merchant order history view");
+    }
+
+    const orders = await readRevolutMerchantOrders(limit);
+
+    return res.json({
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_revolut_merchant_orders",
+      },
+      limit,
+      orders,
+    });
+  } catch (error) {
+    return res.status(503).json({
+      error: "Revolut merchant order history fetch failed",
+      detail: error.message,
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_revolut_merchant_orders",
+      },
+    });
+  }
+});
+
+async function handleRevolutMerchantOrderStatusRequest(req, res) {
+  try {
+    const statusResult = await fetchRevolutMerchantOrder(req.params.id);
+    const payload = statusResult.payload;
+    const record = summarizeRevolutMerchantOrderRecord(payload, {
+      orderId: normalizeTextValue(req.params.id),
+    });
+    const persistence = await persistRevolutMerchantOrderRecord(
+      record,
+      payload,
+      `Revolut merchant order poll ${record.orderId}`,
+    );
+
+    state.revolutMerchant.lastCheckoutUrl =
+      record.checkoutUrl || state.revolutMerchant.lastCheckoutUrl;
+    state.revolutMerchant.lastCreatedAt = record.createdAt || state.revolutMerchant.lastCreatedAt;
+    state.revolutMerchant.lastError = persistence.persistenceError;
+    state.revolutMerchant.lastOrderId = record.orderId;
+    state.revolutMerchant.lastOrderState = record.orderState;
+    state.revolutMerchant.lastPaymentStatus = record.paymentStatus;
+    state.revolutMerchant.lastPersisted = persistence.persisted;
+    state.revolutMerchant.lastPersistenceError = persistence.persistenceError;
+    state.revolutMerchant.lastStatusRequestPath = statusResult.requestPath;
+    state.revolutMerchant.lastStatusRequestUrl = statusResult.requestUrl;
+    state.revolutMerchant.lastUpdated = record.updatedAt || new Date().toISOString();
+
+    return res.json({
+      success: true,
+      source: REVOLUT_MERCHANT_ORDER_POLL_SOURCE,
+      localRequestPath: req.path,
+      upstreamRequestPath: statusResult.requestPath,
+      upstreamRequestUrl: statusResult.requestUrl,
+      orderId: record.orderId,
+      orderState: record.orderState,
+      paymentStatus: record.paymentStatus,
+      paymentId: record.paymentId,
+      merchantOrderReference: record.merchantOrderReference,
+      merchantReference: record.merchantReference,
+      amountMinor: record.amountMinor,
+      amountValue: record.amountValue,
+      amountDisplay: record.amountDisplay,
+      currency: record.currency,
+      checkoutUrl: record.checkoutUrl,
+      customerEmail: record.customerEmail,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      persisted: persistence.persisted,
+      persistenceError: persistence.persistenceError,
+    });
+  } catch (error) {
+    state.revolutMerchant.lastError = error.message;
+    state.revolutMerchant.lastUpdated = new Date().toISOString();
+    log("error", `💶 Revolut merchant order status poll failed: ${error.message}`);
+
+    return res
+      .status(
+        error.message.includes("must be configured") ||
+          error.message.includes("order id is required")
+          ? 503
+          : 502,
+      )
+      .json({
+        error: "Revolut merchant order status fetch failed",
+        detail: error.message,
+        configured: state.revolutMerchant.configured,
+        merchant: state.revolutMerchant,
+      });
+  }
+}
+
+app.get("/api/revolut/merchant/orders/:id", (req, res, next) => {
+  void handleRevolutMerchantOrderStatusRequest(req, res).catch(next);
+});
+
 app.get("/api/revolut/merchant-events", async (req, res) => {
   try {
     await ensureDatabaseReady("Revolut merchant executive view");
     const limit = clampRevolutMerchantEventsLimit(req.query.limit);
-    const [events, summary] = await Promise.all([
+    const [events, rawSummary] = await Promise.all([
       readRevolutMerchantEvents(limit),
       readRevolutMerchantExecutiveSummary(),
     ]);
+    const summary = resolveRevolutExecutiveSummary(rawSummary);
 
     return res.json({
       database: {
@@ -3376,6 +7108,17 @@ app.get("/api/revolut/merchant-events", async (req, res) => {
 app.get("/api/revolut/refresh-token", handleRevolutRefreshRequest);
 app.post("/api/revolut/refresh-token", handleRevolutRefreshRequest);
 
+app.post("/api/arni/ask", (req, res) => {
+  const payload = typeof req.body === "string" ? { prompt: req.body } : req.body || {};
+  const prompt = typeof payload.prompt === "string" ? payload.prompt : "";
+
+  if (!prompt.trim()) {
+    return res.status(400).json({ error: "prompt is required" });
+  }
+
+  return res.json(buildArniResponse(prompt));
+});
+
 // Health check
 app.get("/api/health", (req, res) => {
   const healthy = !state.database.configured || state.database.connected;
@@ -3383,6 +7126,7 @@ app.get("/api/health", (req, res) => {
   res.status(healthy ? 200 : 503).json({
     status: healthy ? "ok" : "degraded",
     uptime: process.uptime(),
+    runtime: buildRuntimeSnapshot(),
     database: state.database,
     stripe: {
       publicUrl: state.stripe.publicUrl,
@@ -3441,6 +7185,17 @@ app.get("/api/health", (req, res) => {
       lastWebhookReceivedAt: state.revolut.lastWebhookReceivedAt,
       canonicalNote: state.revolut.canonicalNote,
     },
+  });
+});
+
+app.get("/api/ready", (req, res) => {
+  const ready = !state.database.configured || state.database.connected;
+
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? "ready" : "not-ready",
+    ready,
+    runtime: buildRuntimeSnapshot(),
+    database: state.database,
   });
 });
 
@@ -3508,7 +7263,7 @@ app.post("/api/targets/cleanup-failed", (req, res) => {
 
 // Get logs (historical)
 app.get("/api/logs", (req, res) => {
-  const limit = parseInt(req.query.limit || "100", 10);
+  const limit = Number.parseInt(req.query.limit || "100", 10);
   res.json({
     logs: state.logs.slice(-limit),
   });

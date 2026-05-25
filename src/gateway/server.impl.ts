@@ -608,7 +608,7 @@ export async function startGatewayServer(
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
   const controlUiSeed = minimalTestGateway
-    ? { config: cfgAtStart, seededAllowedOrigins: false, persistedAllowedOriginsSeed: false }
+    ? { config: cfgAtStart, seededAllowedOrigins: false }
     : await startupTrace.measure("control-ui.seed", () =>
         maybeSeedControlUiAllowedOriginsAtStartup({
           config: cfgAtStart,
@@ -624,14 +624,9 @@ export async function startGatewayServer(
         }),
       );
   cfgAtStart = controlUiSeed.config;
-  // Capture the final config hash only after startup writes (config recovery,
-  // auth token generation, control-UI origin seeding) so the config reloader can
-  // suppress its own persistence events without rereading config on every boot.
-  if (
-    startupConfigLoad.wroteConfig ||
-    authBootstrap.persistedGeneratedToken ||
-    controlUiSeed.persistedAllowedOriginsSeed
-  ) {
+  // Keep the old startup-write suppression path intact for compatibility with
+  // callers that may still report a write, but startup itself no longer mutates config.
+  if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
       readConfigFileSnapshot(),
     );

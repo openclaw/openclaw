@@ -1,0 +1,21 @@
+const [
+  readyResult,
+  healthResult,
+  databaseResult,
+  logResult,
+  merchantResult,
+  revolutSummaryResult,
+  merchantOrdersResult,
+  businessTransferResult,
+  empireMarketResult,
+] = await Promise.allSettled([
+  fetch("/api/ready"),
+  fetch("/api/health"),
+  fetch("/api/database/status"),
+  fetch("/api/logs?limit=20"),
+  fetch("/api/revolut/merchant/status"),
+  fetch("/api/revolut/status"),
+  fetch("/api/revolut/merchant/orders?limit=8"),
+  fetch("/api/revolut/business-transfers/status"),
+  fetch("/api/empire/market"),
+]);

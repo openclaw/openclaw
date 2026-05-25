@@ -19,5 +19,16 @@
   "typescript.updateImportsOnFileMove.enabled": "always",
   "typescript.tsdk": "node_modules/typescript/lib",
   "chat.mcp.autoStart": true,
-  "makefile.configureOnOpen": false
+  "makefile.configureOnOpen": false,
+  "chat.mcp.serverSampling": {
+    "openclaw/.vscode/mcp.json: alphabet-harvester": {
+      "allowedModels": [
+        "copilot/auto",
+        "copilotcli/claude-sonnet-4.6",
+        "copilot/gemini-3-flash-preview",
+        "copilot/gemini-3.1-pro-preview",
+        "copilot/gemini-3.5-flash"
+      ]
+    }
+  }
 }

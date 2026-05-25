@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
@@ -18,7 +19,9 @@ const { args: finalArgs, env } = applyLocalTsgoPolicy(
   resolveLocalHeavyCheckEnv(process.env),
 );
 
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
+const require = createRequire(import.meta.url);
+const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
+const tsgoPath = path.resolve(path.dirname(nativePreviewPackageJsonPath), "bin", "tsgo.js");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
 if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
@@ -45,10 +48,9 @@ try {
       process.exitCode = 1;
     }
   } else {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const result = spawnSync(process.execPath, [tsgoPath, ...finalArgs], {
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
     });
 
     if (result.error) {

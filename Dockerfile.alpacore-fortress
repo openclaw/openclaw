@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY harvester-package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+
+COPY harvester-server.mjs ./harvester-server.mjs
+
+ENV NODE_ENV=production
+ENV NODE_OPTIONS=--max-old-space-size=512
+
+EXPOSE 8080
+
+CMD ["node", "harvester-server.mjs"]

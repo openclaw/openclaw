@@ -134,7 +134,6 @@ function getGitBooleanConfig(name, { cwd }) {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
   });
 
   if (result.error || (result.status ?? 1) !== 0) {
@@ -149,7 +148,6 @@ function getSparseCheckoutPatterns({ cwd }) {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
   });
 
   if (result.error || (result.status ?? 1) !== 0) {

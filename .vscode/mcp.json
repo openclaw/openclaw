@@ -1,15 +1,8 @@
 {
   "servers": {
-    "alpacore-local": {
-      "type": "stdio",
-      "command": "node",
-      "args": [
-        "${workspaceFolder}/scripts/alpacore-mcp-bridge.mjs"
-      ],
-      "env": {
-        "ALPACORE_URL": "http://127.0.0.1:8080",
-        "ALPACORE_TIMEOUT_MS": "240000"
-      }
+    "alphabet-harvester": {
+      "type": "sse",
+      "url": "https://alphabet-harvester.fly.dev/sse"
     }
   }
 }
