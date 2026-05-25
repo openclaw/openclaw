@@ -76,6 +76,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
+  const renderedRunErrors = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -316,6 +317,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   }) => {
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
+    renderedRunErrors.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -544,7 +546,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       const errorMessage = evt.errorMessage ?? "unknown";
       const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+      if (!renderedRunErrors.has(evt.runId)) {
+        renderedRunErrors.add(evt.runId);
+        chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+      }
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -661,7 +666,24 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("error");
+        // Surface lifecycle/provider failures in the visible transcript and
+        // clear the active run. Previously only the footer activity status
+        // was set to 'error' while activeChatRunId remained set, leaving the
+        // input locked with 'agent is busy' and no visible explanation
+        // unless the separate chat 'state: "error"' event also arrived
+        // (which is not guaranteed for every lifecycle-only failure). See #85782.
+        const wasActiveRun = state.activeChatRunId === evt.runId;
+        const rawError =
+          typeof evt.data?.error === "string" && evt.data.error.trim()
+            ? evt.data.error.trim()
+            : "unknown";
+        const renderedError = formatRawAssistantErrorForUi(rawError);
+        if (!renderedRunErrors.has(evt.runId)) {
+          renderedRunErrors.add(evt.runId);
+          chatLog.addSystem(resolveAuthErrorHint(rawError) ?? `run error: ${renderedError}`);
+        }
+        terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
+        maybeRefreshHistoryForRun(evt.runId);
       }
       tui.requestRender();
     }
