@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { emitAgentCommandOutputEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
@@ -16,6 +17,8 @@ import {
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -83,6 +86,8 @@ export type ProcessGatewayAllowlistParams = {
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
+
+const COMMAND_OUTPUT_MAX_CHARS = 8000;
 
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
@@ -359,6 +364,14 @@ function shouldAwaitGatewayApprovalInline(params: {
   return normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL;
 }
 
+function redactGatewayCommandOutputText(value: string): string {
+  const redacted = redactToolPayloadText(value);
+  if (redacted.length <= COMMAND_OUTPUT_MAX_CHARS) {
+    return redacted;
+  }
+  return `${truncateUtf16Safe(redacted, COMMAND_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
+}
+
 function buildGatewayExecApprovalDeniedToolResult(params: {
   approvalId: string;
   deniedReason: string;
@@ -400,6 +413,40 @@ async function resolveGatewayExecApprovalFollowupText(params: {
     const message = error instanceof Error ? error.message : String(error);
     return `Diagnostics follow-up failed: ${message}`;
   }
+}
+
+function emitGatewayExecApprovalCommandOutput(params: {
+  approvalId: string;
+  command: string;
+  cwd?: string;
+  sessionKey?: string;
+  turnSourceChannel?: string;
+  outcome: ExecApprovalFollowupOutcome;
+}): void {
+  const runId = `exec-approval-followup:${params.approvalId}`;
+  const sessionKey = params.sessionKey?.trim();
+  registerAgentRunContext(runId, {
+    ...(sessionKey ? { sessionKey } : {}),
+    isControlUiVisible:
+      normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL,
+  });
+  emitAgentCommandOutputEvent({
+    runId,
+    ...(sessionKey ? { sessionKey } : {}),
+    data: {
+      itemId: `command:${params.approvalId}`,
+      phase: "end",
+      title: "Command",
+      toolCallId: params.approvalId,
+      command: redactGatewayCommandOutputText(params.command),
+      name: "exec",
+      output: redactGatewayCommandOutputText(params.outcome.aggregated),
+      status: params.outcome.status,
+      exitCode: params.outcome.exitCode,
+      cwd: params.cwd,
+      approvalId: params.approvalId,
+    },
+  });
 }
 
 export async function processGatewayAllowlist(
@@ -754,6 +801,14 @@ export async function processGatewayAllowlist(
       markBackgrounded(run.session);
 
       const outcome = await run.promise;
+      emitGatewayExecApprovalCommandOutput({
+        approvalId,
+        command: params.command,
+        cwd: params.workdir,
+        sessionKey: params.notifySessionKey ?? params.sessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        outcome,
+      });
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
         approvalFollowup: params.approvalFollowup,
         approvalId,

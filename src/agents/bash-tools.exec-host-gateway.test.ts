@@ -1,4 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  getAgentRunContext,
+  onAgentEvent,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -196,6 +201,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   beforeEach(() => {
+    resetAgentEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReset();
     buildExecApprovalFollowupTargetMock.mockReturnValue(null);
@@ -653,6 +659,144 @@ EOF`,
     expect(approvalInput?.trigger).toBe("diagnostics");
     expect(approvalInput?.outcome?.status).toBe("completed");
     expect(approvalInput?.outcome?.exitCode).toBe(0);
+  });
+
+  it("emits command output when an async gateway exec approval finishes", async () => {
+    const events: Array<{ runId?: string; stream?: string; sessionKey?: string; data?: unknown }> =
+      [];
+    onAgentEvent((event) => {
+      events.push(event);
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 12,
+      timedOut: false,
+      aggregated: "hello from approval\n",
+    };
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const result = await runGatewayAllowlist({
+      command: "echo hello",
+      sessionKey: "agent:main:webchat:thread:1",
+      notifySessionKey: "agent:main:telegram:direct:123",
+      turnSourceChannel: "webchat",
+      approvalFollowupMode: "direct",
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.stream === "command_output")).toBe(true);
+    });
+
+    const commandOutputEvent = events.find((event) => event.stream === "command_output");
+    expect(commandOutputEvent).toEqual(
+      expect.objectContaining({
+        runId: "exec-approval-followup:req-1",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+    expect(commandOutputEvent?.data).toEqual(
+      expect.objectContaining({
+        itemId: "command:req-1",
+        phase: "end",
+        title: "Command",
+        toolCallId: "req-1",
+        command: "echo hello",
+        name: "exec",
+        output: "hello from approval\n",
+        status: "completed",
+        exitCode: 0,
+        cwd: process.cwd(),
+        approvalId: "req-1",
+      }),
+    );
+    expect(getAgentRunContext("exec-approval-followup:req-1")).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123",
+        isControlUiVisible: true,
+      }),
+    );
+  });
+
+  it("redacts and keeps external-channel gateway approval command output hidden", async () => {
+    const events: Array<{ runId?: string; stream?: string; sessionKey?: string; data?: unknown }> =
+      [];
+    onAgentEvent((event) => {
+      events.push(event);
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 12,
+      timedOut: false,
+      aggregated: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\nexternal output\n",
+    };
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    await runGatewayAllowlist({
+      command: "echo --token ghp_abcdefghij1234567890 external",
+      sessionKey: "agent:main:telegram:direct:123",
+      notifySessionKey: "agent:main:telegram:direct:123",
+      turnSourceChannel: "telegram",
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.stream === "command_output")).toBe(true);
+    });
+
+    const commandOutputEvent = events.find((event) => event.stream === "command_output");
+    expect(commandOutputEvent).toEqual(
+      expect.objectContaining({
+        runId: "exec-approval-followup:req-1",
+      }),
+    );
+    expect(commandOutputEvent?.sessionKey).toBeUndefined();
+    expect(commandOutputEvent?.data).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        approvalId: "req-1",
+      }),
+    );
+    const serialized = JSON.stringify(commandOutputEvent?.data);
+    expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(serialized).not.toContain("ghp_abcdefghij1234567890");
+    expect(commandOutputEvent?.data).toEqual(
+      expect.objectContaining({
+        command: expect.stringContaining("echo --token"),
+        output: expect.stringContaining("external output"),
+        status: "completed",
+        approvalId: "req-1",
+      }),
+    );
+    expect(getAgentRunContext("exec-approval-followup:req-1")).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123",
+        isControlUiVisible: false,
+      }),
+    );
   });
 
   it("waits inline for webchat approval so the exec tool can return real output to the model", async () => {

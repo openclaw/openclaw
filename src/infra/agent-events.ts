@@ -79,12 +79,14 @@ export type AgentCommandOutputEventData = {
   phase: "delta" | "end";
   title: string;
   toolCallId: string;
+  command?: string;
   name?: string;
   output?: string;
   status?: AgentItemEventStatus | "running";
   exitCode?: number | null;
   durationMs?: number;
   cwd?: string;
+  approvalId?: string;
 };
 
 export type AgentPatchSummaryEventData = {
