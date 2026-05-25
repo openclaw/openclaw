@@ -156,6 +156,16 @@ describe("channel-broker plugin", () => {
         to: "broker:discord:dm:123456789012345678",
       } as never),
     ).toBe("direct");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "telegram:123456789",
+      } as never),
+    ).toBe("direct");
+    expect(
+      channelBrokerPlugin.messaging?.inferTargetChatType?.({
+        to: "telegram:-1001234567890",
+      } as never),
+    ).toBe("group");
   });
 
   it("delivers broker-prefixed DM aliases as direct conversations", async () => {
@@ -1063,6 +1073,56 @@ describe("channel-broker plugin", () => {
     });
   });
 
+  it("keeps broker-routed Telegram positive numeric ids as direct DMs", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-telegram-dm-1",
+        providerId: "acme",
+        platform: "Telegram",
+        status: "sent",
+        messageIds: ["telegram-message-1"],
+      }),
+    );
+    setChannelBrokerRuntime({
+      sendOutboundRequest,
+      createRequestId: () => "broker-telegram-dm-1",
+    });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            defaultProviderId: "acme",
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      to: "telegram:123456789",
+      text: "dm proof",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        requestId: "broker-telegram-dm-1",
+        providerId: "acme",
+        platform: "telegram",
+        conversation: {
+          id: "123456789",
+          type: "direct",
+        },
+        requirements: { text: true },
+      }),
+    });
+  });
+
   it("canonicalizes Telegram topic routes without changing native default ownership", () => {
     const route = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {
@@ -1088,6 +1148,33 @@ describe("channel-broker plugin", () => {
       peer: { kind: "channel", id: "telegram:-1001234567890" },
       to: "telegram:-1001234567890?threadId=42",
       threadId: "42",
+    });
+  });
+
+  it("routes broker-owned Telegram DMs with direct session semantics", () => {
+    const route = channelBrokerPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["telegram"],
+              },
+            },
+          },
+        },
+      },
+      agentId: "agent",
+      accountId: "acme",
+      target: "telegram:123456789",
+    } as never);
+
+    expect(route).toMatchObject({
+      chatType: "direct",
+      peer: { kind: "direct", id: "telegram:123456789" },
+      to: "telegram:123456789",
     });
   });
 
