@@ -5,6 +5,7 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { isRecord as isPlainObject } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
@@ -95,10 +96,6 @@ function isCanonicalAgentSessionKey(value: string): boolean {
     return false;
   }
   return !trimmed.split(":").some((part) => part.length === 0);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function validateRouteTargetInput(

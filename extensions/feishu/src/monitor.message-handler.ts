@@ -1,4 +1,4 @@
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -9,10 +9,6 @@ import {
 } from "./processing-claims.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 import type { FeishuChatType } from "./types.js";
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
 
 type FeishuMessageReceiveHandlerContext = {
   cfg: ClawdbotConfig;
