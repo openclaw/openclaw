@@ -100,16 +100,16 @@ const claworksLaunchAgentCheck: HealthCheck = {
       findings.push({
         checkId: LAUNCH_AGENT_CHECK_ID,
         severity: "error",
-        message: `${misplaced} LaunchAgent points at ~/.claworks — it steals port 18789 from OpenClaw.`,
-        fixHint: "claworks doctor --fix",
+        message: `${misplaced} LaunchAgent points at ~/.claworks — it binds OpenClaw's reserved port ${OPENCLAW_RESERVED_GATEWAY_PORT}. ClaWorks Gateway must use ${CLAWORKS_STANDARD_GATEWAY_PORT} (label ai.claworks.gateway).`,
+        fixHint: "claworks doctor --fix  (or claworks gateway install --force)",
       });
     }
     if (detectClaworksLaunchAgentPortConflict(process.env)) {
       findings.push({
         checkId: LAUNCH_AGENT_CHECK_ID,
         severity: "error",
-        message: `ai.claworks.gateway service still uses port ${OPENCLAW_RESERVED_GATEWAY_PORT}. Reinstall on ${CLAWORKS_STANDARD_GATEWAY_PORT}.`,
-        fixHint: "claworks doctor --fix",
+        message: `ai.claworks.gateway LaunchAgent still listens on ${OPENCLAW_RESERVED_GATEWAY_PORT}. Reinstall the service on ClaWorks port ${CLAWORKS_STANDARD_GATEWAY_PORT}.`,
+        fixHint: "claworks doctor --fix  (or claworks gateway install --force)",
       });
     }
     return findings;

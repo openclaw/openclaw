@@ -22,6 +22,7 @@ import { formatCliCommand } from "./command-format.js";
 import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
+import { productizeUserCopy } from "./product-surface.js";
 
 export type HooksListOptions = {
   json?: boolean;
@@ -535,26 +536,36 @@ export function registerHooksCli(program: Command): void {
 
   hooks
     .command("install")
-    .description("Deprecated: install a hook pack via `openclaw plugins install`")
+    .description(
+      productizeUserCopy("Deprecated: install a hook pack via `openclaw plugins install`"),
+    )
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
       defaultRuntime.log(
-        theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
+        theme.warn(
+          productizeUserCopy(
+            `\`${formatCliCommand("openclaw hooks install")}\` is deprecated; use \`${formatCliCommand("openclaw plugins install")}\`.`,
+          ),
+        ),
       );
       await runPluginInstallCommand({ raw, opts });
     });
 
   hooks
     .command("update")
-    .description("Deprecated: update hook packs via `openclaw plugins update`")
+    .description(productizeUserCopy("Deprecated: update hook packs via `openclaw plugins update`"))
     .argument("[id]", "Hook pack id (omit with --all)")
     .option("--all", "Update all tracked hooks", false)
     .option("--dry-run", "Show what would change without writing", false)
     .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
       defaultRuntime.log(
-        theme.warn("`openclaw hooks update` is deprecated; use `openclaw plugins update`."),
+        theme.warn(
+          productizeUserCopy(
+            `\`${formatCliCommand("openclaw hooks update")}\` is deprecated; use \`${formatCliCommand("openclaw plugins update")}\`.`,
+          ),
+        ),
       );
       await runPluginUpdateCommand({ id, opts });
     });

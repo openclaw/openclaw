@@ -34,6 +34,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
+import { productizeUserCopy } from "./product-surface.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -729,7 +730,9 @@ export async function runDevicesApproveCommand(
         break;
       case "re-approval":
         defaultRuntime.log(
-          "  Note:   Already paired. Approval-bound device details changed, so OpenClaw created a fresh request instead of silently reusing the old approval.",
+          productizeUserCopy(
+            "  Note:   Already paired. Approval-bound device details changed, so OpenClaw created a fresh request instead of silently reusing the old approval.",
+          ),
         );
         break;
       case "new-pairing":

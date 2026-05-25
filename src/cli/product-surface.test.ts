@@ -94,4 +94,32 @@ describe("product-surface", () => {
       "claworks.json",
     );
   });
+
+  it("rewrites edge CLI dns/hooks/devices copy", () => {
+    const env = { CLAWORKS_PRODUCT: "1" };
+    expect(
+      applyProductSurfaceCopy(
+        "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
+        env,
+      ),
+    ).toContain("ClaWorks config");
+    expect(
+      applyProductSurfaceCopy(
+        "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
+        env,
+      ),
+    ).toContain("~/.claworks/claworks.json");
+    expect(
+      applyProductSurfaceCopy(
+        "  Note:   Already paired. Approval-bound device details changed, so OpenClaw created a fresh request instead of silently reusing the old approval.",
+        env,
+      ),
+    ).toContain("ClaWorks created");
+    expect(
+      applyProductSurfaceCopy(
+        "Deprecated: install a hook pack via `openclaw plugins install`",
+        env,
+      ),
+    ).toContain("`claworks plugins install`");
+  });
 });
