@@ -860,6 +860,7 @@ export type DiscordModelPickerRecentsViewParams = {
   quickModels: string[];
   currentModel?: string;
   runtime?: string;
+  runtimeIndex?: number;
   provider?: string;
   page?: number;
   providerPage?: number;
@@ -900,6 +901,7 @@ export function renderDiscordModelPickerRecentsView(
           recentSlot: 1,
           provider: params.provider,
           runtime: params.runtime,
+          runtimeIndex: params.runtimeIndex,
           page: params.page,
           providerPage: params.providerPage,
           userId: params.userId,
@@ -923,6 +925,7 @@ export function renderDiscordModelPickerRecentsView(
             recentSlot: i + 2,
             provider: params.provider,
             runtime: params.runtime,
+            runtimeIndex: params.runtimeIndex,
             page: params.page,
             providerPage: params.providerPage,
             userId: params.userId,
@@ -943,6 +946,7 @@ export function renderDiscordModelPickerRecentsView(
         view: "models",
         provider: params.provider,
         runtime: params.runtime,
+        runtimeIndex: params.runtimeIndex,
         page: params.page,
         providerPage: params.providerPage,
         userId: params.userId,

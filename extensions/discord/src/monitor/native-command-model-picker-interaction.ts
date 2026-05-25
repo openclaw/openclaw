@@ -252,13 +252,8 @@ export async function handleDiscordModelPickerInteraction(params: {
       data: pickerData,
       quickModels,
       currentModel: currentModelRef,
-      runtime:
-        parsed.runtime ??
-        resolveModelPickerRuntimeByIndex({
-          data: pickerData,
-          provider: parsed.provider,
-          runtimeIndex: parsed.runtimeIndex,
-        }),
+      runtime: parsed.runtime,
+      runtimeIndex: parsed.runtimeIndex,
       provider: parsed.provider,
       page: parsed.page,
       providerPage: parsed.providerPage,

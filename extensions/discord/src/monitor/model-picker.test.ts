@@ -1275,6 +1275,33 @@ describe("Discord model picker recents view", () => {
     expect(backState.runtime).toBe("codex");
   });
 
+  it("keeps compact runtime state on recents buttons under the customId limit", () => {
+    const data = createModelsProviderData({
+      "google-gemini-cli": ["qwen3-01", "qwen3-02"],
+    });
+
+    const rows = renderRecentsViewRows({
+      command: "model",
+      userId: "12345678901234567890",
+      data,
+      quickModels: ["google-gemini-cli/qwen3-02"],
+      currentModel: "google-gemini-cli/qwen3-02",
+      provider: "google-gemini-cli",
+      runtimeIndex: 1,
+    });
+
+    const states = rows.map((row) => {
+      const customId = requireValue(row.components?.[0]?.custom_id, "recents row custom id");
+      expect(customId.length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+      return requireValue(
+        parseDiscordModelPickerCustomId(customId),
+        "recents custom id should parse",
+      );
+    });
+    expect(states.every((state) => state.runtime === undefined)).toBe(true);
+    expect(states.every((state) => state.runtimeIndex === 1)).toBe(true);
+  });
+
   it("includes (default) suffix on default model button label", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4o"],
