@@ -28,7 +28,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { sortUniqueStrings } from "../../shared/string-normalization.js";
+import { sortUniqueStrings, uniqueValues } from "../../shared/string-normalization.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -718,7 +718,7 @@ function resolveMessageToolActionSchemaActions(params: MessageToolDiscoveryParam
 
 function listAllMessageToolActions(params: MessageToolDiscoveryParams): ChannelMessageActionName[] {
   const pluginActions = listAllChannelSupportedActions(buildMessageActionDiscoveryInput(params));
-  return Array.from(new Set<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]));
+  return uniqueValues<ChannelMessageActionName>(["send", "broadcast", ...pluginActions]);
 }
 
 function resolveIncludeCapability(
