@@ -100,6 +100,12 @@ type WhatsAppQaScenarioResult = {
   requestStartedAt?: string;
   responseObservedAt?: string;
   rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
   status: "fail" | "pass" | "skip";
   title: string;
 };
@@ -647,6 +653,12 @@ async function runWhatsAppScenario(params: {
       rttMs,
       requestStartedAt: requestStartedAt.toISOString(),
       responseObservedAt: responseObservedAt.toISOString(),
+      rttMeasurement: {
+        finalMatchedReplyRttMs: rttMs,
+        requestStartedAt: requestStartedAt.toISOString(),
+        responseObservedAt: responseObservedAt.toISOString(),
+        source: "request-to-observed-message",
+      },
     };
   } catch (error) {
     preservedGatewayDebug = true;
