@@ -15,6 +15,7 @@ import {
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscript,
   readRecentSessionMessagesAsync,
+  readRecentSessionMessagesDetailedAsync,
   readRecentSessionMessages,
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionMessagesWithStats,
@@ -583,6 +584,38 @@ describe("readSessionMessages", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("async recent-message reads stop after the needed tail lines", async () => {
+    const sessionId = "test-session-recent-async-reverse-tail";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 3000 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `message ${index} ${"x".repeat(220)}`,
+          },
+        }),
+      ),
+      JSON.stringify({ message: { role: "user", content: "penultimate" } }),
+      JSON.stringify({ message: { role: "assistant", content: "tail" } }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const fileBytes = fs.statSync(transcriptPath).size;
+
+    const result = await readRecentSessionMessagesDetailedAsync(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: fileBytes,
+    });
+
+    expect(result.messages).toHaveLength(2);
+    expectMessageFields(result.messages[0], { role: "user", content: "penultimate" });
+    expectMessageFields(result.messages[1], { role: "assistant", content: "tail" });
+    expect(result.timings.readMode).toBe("reverse-tail");
+    expect(result.timings.bytesRead).toBeLessThan(fileBytes);
+    expect(result.timings.linesRead).toBeLessThanOrEqual(result.timings.maxLines ?? 0);
   });
 
   test("honors byte caps for sync recent tree-message reads", () => {

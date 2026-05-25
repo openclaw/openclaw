@@ -18,6 +18,7 @@ import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+export const CHAT_HISTORY_TOOL_PAYLOAD_OMITTED_PLACEHOLDER = "[chat.history tool payload omitted]";
 
 type RoleContentMessage = {
   role: string;
@@ -808,6 +809,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
         });
       }
     } else if (isRenderableAssistantDisplayMessage(record)) {
+      flushSucceededMirrors();
       clearPending();
     }
 
@@ -870,6 +872,222 @@ export function sanitizeChatHistoryMessages(
     next.push(res.message);
   }
   return changed ? next : messages;
+}
+
+export type SafeChatHistoryMessagesProjection = {
+  messages: Array<Record<string, unknown>>;
+  placeholders: number;
+  omittedBytes: number;
+};
+
+function jsonUtf8BytesSafe(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "null", "utf8");
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeHistoryRole(value: unknown): string {
+  return typeof value === "string" ? value.toLowerCase().replace(/_/g, "") : "";
+}
+
+function isToolResultHistoryMessage(message: Record<string, unknown>): boolean {
+  const role = normalizeHistoryRole(message.role);
+  return (
+    role === "toolresult" ||
+    role === "tool" ||
+    role === "function" ||
+    typeof message.toolName === "string" ||
+    typeof message.tool_name === "string" ||
+    typeof message.toolCallId === "string" ||
+    typeof message.tool_call_id === "string"
+  );
+}
+
+function hasVisibleAssistantText(message: Record<string, unknown>): boolean {
+  if (typeof message.text === "string" && message.text.trim()) {
+    return true;
+  }
+  if (typeof message.content === "string" && message.content.trim()) {
+    return true;
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some((block) => {
+    const record = readRecord(block);
+    return record?.type === "text" && typeof record.text === "string" && record.text.trim();
+  });
+}
+
+function hasAssistantToolHistoryBlock(message: Record<string, unknown>): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some((block) => {
+    const record = readRecord(block);
+    return record ? isToolHistoryBlockType(record.type) : false;
+  });
+}
+
+function isAssistantToolEnvelopeHistoryMessage(message: Record<string, unknown>): boolean {
+  return (
+    normalizeHistoryRole(message.role) === "assistant" &&
+    hasAssistantToolHistoryBlock(message) &&
+    !hasVisibleAssistantText(message)
+  );
+}
+
+function readFirstToolHistoryBlock(message: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(message.content)) {
+    return {};
+  }
+  for (const block of message.content) {
+    const record = readRecord(block);
+    if (record && isToolHistoryBlockType(record.type)) {
+      return record;
+    }
+  }
+  return {};
+}
+
+function readHistoryToolName(message: Record<string, unknown>): string | undefined {
+  return (
+    readMessageToolResultName(message) ?? readToolBlockName(readFirstToolHistoryBlock(message))
+  );
+}
+
+function readHistoryToolCallId(message: Record<string, unknown>): string | undefined {
+  return (
+    readMessageToolResultCallId(message) ?? readToolBlockCallId(readFirstToolHistoryBlock(message))
+  );
+}
+
+function readHistoryToolStatus(message: Record<string, unknown>): string | undefined {
+  if (message.isError === true || message.error != null) {
+    return "error";
+  }
+  const direct =
+    normalizeOptionalString(message.status) ??
+    normalizeOptionalString(message.deliveryStatus) ??
+    normalizeOptionalString(message.delivery_status);
+  return direct;
+}
+
+function buildSafeToolHistoryPlaceholder(
+  message: Record<string, unknown>,
+): Record<string, unknown> {
+  const omittedBytes = jsonUtf8BytesSafe(message);
+  const role = typeof message.role === "string" ? message.role : "assistant";
+  const toolName = readHistoryToolName(message);
+  const toolCallId = readHistoryToolCallId(message);
+  const status = readHistoryToolStatus(message);
+  const placeholder: Record<string, unknown> = {
+    role,
+    content: [{ type: "text", text: CHAT_HISTORY_TOOL_PAYLOAD_OMITTED_PLACEHOLDER }],
+    toolPayloadOmitted: true,
+    omittedBytes,
+    __openclaw: {
+      toolPayloadOmitted: true,
+      omittedBytes,
+      reason: "tool_payload",
+    },
+  };
+  if (typeof message.timestamp === "number" || typeof message.timestamp === "string") {
+    placeholder.timestamp = message.timestamp;
+  }
+  if (toolName) {
+    placeholder.toolName = toolName;
+  }
+  if (toolCallId) {
+    placeholder.toolCallId = toolCallId;
+  }
+  if (status) {
+    placeholder.status = status;
+  }
+  return placeholder;
+}
+
+function buildSafeToolHistoryBlockPlaceholder(
+  block: Record<string, unknown>,
+): Record<string, unknown> {
+  const omittedBytes = jsonUtf8BytesSafe(block);
+  return {
+    type: "text",
+    text: CHAT_HISTORY_TOOL_PAYLOAD_OMITTED_PLACEHOLDER,
+    toolPayloadOmitted: true,
+    omittedBytes,
+  };
+}
+
+function projectAssistantToolHistoryBlocks(
+  message: Record<string, unknown>,
+): { message: Record<string, unknown>; placeholders: number; omittedBytes: number } | null {
+  if (normalizeHistoryRole(message.role) !== "assistant" || !Array.isArray(message.content)) {
+    return null;
+  }
+  let placeholders = 0;
+  let omittedBytes = 0;
+  const content = message.content.map((block) => {
+    const record = readRecord(block);
+    if (!record || !isToolHistoryBlockType(record.type)) {
+      return block;
+    }
+    const placeholder = buildSafeToolHistoryBlockPlaceholder(record);
+    placeholders += 1;
+    omittedBytes += typeof placeholder.omittedBytes === "number" ? placeholder.omittedBytes : 0;
+    return placeholder;
+  });
+  if (placeholders === 0) {
+    return null;
+  }
+  return {
+    message: {
+      ...message,
+      content,
+      toolPayloadOmitted: true,
+      omittedBytes,
+      __openclaw: {
+        ...readRecord(message["__openclaw"]),
+        toolPayloadOmitted: true,
+        omittedBytes,
+        reason: "tool_payload",
+      },
+    },
+    placeholders,
+    omittedBytes,
+  };
+}
+
+export function projectSafeChatHistoryMessages(
+  messages: Array<Record<string, unknown>>,
+): SafeChatHistoryMessagesProjection {
+  let placeholders = 0;
+  let omittedBytes = 0;
+  let changed = false;
+  const safeMessages = messages.map((message) => {
+    const assistantToolBlockProjection = projectAssistantToolHistoryBlocks(message);
+    if (assistantToolBlockProjection) {
+      placeholders += assistantToolBlockProjection.placeholders;
+      omittedBytes += assistantToolBlockProjection.omittedBytes;
+      changed = true;
+      return assistantToolBlockProjection.message;
+    }
+    if (!isToolResultHistoryMessage(message) && !isAssistantToolEnvelopeHistoryMessage(message)) {
+      return message;
+    }
+    const placeholder = buildSafeToolHistoryPlaceholder(message);
+    placeholders += 1;
+    omittedBytes += typeof placeholder.omittedBytes === "number" ? placeholder.omittedBytes : 0;
+    changed = true;
+    return placeholder;
+  });
+  return {
+    messages: changed ? safeMessages : messages,
+    placeholders,
+    omittedBytes,
+  };
 }
 
 function asRoleContentMessage(message: Record<string, unknown>): RoleContentMessage | null {

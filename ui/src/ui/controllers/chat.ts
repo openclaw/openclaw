@@ -315,17 +315,28 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
+    let res: {
+      messages?: Array<unknown>;
+      sessionId?: string;
+      thinkingLevel?: string;
+      mode?: string;
+      items?: Array<unknown>;
+      meta?: unknown;
+    };
     for (;;) {
       try {
         res = await state.client.request<{
           messages?: Array<unknown>;
           sessionId?: string;
           thinkingLevel?: string;
+          mode?: string;
+          items?: Array<unknown>;
+          meta?: unknown;
         }>("chat.history", {
           sessionKey,
           limit: CHAT_HISTORY_REQUEST_LIMIT,
           maxChars: CHAT_HISTORY_REQUEST_MAX_CHARS,
+          mode: "turns",
         });
         break;
       } catch (err) {

@@ -52,13 +52,41 @@ function readLockfile() {
   return parse(fs.readFileSync(lockfilePath, "utf8"));
 }
 
-function addLockfilePackages(lockfile) {
-  for (const key of Object.keys(lockfile?.packages ?? {})) {
+function buildNormalizedLockfileKeyMap(entries) {
+  const map = new Map();
+  for (const key of Object.keys(entries ?? {})) {
     const spec = packageSpecFromLockfileKey(key);
-    if (spec) {
-      specs.add(spec);
+    if (!spec) {
+      continue;
+    }
+    const keys = map.get(spec);
+    if (keys) {
+      keys.push(key);
+    } else {
+      map.set(spec, [key]);
     }
   }
+  return map;
+}
+
+function lockfileEntriesForSpec(entries, keyMap, spec) {
+  const keys = new Set();
+  if (entries?.[spec]) {
+    keys.add(spec);
+  }
+  for (const key of keyMap.get(spec) ?? []) {
+    if (entries?.[key]) {
+      keys.add(key);
+    }
+  }
+  return [...keys].map((key) => entries[key]);
+}
+
+function snapshotDependencyEntries(snapshot) {
+  return Object.entries({
+    ...snapshot.dependencies,
+    ...snapshot.optionalDependencies,
+  });
 }
 
 function addSnapshotClosure(lockfile) {
@@ -67,6 +95,8 @@ function addSnapshotClosure(lockfile) {
   if (!snapshots || !packages) {
     return;
   }
+  const snapshotKeys = buildNormalizedLockfileKeyMap(snapshots);
+  const packageKeys = buildNormalizedLockfileKeyMap(packages);
   const pending = [...specs];
   const visited = new Set();
   while (pending.length > 0) {
@@ -75,17 +105,23 @@ function addSnapshotClosure(lockfile) {
       continue;
     }
     visited.add(spec);
-    const snapshot = snapshots[spec];
-    if (!snapshot) {
+    const matchingSnapshots = lockfileEntriesForSpec(snapshots, snapshotKeys, spec);
+    if (matchingSnapshots.length === 0) {
       continue;
     }
-    for (const [name, version] of Object.entries(snapshot.dependencies ?? {})) {
-      const depSpec = packageSpec(name, typeof version === "string" ? version : version?.version);
-      if (!depSpec || !packages[depSpec] || specs.has(depSpec)) {
-        continue;
+    for (const snapshot of matchingSnapshots) {
+      for (const [name, version] of snapshotDependencyEntries(snapshot)) {
+        const depSpec = packageSpec(name, typeof version === "string" ? version : version?.version);
+        if (
+          !depSpec ||
+          lockfileEntriesForSpec(packages, packageKeys, depSpec).length === 0 ||
+          specs.has(depSpec)
+        ) {
+          continue;
+        }
+        specs.add(depSpec);
+        pending.push(depSpec);
       }
-      specs.add(depSpec);
-      pending.push(depSpec);
     }
   }
 }
@@ -95,6 +131,5 @@ for (const root of roots) {
 }
 const lockfile = readLockfile();
 addSnapshotClosure(lockfile);
-addLockfilePackages(lockfile);
 
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));

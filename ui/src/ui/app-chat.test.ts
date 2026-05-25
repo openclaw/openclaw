@@ -222,6 +222,7 @@ describe("refreshChat", () => {
       sessionKey: "main",
       limit: 100,
       maxChars: 4000,
+      mode: "turns",
     });
     expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
     const sessionsListPayload = findRequestPayload(

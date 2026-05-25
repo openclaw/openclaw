@@ -1337,6 +1337,7 @@ describe("loadChatHistory retry handling", () => {
       sessionKey: "main",
       limit: 100,
       maxChars: 4000,
+      mode: "turns",
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
