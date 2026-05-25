@@ -15,6 +15,7 @@ export type RealtimeVoiceOutputActivitySnapshot = {
   sinkAudioBytes: number;
   playbackStarted: boolean;
   streamEnding: boolean;
+  lastAudioAt?: number;
   playbackStartedAt?: number;
 };
 
@@ -41,6 +42,7 @@ export function createRealtimeVoiceOutputActivityTracker(
   let sinkAudioBytes = 0;
   let playbackStarted = false;
   let streamEnding = false;
+  let lastAudioAt: number | undefined;
   let playbackStartedAt: number | undefined;
 
   const snapshot = (): RealtimeVoiceOutputActivitySnapshot => ({
@@ -50,6 +52,7 @@ export function createRealtimeVoiceOutputActivityTracker(
     sinkAudioBytes,
     playbackStarted,
     streamEnding,
+    ...(lastAudioAt === undefined ? {} : { lastAudioAt }),
     ...(playbackStartedAt === undefined ? {} : { playbackStartedAt }),
   });
 
@@ -58,6 +61,7 @@ export function createRealtimeVoiceOutputActivityTracker(
       streamEnding = false;
       playbackStarted = false;
       playbackStartedAt = undefined;
+      lastAudioAt = undefined;
     },
     markStreamEnding() {
       streamEnding = true;
@@ -74,6 +78,7 @@ export function createRealtimeVoiceOutputActivityTracker(
       sourceAudioBytes += Math.max(0, delta.sourceAudioBytes ?? 0);
       sinkAudioBytes += Math.max(0, delta.sinkAudioBytes ?? 0);
       chunks += 1;
+      lastAudioAt = now();
     },
     reset() {
       audioMs = 0;
@@ -82,6 +87,7 @@ export function createRealtimeVoiceOutputActivityTracker(
       sinkAudioBytes = 0;
       playbackStarted = false;
       streamEnding = false;
+      lastAudioAt = undefined;
       playbackStartedAt = undefined;
     },
     isActive(sinkActive = false) {

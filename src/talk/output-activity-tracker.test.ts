@@ -7,6 +7,7 @@ describe("realtime voice output activity tracker", () => {
 
     expect(tracker.isActive(false)).toBe(false);
     expect(tracker.isInterruptible(false)).toBe(false);
+    expect(tracker.snapshot().lastAudioAt).toBeUndefined();
 
     tracker.markAudio({ audioMs: 10, sourceAudioBytes: 480, sinkAudioBytes: 1_920 });
 
@@ -17,6 +18,7 @@ describe("realtime voice output activity tracker", () => {
       chunks: 1,
       sourceAudioBytes: 480,
       sinkAudioBytes: 1_920,
+      lastAudioAt: expect.any(Number),
     });
   });
 
@@ -43,6 +45,7 @@ describe("realtime voice output activity tracker", () => {
       playbackStarted: true,
       playbackStartedAt: 1_000,
       streamEnding: true,
+      lastAudioAt: 1_000,
     });
   });
 
