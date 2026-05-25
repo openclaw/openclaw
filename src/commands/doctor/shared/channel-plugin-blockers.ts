@@ -18,36 +18,18 @@ export type ChannelPluginBlockerHit = {
   /** Plugin id that would provide the configured channel. */
   pluginId: string;
   /** Effective activation reason preventing the plugin from loading. */
-  reason: "disabled in config" | "plugins disabled";
+  reason:
+    | "disabled in config"
+    | "plugins disabled"
+    | "missing explicit enablement"
+    | "not in allowlist";
 };
 
-function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false) {
-    return true;
-  }
-  const entries = cfg.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
-    return false;
-  }
-  return Object.values(entries).some((entry) => {
-    return (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      "enabled" in entry &&
-      (entry as { enabled?: unknown }).enabled === false
-    );
-  });
-}
-
-/** Find configured channel ids whose backing plugins are explicitly disabled. */
+/** Find configured channel ids whose backing plugins cannot activate. */
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelPluginBlockerHit[] {
-  if (!hasExplicitChannelPluginBlockerConfig(cfg)) {
-    return [];
-  }
   const configuredChannelIds = new Set(
     listExplicitConfiguredChannelIdsForConfig(cfg)
       .map((channelId) => normalizeOptionalLowercaseString(channelId))
@@ -63,15 +45,19 @@ export function scanConfiguredChannelPluginBlockers(
     env,
     includeDisabled: true,
   });
+  const presencePolicy = resolveConfiguredChannelPresencePolicy({
+    config: cfg,
+    env,
+    includePersistedAuthState: false,
+    manifestRecords: registry.plugins,
+  });
   const activeConfiguredChannelIds = new Set(
-    resolveConfiguredChannelPresencePolicy({
-      config: cfg,
-      env,
-      includePersistedAuthState: false,
-      manifestRecords: registry.plugins,
-    })
-      .filter((entry) => entry.effective)
-      .map((entry) => entry.channelId),
+    presencePolicy.filter((entry) => entry.effective).map((entry) => entry.channelId),
+  );
+  const blockedReasonsByChannelId = new Map(
+    presencePolicy
+      .filter((entry) => !entry.effective)
+      .map((entry) => [entry.channelId, new Set(entry.blockedReasons)] as const),
   );
   const hits: ChannelPluginBlockerHit[] = [];
 
@@ -115,6 +101,44 @@ export function scanConfiguredChannelPluginBlockers(
     }
   }
 
+  const channelsWithExplicitBlockerHits = new Set(hits.map((hit) => hit.channelId));
+
+  for (const plugin of registry.plugins) {
+    if (plugin.origin === "bundled" || plugin.channels.length === 0) {
+      continue;
+    }
+
+    for (const rawChannelId of plugin.channels) {
+      const channelId = normalizeOptionalLowercaseString(rawChannelId);
+      if (!channelId) {
+        continue;
+      }
+      if (!configuredChannelIds.has(channelId)) {
+        continue;
+      }
+      if (channelsWithExplicitBlockerHits.has(channelId)) {
+        continue;
+      }
+      if (activeConfiguredChannelIds.has(channelId)) {
+        continue;
+      }
+      const blockedReasons = blockedReasonsByChannelId.get(channelId);
+      const reason = blockedReasons?.has("untrusted-plugin")
+        ? "missing explicit enablement"
+        : blockedReasons?.has("not-in-allowlist")
+          ? "not in allowlist"
+          : undefined;
+      if (!reason) {
+        continue;
+      }
+      hits.push({
+        channelId,
+        pluginId: plugin.id,
+        reason,
+      });
+    }
+  }
+
   return hits;
 }
 
@@ -124,6 +148,12 @@ function formatReason(hit: ChannelPluginBlockerHit): string {
   }
   if (hit.reason === "plugins disabled") {
     return `plugins.enabled=false blocks channel plugins globally.`;
+  }
+  if (hit.reason === "missing explicit enablement") {
+    return `external plugin "${sanitizeForLog(hit.pluginId)}" is installed without explicit trust. Add plugins.entries.${sanitizeForLog(hit.pluginId)}.enabled=true.`;
+  }
+  if (hit.reason === "not in allowlist") {
+    return `external plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow or remove the restrictive allowlist.`;
   }
   return `plugin "${sanitizeForLog(hit.pluginId)}" is not loadable (${sanitizeForLog(hit.reason)}).`;
 }

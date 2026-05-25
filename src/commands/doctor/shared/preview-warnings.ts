@@ -58,19 +58,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
-function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false) {
-    return true;
-  }
-  const entries = cfg.plugins?.entries;
-  if (!hasRecord(entries)) {
-    return false;
-  }
-  return Object.values(entries).some(
-    (entry) => hasRecord(entry) && "enabled" in entry && entry.enabled === false,
-  );
-}
-
 function hasToolsBySenderKey(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(hasToolsBySenderKey);
@@ -813,10 +800,9 @@ export async function collectDoctorPreviewNotes(params: {
     await import("./active-tool-schema-warnings.js");
   warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
 
-  const channelPluginRuntime =
-    hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
-      ? await import("./channel-plugin-blockers.js")
-      : undefined;
+  const channelPluginRuntime = hasChannelConfig
+    ? await import("./channel-plugin-blockers.js")
+    : undefined;
   const channelPluginBlockerHits =
     channelPluginRuntime?.scanConfiguredChannelPluginBlockers(params.cfg, env) ?? [];
   if (channelPluginRuntime && channelPluginBlockerHits.length > 0) {

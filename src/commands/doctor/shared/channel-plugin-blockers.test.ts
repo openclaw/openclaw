@@ -1,30 +1,128 @@
 // Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
-import { scanConfiguredChannelPluginBlockers } from "./channel-plugin-blockers.js";
+import {
+  collectConfiguredChannelPluginBlockerWarnings,
+  scanConfiguredChannelPluginBlockers,
+} from "./channel-plugin-blockers.js";
 
 describe("channel plugin blockers", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("skips plugin registry work when config has no plugin blocker surfaces", () => {
+  it("skips plugin registry work when config has no configured channel surfaces", () => {
     const registrySpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
 
     const hits = scanConfiguredChannelPluginBlockers({
       channels: {
-        slack: {
-          accounts: {
-            work: {
-              allowFrom: ["alice"],
-            },
-          },
+        defaults: {
+          groupPolicy: "disabled",
         },
       },
     });
 
     expect(hits).toStrictEqual([]);
     expect(registrySpy).not.toHaveBeenCalled();
+  });
+
+  it("reports external channel plugins that are installed but not explicitly enabled", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      channels: {
+        discord: {
+          enabled: true,
+          token: "configured",
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "missing explicit enablement",
+      },
+    ]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
+      '- channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
+  });
+
+  it("accepts plugins.allow as explicit trust for external channel plugins", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        allow: ["discord"],
+      },
+      channels: {
+        discord: {
+          enabled: true,
+          token: "configured",
+        },
+      },
+    });
+
+    expect(hits).toStrictEqual([]);
+  });
+
+  it("reports external channel plugins omitted from a restrictive allowlist", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [
+        {
+          id: "discord",
+          origin: "global",
+          channels: ["discord"],
+          enabledByDefault: false,
+        },
+      ],
+      diagnostics: [],
+    } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistry>);
+
+    const hits = scanConfiguredChannelPluginBlockers({
+      plugins: {
+        allow: ["brave"],
+      },
+      channels: {
+        discord: {
+          enabled: true,
+          token: "configured",
+        },
+      },
+    });
+
+    expect(hits).toEqual([
+      {
+        channelId: "discord",
+        pluginId: "discord",
+        reason: "not in allowlist",
+      },
+    ]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
+      '- channels.discord: channel is configured, but external plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow or remove the restrictive allowlist. Fix plugin enablement before relying on setup guidance for this channel.',
+    ]);
   });
 
   it("still evaluates configured channels when plugins are disabled globally", () => {
