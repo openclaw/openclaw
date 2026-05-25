@@ -86,7 +86,7 @@ export type PluginRuntimeChannel = {
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
     /**
-     * @deprecated Prefer `openclaw/plugin-sdk/channel-message` adapters plus
+     * @deprecated Prefer `openclaw/plugin-sdk/channel-outbound` adapters plus
      * `dispatchReplyWithBufferedBlockDispatcher` or channel turn helpers.
      * This is a low-level legacy dispatcher escape hatch.
      */

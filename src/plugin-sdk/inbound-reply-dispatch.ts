@@ -1,3 +1,9 @@
+/**
+ * @deprecated Use `openclaw/plugin-sdk/channel-inbound` for inbound runners and
+ * dispatch predicates. Use `openclaw/plugin-sdk/channel-outbound` for message
+ * delivery helpers.
+ */
+
 import { withReplyDispatcher } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {

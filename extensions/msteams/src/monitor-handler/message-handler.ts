@@ -6,14 +6,14 @@ import {
   resolveInboundSessionEnvelopeContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  filterSupplementalContextItems,
-  resolveChannelContextVisibilityMode,
-} from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
   dispatchReplyFromConfigWithSettledDispatcher,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  filterSupplementalContextItems,
+  resolveChannelContextVisibilityMode,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,

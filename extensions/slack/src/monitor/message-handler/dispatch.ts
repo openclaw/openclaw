@@ -12,11 +12,15 @@ import {
   runPreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  type ChannelBotLoopProtectionFacts,
+  hasVisibleInboundReplyDispatch,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   createChannelMessageReplyPipeline,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -35,10 +39,6 @@ import {
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  type ChannelBotLoopProtectionFacts,
-  hasVisibleInboundReplyDispatch,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import {

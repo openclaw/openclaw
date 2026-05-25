@@ -5,7 +5,7 @@ export { toLocationContext } from "openclaw/plugin-sdk/channel-location";
 export {
   createChannelMessageReplyPipeline,
   resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 export {
   isControlCommandMessage,
   shouldComputeCommandAuthorized,

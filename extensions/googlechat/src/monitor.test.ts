@@ -1,4 +1,4 @@
-import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";

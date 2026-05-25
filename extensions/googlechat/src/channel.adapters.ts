@@ -3,7 +3,7 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,

@@ -11,7 +11,7 @@ import {
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {

@@ -1,7 +1,7 @@
 import {
   createPreviewMessageReceipt,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,

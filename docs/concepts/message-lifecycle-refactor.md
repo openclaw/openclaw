@@ -20,7 +20,7 @@ The short version:
   commit, fail.
 - Receiving must be context based too: normalize, dedupe, route, record,
   dispatch, platform ack, fail.
-- The public plugin SDK should collapse to one small channel-message surface.
+- The public plugin SDK should collapse to one small channel-outbound surface.
 
 ## Problems
 
@@ -557,7 +557,7 @@ This should cover current behavior:
 The public SDK target should be one subpath:
 
 ```typescript
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-message";
+import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 ```
 
 Target shape:
@@ -670,7 +670,7 @@ should not need them.
 
 Bundled plugins may keep internal helper imports through reserved runtime
 subpaths while migrating. Public docs should steer plugin authors to
-`plugin-sdk/channel-message` once it exists.
+`plugin-sdk/channel-outbound` once it exists.
 
 ## Relationship to channel inbound
 
@@ -948,12 +948,12 @@ Core policy:
 
 ### Phase 6: Public SDK
 
-- Add `openclaw/plugin-sdk/channel-message`.
+- Add `openclaw/plugin-sdk/channel-outbound`.
 - Document it as the preferred channel plugin API.
 - Update package exports, entrypoint inventory, generated API baselines, and
   plugin SDK docs.
 - Include `MessageOrigin`, origin encode/decode hooks, and the shared
-  `shouldDropOpenClawEcho` predicate in the channel-message SDK surface.
+  `shouldDropOpenClawEcho` predicate in the channel-outbound SDK surface.
 - Keep compatibility wrappers for old subpaths.
 - Mark reply-named SDK helpers as deprecated in docs after bundled plugins are
   migrated.
@@ -1073,7 +1073,7 @@ Validation:
 - Whether durable live preview state should be stored in the same queue record
   as the final send intent or in a sibling live-state store.
 - How long compatibility wrappers stay documented after
-  `plugin-sdk/channel-message` ships.
+  `plugin-sdk/channel-outbound` ships.
 - Whether third-party plugins should implement receive adapters directly or only
   provide normalize/send/live hooks through `defineChannelMessageAdapter`.
 - Which receipt fields are safe to expose in public SDK versus internal runtime

@@ -14,11 +14,15 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  hasFinalInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   createChannelMessageReplyPipeline,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -26,10 +30,6 @@ import {
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  hasFinalInboundReplyDispatch,
-  recordChannelBotPairLoopAndCheckSuppression,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";

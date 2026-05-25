@@ -1,5 +1,5 @@
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
-import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type {
   MarkdownTableMode,
   OpenClawConfig,

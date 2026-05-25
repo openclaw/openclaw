@@ -93,9 +93,15 @@ export {
   runPreparedInboundReply,
   dispatchChannelInboundReply,
   recordDroppedChannelInboundHistory,
+  dispatchReplyFromConfigWithSettledDispatcher,
+  hasFinalInboundReplyDispatch,
+  hasVisibleInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
+  resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
 export type {
   AssembledInboundReply,
+  ChannelBotLoopProtectionFacts,
   ChannelInboundEventRunnerParams,
   ChannelInboundDroppedHistoryOptions,
   PreparedInboundReply,

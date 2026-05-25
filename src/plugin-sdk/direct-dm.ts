@@ -1,9 +1,10 @@
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { runPreparedInboundReply } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChannelReplyPipeline } from "./channel-reply-core.js";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
-import { recordInboundSessionAndDispatchReply } from "./inbound-reply-dispatch.js";
-import type { OutboundReplyPayload } from "./reply-payload.js";
+import { normalizeOutboundReplyPayload, type OutboundReplyPayload } from "./reply-payload.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -127,20 +128,41 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     ...params.extraContext,
   });
 
-  await recordInboundSessionAndDispatchReply({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
+    agentId: route.agentId,
     channel: params.channel,
     accountId: route.accountId ?? params.accountId,
-    agentId: route.agentId,
+  });
+  await runPreparedInboundReply({
+    channel: params.channel,
+    accountId: route.accountId ?? params.accountId,
     routeSessionKey: route.sessionKey,
     storePath,
     ctxPayload,
     recordInboundSession: params.runtime.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    deliver: params.deliver,
-    onRecordError: params.onRecordError,
-    onDispatchError: params.onDispatchError,
+    record: {
+      onRecordError: params.onRecordError,
+    },
+    runDispatch: async () =>
+      await params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload: unknown) => {
+            const normalized =
+              payload && typeof payload === "object"
+                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+                : {};
+            return await params.deliver(normalized);
+          },
+          onError: params.onDispatchError,
+        },
+        replyOptions: {
+          onModelSelected,
+        },
+      }),
   });
 
   return {

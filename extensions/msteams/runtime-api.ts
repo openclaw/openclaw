@@ -19,7 +19,7 @@ export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,
@@ -52,7 +52,7 @@ export {
   getFileExtension,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/channel-inbound";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";

@@ -6,7 +6,7 @@ export { createReplyToFanout, type ReplyToResolution } from "../infra/outbound/r
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate. New
  * channel and plugin send paths should use
- * `openclaw/plugin-sdk/channel-message-runtime` helpers:
+ * `openclaw/plugin-sdk/channel-outbound` helpers:
  * `sendDurableMessageBatch`, `withDurableMessageSendContext`, or
  * `deliverInboundReplyWithMessageSendContext`.
  */
@@ -14,7 +14,7 @@ export { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 /**
  * @deprecated Direct outbound delivery params are compatibility/runtime
  * substrate. New channel and plugin send paths should use
- * `openclaw/plugin-sdk/channel-message-runtime` helpers.
+ * `openclaw/plugin-sdk/channel-outbound` helpers.
  */
 export type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 export { type OutboundDeliveryResult } from "../infra/outbound/deliver.js";

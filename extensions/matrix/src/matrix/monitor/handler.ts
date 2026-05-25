@@ -2,12 +2,14 @@ import {
   buildChannelInboundEventContext,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
@@ -25,8 +27,6 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import {

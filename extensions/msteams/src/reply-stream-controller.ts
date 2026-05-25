@@ -5,7 +5,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
   markLiveMessageFinalized,
   type LiveMessageState,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,

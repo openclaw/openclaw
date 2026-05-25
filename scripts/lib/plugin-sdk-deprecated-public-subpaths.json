@@ -1,6 +1,8 @@
 [
   "agent-config-primitives",
   "channel-config-schema-legacy",
+  "channel-message",
+  "channel-message-runtime",
   "channel-reply-pipeline",
   "channel-runtime",
   "channel-secret-runtime",
@@ -11,6 +13,7 @@
   "config-types",
   "discord",
   "group-access",
+  "inbound-reply-dispatch",
   "infra-runtime",
   "matrix",
   "mattermost",

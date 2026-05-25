@@ -15,7 +15,7 @@ platform event -> inbound facts/context -> agent reply -> message delivery
 
 Use `openclaw/plugin-sdk/channel-inbound` for inbound event normalization and
 shared receive-path orchestration. Use
-`openclaw/plugin-sdk/channel-message` / `channel-message-runtime` for native
+`openclaw/plugin-sdk/channel-outbound` for native
 send, receipt, durable delivery, and live preview behavior.
 
 ## Core Helpers

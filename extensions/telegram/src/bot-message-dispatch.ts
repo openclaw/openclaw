@@ -19,7 +19,7 @@ import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gati
 import {
   createChannelMessageReplyPipeline,
   deriveDurableFinalDeliveryRequirements,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,

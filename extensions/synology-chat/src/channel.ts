@@ -17,7 +17,7 @@ import {
   defineChannelMessageAdapter,
   type MessageReceipt,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   composeWarningCollectors,
   createConditionalWarningCollector,

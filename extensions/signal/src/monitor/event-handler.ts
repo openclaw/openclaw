@@ -13,7 +13,7 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
