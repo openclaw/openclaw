@@ -167,6 +167,10 @@ function buildUnownedProviderTransportReplayFallback(params: {
 }
 
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "deepseek-v4-flash",
+  "deepseek-v4-flash-free",
+  "deepseek-v4-pro",
+  "big-pickle",
   "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",

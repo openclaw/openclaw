@@ -369,6 +369,10 @@ describe("resolveTranscriptPolicy", () => {
     "hf:moonshotai/kimi-k2-thinking",
     "xiaomi/mimo-v2.6-pro",
     "xiaomi/mimo-v2.6-pro:cloud",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-free",
+    "deepseek-v4-pro",
+    "big-pickle",
   ])(
     "preserves historical reasoning for %s replay-required OpenAI-compatible models",
     (modelId) => {
