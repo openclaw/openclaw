@@ -78,7 +78,7 @@ pnpm test packages/claworks-runtime          # 运行测试
 | 交流       | 4/5  | comms.send / notify.dispatch 多渠道通知，HITL 人机协同步骤完备                      |
 | 记忆       | 4/5  | ObjectStore + KB + CBR + memory_read/write 步骤，用户画像持久化                     |
 | 学习       | 4/5  | 进化流水线（evolve.\*）、CBR 摄取、weak_model_regression 自测闭环                   |
-| 执行       | 5/5  | 215+ 能力 + 12+ 步骤类型 + Pack Profile 热切换，395 测试全绿                        |
+| 执行       | 5/5  | 215+ 能力 + 12+ 步骤类型 + Pack Profile 热切换，397 测试全绿                        |
 | 自主       | 4/5  | AutonomyEngine 心跳/空闲/缺口检测，ScaffoldEngine 弱模型照单执行                    |
 | 安全       | 4/5  | RBAC、HITL 门禁、production_mode fail-closed、审计日志                              |
 | 可观测性   | 4/5  | LOG_LEVEL + metrics + W3C traceparent 贯通；OTEL 导出器仍待加强                     |
