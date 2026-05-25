@@ -221,6 +221,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       MediaTypes: entry.mediaTypes,
       WasMentioned: entry.isGroup ? entry.wasMentioned === true : undefined,
       CommandAuthorized: entry.commandAuthorized,
+      CommandSource: entry.commandBody.trim().startsWith("/") ? "text" : undefined,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
