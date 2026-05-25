@@ -2623,12 +2623,10 @@ async function processOpenAICompletionsStream(
     if (deepSeekTextFilter) {
       pendingDeepSeekDsmlText += text;
       const parts = deepSeekTextFilter.push(text);
-      const recovered = tryFlushDeepSeekDsmlToolText(false);
-      if (!recovered) {
-        for (const part of parts) {
-          appendVisibleTextDelta(part);
-        }
+      for (const part of parts) {
+        appendVisibleTextDelta(part);
       }
+      tryFlushDeepSeekDsmlToolText(false);
       return;
     }
     appendVisibleTextDelta(text);
@@ -2647,7 +2645,7 @@ async function processOpenAICompletionsStream(
       type: "toolCall",
       id: `deepseek_dsml_${++deepSeekDsmlSyntheticCallCount}`,
       name,
-      arguments: parsedArgs as Record<string, unknown>,
+      arguments: parsedArgs,
       partialArgs,
     };
     output.content.push(currentBlock);
@@ -2696,12 +2694,12 @@ async function processOpenAICompletionsStream(
         const fenceMatch = trimmedBody.match(DEEPSEEK_DSML_JSON_FENCE_RE);
         argsText = (fenceMatch?.[1] ?? trimmedBody).trim();
       }
-      matched ||= emitDeepSeekDsmlToolCall(name, argsText);
+      if (emitDeepSeekDsmlToolCall(name, argsText)) {
+        matched = true;
+      }
     }
     if (matched) {
       output.stopReason = "toolUse";
-    } else if (final) {
-      appendVisibleTextDelta(source);
     }
     return matched;
   };

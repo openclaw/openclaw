@@ -1762,6 +1762,96 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("toolUse");
   });
 
+  it("recovers observed DeepSeek DSML tool call while preserving surrounding visible text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-visible",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'Hello! <｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls> Done.',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "Hello!  Done." },
+      {
+        type: "toolCall",
+        id: "deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("recovers multiple DSML invoke entries in a single response", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-multiple",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name="read">\n<｜DSML｜parameter name="path" string="true">/tmp/test.md</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+      {
+        type: "toolCall",
+        id: "deepseek_dsml_2",
+        name: "read",
+        arguments: { path: "/tmp/test.md" },
+        partialArgs: '{"path":"/tmp/test.md"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
   it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
