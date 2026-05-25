@@ -1260,7 +1260,6 @@ export function createOllamaStreamFn(
             }
             const previousVisibleContent = accumulatedVisibleContent;
             const delta = resolveStreamingTextDelta(previousVisibleContent, nextVisibleContent);
-            accumulatedVisibleContent = nextVisibleContent;
             if (!delta) {
               return;
             }
@@ -1289,6 +1288,7 @@ export function createOllamaStreamFn(
               stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
             }
 
+            accumulatedVisibleContent = nextVisibleContent;
             const partial = buildStreamAssistantMessage({
               model: modelInfo,
               content: buildCurrentContent(),

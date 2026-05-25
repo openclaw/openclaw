@@ -1934,6 +1934,8 @@ describe("createOllamaStreamFn streaming events", () => {
         const types = events.map((e) => e.type);
         expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
 
+        const textStart = events.find((e) => e.type === "text_start");
+        expect(textStart?.partial.content).toEqual([]);
         const delta = events.find((e) => e.type === "text_delta");
         expect(delta?.delta).toBe("one shot");
       },
@@ -1977,6 +1979,8 @@ describe("createOllamaStreamFn streaming events", () => {
           "done",
         ]);
 
+        const textStart = events.find((e) => e.type === "text_start");
+        expect(textStart?.partial.content).toEqual([]);
         const deltas = events.filter((e) => e.type === "text_delta");
         expect(deltas).toHaveLength(2);
         expect(deltas[0]?.delta).toBe("Final answer");
