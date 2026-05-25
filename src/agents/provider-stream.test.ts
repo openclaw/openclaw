@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderStreamFn: vi.fn(() => undefined),
+}));
+
+vi.mock("./provider-transport-stream.js", () => ({
+  createTransportAwareStreamFnForModel: vi.fn(() => undefined),
+}));
 
 const googleModel = {
   api: "google-generative-ai",
