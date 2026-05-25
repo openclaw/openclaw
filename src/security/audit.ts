@@ -616,7 +616,9 @@ function collectRestrictiveClaudePermissionModeHits(
   return hits;
 }
 
-function isManagedClaudeLiveBackendConfig(backend: CliBackendConfig | undefined): boolean {
+function isManagedClaudeLiveBackendConfig(
+  backend: CliBackendConfig | undefined,
+): backend is CliBackendConfig {
   if (!backend) {
     return false;
   }
