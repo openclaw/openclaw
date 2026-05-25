@@ -55,6 +55,23 @@ describe("shouldSupersedeTelegramReplyFence", () => {
       }),
     ).toBe(true);
   });
+
+  it("keeps normal direct turns deliverable while preserving direct aborts", () => {
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "answer this",
+        CommandAuthorized: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/stop",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("telegram reply fence supersede", () => {
