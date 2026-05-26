@@ -46,7 +46,7 @@ type GatewayMemoryStartupPolicy =
   | { mode: "idle"; delayMs: number };
 
 export type GatewayPostReadySidecarHandle = {
-  stop: () => void;
+  stop: () => Awaitable<void>;
 };
 
 export function stopPostReadySidecarsAfterCloseStarted(params: {
@@ -284,6 +284,7 @@ function schedulePostReadySidecarTask(params: {
   name: string;
   log: { warn: (msg: string) => void };
   run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
+  stop?: () => Awaitable<void>;
 }): GatewayPostReadySidecarHandle {
   let stopped = false;
   const abortController = new AbortController();
@@ -300,10 +301,11 @@ function schedulePostReadySidecarTask(params: {
   });
   handle.unref?.();
   return {
-    stop: () => {
+    stop: async () => {
       stopped = true;
       abortController.abort();
       clearImmediate(handle);
+      await params.stop?.();
     },
   };
 }
@@ -499,31 +501,28 @@ export async function startGatewaySidecars(params: {
   params.onPluginServices?.(pluginServices);
 
   if (params.cfg.transcripts?.autoStart?.length) {
+    let stopTranscriptsAutoStart: (() => Promise<void>) | undefined;
     postReadySidecars.push(
       schedulePostReadySidecarTask({
         startupTrace: params.startupTrace,
         name: "sidecars.transcripts-auto-start",
         log: params.log,
-        run: async (_isStopped, signal) => {
+        run: async (isStopped) => {
           const { createTranscriptsAutoStartService } =
             await import("../agents/tools/transcripts-tool.js");
+          if (isStopped()) {
+            return;
+          }
           const service = createTranscriptsAutoStartService({
             config: params.cfg,
             stateDir: resolveStateDir(),
             logger: params.log,
           });
-          signal.addEventListener(
-            "abort",
-            () => {
-              void service
-                .stop()
-                .catch((err) =>
-                  params.log.warn(`transcripts autoStart stop failed: ${String(err)}`),
-                );
-            },
-            { once: true },
-          );
+          stopTranscriptsAutoStart = () => service.stop();
           service.start();
+        },
+        stop: async () => {
+          await stopTranscriptsAutoStart?.();
         },
       }),
     );
