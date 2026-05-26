@@ -19,6 +19,15 @@ replacement for scheduled work, detached tasks, or standing instructions.
 
 ## Quick start
 
+Enable the bundled goal plugin before using `/goal`:
+
+```bash
+openclaw config set plugins.entries.goal.enabled true
+```
+
+Restart or reload the Gateway after changing plugin configuration so the command
+is registered in connected chats.
+
 Start a goal from the current chat:
 
 ```text
