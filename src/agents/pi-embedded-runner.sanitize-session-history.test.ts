@@ -299,6 +299,7 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(() => {
     testTimestamp = 1;
     vi.clearAllMocks();
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
     vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     mockSessionManager = makeMockSessionManager();
   });
