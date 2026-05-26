@@ -48,6 +48,15 @@ sudo env ZORG_INSTALL_MODE=first-run "$(npm root -g)/openclaw/zorg/install-zorg-
 
 Direct global npm also fails closed when a host-side `openclaw` binary already exists. That command would be an upgrade, not a first-run install. Use the first-run installer on clean hosts, or opt into an existing repair with `ZORG_INSTALL_MODE=existing ZORG_ALLOW_EXISTING_UPGRADE=1` only when that is the intended scope.
 
+If direct GitHub npm is rerun over an existing global install, npm may fail during its git-dependency preparation before package lifecycle scripts can print the clearer guard. The common signature is:
+
+```text
+npm error git dep preparation failed
+npm error ENOTEMPTY: directory not empty, rename '/usr/lib/node_modules/openclaw' -> '/usr/lib/node_modules/.openclaw-*'
+```
+
+That is still an existing-install collision, not the clean first-run path. Do not add `--force` for a fresh Zorg install; use the first-run installer on a clean host or explicitly choose existing repair mode.
+
 If `node --version` prints Node 12, Node 18, or any version below 22.19.0, do not use direct npm yet. Run the first-run installer above so Node is upgraded before npm executes OpenClaw lifecycle scripts.
 
 Observed failure on old hosts: npm resolves the package dependency tree before the OpenClaw lifecycle script can run. On Node v12.22.9 this produces a long `npm WARN EBADENGINE` cascade. If the lifecycle script does run and upgrades Node during the same npm process, npm can still continue inside the temporary git package tree it already prepared. Zorg keeps a copy of the Node prerequisite repair script under `zorg/check-node-version.cjs`, which is part of the packaged add-on tree, so the lifecycle path remains available during direct git installs.
