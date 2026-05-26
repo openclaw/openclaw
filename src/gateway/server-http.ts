@@ -744,8 +744,6 @@ export function createGatewayHttpServer(opts: {
                 allowRealIpFallback,
                 rateLimiter,
                 thumbnailMaxSide: configSnapshot.gateway?.controlUi?.imageThumbnailMaxSide,
-                authorizeControlUiDeviceReadToken: async (token) =>
-                  (await getControlUiModule()).authorizeControlUiDeviceReadToken(token),
               },
             ),
         });

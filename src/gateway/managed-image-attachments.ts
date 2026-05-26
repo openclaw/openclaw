@@ -21,7 +21,6 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
-  getBearerToken,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
@@ -968,7 +967,6 @@ export async function handleManagedOutgoingImageHttpRequest(
     rateLimiter?: AuthRateLimiter;
     stateDir?: string;
     thumbnailMaxSide?: number;
-    authorizeControlUiDeviceReadToken?: (token: string) => Promise<boolean>;
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
@@ -1001,48 +999,36 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  const bearerToken = getBearerToken(req);
-  const requesterSessionKey = req.headers["x-openclaw-requester-session-key"];
-  const isRequesterSessionMatch =
-    typeof requesterSessionKey === "string" && requesterSessionKey === sessionKey;
-  const isControlUiDeviceRead =
-    isRequesterSessionMatch &&
-    bearerToken && opts.authorizeControlUiDeviceReadToken
-      ? await opts.authorizeControlUiDeviceReadToken(bearerToken)
-      : false;
-  if (!isControlUiDeviceRead) {
-    const requestAuth = await authorizeGatewayHttpRequestOrReply({
-      req,
-      res,
-      auth: opts.auth,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req,
+    res,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (!requestAuth) {
+    return true;
+  }
+
+  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
+    return true;
+  }
+
+  // Requester-session headers are client-declared, so media bytes require
+  // authenticated owner/admin context rather than paired read-token access.
+  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "owner access required",
+      },
     });
-    if (!requestAuth) {
-      return true;
-    }
-
-    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
-    const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-    if (!scopeAuth.allowed) {
-      sendMissingScopeForbidden(res, scopeAuth.missingScope);
-      return true;
-    }
-
-    // Requester-session headers are client-declared, so media bytes require
-    // authenticated owner/admin context. Control UI read tokens are paired to
-    // the logged-in UI session and authorized above before this branch.
-    if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
-      sendJson(res, 403, {
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "owner access required",
-        },
-      });
-      return true;
-    }
+    return true;
   }
 
   const record = await readManagedImageRecord(attachmentId, opts.stateDir);
