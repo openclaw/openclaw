@@ -116,6 +116,10 @@ jobs:
               per_page: 100,
             });
 
+            const labelNames = new Set(
+              currentLabels.map((label) => label.name ?? "").filter((n) => n.length > 0)
+            );
+
             for (const label of currentLabels) {
               const name = label.name ?? "";
               if (!sizeLabels.includes(name)) {
@@ -124,20 +128,31 @@ jobs:
               if (name === targetSizeLabel) {
                 continue;
               }
-              await github.rest.issues.removeLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullRequest.number,
-                name,
-              });
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name,
+                });
+                labelNames.delete(name);
+              } catch (err) {
+                // Label may have been removed concurrently or not present; best-effort only.
+              }
             }
 
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pullRequest.number,
-              labels: [targetSizeLabel],
-            });
+            if (!labelNames.has(targetSizeLabel)) {
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  labels: [targetSizeLabel],
+                });
+              } catch (err) {
+                core.warning(`Failed to apply size label ${targetSizeLabel} (current labels: ${currentLabels.length}): ${err?.message || err}`);
+              }
+            }
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@v9
         with:
@@ -631,23 +646,31 @@ jobs:
                 if (name === targetSizeLabel) {
                   continue;
                 }
-                await github.rest.issues.removeLabel({
-                  owner,
-                  repo,
-                  issue_number: pullRequest.number,
-                  name,
-                });
-                labelNames.delete(name);
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: pullRequest.number,
+                    name,
+                  });
+                  labelNames.delete(name);
+                } catch (err) {
+                  // Best-effort removal; label may already be gone.
+                }
               }
 
               if (!labelNames.has(targetSizeLabel)) {
-                await github.rest.issues.addLabels({
-                  owner,
-                  repo,
-                  issue_number: pullRequest.number,
-                  labels: [targetSizeLabel],
-                });
-                labelNames.add(targetSizeLabel);
+                try {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: pullRequest.number,
+                    labels: [targetSizeLabel],
+                  });
+                  labelNames.add(targetSizeLabel);
+                } catch (err) {
+                  core.warning(`Failed to apply size label ${targetSizeLabel} during backfill (current labels: ${currentLabels.length}): ${err?.message || err}`);
+                }
               }
             }
 
