@@ -1733,11 +1733,22 @@ install_user_local_node_linux() {
         return 1
     fi
 
-    version_dir="node-v${NODE_DEFAULT_MAJOR}.latest-${platform}"
     tarball="$(mktempfile)"
     tmp="$(mktemp -d)"
     TMPFILES+=("$tmp")
-    url="https://nodejs.org/dist/latest-v${NODE_DEFAULT_MAJOR}.x/${version_dir}.tar.xz"
+    local shasums
+    shasums="$(mktempfile)"
+    local latest_base="https://nodejs.org/dist/latest-v${NODE_DEFAULT_MAJOR}.x"
+    if ! download_file "${latest_base}/SHASUMS256.txt" "$shasums"; then
+        ui_error "Could not read Node.js latest-v${NODE_DEFAULT_MAJOR}.x index"
+        return 1
+    fi
+    version_dir="$(awk -v platform="$platform" '$2 ~ ("node-v[0-9].*-" platform "\\.tar\\.xz$") { print $2; exit }' "$shasums")"
+    if [[ -z "$version_dir" ]]; then
+        ui_error "Could not locate Node.js ${NODE_DEFAULT_MAJOR} archive for ${platform}"
+        return 1
+    fi
+    url="${latest_base}/${version_dir}"
 
     ui_info "Installing Node.js ${NODE_DEFAULT_MAJOR} locally under \$HOME/.local/openclaw-node"
     if ! download_file "$url" "$tarball"; then
