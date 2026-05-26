@@ -15,8 +15,15 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
-import { getFileStatSnapshot, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
-import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import {
+  getFileStatSnapshot,
+  isCacheEnabled,
+  resolveCacheTtlMs,
+} from "../cache-utils.js";
+import {
+  enforceSessionDiskBudget,
+  type SessionDiskBudgetSweepResult,
+} from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   clearSessionStoreCaches,
@@ -51,7 +58,9 @@ const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
+function isSessionStoreRecord(
+  value: unknown,
+): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -72,14 +81,18 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    lastThreadId:
+      entry.lastThreadId ??
+      entry.deliveryContext?.threadId ??
+      entry.origin?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
   const sameDelivery =
     (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
     (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
-    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
+    (entry.deliveryContext?.accountId ?? undefined) ===
+      nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
   const sameLast =
     entry.lastChannel === normalized.lastChannel &&
@@ -99,7 +112,9 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   };
 }
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+function removeThreadFromDeliveryContext(
+  context?: DeliveryContext,
+): DeliveryContext | undefined {
   if (!context || context.threadId == null) {
     return context;
   }
@@ -130,7 +145,8 @@ export function resolveSessionStoreEntry(params: {
     legacyKeySet.add(trimmedKey);
   }
   let existing =
-    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+    params.store[normalizedKey] ??
+    (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
   let existingUpdatedAt = existing?.updatedAt ?? 0;
   for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
     if (candidateKey === normalizedKey) {
@@ -158,7 +174,9 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
     if (!entry) {
       continue;
     }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
+    const normalized = normalizeSessionEntryDelivery(
+      normalizeSessionRuntimeModelFields(entry),
+    );
     if (normalized !== entry) {
       store[key] = normalized;
     }
@@ -221,7 +239,8 @@ export function loadSessionStore(
   let mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
   const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
+  const retryBuf =
+    maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
     try {
       const raw = fs.readFileSync(storePath, "utf-8");
@@ -275,7 +294,10 @@ export function readSessionUpdatedAt(params: {
 }): number | undefined {
   try {
     const store = loadSessionStore(params.storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    const resolved = resolveSessionStoreEntry({
+      store,
+      sessionKey: params.sessionKey,
+    });
     return resolved.existing?.updatedAt;
   } catch {
     return undefined;
@@ -312,7 +334,9 @@ type SaveSessionStoreOptions = {
   /** Optional callback for warn-only maintenance. */
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   /** Optional callback with maintenance stats after a save. */
-  onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
+  onMaintenanceApplied?: (
+    report: SessionMaintenanceApplyReport,
+  ) => void | Promise<void>;
   /** Optional overrides used by maintenance commands. */
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
 };
@@ -346,7 +370,10 @@ async function saveSessionStoreUnlocked(
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
-    const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const maintenance = {
+      ...resolveMaintenanceConfig(),
+      ...opts?.maintenanceOverride,
+    };
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 
@@ -360,13 +387,16 @@ async function saveSessionStoreUnlocked(
           maxEntries: maintenance.maxEntries,
         });
         if (warning) {
-          log.warn("session maintenance would evict active session; skipping enforcement", {
-            activeSessionKey: warning.activeSessionKey,
-            wouldPrune: warning.wouldPrune,
-            wouldCap: warning.wouldCap,
-            pruneAfterMs: warning.pruneAfterMs,
-            maxEntries: warning.maxEntries,
-          });
+          log.warn(
+            "session maintenance would evict active session; skipping enforcement",
+            {
+              activeSessionKey: warning.activeSessionKey,
+              wouldPrune: warning.wouldPrune,
+              wouldCap: warning.wouldCap,
+              pruneAfterMs: warning.pruneAfterMs,
+              maxEntries: warning.maxEntries,
+            },
+          );
           await opts?.onWarn?.(warning);
         }
       }
@@ -415,9 +445,14 @@ async function saveSessionStoreUnlocked(
       for (const archivedDir of archivedForDeletedSessions) {
         archivedDirs.add(archivedDir);
       }
-      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
+      if (
+        archivedDirs.size > 0 ||
+        maintenance.resetArchiveRetentionMs != null
+      ) {
         const targetDirs =
-          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+          archivedDirs.size > 0
+            ? [...archivedDirs]
+            : [path.dirname(path.resolve(storePath))];
         await cleanupArchivedSessionTranscripts({
           directories: targetDirs,
           olderThanMs: maintenance.pruneAfterMs,
@@ -811,7 +846,8 @@ export async function updateLastRoute(params: {
   ctx?: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
-  const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
+  const { storePath, sessionKey, channel, to, accountId, threadId, ctx } =
+    params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
@@ -840,7 +876,8 @@ export async function updateLastRoute(params: {
       inlineContext?.channel ||
       inlineContext?.to,
     );
-    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
+    const clearThreadFromFallback =
+      explicitRouteProvided && explicitThreadValue == null;
     const fallbackContext = clearThreadFromFallback
       ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
       : deliveryContextFromSession(existing);
