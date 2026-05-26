@@ -3688,22 +3688,34 @@ export const chatHandlers: GatewayRequestHandlers = {
                             (entry) =>
                               typeof entry.id === "string" && rewriteTargetIds.has(entry.id),
                           ) ?? -1;
+                        const allowedRewriteSuffixEntryIds = new Set(allowedSourceReplyMirrorIds);
                         const canRewriteSourceReplyMirrors =
                           firstRewriteEntryIndex >= 0 &&
                           rewriteIndex?.entries
                             .slice(firstRewriteEntryIndex)
-                            .every(
-                              (entry) =>
-                                typeof entry.id !== "string" ||
-                                allowedSourceReplyMirrorIds.has(entry.id),
-                            ) === true;
+                            .every((entry) => {
+                              if (typeof entry.id !== "string") {
+                                return true;
+                              }
+                              if (allowedSourceReplyMirrorIds.has(entry.id)) {
+                                return true;
+                              }
+                              const message = entry.record.message as
+                                | { role?: unknown }
+                                | undefined;
+                              if (message?.role !== "assistant") {
+                                allowedRewriteSuffixEntryIds.add(entry.id);
+                                return true;
+                              }
+                              return false;
+                            }) === true;
                         if (canRewriteSourceReplyMirrors) {
                           const result = await rewriteTranscriptEntriesInSessionFile({
                             sessionFile: resolvedTranscriptPath,
                             sessionKey,
                             config: cfg,
                             request: {
-                              allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
+                              allowedRewriteSuffixEntryIds: [...allowedRewriteSuffixEntryIds],
                               replacements: rewriteTargets.map((target) => ({
                                 entryId: target.messageId,
                                 message: {
