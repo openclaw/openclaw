@@ -31,32 +31,37 @@ function makeUnregisteredGroupMsg(
 }
 
 type WarnLogger = (obj: unknown, msg: string) => void;
+type ApplyGroupGatingParams = Parameters<typeof applyGroupGating>[0];
 
-function makeParams(msg: WebInboundMsg, warn: WarnLogger) {
-  return {
-    cfg: {
-      channels: {
-        whatsapp: {
-          groupPolicy: "allowlist",
-          groups: {
-            "registered@g.us": {},
-          },
-          accounts: {
-            work: {
-              groupPolicy: "allowlist",
-              groups: {
-                "registered@g.us": {},
-              },
+function makeParams(
+  msg: WebInboundMsg,
+  warn: WarnLogger,
+  cfg: ApplyGroupGatingParams["cfg"] = {
+    channels: {
+      whatsapp: {
+        groupPolicy: "allowlist",
+        groups: {
+          "registered@g.us": {},
+        },
+        accounts: {
+          work: {
+            groupPolicy: "allowlist",
+            groups: {
+              "registered@g.us": {},
             },
           },
         },
       },
-      messages: {
-        groupChat: {
-          mentionPatterns: ["\\bopenclaw\\b"],
-        },
+    },
+    messages: {
+      groupChat: {
+        mentionPatterns: ["\\bopenclaw\\b"],
       },
-    } as never,
+    },
+  } as never,
+) {
+  return {
+    cfg,
     msg,
     conversationId: msg.conversationId,
     groupHistoryKey: `whatsapp:group:${msg.conversationId}`,
@@ -110,6 +115,42 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(message).toContain("channels.whatsapp.accounts.work.groups");
   });
 
+  it("names the root groups path for non-default accounts inheriting root groups", async () => {
+    const warn = vi.fn<WarnLogger>();
+    const msg = makeUnregisteredGroupMsg("unregistered@g.us", "work");
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groups: {
+            "registered@g.us": {},
+          },
+          accounts: {
+            work: {
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    } as ApplyGroupGatingParams["cfg"];
+
+    await applyGroupGating(makeParams(msg, warn, cfg));
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [context, message] = warn.mock.calls[0] ?? [];
+    expect(context).toMatchObject({
+      conversationId: "unregistered@g.us",
+      accountId: "work",
+      groupsPath: "channels.whatsapp.groups",
+    });
+    expect(message).toContain("channels.whatsapp.groups");
+  });
+
   it("only warns once per conversation across repeated messages", async () => {
     const warn = vi.fn<WarnLogger>();
 
@@ -129,6 +170,20 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(warn).toHaveBeenCalledTimes(2);
     expect(warn.mock.calls[0]?.[1]).toContain("a@g.us");
     expect(warn.mock.calls[1]?.[1]).toContain("b@g.us");
+  });
+
+  it("evicts old warning keys instead of growing without bound", async () => {
+    const warn = vi.fn<WarnLogger>();
+
+    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("evicted@g.us"), warn));
+    for (let index = 0; index < 100; index += 1) {
+      await applyGroupGating(makeParams(makeUnregisteredGroupMsg(`overflow-${index}@g.us`), warn));
+    }
+    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("evicted@g.us"), warn));
+
+    expect(warn).toHaveBeenCalledTimes(102);
+    expect(warn.mock.calls[0]?.[1]).toContain("evicted@g.us");
+    expect(warn.mock.calls[101]?.[1]).toContain("evicted@g.us");
   });
 
   it("does not warn when the group is registered", async () => {

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -52,13 +53,26 @@ type ApplyGroupGatingParams = {
   };
 };
 
-// One-shot diagnostic so users learn why a group inbound was dropped without
-// enabling verbose mode. Keyed by `${accountId}:${conversationId}` to avoid log
-// spam in active groups. See issue #83777.
+const MAX_GROUP_DROP_WARNINGS = 100;
 const groupDropWarned = new Set<string>();
 
 export function resetGroupDropWarningsForTests() {
   groupDropWarned.clear();
+}
+
+function shouldWarnForGroupDrop(warnKey: string): boolean {
+  if (groupDropWarned.has(warnKey)) {
+    return false;
+  }
+  groupDropWarned.add(warnKey);
+  while (groupDropWarned.size > MAX_GROUP_DROP_WARNINGS) {
+    const oldest = groupDropWarned.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    groupDropWarned.delete(oldest);
+  }
+  return true;
 }
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
@@ -126,14 +140,10 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     params.conversationId,
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
-    const accountId = params.msg.accountId;
-    const warnKey = `${accountId ?? "default"}:${params.conversationId}`;
-    if (!groupDropWarned.has(warnKey)) {
-      groupDropWarned.add(warnKey);
-      const groupsPath =
-        accountId && accountId !== "default"
-          ? `channels.whatsapp.accounts.${accountId}.groups`
-          : "channels.whatsapp.groups";
+    const accountId = inboundPolicy.account.accountId;
+    const warnKey = `${accountId}:${params.conversationId}`;
+    if (shouldWarnForGroupDrop(warnKey)) {
+      const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
       params.replyLogger.warn(
         { conversationId: params.conversationId, accountId, groupsPath },
         `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
