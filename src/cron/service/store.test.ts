@@ -223,6 +223,85 @@ describe("cron service store seam coverage", () => {
     ]);
   });
 
+  it("preserves malformed persisted rows across full persistence without loading them", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeJobStore(storePath, [
+      {
+        id: "valid-job",
+        name: "valid job",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "missing-schedule-job",
+        name: "missing schedule job",
+        enabled: true,
+        payload: { kind: "systemEvent", text: "tick" },
+        state: { lastRunAtMs: STORE_TEST_NOW - 3_600_000 },
+      },
+      {
+        id: "missing-system-text-job",
+        name: "missing system text job",
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent" },
+        metadata: { preserve: { nested: true } },
+      },
+    ]);
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    expect(() => findJobOrThrow(state, "missing-schedule-job")).toThrow(/unknown cron job id/);
+    expect(() => findJobOrThrow(state, "missing-system-text-job")).toThrow(/unknown cron job id/);
+
+    const valid = findJobOrThrow(state, "valid-job");
+    valid.name = "valid job renamed";
+    await persist(state);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(config.jobs.map((job) => job.id)).toEqual([
+      "valid-job",
+      "missing-schedule-job",
+      "missing-system-text-job",
+    ]);
+    expect(config.jobs[0]?.name).toBe("valid job renamed");
+    expect(config.jobs[1]).toMatchObject({
+      id: "missing-schedule-job",
+      state: { lastRunAtMs: STORE_TEST_NOW - 3_600_000 },
+    });
+    expect(config.jobs[2]).toMatchObject({
+      id: "missing-system-text-job",
+      metadata: { preserve: { nested: true } },
+    });
+    expect(config.jobs[2]).not.toHaveProperty("state");
+    expect(config.jobs[2]).not.toHaveProperty("updatedAtMs");
+
+    const stateFile = JSON.parse(
+      await fs.readFile(storePath.replace(/\.json$/, "-state.json"), "utf8"),
+    ) as { jobs: Record<string, unknown> };
+    expect(Object.keys(stateFile.jobs)).toEqual(["valid-job"]);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: "missing-schedule-job", jobIndex: 1 }),
+      expect.stringContaining("skipped invalid persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: "missing-system-text-job", jobIndex: 2 }),
+      expect.stringContaining("skipped invalid persisted job"),
+    );
+  });
+
   it("skips preserved unsupported rows that collide with supported jobs by canonical id", async () => {
     const { storePath } = await makeStorePath();
 
@@ -494,6 +573,33 @@ describe("cron service store seam coverage", () => {
     const job = findJobOrThrow(state, "reload-cron-expr-job");
     expect(job.schedule).toBe("0 17 * * *");
     expect(job.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("warns once per malformed persisted row across repeated forceReload cycles", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "missing-cron-expr-job",
+      name: "missing cron expr job",
+      enabled: true,
+      schedule: { kind: "cron" },
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    });
+
+    const warnSpy = vi.spyOn(logger, "warn");
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const malformedWarns = warnSpy.mock.calls.filter((call) => {
+      const msg = typeof call[1] === "string" ? call[1] : "";
+      return msg.includes("skipped invalid persisted job");
+    });
+    expect(malformedWarns).toHaveLength(1);
+    warnSpy.mockRestore();
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {

@@ -48,21 +48,6 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasUnsupportedStringPayloadKind(candidate: Record<string, unknown>): boolean {
-  const payload = candidate.payload;
-  if (!isRecord(payload)) {
-    return false;
-  }
-  const kind = payload.kind;
-  return (
-    typeof kind === "string" && kind.trim() !== "" && kind !== "systemEvent" && kind !== "agentTurn"
-  );
-}
-
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
@@ -121,9 +106,7 @@ export async function ensureLoaded(
       hydrated as unknown as Record<string, unknown>,
     );
     if (invalidReason) {
-      if (invalidReason === "invalid-payload" && hasUnsupportedStringPayloadKind(rawConfigJob)) {
-        preservedInvalidPersistedJobs.push({ index, job: rawConfigJob });
-      }
+      preservedInvalidPersistedJobs.push({ index, job: rawConfigJob });
       warnInvalidPersistedCronJob({ state, raw, index, reason: invalidReason });
       continue;
     }
