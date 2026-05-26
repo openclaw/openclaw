@@ -8656,7 +8656,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resolved).toBe(false);
     expect(
       warn.mock.calls.some(([message]) =>
-        String(message).includes("turn/completed did not match active turn"),
+        message.includes("turn/completed did not match active turn"),
       ),
     ).toBe(false);
 
@@ -9727,7 +9727,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
   });
 
-  it("starts a fresh Codex thread before resume when the native rollout is over budget", async () => {
+  it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -9750,7 +9750,7 @@ describe("runCodexAppServerAttempt", () => {
           type: "token_count",
           info: {
             total_token_usage: {
-              total_tokens: 70_000,
+              total_tokens: 300_000,
             },
           },
         },
@@ -9783,7 +9783,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-1");
   });
 
-  it("preserves bound auth when rotating an over-budget native rollout", async () => {
+  it("preserves bound auth when rotating a fallback-fuse native rollout", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -9809,7 +9809,7 @@ describe("runCodexAppServerAttempt", () => {
           type: "token_count",
           info: {
             total_token_usage: {
-              total_tokens: 70_000,
+              total_tokens: 300_000,
             },
           },
         },
@@ -9997,7 +9997,7 @@ describe("runCodexAppServerAttempt", () => {
           type: "token_count",
           info: {
             total_token_usage: {
-              total_tokens: 70_000,
+              total_tokens: 300_000,
             },
             last_token_usage: {
               total_tokens: 12_000,
@@ -10038,7 +10038,7 @@ describe("runCodexAppServerAttempt", () => {
       JSON.stringify({
         "agent:main:session-1": {
           sessionFile,
-          totalTokens: 70_000,
+          totalTokens: 300_000,
           totalTokensFresh: false,
         },
       }),
@@ -10080,7 +10080,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
-  it("streams rollout token scans without reading the whole file", async () => {
+  it("clears native rollouts at Codex's reported model context window", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -10099,16 +10099,26 @@ describe("runCodexAppServerAttempt", () => {
     const rolloutFile = path.join(rolloutDir, "rollout-thread-existing.jsonl");
     await fs.writeFile(
       rolloutFile,
-      `${JSON.stringify({
-        payload: {
-          type: "token_count",
-          info: {
-            last_token_usage: {
-              total_tokens: 70_000,
+      [
+        JSON.stringify({
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                total_tokens: 128_000,
+              },
             },
           },
-        },
-      })}\n`,
+        }),
+        JSON.stringify({
+          payload: {
+            type: "token_count",
+            info: {
+              model_context_window: 128_000,
+            },
+          },
+        }),
+      ].join("\n") + "\n",
     );
     const readFileSpy = vi.spyOn(fs, "readFile");
 
@@ -10132,6 +10142,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(readFileSpy.mock.calls.some(([file]) => file === rolloutFile)).toBe(false);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding).toBeUndefined();
+  });
+
+  it("keeps native rollouts above the old guard when Codex still has context window headroom", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    await fs.writeFile(
+      path.join(path.dirname(sessionFile), "sessions.json"),
+      JSON.stringify({
+        "agent:main:session-1": {
+          sessionFile,
+          totalTokens: 12_000,
+        },
+      }),
+    );
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+      `${JSON.stringify({
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: {
+              total_tokens: 86_000,
+            },
+            model_context_window: 272_000,
+          },
+        },
+      })}\n`,
+    );
+
+    const binding = await testing.rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "1mb",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(binding?.threadId).toBe("thread-existing");
+    const savedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
   it("clears byte-oversized rollouts before reading their contents", async () => {
