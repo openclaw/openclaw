@@ -7,15 +7,15 @@ export type BrowserChromeMcpCapabilitiesConfig = {
   diagnostics?: BrowserChromeMcpCapabilitySetting;
   /** Enable Chrome MCP extension inventory/tab helpers. Default: auto */
   extensions?: BrowserChromeMcpCapabilitySetting;
-  /** Allow Chrome MCP extension install, reload, action, and uninstall operations. Default: auto */
+  /** Allow Chrome MCP extension install, reload, action, and uninstall operations. Default: false */
   extensionMutation?: BrowserChromeMcpCapabilitySetting;
-  /** Enable Chrome MCP page-provided third-party developer tool listing. Default: auto */
+  /** Enable Chrome MCP page-provided third-party developer tool listing. Default: false */
   thirdPartyTools?: BrowserChromeMcpCapabilitySetting;
-  /** Allow executing page-provided third-party developer tools. Default: auto */
+  /** Allow executing page-provided third-party developer tools. Default: false */
   thirdPartyToolExecution?: BrowserChromeMcpCapabilitySetting;
-  /** Enable Chrome MCP WebMCP tool listing. Default: auto */
+  /** Enable Chrome MCP WebMCP tool listing. Default: false */
   webMcpTools?: BrowserChromeMcpCapabilitySetting;
-  /** Allow executing page-provided WebMCP tools. Default: auto */
+  /** Allow executing page-provided WebMCP tools. Default: false */
   webMcpToolExecution?: BrowserChromeMcpCapabilitySetting;
 };
 
