@@ -10,7 +10,7 @@ export const channelBrokerStatus = createComputedAccountStatusAdapter<ResolvedCh
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
-        if (account.configured) {
+        if (!account.enabled || account.configured) {
           return [];
         }
         return [
