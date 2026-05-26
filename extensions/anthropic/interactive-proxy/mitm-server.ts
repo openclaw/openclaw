@@ -47,7 +47,9 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
   let lastStopReason = "";
 
   function emitEvent(evt: Record<string, unknown>): void {
-    for (const h of eventHandlers) {h(evt);}
+    for (const h of eventHandlers) {
+      h(evt);
+    }
     if (evt.type === "message_delta") {
       const delta = evt.delta as Record<string, unknown> | undefined;
       if (typeof delta?.stop_reason === "string") {
@@ -76,7 +78,15 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
       const headers = new Headers(req.headers);
       headers.set("host", UPSTREAM_HOST);
       headers.set("accept-encoding", "identity");
-      for (const hop of ["connection", "keep-alive", "proxy-connection", "upgrade", "te", "trailer", "transfer-encoding"]) {
+      for (const hop of [
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "upgrade",
+        "te",
+        "trailer",
+        "transfer-encoding",
+      ]) {
         headers.delete(hop);
       }
 
@@ -129,16 +139,19 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
               const hasToolResult = (lastMsg.content as Record<string, unknown>[]).some(
                 (b) => b.type === "tool_result",
               );
-              if (hasToolResult) {requestType = "tool_followup";}
+              if (hasToolResult) {
+                requestType = "tool_followup";
+              }
             }
             if (requestType === "normal" && lastMsg.role === "user") {
-              const lastContent = typeof lastMsg.content === "string"
-                ? lastMsg.content
-                : Array.isArray(lastMsg.content)
-                  ? (lastMsg.content as Record<string, unknown>[])
-                      .map((b) => (typeof b.text === "string" ? b.text : ""))
-                      .join("")
-                  : "";
+              const lastContent =
+                typeof lastMsg.content === "string"
+                  ? lastMsg.content
+                  : Array.isArray(lastMsg.content)
+                    ? (lastMsg.content as Record<string, unknown>[])
+                        .map((b) => (typeof b.text === "string" ? b.text : ""))
+                        .join("")
+                    : "";
               if (
                 lastContent.includes("summary should include the following sections") &&
                 (lastContent.includes("continuation summary") ||
@@ -169,18 +182,21 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
 
       let upstream: Response;
       try {
-        upstream = await fetch(new Request(upstreamUrl, {
-          method: req.method,
-          headers,
-          body: reqBody !== undefined ? reqBody : undefined,
-        }));
+        upstream = await fetch(
+          new Request(upstreamUrl, {
+            method: req.method,
+            headers,
+            body: reqBody !== undefined ? reqBody : undefined,
+          }),
+        );
       } catch {
         return new Response("Bad Gateway", { status: 502 });
       }
 
       const contentType = upstream.headers.get("content-type") ?? "";
       const isSSE = contentType.includes("text/event-stream");
-      const isMessagesEndpoint = url.pathname === "/v1/messages" || url.pathname.startsWith("/v1/messages?");
+      const isMessagesEndpoint =
+        url.pathname === "/v1/messages" || url.pathname.startsWith("/v1/messages?");
       const status = upstream.status;
       const respHeaders = new Headers(upstream.headers);
       for (const hop of ["connection", "keep-alive", "transfer-encoding", "trailer"]) {
@@ -222,7 +238,9 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
         try {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) {break;}
+            if (done) {
+              break;
+            }
             await writer.write(value);
 
             textBuf += decoder.decode(value, { stream: true });
@@ -230,9 +248,13 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
             textBuf = lines.pop() ?? "";
 
             for (const line of lines) {
-              if (!line.startsWith("data: ")) {continue;}
+              if (!line.startsWith("data: ")) {
+                continue;
+              }
               const raw = line.slice(6).trim();
-              if (raw === "[DONE]") {continue;}
+              if (raw === "[DONE]") {
+                continue;
+              }
               try {
                 const evt = JSON.parse(raw);
                 evt._reqId = reqId;
@@ -268,11 +290,15 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
     let tunneled = false;
 
     const onData = (chunk: Buffer) => {
-      if (tunneled) {return;}
+      if (tunneled) {
+        return;
+      }
       headerBuf = Buffer.concat([headerBuf, chunk]);
       const str = headerBuf.toString("latin1");
       const headEnd = str.indexOf("\r\n\r\n");
-      if (headEnd === -1) {return;}
+      if (headEnd === -1) {
+        return;
+      }
 
       client.removeListener("data", onData);
 
@@ -282,6 +308,18 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
       const targetPort = Number.parseInt(portStr, 10) || 443;
 
       const isApiHost = host === UPSTREAM_HOST;
+      // Constrain this unauthenticated localhost CONNECT proxy to Anthropic
+      // hosts only. Otherwise any local process that discovers the port while a
+      // run is active could use it as an arbitrary TCP tunnel. api.anthropic.com
+      // is intercepted by the local TLS terminator; other *.anthropic.com hosts
+      // (telemetry/console) pass through unmodified; everything else is rejected.
+      const isAnthropicHost =
+        isApiHost || host === "anthropic.com" || host.endsWith(".anthropic.com");
+      if (!isAnthropicHost) {
+        client.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        client.destroy();
+        return;
+      }
       const destHost = isApiHost ? "127.0.0.1" : host;
       const destPort = isApiHost ? tlsPort : targetPort;
 
@@ -290,7 +328,9 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
         tunneled = true;
 
         const leftover = headerBuf.slice(headEnd + 4);
-        if (leftover.length > 0) {upstreamSocket.write(leftover);}
+        if (leftover.length > 0) {
+          upstreamSocket.write(leftover);
+        }
 
         client.pipe(upstreamSocket);
         upstreamSocket.pipe(client);
@@ -322,4 +362,3 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
     },
   };
 }
-

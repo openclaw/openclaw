@@ -63,6 +63,10 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/anthropic/interactive-proxy/cert-manager.ts",
+      "dist/extensions/anthropic/interactive-proxy/mitm-server.ts",
+      "dist/extensions/anthropic/interactive-proxy/tty-spoof.cjs",
+      "dist/extensions/anthropic/interactive-proxy/wrapper.ts",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");

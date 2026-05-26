@@ -207,10 +207,38 @@ only for behavior that really belongs to the backend.
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                |
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions |
 | `nativeToolMode`                   | Declare whether the CLI has always-on native tools     |
+| `inheritUserConfigFrom`            | Reuse a sibling backend's user override for a variant  |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge           |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when a
 backend hook can express the behavior.
+
+### Variant config inheritance
+
+A backend that is a variant of another (for example a streaming or
+subscription-path variant of a canonical CLI) can reuse the user's override for
+its sibling instead of asking users to duplicate config:
+
+```typescript
+return {
+  id: "acme-cli-fast",
+  inheritUserConfigFrom: {
+    backendId: "acme-cli",
+    // Drop flags that don't apply to this variant's dialect.
+    filterArgs: (args) => args.filter((arg) => arg !== "--slow"),
+  },
+  config: {
+    command: "acme",
+    args: ["chat", "--json", "--fast"],
+  },
+};
+```
+
+When no direct override exists under `agents.defaults.cliBackends.<id>`, the
+variant inherits the sibling's override (`acme-cli` above). `filterArgs`, when
+provided, sanitizes the inherited `args`/`resumeArgs` so flags that don't apply
+to the variant are removed before launch. A direct override for the variant
+always wins over the inherited one.
 
 ## MCP tool bridge
 
