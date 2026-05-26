@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SKILL_SNAPSHOT_SCHEMA_VERSION } from "../../agents/skills/types.js";
 import {
   makeIsolatedAgentTurnJob,
   makeIsolatedAgentTurnParams,
@@ -174,8 +175,11 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         sessionId: "test-session-id",
         updatedAt: 0,
         systemSent: false,
+        // Stamp `schemaVersion` so the cron reuse path's stale-schema guard
+        // (mirrored from agent-command) treats this fixture as current.
         skillsSnapshot: {
           prompt: "<available_skills><skill>weather</skill></available_skills>",
+          schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
           skills: [{ name: "weather" }],
           skillFilter: ["meme-factory", "weather"],
           version: 42,
