@@ -3089,6 +3089,22 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(testing.CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
+  it("uses a 90 second default for generic Codex dynamic tool calls", () => {
+    expect(
+      testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-session-status",
+          namespace: null,
+          tool: "session_status",
+          arguments: { sessionKey: "current" },
+        },
+        config: undefined,
+      }),
+    ).toBe(90_000);
+  });
+
   it("caps dynamic tool timeouts at the bridge maximum", () => {
     expect(
       testing.resolveDynamicToolCallTimeoutMs({
