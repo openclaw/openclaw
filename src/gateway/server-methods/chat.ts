@@ -2160,7 +2160,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars, mode, unsafeRawToolPayloads } = params as {
+    // `unsafeRawToolPayloads` is accepted in the params schema for backwards
+    // compatibility but intentionally not destructured here: the raw branch is
+    // now gated solely by `mode === "raw-messages"` (see docs/web/webchat.md
+    // and docs/gateway/protocol.md), so the flag has no effect on its own.
+    const { sessionKey, limit, maxChars, mode } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
