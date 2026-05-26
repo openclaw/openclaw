@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -90,11 +93,20 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 }
 
 describe("registerCoreHealthChecks", () => {
+  let tmp: string | undefined;
+
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    tmp = undefined;
+  });
+
+  afterEach(async () => {
+    if (tmp) {
+      await fs.rm(tmp, { force: true, recursive: true });
+    }
   });
 
   it("registers the built-in health checks once", () => {
