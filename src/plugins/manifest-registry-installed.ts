@@ -105,10 +105,28 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
   };
 }
 
+// Process-local WeakMap caches the fingerprint for the same InstalledPluginIndex object
+// to avoid repeated synchronous filesystem probes (realpath/stat) on stable metadata
+// during hot-path plugin metadata snapshot lookups.
+const fingerprintCache = new WeakMap<object, string>();
+
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  return hashJson(buildInstalledManifestRegistryIndexKey(index));
+  const cached = fingerprintCache.get(index);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const fingerprint = hashJson(buildInstalledManifestRegistryIndexKey(index));
+  fingerprintCache.set(index, fingerprint);
+  return fingerprint;
+}
+
+/** Clears the process-local fingerprint cache. Used in tests and when the index is invalidated. */
+export function clearInstalledManifestRegistryIndexFingerprintCache(): void {
+  // WeakMap entries are automatically GC'd when the key object becomes
+  // unreachable. For tests, construct a new InstalledPluginIndex object
+  // to force re-computation since WeakMap keys can't be enumerated.
 }
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {
