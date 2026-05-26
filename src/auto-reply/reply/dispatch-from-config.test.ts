@@ -4738,6 +4738,78 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
+  it("does not run plugin-owned binding delivery when the caller already aborted", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "should not send" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-aborted-1",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/workspace/openclaw-app-server",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
+      },
+    } satisfies SessionBindingRecord);
+    const abortController = new AbortController();
+    abortController.abort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "discord:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "who are you",
+      RawBody: "who are you",
+      Body: "who are you",
+      MessageSid: "msg-claim-plugin-aborted-1",
+      SessionKey: "agent:main:discord:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("lets authorized plugin-owned binding commands fall through to command processing", async () => {
     setNoAbort();
     expect(
@@ -5706,7 +5778,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
   });
 
-  it("waits for same-channel block dispatcher delivery before resolving block replies", async () => {
+  it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
@@ -5739,10 +5811,10 @@ describe("dispatchReplyFromConfig", () => {
       await deliveryStarted;
 
       expect(delivered).toEqual([{ text: "before tool" }]);
-      expect(blockReplySettled).toBe(false);
+      await blockReplyPromise;
+      expect(blockReplySettled).toBe(true);
 
       releaseDelivery?.();
-      await blockReplyPromise;
       return undefined;
     };
 
@@ -5754,6 +5826,177 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(blockReplySettled).toBe(true);
+    await dispatcher.waitForIdle();
+  });
+
+  it("waits for pending same-channel block delivery before completing block-only dispatch", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const delivered: ReplyPayload[] = [];
+    let releaseDelivery: (() => void) | undefined;
+    let markDeliveryStarted: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "only block" });
+      return undefined;
+    };
+
+    let dispatchSettled = false;
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    }).then((result) => {
+      dispatchSettled = true;
+      return result;
+    });
+
+    await deliveryStarted;
+
+    expect(delivered).toEqual([{ text: "only block" }]);
+    expect(dispatchSettled).toBe(false);
+
+    releaseDelivery?.();
+    await dispatchPromise;
+
+    expect(dispatchSettled).toBe(true);
+  });
+
+  it("waits for pending same-channel block delivery before forwarding tool progress", async () => {
+    setNoAbort();
+    const cfg = {
+      agents: { defaults: { verboseDefault: "on" } },
+    } as const satisfies OpenClawConfig;
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const delivered: ReplyPayload[] = [];
+    let releaseDelivery: (() => void) | undefined;
+    let markDeliveryStarted: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    const onToolStart = vi.fn();
+    let toolProgressSettled = false;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "before tool" });
+      const toolProgressPromise = Promise.resolve(opts?.onToolStart?.({ name: "lookup" })).then(
+        () => {
+          toolProgressSettled = true;
+        },
+      );
+
+      await deliveryStarted;
+
+      expect(delivered).toEqual([{ text: "before tool" }]);
+      expect(onToolStart).not.toHaveBeenCalled();
+      expect(toolProgressSettled).toBe(false);
+
+      releaseDelivery?.();
+      await toolProgressPromise;
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onToolStart },
+    });
+
+    expect(toolProgressSettled).toBe(true);
+    expect(onToolStart).toHaveBeenCalledWith({ name: "lookup" });
+  });
+
+  it("does not synthesize tool-start capability while ordering item progress", async () => {
+    setNoAbort();
+    const cfg = {
+      agents: { defaults: { verboseDefault: "on" } },
+    } as const satisfies OpenClawConfig;
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const delivered: ReplyPayload[] = [];
+    let releaseDelivery: (() => void) | undefined;
+    let markDeliveryStarted: (() => void) | undefined;
+    const deliveryStarted = new Promise<void>((resolve) => {
+      markDeliveryStarted = resolve;
+    });
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+        markDeliveryStarted?.();
+        await deliveryGate;
+      },
+    });
+    const onItemEvent = vi.fn();
+    let itemProgressSettled = false;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "before item" });
+      expect(opts?.onToolStart).toBeUndefined();
+      const itemProgressPromise = Promise.resolve(
+        opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running" }),
+      ).then(() => {
+        itemProgressSettled = true;
+      });
+
+      await deliveryStarted;
+
+      expect(delivered).toEqual([{ text: "before item" }]);
+      expect(onItemEvent).not.toHaveBeenCalled();
+      expect(itemProgressSettled).toBe(false);
+
+      releaseDelivery?.();
+      await itemProgressPromise;
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onItemEvent },
+    });
+
+    expect(itemProgressSettled).toBe(true);
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "1",
+      kind: "tool",
+      progressText: "running",
+    });
   });
 
   it("forwards payload metadata into onBlockReplyQueued context", async () => {

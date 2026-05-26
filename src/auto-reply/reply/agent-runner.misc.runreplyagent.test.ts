@@ -376,6 +376,77 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   });
 
+  it("continues when preflight compaction reports a skip-like no-op result", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-skip-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1_000_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    compactState.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "already under target",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          lastCallUsage: { input: 1_000, output: 100, total: 1_100 },
+        },
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      sessionFile: path.join(tmp, "session.jsonl"),
+      workspaceDir: tmp,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expectReplyText(result, "ok");
+    expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    expect(
+      firstMockCallArg(compactState.compactEmbeddedPiSessionMock, "preflight compaction"),
+    ).toMatchObject({
+      sessionId: "session",
+      sessionKey,
+      trigger: "budget",
+      deferOwningContextEngineCompaction: false,
+      currentTokenCount: 1_000_000,
+    });
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {
