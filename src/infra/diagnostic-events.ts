@@ -788,6 +788,7 @@ const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["ty
   "tool.execution.completed",
   "tool.execution.error",
   "tool.execution.blocked",
+  "harness.selection",
 ]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {

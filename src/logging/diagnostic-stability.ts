@@ -1,5 +1,5 @@
 import {
-  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
@@ -717,7 +717,7 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onDiagnosticEvent((event) => {
+  state.unsubscribe = onInternalDiagnosticEvent((event) => {
     appendRecord(sanitizeDiagnosticEvent(event));
   });
 }

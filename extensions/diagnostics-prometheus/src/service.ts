@@ -550,6 +550,8 @@ function recordDiagnosticEvent(
         harnessLabels(evt),
       );
       return;
+    case "harness.selection":
+      return;
     case "message.processed":
       store.counter("openclaw_message_processed_total", "Inbound messages processed by outcome.", {
         channel: lowCardinalityLabel(evt.channel),

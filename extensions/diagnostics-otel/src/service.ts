@@ -2678,6 +2678,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "harness.run.error":
               recordHarnessRunError(evt, metadata);
               return;
+            case "harness.selection":
+              return;
             case "context.assembled":
               recordContextAssembled(evt, metadata);
               return;

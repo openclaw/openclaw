@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -253,6 +254,46 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[0]).not.toHaveProperty("sessionId");
     expect(snapshot.events[0]).not.toHaveProperty("promptChars");
     expect(snapshot.events[0]).not.toHaveProperty("systemPromptChars");
+  });
+
+  it("records trusted harness selection diagnostics through the sanitized stability surface", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "harness.selection",
+      runId: "run-secret",
+      sessionId: "session-secret",
+      sessionKey: "agent:main:webchat:direct:u1",
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "webchat",
+      selectedHarnessId: "codex",
+      selectedReason: "implicit_plugin",
+      runtime: "codex",
+      runtimeSource: "implicit",
+      runtimeReason: "openai_official_default_codex",
+      warning: "openai_official_implicit_codex_harness",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expectFields(snapshot.events[0], {
+      type: "harness.selection",
+      source: "codex",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "webchat",
+      mode: "codex",
+      outcome: "implicit_plugin",
+      target: "main",
+      reason: "openai_official_default_codex",
+      level: "warning",
+    });
+    expect(snapshot.events[0]).not.toHaveProperty("runId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionId");
+    expect(snapshot.events[0]).not.toHaveProperty("sessionKey");
   });
 
   it("sanitizes tool and model diagnostic error categories", async () => {
