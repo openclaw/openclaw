@@ -113,10 +113,18 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
   };
 }
 
+const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
+
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  return hashJson(buildInstalledManifestRegistryIndexKey(index));
+  const cached = installedManifestRegistryIndexFingerprintCache.get(index);
+  if (cached) {
+    return cached;
+  }
+  const fingerprint = hashJson(buildInstalledManifestRegistryIndexKey(index));
+  installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
+  return fingerprint;
 }
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {
