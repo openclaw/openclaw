@@ -105,15 +105,32 @@ function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   );
 }
 
+function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): boolean {
+  return (
+    params.failoverFailure && Boolean(params.failoverReason) && params.failoverReason !== "timeout"
+  );
+}
+
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
   const timeoutFailure = isAssistantTimeoutFailure(params);
-  if (timeoutFailure && params.harnessOwnsTransport) {
+  if (
+    timeoutFailure &&
+    params.harnessOwnsTransport &&
+    !isConcreteNonTimeoutAssistantFailure(params)
+  ) {
     return false;
   }
   return (!params.aborted && params.failoverFailure) || timeoutFailure;
+}
+
+function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
+  if (isConcreteNonTimeoutAssistantFailure(params)) {
+    return params.failoverReason;
+  }
+  return isAssistantTimeoutFailure(params) ? "timeout" : (params.failoverReason ?? "unknown");
 }
 
 export function mergeRetryFailoverReason(params: {
@@ -198,7 +215,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (assistantShouldRotate && params.fallbackConfigured) {
     return {
       action: "fallback_model",
-      reason: isAssistantTimeoutFailure(params) ? "timeout" : (params.failoverReason ?? "unknown"),
+      reason: assistantFallbackReason(params),
     };
   }
   if (!assistantShouldRotate) {

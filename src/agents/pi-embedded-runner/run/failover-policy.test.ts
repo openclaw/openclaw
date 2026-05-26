@@ -319,6 +319,50 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("rotates concrete assistant failover failures that accompany harness-owned timeouts", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "rate_limit",
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        harnessOwnsTransport: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "rate_limit",
+    });
+  });
+
+  it("falls back with the concrete assistant failover reason after harness-owned timeout rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "billing",
+        timedOut: true,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "billing",
+    });
+  });
+
   it("treats idle watchdog timeouts during tool execution as model silence", () => {
     expect(
       resolveRunFailoverDecision({
