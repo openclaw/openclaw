@@ -42,26 +42,18 @@ async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<Comman
 function parseLsofFieldOutput(output: string): PortListener[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const listeners: PortListener[] = [];
-  let current: PortListener = {};
+  let processFields: Pick<PortListener, "pid" | "command"> = {};
   for (const line of lines) {
     if (line.startsWith("p")) {
-      if (current.pid || current.command) {
-        listeners.push(current);
-      }
       const pid = Number.parseInt(line.slice(1), 10);
-      current = Number.isFinite(pid) ? { pid } : {};
+      processFields = Number.isFinite(pid) ? { pid } : {};
     } else if (line.startsWith("c")) {
-      current.command = line.slice(1);
+      processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {
       // TCP 127.0.0.1:18789 (LISTEN)
       // TCP *:18789 (LISTEN)
-      if (!current.address) {
-        current.address = line.slice(1);
-      }
+      listeners.push({ ...processFields, address: line.slice(1) });
     }
-  }
-  if (current.pid || current.command) {
-    listeners.push(current);
   }
   return listeners;
 }

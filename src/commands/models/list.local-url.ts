@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 export const isLocalBaseUrl = (baseUrl: string) => {
   try {
     const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname);
+    const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
     return (
       host === "localhost" ||
       host === "127.0.0.1" ||
