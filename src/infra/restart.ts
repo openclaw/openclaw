@@ -57,6 +57,21 @@ function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
 }
 
+export type GatewayRestartPendingState = {
+  pending: boolean;
+  unconsumedSignal: boolean;
+  scheduled: boolean;
+  preparing: boolean;
+  activeDeferralPolls: number;
+  dueAt: number | null;
+  delayMs: number;
+  reason: string | null;
+  skipDeferral: boolean;
+  deferralTimeoutMs: number | null;
+  effectiveDeferralTimeoutMs: number | null;
+  deferralTimeoutUnbounded: boolean;
+};
+
 function clearPendingScheduledRestart(): void {
   if (pendingRestartTimer) {
     clearTimeout(pendingRestartTimer);
@@ -436,6 +451,41 @@ export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): numb
     return undefined;
   }
   return Math.floor(timeoutMs);
+}
+
+function normalizeConfiguredRestartDeferralTimeoutMs(timeoutMs: unknown): number | null {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : null;
+}
+
+export function getGatewayRestartPendingState(nowMs = Date.now()): GatewayRestartPendingState {
+  const unconsumedSignal = hasUnconsumedRestartSignal();
+  const scheduled = pendingRestartTimer !== null;
+  const activeDeferralPollCount = activeDeferralPolls.size;
+  const dueAt = pendingRestartDueAt > 0 ? pendingRestartDueAt : null;
+  const configuredDeferralTimeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
+  const resolvedDeferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+    configuredDeferralTimeoutMs,
+  );
+  const effectiveDeferralTimeoutMs =
+    typeof resolvedDeferralTimeoutMs === "number" && resolvedDeferralTimeoutMs > 0
+      ? resolvedDeferralTimeoutMs
+      : undefined;
+
+  return {
+    pending:
+      unconsumedSignal || scheduled || pendingRestartPreparing || activeDeferralPollCount > 0,
+    unconsumedSignal,
+    scheduled,
+    preparing: pendingRestartPreparing,
+    activeDeferralPolls: activeDeferralPollCount,
+    dueAt,
+    delayMs: dueAt === null ? 0 : Math.max(0, dueAt - nowMs),
+    reason: pendingRestartReason ?? emittedRestartReason ?? null,
+    skipDeferral: pendingRestartSkipDeferral,
+    deferralTimeoutMs: normalizeConfiguredRestartDeferralTimeoutMs(configuredDeferralTimeoutMs),
+    effectiveDeferralTimeoutMs: effectiveDeferralTimeoutMs ?? null,
+    deferralTimeoutUnbounded: effectiveDeferralTimeoutMs === undefined,
+  };
 }
 
 function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
@@ -829,8 +879,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
-      pendingRestartReason = undefined;
-      pendingRestartSkipDeferral = false;
+      pendingRestartReason = scheduledReason;
+      pendingRestartSkipDeferral = scheduledSkipDeferral;
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {

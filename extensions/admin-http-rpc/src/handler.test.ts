@@ -105,6 +105,52 @@ describe("admin-http-rpc plugin handler", () => {
     });
   });
 
+  it("allows restart pending checks through the authenticated plugin request scope", async () => {
+    dispatchGatewayMethod.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        pending: false,
+        unconsumedSignal: false,
+        scheduled: false,
+        preparing: false,
+        activeDeferralPolls: 0,
+        dueAt: null,
+        delayMs: 0,
+        reason: null,
+        skipDeferral: false,
+        deferralTimeoutMs: 0,
+        effectiveDeferralTimeoutMs: null,
+        deferralTimeoutUnbounded: true,
+      },
+    });
+
+    const result = await invoke({
+      id: "restart-pending",
+      method: "gateway.restart.pending",
+    });
+
+    expect(dispatchGatewayMethod).toHaveBeenCalledWith("gateway.restart.pending", undefined);
+    expect(result.captured.statusCode).toBe(200);
+    expect(result.json).toEqual({
+      id: "restart-pending",
+      ok: true,
+      payload: {
+        pending: false,
+        unconsumedSignal: false,
+        scheduled: false,
+        preparing: false,
+        activeDeferralPolls: 0,
+        dueAt: null,
+        delayMs: 0,
+        reason: null,
+        skipDeferral: false,
+        deferralTimeoutMs: 0,
+        effectiveDeferralTimeoutMs: null,
+        deferralTimeoutUnbounded: true,
+      },
+    });
+  });
+
   it.each([
     ["web.login.start", { force: true, timeoutMs: 1000 }],
     ["web.login.wait", { timeoutMs: 1000 }],

@@ -511,7 +511,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadPushHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["gateway.restart.request", "gateway.restart.preflight"],
+    methods: ["gateway.restart.request", "gateway.restart.preflight", "gateway.restart.pending"],
     loadHandlers: loadRestartHandlers,
   }),
   ...createLazyCoreHandlers({

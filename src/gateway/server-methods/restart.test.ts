@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
 const requestSafeGatewayRestart = vi.hoisted(() => vi.fn());
+const getGatewayRestartPendingState = vi.hoisted(() => vi.fn());
 
 vi.mock("../../infra/restart-coordinator.js", () => ({
   createSafeGatewayRestartPreflight: vi.fn(() => ({
@@ -19,9 +20,16 @@ vi.mock("../../infra/restart-coordinator.js", () => ({
   requestSafeGatewayRestart: (opts: unknown) => requestSafeGatewayRestart(opts),
 }));
 
-function invokeRestartRequest(params: Record<string, unknown>) {
+vi.mock("../../infra/restart.js", () => ({
+  getGatewayRestartPendingState: () => getGatewayRestartPendingState(),
+}));
+
+function invokeRestartHandler(
+  method: keyof typeof restartHandlers,
+  params: Record<string, unknown> = {},
+) {
   const respond = vi.fn();
-  const handler = restartHandlers["gateway.restart.request"];
+  const handler = restartHandlers[method];
   return Promise.resolve(
     handler({
       respond,
@@ -29,6 +37,10 @@ function invokeRestartRequest(params: Record<string, unknown>) {
       // The handler only reads `params` and `respond`; remaining fields are unused.
     } as unknown as Parameters<typeof handler>[0]),
   ).then(() => respond);
+}
+
+function invokeRestartRequest(params: Record<string, unknown>) {
+  return invokeRestartHandler("gateway.restart.request", params);
 }
 
 describe("gateway.restart.request handler", () => {
@@ -130,5 +142,29 @@ describe("gateway.restart.request handler", () => {
       delayMs: 0,
       skipDeferral: false,
     });
+  });
+});
+
+describe("gateway.restart.pending handler", () => {
+  it("returns the read-only restart pending state", async () => {
+    const state = {
+      pending: true,
+      unconsumedSignal: false,
+      scheduled: false,
+      preparing: true,
+      activeDeferralPolls: 1,
+      dueAt: null,
+      delayMs: 0,
+      reason: null,
+      skipDeferral: false,
+      deferralTimeoutMs: 0,
+      effectiveDeferralTimeoutMs: null,
+      deferralTimeoutUnbounded: true,
+    };
+    getGatewayRestartPendingState.mockReturnValueOnce(state);
+
+    const respond = await invokeRestartHandler("gateway.restart.pending");
+
+    expect(respond).toHaveBeenCalledWith(true, state);
   });
 });
