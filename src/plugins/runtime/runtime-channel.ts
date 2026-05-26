@@ -55,6 +55,7 @@ import {
   dispatchChannelInboundReply,
   runChannelInboundEvent,
   runPreparedInboundReply,
+  runResolvedChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -184,6 +185,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       run: runChannelInboundEvent,
       runPreparedReply: runPreparedInboundReply,
       dispatchReply: dispatchChannelInboundReply,
+    },
+    turn: {
+      run: runChannelInboundEvent,
+      runAssembled: dispatchChannelInboundReply,
+      runResolved: runResolvedChannelTurn,
+      buildContext: buildChannelInboundEventContext,
+      runPrepared: runPreparedInboundReply,
+      dispatchAssembled: dispatchChannelInboundReply,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

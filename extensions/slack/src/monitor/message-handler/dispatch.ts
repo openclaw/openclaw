@@ -894,9 +894,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   let draftPreviewCommitted = false;
-  const deliverSlackPayload = async (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => {
+  const deliverSlackPayload = async (
+    payload: ReplyPayload,
+    info: { kind: ReplyDispatchKind },
+  ): Promise<{ visibleReplySent: false } | void> => {
     if (payload.isReasoning === true) {
-      return;
+      return { visibleReplySent: false };
     }
     if (useStreaming) {
       await deliverWithStreaming({ payload, kind: info.kind });

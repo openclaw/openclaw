@@ -36,7 +36,9 @@ import type {
   RunChannelTurnParams,
 } from "../channels/turn/types.js";
 export type {
+  ChannelTurnDroppedHistoryOptions,
   ChannelTurnDroppedHistoryOptions as ChannelInboundDroppedHistoryOptions,
+  ChannelTurnRecordOptions,
   ChannelTurnRecordOptions as InboundReplyRecordOptions,
 } from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
@@ -92,10 +94,33 @@ export async function runPreparedInboundReply<TDispatchResult>(
   return await runPreparedInboundReplyCore(params);
 }
 
+/** @deprecated Use `runPreparedInboundReply`. */
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
+): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export async function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  return await runPreparedInboundReply(params);
+}
+
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
   params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ) {
   return await runChannelInboundEventCore(params);
+}
+
+/** @deprecated Use `runChannelInboundEvent`. */
+export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+) {
+  return await runChannelInboundEvent(params);
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
@@ -107,6 +132,7 @@ export {
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
   deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
+  recordDroppedChannelInboundHistory as recordDroppedChannelTurnHistory,
   recordDroppedChannelInboundHistory,
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };

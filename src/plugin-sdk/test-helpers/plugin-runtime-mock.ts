@@ -727,6 +727,17 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         buildContext: buildChannelInboundEventContextMock,
         runPreparedReply: runPreparedChannelTurnMock,
       },
+      turn: {
+        run: runChannelTurnMock,
+        runAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
+        runResolved:
+          runChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
+        buildContext: buildChannelInboundEventContextMock,
+        runPrepared: runPreparedChannelTurnMock,
+        dispatchAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
+      },
       threadBindings: {
         setIdleTimeoutBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"],
