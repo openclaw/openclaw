@@ -41,16 +41,18 @@ describe("toModelRow", () => {
   });
 
   it("marks bracketed IPv6 loopback base URLs as local", () => {
-    const row = toModelRow({
-      model: {
-        ...OPENROUTER_MODEL,
-        provider: "ollama",
-        baseUrl: "http://[::1]:11434/v1",
-      } as never,
-      key: "ollama/llama3.2",
-      tags: [],
-    });
+    for (const baseUrl of ["http://[::1]:11434/v1", "http://[::]:11434/v1"]) {
+      const row = toModelRow({
+        model: {
+          ...OPENROUTER_MODEL,
+          provider: "ollama",
+          baseUrl,
+        } as never,
+        key: "ollama/llama3.2",
+        tags: [],
+      });
 
-    expect(row.local).toBe(true);
+      expect(row.local).toBe(true);
+    }
   });
 });
