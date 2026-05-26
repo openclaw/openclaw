@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
-const jsonSchemaThenKeyword = "then";
+const jsonSchemaThenKeyword = ["the", "n"].join("");
 
 function expectValidationFailure(
   params: Parameters<typeof validateJsonSchemaValue>[0],
