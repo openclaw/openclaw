@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { installLobsterAjvCompileCache } from "./lobster-ajv-cache.js";
 
 export type LobsterEnvelope =
   | {
@@ -301,6 +302,8 @@ export async function loadEmbeddedToolRuntimeFromPackage(
     (async (specifier: string) => (await import(specifier)) as Partial<EmbeddedToolRuntime>);
   const resolvePackageEntry =
     options.resolvePackageEntry ?? ((specifier: string) => lobsterRequire.resolve(specifier));
+  const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
+  await installLobsterAjvCompileCache(packageEntryPath);
 
   let coreLoadError: unknown;
   try {
@@ -312,7 +315,6 @@ export async function loadEmbeddedToolRuntimeFromPackage(
 
   let fallbackLoadError: unknown;
   try {
-    const packageEntryPath = resolvePackageEntry("@clawdbot/lobster");
     const packageRoot = findLobsterPackageRoot(packageEntryPath);
     const coreRuntimeUrl = pathToFileURL(path.join(packageRoot, "dist/src/core/index.js")).href;
     return toEmbeddedToolRuntime(await importModule(coreRuntimeUrl), coreRuntimeUrl);

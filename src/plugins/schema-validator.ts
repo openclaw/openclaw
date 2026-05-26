@@ -29,6 +29,30 @@ export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
 
+for (const format of [
+  "date-time",
+  "date",
+  "duration",
+  "email",
+  "hostname",
+  "idn-email",
+  "idn-hostname",
+  "ipv4",
+  "ipv6",
+  "iri-reference",
+  "iri",
+  "json-pointer-uri-fragment",
+  "json-pointer",
+  "regex",
+  "relative-json-pointer",
+  "time",
+  "uri-reference",
+  "uri-template",
+  "url",
+  "uuid",
+]) {
+  Format.Set(format, () => true);
+}
 Format.Set("uri", (value) => URL.canParse(value));
 
 function fingerprintSchema(schema: JsonSchemaValue): string {

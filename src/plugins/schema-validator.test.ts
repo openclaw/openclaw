@@ -1724,4 +1724,34 @@ describe("schema validator", () => {
       });
     },
   );
+
+  it("treats non-uri string formats as annotations", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.format.email.annotation",
+        schema: {
+          type: "object",
+          properties: {
+            contact: {
+              type: "string",
+              format: "email",
+            },
+            token: {
+              type: "string",
+              format: "uuid",
+            },
+          },
+          required: ["contact", "token"],
+        },
+        value: {
+          contact: "not an email",
+          token: "not a uuid",
+        },
+      },
+      expectedValue: {
+        contact: "not an email",
+        token: "not a uuid",
+      },
+    });
+  });
 });
