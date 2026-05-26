@@ -1,4 +1,5 @@
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import { Format } from "typebox/format";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import {
   applyJsonSchemaDefaults,
@@ -27,6 +28,8 @@ type CachedValidator = {
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
+
+Format.Set("uri", (value) => URL.canParse(value));
 
 function fingerprintSchema(schema: JsonSchemaValue): string {
   return JSON.stringify(schema);

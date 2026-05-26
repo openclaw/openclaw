@@ -1693,6 +1693,26 @@ describe("schema validator", () => {
       expectedPath: "apiRoot",
       expectedMessage: "must match format",
     },
+    {
+      title: "rejects uri-formatted string schemas for invalid absolute urls",
+      params: {
+        cacheKey: "schema-validator.test.uri.invalid-absolute",
+        schema: {
+          type: "object",
+          properties: {
+            apiRoot: {
+              type: "string",
+              format: "uri",
+            },
+          },
+          required: ["apiRoot"],
+        },
+        value: { apiRoot: "https://" },
+      },
+      ok: false,
+      expectedPath: "apiRoot",
+      expectedMessage: "must match format",
+    },
   ])(
     "supports uri-formatted string schemas: $title",
     ({ params, ok, expectedPath, expectedMessage }) => {
