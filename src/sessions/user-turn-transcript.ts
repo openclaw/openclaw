@@ -296,7 +296,7 @@ function buildPersistedUserTurnMediaFields(
   };
 }
 
-export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
+function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
   const text = normalizeTranscriptText(params.text);

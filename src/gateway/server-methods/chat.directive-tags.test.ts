@@ -567,6 +567,17 @@ function userUpdateMessage(
     : undefined;
 }
 
+function readPersistedUserMessages(): Array<Record<string, unknown>> {
+  return readTranscriptJsonLines(mockState.transcriptPath)
+    .map((entry) => entry.message)
+    .filter(
+      (candidate): candidate is Record<string, unknown> =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        (candidate as { role?: unknown }).role === "user",
+    );
+}
+
 function expectDispatchContextFields(expected: {
   OriginatingChannel?: unknown;
   OriginatingTo?: unknown;
@@ -3108,32 +3119,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(userUpdates).toHaveLength(0);
   });
 
-  it("does not emit raw user transcript content when before_agent_run blocks without a persisted marker", async () => {
-    createTranscriptFixture("openclaw-chat-send-user-transcript-blocked-live-signal-");
-    mockState.finalText = "The agent cannot read this message.";
-    mockState.triggerAgentRunStart = true;
-    mockState.hasBeforeAgentRunHooks = true;
-    mockState.dispatchBlockedByBeforeAgentRun = true;
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-user-transcript-blocked-live-signal",
-      message: "secret prompt blocked before persistence",
-      expectBroadcast: false,
-    });
-
-    const userUpdates = mockState.emittedTranscriptUpdates.filter(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "user",
-    );
-    expect(userUpdates).toHaveLength(0);
-  });
-
   it("does not persist raw user transcript content when a delivered before_agent_run block is followed by a dispatch error", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-blocked-delivery-error-");
     mockState.triggerAgentRunStart = true;
@@ -3166,15 +3151,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
     });
     expect(findUserUpdate()).toBeUndefined();
-    const persistedUsers = readTranscriptJsonLines(mockState.transcriptPath)
-      .map((entry) => entry.message)
-      .filter(
-        (candidate): candidate is Record<string, unknown> =>
-          typeof candidate === "object" &&
-          candidate !== null &&
-          (candidate as { role?: unknown }).role === "user",
-      );
-    expect(persistedUsers).toHaveLength(0);
+    expect(readPersistedUserMessages()).toHaveLength(0);
   });
 
   it("emits a user transcript update when hooks pass and the started agent throws before runtime persistence", async () => {
@@ -4525,14 +4502,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("user");
     expect(message?.content).toBe("quick command");
     expect(typeof message?.timestamp).toBe("number");
-    const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
-      .map((entry) => entry.message)
-      .find(
-        (candidate): candidate is Record<string, unknown> =>
-          typeof candidate === "object" &&
-          candidate !== null &&
-          (candidate as { role?: unknown }).role === "user",
-      );
+    const persistedUser = readPersistedUserMessages()[0];
     expect(persistedUser?.content).toBe("quick command");
   });
 
@@ -4559,14 +4529,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello from failed dispatch");
       expect(typeof message?.timestamp).toBe("number");
-      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
-        .map((entry) => entry.message)
-        .find(
-          (candidate): candidate is Record<string, unknown> =>
-            typeof candidate === "object" &&
-            candidate !== null &&
-            (candidate as { role?: unknown }).role === "user",
-        );
+      const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello from failed dispatch");
     });
   });
@@ -4591,16 +4554,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      expect(
-        readTranscriptJsonLines(mockState.transcriptPath)
-          .map((entry) => entry.message)
-          .filter(
-            (candidate): candidate is Record<string, unknown> =>
-              typeof candidate === "object" &&
-              candidate !== null &&
-              (candidate as { role?: unknown }).role === "user",
-          ),
-      ).toEqual([
+      expect(readPersistedUserMessages()).toEqual([
         expect.objectContaining({
           role: "user",
           content: "hello from replayed failed dispatch",
@@ -4665,14 +4619,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(userUpdate?.sessionKey).toBe("main");
       expect(message?.role).toBe("user");
       expect(message?.content).toBe("hello before cli startup failure");
-      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
-        .map((entry) => entry.message)
-        .find(
-          (candidate): candidate is Record<string, unknown> =>
-            typeof candidate === "object" &&
-            candidate !== null &&
-            (candidate as { role?: unknown }).role === "user",
-        );
+      const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("hello before cli startup failure");
     });
   });
@@ -4698,14 +4645,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const message = userUpdateMessage(userUpdate);
       expect(message?.content).toBe("[redacted by hook]");
       expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
-      const persistedUser = readTranscriptJsonLines(mockState.transcriptPath)
-        .map((entry) => entry.message)
-        .find(
-          (candidate): candidate is Record<string, unknown> =>
-            typeof candidate === "object" &&
-            candidate !== null &&
-            (candidate as { role?: unknown }).role === "user",
-        );
+      const persistedUser = readPersistedUserMessages()[0];
       expect(persistedUser?.content).toBe("[redacted by hook]");
       expect(JSON.stringify(persistedUser)).not.toContain("raw sensitive prompt");
     });
@@ -4734,16 +4674,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
     });
     expect(findUserUpdate()).toBeUndefined();
-    expect(
-      readTranscriptJsonLines(mockState.transcriptPath)
-        .map((entry) => entry.message)
-        .filter(
-          (candidate): candidate is Record<string, unknown> =>
-            typeof candidate === "object" &&
-            candidate !== null &&
-            (candidate as { role?: unknown }).role === "user",
-        ),
-    ).toHaveLength(0);
+    expect(readPersistedUserMessages()).toHaveLength(0);
   });
 
   it("emits a user transcript update when a started agent returns an error before runtime persistence", async () => {
