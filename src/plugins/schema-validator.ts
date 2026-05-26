@@ -106,6 +106,10 @@ function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidat
   });
 }
 
+function applyDefaultsWithPluginFormatSemantics(schema: JsonSchemaValue, value: unknown): unknown {
+  return withPluginFormatSemantics(() => applyJsonSchemaDefaults(schema, value));
+}
+
 export type JsonSchemaValidationError = {
   path: string;
   message: string;
@@ -288,7 +292,7 @@ export function validateJsonSchemaValue(params: {
     const validate = compileSchema(params.schema);
     const value =
       params.applyDefaults && schemaHasDefaults(params.schema)
-        ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
+        ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
         : params.value;
     const errors = checkSchema(validate, value);
     if (!errors) {
@@ -319,7 +323,7 @@ export function validateJsonSchemaValue(params: {
 
   const value =
     params.applyDefaults && cached.hasDefaults
-      ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
+      ? applyDefaultsWithPluginFormatSemantics(params.schema, cloneValidationValue(params.value))
       : params.value;
   const errors = checkSchema(cached.validate, value);
   if (!errors) {

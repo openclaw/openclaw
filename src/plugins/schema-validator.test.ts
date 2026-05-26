@@ -957,6 +957,41 @@ describe("schema validator", () => {
 
     expectSuccessfulValidationValue({
       input: {
+        cacheKey: "schema-validator.test.defaults.conditional-format-annotation",
+        schema: {
+          type: "object",
+          properties: {
+            contact: {
+              type: "string",
+            },
+          },
+          if: {
+            properties: {
+              contact: {
+                type: "string",
+                format: "email",
+              },
+            },
+            required: ["contact"],
+          },
+          [jsonSchemaThenKeyword]: {
+            properties: {
+              mode: {
+                type: "string",
+                default: "auto",
+              },
+            },
+            required: ["mode"],
+          },
+        },
+        value: { contact: "not an email" },
+        applyDefaults: true,
+      },
+      expectedValue: { contact: "not an email", mode: "auto" },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
         cacheKey: "schema-validator.test.defaults.conditional-ref-resource-property-object",
         schema: {
           type: "object",
