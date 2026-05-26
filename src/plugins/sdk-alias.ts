@@ -1046,13 +1046,10 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
     if (packageRoot) {
       appendPluginRuntimeModuleCandidates(candidates, packageRoot, orderedKinds);
     } else {
+      const argv1 = params.argv1 ?? process.argv[1];
       candidates.push(
         ...listAncestorPluginRuntimeModuleCandidates({
-          starts: [
-            path.dirname(modulePath),
-            params.cwd,
-            params.argv1 ? path.dirname(params.argv1) : undefined,
-          ],
+          starts: [path.dirname(modulePath), params.cwd, argv1 ? path.dirname(argv1) : undefined],
           orderedKinds,
         }),
       );
