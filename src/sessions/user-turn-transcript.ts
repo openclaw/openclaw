@@ -101,8 +101,11 @@ type UserTurnTranscriptTargetResolver =
   | UserTurnTranscriptTarget
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
+type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
+
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
+  resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
   markBlocked: () => void;
@@ -123,6 +126,7 @@ export type UserTurnTranscriptRecorder = {
 type CreateUserTurnTranscriptRecorderParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
+  resolveInput?: UserTurnInputResolver;
   target: UserTurnTranscriptTargetResolver;
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
@@ -501,6 +505,7 @@ export function createUserTurnTranscriptRecorder(
   let persistedResult: UserTurnTranscriptPersistResult | undefined;
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
+  let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -514,6 +519,32 @@ export function createUserTurnTranscriptRecorder(
         );
       })
       .catch(() => undefined);
+  };
+
+  const resolveMessageForPersistence = async (): Promise<PersistedUserTurnMessage | undefined> => {
+    if (params.message) {
+      return params.message;
+    }
+    if (!params.resolveInput) {
+      return message;
+    }
+    if (!resolvedMessagePromise) {
+      resolvedMessagePromise = (async () => {
+        try {
+          const resolvedInput = await params.resolveInput?.();
+          return (
+            resolvePersistedUserTurnMessage({
+              message: params.message,
+              input: resolvedInput ?? params.input,
+            }) ?? message
+          );
+        } catch (error) {
+          handlePersistenceError(error);
+          return message;
+        }
+      })();
+    }
+    return await resolvedMessagePromise;
   };
 
   const waitForRuntimePersistence = async () => {
@@ -539,7 +570,7 @@ export function createUserTurnTranscriptRecorder(
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }
-    if (!message) {
+    if (!message && !params.resolveInput) {
       return undefined;
     }
     if (options.waitForRuntime) {
@@ -552,6 +583,10 @@ export function createUserTurnTranscriptRecorder(
       return await selfPersistencePromise;
     }
     selfPersistencePromise = (async () => {
+      const resolvedMessage = await resolveMessageForPersistence();
+      if (!resolvedMessage) {
+        return undefined;
+      }
       const target = await resolveUserTurnTranscriptTarget(options.target ?? params.target);
       if (!target) {
         return undefined;
@@ -560,7 +595,7 @@ export function createUserTurnTranscriptRecorder(
       const result = isUserTurnTranscriptFileTarget(target)
         ? await appendUserTurnTranscriptMessage({
             ...target,
-            message,
+            message: resolvedMessage,
             updateMode,
             ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
           }).then((appended) =>
@@ -573,7 +608,7 @@ export function createUserTurnTranscriptRecorder(
           )
         : await persistUserTurnTranscript({
             ...target,
-            message,
+            message: resolvedMessage,
             updateMode,
             ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
           });
@@ -593,6 +628,7 @@ export function createUserTurnTranscriptRecorder(
 
   return {
     message,
+    resolveMessage: resolveMessageForPersistence,
     markRuntimePersistencePending: (pending) => {
       runtimePersistencePromise = pending;
     },

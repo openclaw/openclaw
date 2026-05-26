@@ -8,6 +8,7 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import {
   appendUserTurnTranscriptMessage,
   buildPersistedUserTurnMediaInputsFromFields,
@@ -376,6 +377,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
         },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
       await appendUserTurnTranscriptMessage({
         transcriptPath,
@@ -383,6 +385,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
         },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
 
       expect(readTranscriptMessages(transcriptPath)).toEqual([
@@ -464,6 +467,104 @@ describe("user turn transcript persistence", () => {
           role: "user",
           content: "hello from fallback",
           idempotencyKey: "chat-run-1:user",
+        }),
+      ]);
+    });
+
+    it("resolves media lazily at persistence time", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-lazy-media-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      let resolverCalled = false;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "describe this",
+          timestamp: 123,
+          idempotencyKey: "chat-run-lazy:user",
+        },
+        resolveInput: async () => {
+          resolverCalled = true;
+          return {
+            text: "describe this",
+            timestamp: 123,
+            idempotencyKey: "chat-run-lazy:user",
+            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+          };
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      expect(recorder.message).toEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "describe this",
+          idempotencyKey: "chat-run-lazy:user",
+        }),
+      );
+      expect(recorder.message).not.toHaveProperty("MediaPath");
+      expect(resolverCalled).toBe(false);
+
+      const persisted = await recorder.persistFallback();
+
+      expect(resolverCalled).toBe(true);
+      expect(persisted?.message).toMatchObject({
+        role: "user",
+        content: "describe this",
+        MediaPath: path.join(dir, "image.png"),
+        MediaType: "image/png",
+      });
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "describe this",
+          MediaPath: path.join(dir, "image.png"),
+          MediaType: "image/png",
+        }),
+      ]);
+    });
+
+    it("falls back to the admitted text message when lazy media resolution fails", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-lazy-failed-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const errors: unknown[] = [];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "keep the prompt",
+          timestamp: 123,
+          idempotencyKey: "chat-run-lazy-failed:user",
+        },
+        resolveInput: async () => {
+          throw new Error("media staging failed");
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onPersistenceError: (error) => errors.push(error),
+      });
+
+      const persisted = await recorder.persistFallback();
+
+      expect(errors).toHaveLength(1);
+      expect(persisted?.message).toMatchObject({
+        role: "user",
+        content: "keep the prompt",
+        idempotencyKey: "chat-run-lazy-failed:user",
+      });
+      expect(persisted?.message).not.toHaveProperty("MediaPath");
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "keep the prompt",
+          idempotencyKey: "chat-run-lazy-failed:user",
         }),
       ]);
     });

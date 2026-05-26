@@ -37,7 +37,10 @@ function buildSenderLabel(params: {
   return `${label} (${params.senderId})`;
 }
 
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+function buildCodexUserPromptMessageFromPrepared(
+  params: EmbeddedRunAttemptParams,
+  preparedUserMessage: MirroredUserMessage | undefined,
+): AgentMessage {
   const senderId = normalizeOptionalString(params.senderId);
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
@@ -46,7 +49,6 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
-  const preparedUserMessage = params.userTurnTranscriptRecorder?.message;
   if (preparedUserMessage) {
     return {
       role: "user",
@@ -73,6 +75,23 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
     ...(senderE164 ? { senderE164 } : {}),
     ...(senderLabel ? { senderLabel } : {}),
   } as AgentMessage;
+}
+
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+  return buildCodexUserPromptMessageFromPrepared(
+    params,
+    params.userTurnTranscriptRecorder?.message,
+  );
+}
+
+export async function buildResolvedCodexUserPromptMessage(
+  params: EmbeddedRunAttemptParams,
+): Promise<AgentMessage> {
+  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+  return buildCodexUserPromptMessageFromPrepared(
+    params,
+    resolvedMessage ?? params.userTurnTranscriptRecorder?.message,
+  );
 }
 
 /**
