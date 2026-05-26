@@ -659,8 +659,13 @@ export abstract class MemoryManagerSyncOps {
           markDirty();
           if (currentInode !== null) {
             // Re-attach on the new inode (this also installs a fresh
-            // parent watcher closed over the new recordedInode).
-            this.attachNativeMemoryWatchForDir(dir, markDirty);
+            // parent watcher closed over the new recordedInode). If the
+            // helper's own statSync races with the dir disappearing
+            // between our inode check and its own check, it returns
+            // false — fall back to chokidar so coverage isn't lost.
+            if (!this.attachNativeMemoryWatchForDir(dir, markDirty)) {
+              this.attachMemoryChokidarFallback(dir, markDirty);
+            }
           } else {
             this.attachMemoryChokidarFallback(dir, markDirty);
           }
