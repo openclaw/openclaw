@@ -364,7 +364,7 @@ function createAppServerHarness(
   } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
-  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  let notifyHandler: ((notification: CodexServerNotification) => Promise<void>) | undefined;
   let handleServerRequest: AppServerRequestHandler | undefined;
   const closeHandlers = new Set<() => void>();
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
@@ -377,9 +377,15 @@ function createAppServerHarness(
     return {
       getServerVersion: () => "0.132.0",
       request,
-      addNotificationHandler: (handler: typeof notify) => {
-        notify = handler;
-        return () => undefined;
+      addNotificationHandler: (
+        handler: (notification: CodexServerNotification) => Promise<void>,
+      ) => {
+        notifyHandler = handler;
+        return () => {
+          if (notifyHandler === handler) {
+            notifyHandler = undefined;
+          }
+        };
       },
       addRequestHandler: (handler: AppServerRequestHandler) => {
         handleServerRequest = handler;
@@ -398,6 +404,18 @@ function createAppServerHarness(
       timeout: appServerHarnessWait.timeout,
     });
     return handleServerRequest!;
+  };
+
+  const waitForNotificationHandler = async () => {
+    await vi.waitFor(() => expect(notifyHandler).toBeTypeOf("function"), {
+      interval: 1,
+      timeout: appServerHarnessWait.timeout,
+    });
+    return notifyHandler!;
+  };
+  const sendNotification = async (notification: CodexServerNotification) => {
+    const handler = notifyHandler ?? (await waitForNotificationHandler());
+    await handler(notification);
   };
 
   return {
@@ -419,7 +437,7 @@ function createAppServerHarness(
       );
     },
     async notify(notification: CodexServerNotification) {
-      await notify(notification);
+      await sendNotification(notification);
     },
     waitForServerRequestHandler,
     async handleServerRequest(request: Parameters<AppServerRequestHandler>[0]) {
@@ -427,7 +445,7 @@ function createAppServerHarness(
       return handler(request);
     },
     async completeTurn(params: { threadId: string; turnId: string }) {
-      await notify({
+      await sendNotification({
         method: "turn/completed",
         params: {
           threadId: params.threadId,
