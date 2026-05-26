@@ -17,9 +17,14 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
-export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
+export function resolveAnnounceTargetFromKey(
+  sessionKey: string,
+): AnnounceTarget | null {
   const rawParts = sessionKey.split(":").filter(Boolean);
-  const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
+  const parts =
+    rawParts.length >= 3 && rawParts[0] === "agent"
+      ? rawParts.slice(2)
+      : rawParts;
   if (parts.length < 3) {
     return null;
   }
@@ -41,7 +46,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   }
 
   // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  const id = match
+    ? restJoined.replace(/:(topic|thread):\d+$/, "")
+    : restJoined.trim();
 
   if (!id) {
     return null;
@@ -49,7 +56,8 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   if (!channelRaw) {
     return null;
   }
-  const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
+  const normalizedChannel =
+    normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
   const kindTarget = (() => {
     if (!normalizedChannel) {
@@ -61,7 +69,9 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return kind === "channel" ? `channel:${id}` : `group:${id}`;
   })();
   const normalized = normalizedChannel
-    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
+    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(
+        kindTarget,
+      )
     : undefined;
   return {
     channel,
@@ -84,7 +94,9 @@ function buildAgentSessionLines(params: {
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    params.targetChannel
+      ? `Agent 2 (target) channel: ${params.targetChannel}.`
+      : undefined,
   ].filter((line): line is string => Boolean(line));
 }
 
@@ -93,9 +105,10 @@ export function buildAgentToAgentMessageContext(params: {
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
-  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
-    Boolean,
-  );
+  const lines = [
+    "Agent-to-agent message context:",
+    ...buildAgentSessionLines(params),
+  ].filter(Boolean);
   return lines.join("\n");
 }
 
@@ -109,7 +122,9 @@ export function buildAgentToAgentReplyContext(params: {
   maxTurns: number;
 }) {
   const currentLabel =
-    params.currentRole === "requester" ? "Agent 1 (requester)" : "Agent 2 (target)";
+    params.currentRole === "requester"
+      ? "Agent 1 (requester)"
+      : "Agent 2 (target)";
   const lines = [
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
@@ -136,7 +151,9 @@ export function buildAgentToAgentAnnounceContext(params: {
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
       : "Round 1 reply: (not available).",
-    params.latestReply ? `Latest reply: ${params.latestReply}` : "Latest reply: (not available).",
+    params.latestReply
+      ? `Latest reply: ${params.latestReply}`
+      : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
     "Any other reply will be posted to the target channel.",
     "After this reply, the agent-to-agent conversation is over.",
