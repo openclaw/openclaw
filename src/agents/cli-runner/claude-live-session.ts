@@ -2,6 +2,16 @@ import crypto from "node:crypto";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+  normalizeExecAsk,
+  resolveExecApprovalsFromFile,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../../infra/exec-approvals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
@@ -27,6 +37,7 @@ type ClaudeLiveTurn = {
   noOutputTimer: NodeJS.Timeout | null;
   timeoutTimer: NodeJS.Timeout | null;
   streamingParser: ReturnType<typeof createCliJsonlStreamingParser>;
+  execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 };
@@ -54,6 +65,11 @@ type ClaudeLiveOutputLimits = {
   maxTurnRawChars: number;
   maxPendingLineChars: number;
   maxTurnLines: number;
+};
+type ClaudeLiveExecPermission = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  permissionMode: "bypassPermissions" | "default";
 };
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -176,8 +192,9 @@ export function buildClaudeLiveArgs(params: {
   backend: CliBackendConfig;
   systemPrompt: string;
   useResume: boolean;
+  permissionMode?: string;
 }): string[] {
-  return appendArg(
+  const liveArgs = appendArg(
     upsertArgValue(
       upsertArgValue(
         upsertArgValue(
@@ -194,6 +211,9 @@ export function buildClaudeLiveArgs(params: {
     ),
     "--replay-user-messages",
   );
+  return params.permissionMode
+    ? upsertArgValue(liveArgs, "--permission-mode", params.permissionMode)
+    : liveArgs;
 }
 
 function buildClaudeLiveKey(context: PreparedCliRunContext): string {
@@ -482,6 +502,44 @@ function resolveClaudeLiveOutputLimits(backend: CliBackendConfig): ClaudeLiveOut
   };
 }
 
+function readConfiguredExecPolicy(context: PreparedCliRunContext): {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  agentId: string;
+} {
+  const agentId = context.params.agentId ?? resolveAgentIdFromSessionKey(context.params.sessionKey);
+  const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
+    ?.tools?.exec;
+  const exec = agentExec ?? context.params.config?.tools?.exec;
+  const security = exec?.security ?? "full";
+  const configuredAsk = exec?.ask ?? "off";
+  const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
+  return {
+    agentId,
+    security,
+    ask: sessionAsk ? maxAsk(configuredAsk, sessionAsk) : configuredAsk,
+  };
+}
+
+function resolveClaudeLiveExecPermission(context: PreparedCliRunContext): ClaudeLiveExecPermission {
+  const configured = readConfiguredExecPolicy(context);
+  const approvals = resolveExecApprovalsFromFile({
+    file: loadExecApprovals(),
+    agentId: configured.agentId,
+    overrides: {
+      security: configured.security,
+      ask: configured.ask,
+    },
+  });
+  const security = minSecurity(configured.security, approvals.agent.security);
+  const ask = maxAsk(configured.ask, approvals.agent.ask);
+  return {
+    security,
+    ask,
+    permissionMode: security === "full" && ask === "off" ? "bypassPermissions" : "default",
+  };
+}
+
 function parseClaudeLiveJsonLine(
   session: ClaudeLiveSession,
   trimmed: string,
@@ -518,6 +576,51 @@ function createResultError(
     provider: session.providerId,
     model: session.modelId,
     status: resolveFailoverStatus(reason),
+  });
+}
+
+function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: unknown): void {
+  const stdin = session.managedRun.stdin;
+  if (!stdin) {
+    throw new Error("Claude CLI live session stdin is unavailable");
+  }
+  stdin.write(`${JSON.stringify(response)}\n`);
+}
+
+function handleClaudeLiveControlRequest(
+  session: ClaudeLiveSession,
+  turn: ClaudeLiveTurn,
+  parsed: Record<string, unknown>,
+): void {
+  if (parsed.type !== "control_request" || !isRecord(parsed.request)) {
+    return;
+  }
+  const request = parsed.request;
+  if (request.subtype !== "can_use_tool") {
+    return;
+  }
+  const requestId = typeof parsed.request_id === "string" ? parsed.request_id : "";
+  if (!requestId) {
+    return;
+  }
+  const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
+  const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
+  writeClaudeLiveControlResponse(session, {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      response: allowed
+        ? {
+            behavior: "allow",
+            ...(toolUseId ? { toolUseID: toolUseId } : {}),
+          }
+        : {
+            behavior: "deny",
+            decisionClassification: "user_reject",
+            message: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
+          },
+    },
   });
 }
 
@@ -562,6 +665,7 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   turn.rawLines.push(trimmed);
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
+  handleClaudeLiveControlRequest(session, turn, parsed);
   if (parsed.type !== "result") {
     return;
   }
@@ -761,6 +865,7 @@ function createTurn(params: {
   noOutputTimeoutMs: number;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   session: ClaudeLiveSession;
+  execPermission: ClaudeLiveExecPermission;
   resolve: (output: CliOutput) => void;
   reject: (error: unknown) => void;
 }): ClaudeLiveTurn {
@@ -777,6 +882,7 @@ function createTurn(params: {
       providerId: params.context.backendResolved.id,
       onAssistantDelta: params.onAssistantDelta,
     }),
+    execPermission: params.execPermission,
     resolve: params.resolve,
     reject: params.reject,
   };
@@ -845,6 +951,7 @@ export async function runClaudeLiveSessionTurn(params: {
 }): Promise<ClaudeLiveRunResult> {
   const key = buildClaudeLiveKey(params.context);
   const resumeCapable = Boolean(params.context.preparedBackend.backend.resumeArgs?.length);
+  const execPermission = resolveClaudeLiveExecPermission(params.context);
   const argv = [
     params.context.preparedBackend.backend.command,
     ...buildClaudeLiveArgs({
@@ -852,6 +959,7 @@ export async function runClaudeLiveSessionTurn(params: {
       backend: params.context.preparedBackend.backend,
       systemPrompt: params.context.systemPrompt,
       useResume: params.useResume,
+      permissionMode: execPermission.permissionMode,
     }),
   ];
   const fingerprint = buildClaudeLiveFingerprint({
@@ -953,6 +1061,7 @@ export async function runClaudeLiveSessionTurn(params: {
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       onAssistantDelta: params.onAssistantDelta,
       session: liveSession,
+      execPermission,
       resolve,
       reject,
     });
