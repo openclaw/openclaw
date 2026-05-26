@@ -220,7 +220,7 @@ describe("channel-broker HTTP routes", () => {
     resetChannelBrokerRuntimeForTest();
   });
 
-  it("registers the signed inbound webhook route", () => {
+  it("registers signed inbound webhook routes", () => {
     const registerHttpRoute = vi.fn();
 
     registerChannelBrokerHttpRoutes({
@@ -229,9 +229,20 @@ describe("channel-broker HTTP routes", () => {
       registerHttpRoute,
     } as never);
 
-    expect(registerHttpRoute).toHaveBeenCalledWith(
+    expect(registerHttpRoute).toHaveBeenCalledTimes(2);
+    expect(registerHttpRoute).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         path: "/channel-broker/inbound",
+        auth: "plugin",
+        match: "exact",
+        handler: expect.any(Function),
+      }),
+    );
+    expect(registerHttpRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: "/api/v1/channel-broker/inbound",
         auth: "plugin",
         match: "exact",
         handler: expect.any(Function),
@@ -623,6 +634,7 @@ describe("channel-broker HTTP routes", () => {
       message: {
         id: "101",
         text: "see image",
+        mentions: { canDetectMention: true, wasMentioned: true, hasAnyMention: true },
         attachments: [
           {
             id: "image-1",
@@ -2038,6 +2050,51 @@ describe("channel-broker HTTP routes", () => {
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["missing", { providerId: undefined }],
+    ["malformed", { providerId: "!!!" }],
+  ])("rejects %s payload provider ids when a provider header is present", async (_name, override) => {
+    const body = inboundBody("user-1", override);
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        providerIdHeader: "acme",
+        signature: sign(body, "broker-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "provider_id_mismatch" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("matches provider headers and payload ids after account normalization", async () => {
+    const body = inboundBody("user-1", { providerId: "ACME" });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        providerIdHeader: "acme",
+        signature: sign(body, "broker-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(receiveInboundEvent).toHaveBeenCalledOnce();
+  });
+
   it("applies the pre-auth body limit before signature verification", async () => {
     const body = inboundBody("user-1", { message: { id: "101", text: "x".repeat(70 * 1024) } });
     const receiveInboundEvent = vi.fn();
@@ -2120,8 +2177,8 @@ describe("channel-broker HTTP routes", () => {
   });
 
   it("drops bot-originated broker webhooks before wildcard sender allowlists", async () => {
-    const body = inboundBody("bot-main", {
-      sender: { id: "bot-main", handle: "acme-bot", isBot: true },
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", handle: "acme-bot", isBot: true },
     });
     const receiveInboundEvent = vi.fn();
     setChannelBrokerRuntime({ receiveInboundEvent });
@@ -2135,6 +2192,25 @@ describe("channel-broker HTTP routes", () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ ok: true, status: "ignored", reason: "bot_sender" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not hide unallowlisted bot-originated broker webhooks", async () => {
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", handle: "acme-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["user-1"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "sender_not_allowed" });
     expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 

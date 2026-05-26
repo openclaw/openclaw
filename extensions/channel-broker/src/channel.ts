@@ -65,16 +65,25 @@ function resolveBrokerSessionTarget(params: {
 }): string | undefined {
   try {
     const parsed = parseBrokerConversationTarget(normalizeBrokerTarget(params.id) ?? params.id);
-    return buildBrokerConversationTarget({
-      platform: parsed.platform,
-      conversationId: parsed.conversationId,
-      conversationType:
-        parsed.conversationType ?? (params.threadId ? "thread" : params.kind),
-      threadId: parsed.threadId ?? params.threadId ?? undefined,
-    });
+    return asBrokerOwnedChannelTarget(
+      buildBrokerConversationTarget({
+        platform: parsed.platform,
+        conversationId: parsed.conversationId,
+        conversationType:
+          parsed.conversationType ?? (params.threadId ? "thread" : params.kind),
+        threadId: parsed.threadId ?? params.threadId ?? undefined,
+      }),
+    );
   } catch {
-    return normalizeBrokerTarget(params.id);
+    const normalized = normalizeBrokerTarget(params.id);
+    return normalized ? asBrokerOwnedChannelTarget(normalized) : undefined;
   }
+}
+
+function asBrokerOwnedChannelTarget(target: string): string {
+  return target.startsWith("broker:") || target.startsWith("channel-broker:")
+    ? target
+    : `broker:${target}`;
 }
 
 function buildBrokerOwnedChannelTarget(params: {
@@ -82,10 +91,7 @@ function buildBrokerOwnedChannelTarget(params: {
   account: ResolvedChannelBrokerAccount;
   threadId?: string | number | null;
 }): string {
-  const target = buildCanonicalChannelBrokerTarget(params);
-  return target.startsWith("broker:") || target.startsWith("channel-broker:")
-    ? target
-    : `broker:${target}`;
+  return asBrokerOwnedChannelTarget(buildCanonicalChannelBrokerTarget(params));
 }
 
 const channelBrokerMessageAdapter = defineChannelMessageAdapter({

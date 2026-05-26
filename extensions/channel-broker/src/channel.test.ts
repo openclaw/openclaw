@@ -73,6 +73,10 @@ describe("channel-broker plugin", () => {
     expect(() => setChannelBrokerRuntime({} as never)).not.toThrow();
   });
 
+  it("keeps iMessage platform-prefixed targets broker-routable", () => {
+    expect(channelBrokerPlugin.messaging?.targetPrefixes).toContain("imessage");
+  });
+
   it("backs declared durable final capabilities with send adapter proofs", async () => {
     const adapter = requireChannelBrokerMessageAdapter();
 
@@ -332,7 +336,7 @@ describe("channel-broker plugin", () => {
     expect(route?.chatType).toBe("direct");
   });
 
-  it("preserves broker platform ids in session conversation targets", () => {
+  it("preserves broker-owned platform ids in session conversation targets", () => {
     const messaging = channelBrokerPlugin.messaging;
     const conversation = messaging?.resolveSessionConversation?.({
       kind: "channel",
@@ -351,7 +355,7 @@ describe("channel-broker plugin", () => {
         id: conversation?.id ?? "",
         threadId: conversation?.threadId,
       }),
-    ).toBe("telegram:-100123?conversationType=thread&threadId=77");
+    ).toBe("broker:telegram:-100123?conversationType=thread&threadId=77");
   });
 
   it("delivers text through the configured provider and maps the provider receipt", async () => {
@@ -911,7 +915,7 @@ describe("channel-broker plugin", () => {
 
     expect(platformResult).toEqual({
       ok: true,
-      to: "slack:U123?conversationType=direct",
+      to: "broker:slack:U123?conversationType=direct",
     });
     expect(brokerResult).toEqual({
       ok: true,
@@ -1095,7 +1099,8 @@ describe("channel-broker plugin", () => {
       accountId: "acme",
     } as never);
 
-    expect(result).toEqual({ channel: "channel-broker", messageId: "native-media-1" });
+    expect(result).toMatchObject({ channel: "channel-broker", messageId: "native-media-1" });
+    expect(result?.receipt?.platformMessageIds).toEqual(["native-media-1"]);
     expect(sendOutboundRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         request: expect.objectContaining({
@@ -1192,7 +1197,7 @@ describe("channel-broker plugin", () => {
       to: "broker:C123",
     } as never);
 
-    expect(result).toEqual({ ok: true, to: "broker:C123" });
+    expect(result).toEqual({ ok: true, to: "broker:slack:C123?conversationType=channel" });
   });
 
   it("propagates direct outbound adapter send failures", async () => {

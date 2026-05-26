@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   buildBrokerInboundDedupeKey,
@@ -20,6 +21,7 @@ import { receiveBrokerInboundEvent } from "./runtime.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const INBOUND_PATH = "/channel-broker/inbound";
+const LEGACY_INBOUND_PATH = "/api/v1/channel-broker/inbound";
 const PROVIDER_HEADER = "x-openclaw-broker-provider";
 const SIGNATURE_HEADER = "x-openclaw-broker-signature";
 const TIMESTAMP_HEADER = "x-openclaw-broker-timestamp";
@@ -155,7 +157,12 @@ function isWildcardOnlyBotSender(params: {
   account: ResolvedChannelBrokerAccount;
   event: BrokerInboundEventV1;
 }): boolean {
-  return params.event.sender.isBot === true && !hasExplicitSenderAllowance(params);
+  const allowed = params.account.allowFrom.map((value) => String(value).trim()).filter(Boolean);
+  return (
+    params.event.sender.isBot === true &&
+    allowed.includes("*") &&
+    !hasExplicitSenderAllowance(params)
+  );
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -172,7 +179,7 @@ function extractInboundProviderId(value: unknown): string | undefined {
     return undefined;
   }
   const providerId = (value as { providerId?: unknown }).providerId;
-  return typeof providerId === "string" ? normalizeOptionalString(providerId) : undefined;
+  return typeof providerId === "string" ? normalizeOptionalAccountId(providerId) : undefined;
 }
 
 function normalizeInboundEventForAccount(params: {
@@ -248,7 +255,7 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   };
 
   try {
-    const providerIdHint = normalizeOptionalString(getHeader(params.req, PROVIDER_HEADER));
+    const providerIdHint = normalizeOptionalAccountId(getHeader(params.req, PROVIDER_HEADER));
     if (providerIdHint && !isListedChannelBrokerProviderId(params.cfg, providerIdHint)) {
       return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
     }
@@ -276,7 +283,7 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     }
 
     const bodyProviderId = extractInboundProviderId(parsedBody);
-    if (providerIdHint && bodyProviderId && bodyProviderId !== providerIdHint) {
+    if (providerIdHint && bodyProviderId !== providerIdHint) {
       return sendJson(params.res, 400, {
         ok: false,
         error: "provider_id_mismatch",
@@ -365,15 +372,17 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
 }
 
 export function registerChannelBrokerHttpRoutes(api: OpenClawPluginApi): void {
-  api.registerHttpRoute({
-    path: INBOUND_PATH,
-    auth: "plugin",
-    match: "exact",
-    handler: async (req, res) =>
-      await handleChannelBrokerInboundHttpRequest({
-        cfg: api.runtime.config.current() as CoreConfig,
-        req,
-        res,
-      }),
-  });
+  for (const path of [INBOUND_PATH, LEGACY_INBOUND_PATH]) {
+    api.registerHttpRoute({
+      path,
+      auth: "plugin",
+      match: "exact",
+      handler: async (req, res) =>
+        await handleChannelBrokerInboundHttpRequest({
+          cfg: api.runtime.config.current() as CoreConfig,
+          req,
+          res,
+        }),
+    });
+  }
 }

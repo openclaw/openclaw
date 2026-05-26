@@ -238,7 +238,7 @@ export function parseChannelBrokerTarget(params: {
     throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
   }
   if (brokerPrefixed && brokerPrefixSeparator < 0 && !params.account.defaultPlatform) {
-    throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
+    throw new Error("broker target must include a platform or configure defaultPlatform");
   }
   const rawPlatform =
     brokerPrefixed && brokerPrefixSeparator > 0
@@ -250,8 +250,11 @@ export function parseChannelBrokerTarget(params: {
     brokerPrefixed && brokerPrefixSeparator > 0
       ? parsed.conversationId.slice(brokerPrefixSeparator + 1)
       : parsed.conversationId;
-  if (!rawPlatform || !rawConversationId.trim()) {
+  if (!rawPlatform) {
     throw new Error(`Invalid channel broker target: ${params.rawTarget}`);
+  }
+  if (!rawConversationId.trim()) {
+    throw new Error("broker conversation id is required");
   }
   const normalizedRawPlatform = normalizeBrokerPlatformId(rawPlatform);
   const platform =
