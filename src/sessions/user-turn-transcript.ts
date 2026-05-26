@@ -108,9 +108,11 @@ export type UserTurnTranscriptRecorder = {
   hasRuntimePersistencePending: () => boolean;
   waitForRuntimePersistence: () => Promise<void>;
   persistApproved: (params?: {
+    target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
+    target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };
@@ -531,6 +533,7 @@ export function createUserTurnTranscriptRecorder(
   const persistPrepared = async (options: {
     waitForRuntime: boolean;
     skipWhenBlocked: boolean;
+    target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (persisted) {
@@ -552,7 +555,7 @@ export function createUserTurnTranscriptRecorder(
       return await selfPersistencePromise;
     }
     selfPersistencePromise = (async () => {
-      const target = await resolveUserTurnTranscriptTarget(params.target);
+      const target = await resolveUserTurnTranscriptTarget(options.target ?? params.target);
       if (!target) {
         return undefined;
       }
@@ -614,12 +617,14 @@ export function createUserTurnTranscriptRecorder(
       await persistPrepared({
         waitForRuntime: false,
         skipWhenBlocked: true,
+        target: options?.target,
         updateMode: options?.updateMode,
       }),
     persistFallback: async (options) =>
       await persistPrepared({
         waitForRuntime: true,
         skipWhenBlocked: true,
+        target: options?.target,
         updateMode: options?.updateMode,
       }),
   };

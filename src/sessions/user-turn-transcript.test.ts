@@ -657,6 +657,43 @@ describe("user turn transcript persistence", () => {
       expect(fs.existsSync(transcriptPath)).toBe(false);
     });
 
+    it("uses the runtime target supplied at approved persistence time", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-target-");
+      const staleTranscriptPath = path.join(dir, "stale.jsonl");
+      const admittedTranscriptPath = path.join(dir, "admitted.jsonl");
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me in the admitted session",
+          timestamp: 123,
+        },
+        target: {
+          transcriptPath: staleTranscriptPath,
+          sessionId: "stale-session",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+      });
+
+      const persisted = await recorder.persistApproved({
+        target: {
+          transcriptPath: admittedTranscriptPath,
+          sessionId: "admitted-session",
+          sessionKey: "main",
+          cwd: dir,
+        },
+      });
+
+      expect(persisted?.sessionFile).toBe(admittedTranscriptPath);
+      expect(fs.existsSync(staleTranscriptPath)).toBe(false);
+      expect(readTranscriptMessages(admittedTranscriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me in the admitted session",
+        }),
+      ]);
+    });
+
     it("waits for runtime persistence before deciding fallback ownership", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-pending-");
       const transcriptPath = path.join(dir, "session.jsonl");

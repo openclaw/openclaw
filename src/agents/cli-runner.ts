@@ -132,6 +132,14 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     return;
   }
 
+  const target = {
+    transcriptPath: params.sessionFile,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    cwd: params.workspaceDir,
+    ...(params.config ? { config: params.config } : {}),
+  };
   const recorder =
     params.userTurnTranscriptRecorder ??
     createUserTurnTranscriptRecorder({
@@ -143,16 +151,9 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
               timestamp: Date.now(),
             },
           }),
-      target: {
-        transcriptPath: params.sessionFile,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        cwd: params.workspaceDir,
-        ...(params.config ? { config: params.config } : {}),
-      },
+      target,
     });
-  const persisted = await recorder.persistApproved();
+  const persisted = await recorder.persistApproved({ target });
   if (persisted) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
