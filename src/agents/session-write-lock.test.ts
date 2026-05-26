@@ -776,6 +776,44 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("does not poison the per-pid memo when readOwnerProcessArgs throws (#86509)", async () => {
+    // A helper one layer up (`readOwnerProcessArgs`) already catches thrown resolvers and
+    // returns null, so `cleanStaleLockFiles` never propagates the throw — but a naive memo
+    // could still cache that null-equivalent failure and short-circuit later locks for the
+    // same pid. The fix writes the cache only after the resolver returns, so each lock
+    // retries the resolver fresh after a throw.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const nowMs = Date.now();
+    const lockCount = 3;
+    try {
+      for (let i = 0; i < lockCount; i++) {
+        await fs.writeFile(
+          path.join(sessionsDir, `throwing-${i}.jsonl.lock`),
+          JSON.stringify({ pid: process.pid, createdAt: new Date(nowMs).toISOString() }),
+          "utf8",
+        );
+      }
+      let throwCalls = 0;
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: () => {
+          throwCalls++;
+          throw new Error("transient resolver failure");
+        },
+      });
+      // Resolver is invoked once per lock — the throw is not cached as a no-args entry.
+      expect(throwCalls).toBe(lockCount);
+      expect(result.cleaned).toHaveLength(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps fresh live .jsonl lock files with OpenClaw or unknown owners", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const sessionsDir = path.join(root, "sessions");
