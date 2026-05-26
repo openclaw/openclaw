@@ -83,3 +83,4 @@ struct OpenClawLiveActivity: Widget {
         return .blue
     }
 }
+
