@@ -36,9 +36,9 @@ export const channelBrokerStatus = createComputedAccountStatusAdapter<ResolvedCh
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      baseUrl: account.baseUrl ?? undefined,
-      allowFrom: account.allowFrom.map(String),
       extra: {
+        baseUrl: account.baseUrl ?? undefined,
+        allowFrom: account.allowFrom.map(String),
         platforms: account.platforms,
         defaultPlatform: account.defaultPlatform,
         defaultConversationType: account.defaultConversationType,
