@@ -984,6 +984,8 @@ describe("package artifact reuse", () => {
       'check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1',
       "gh run cancel",
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
+      'Sorry. Your account was suspended',
+      'gh_with_retry run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs',
     ]);
     expect(workflow).not.toContain("force-cancel");
     expect(workflow).not.toContain("workflow_ref:");
@@ -1095,7 +1097,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
     expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
     expect(workflow).toContain(
-      'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
+      'gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
     );
     expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
     expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
