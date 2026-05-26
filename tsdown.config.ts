@@ -4,12 +4,16 @@ const env = {
   NODE_ENV: "production",
 };
 
-function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown }) {
+function buildInputOptions(options: {
+  onLog?: unknown;
+  [key: string]: unknown;
+}) {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
 
-  const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+  const previousOnLog =
+    typeof options.onLog === "function" ? options.onLog : undefined;
 
   return {
     ...options,
@@ -106,9 +110,12 @@ export default defineConfig([
     entry: {
       "channels/plugins/agent-tools/whatsapp-login":
         "src/channels/plugins/agent-tools/whatsapp-login.ts",
-      "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
-      "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
-      "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+      "channels/plugins/actions/discord":
+        "src/channels/plugins/actions/discord.ts",
+      "channels/plugins/actions/signal":
+        "src/channels/plugins/actions/signal.ts",
+      "channels/plugins/actions/telegram":
+        "src/channels/plugins/actions/telegram.ts",
       "telegram/audit": "src/telegram/audit.ts",
       "telegram/token": "src/telegram/token.ts",
       "line/accounts": "src/line/accounts.ts",
@@ -119,13 +126,18 @@ export default defineConfig([
   nodeBuildConfig({
     // Bundle all plugin-sdk entries in a single build so the bundler can share
     // common chunks instead of duplicating them per entry (~712MB heap saved).
-    entry: Object.fromEntries(pluginSdkEntrypoints.map((e) => [e, `src/plugin-sdk/${e}.ts`])),
+    entry: Object.fromEntries(
+      pluginSdkEntrypoints.map((e) => [e, `src/plugin-sdk/${e}.ts`]),
+    ),
     outDir: "dist/plugin-sdk",
   }),
   nodeBuildConfig({
     entry: "src/extensionAPI.ts",
   }),
   nodeBuildConfig({
-    entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
+    entry: [
+      "src/hooks/bundled/*/handler.ts",
+      "src/hooks/llm-slug-generator.ts",
+    ],
   }),
 ]);
