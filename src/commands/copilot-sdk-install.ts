@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,20 +85,149 @@ export interface InstallCopilotSdkResult {
   readonly spec: string;
 }
 
+/**
+ * Result of {@link verifyCopilotSdkInstall}. `ok: true` means the install
+ * at `fallbackDir` matches the pinned manifest in `manifestDir` exactly,
+ * and the caller can skip running `npm ci` again. Any `ok: false` carries a
+ * `reason` suitable for surfacing in setup logs and triggering a reinstall.
+ */
+export interface CopilotSdkVerifyResult {
+  readonly ok: boolean;
+  readonly reason?: string;
+}
+
+const COPILOT_SDK_PINNED_PACKAGE_KEYS = [
+  "node_modules/@github/copilot-sdk",
+  "node_modules/@github/copilot",
+] as const;
+
+/**
+ * Confirms that the on-demand install at `fallbackDir` matches the
+ * pinned `@github/copilot-sdk` + `@github/copilot` versions declared in
+ * the shipped manifest at `manifestDir`. The directory check used to be
+ * the only gate (`isCopilotSdkInstalled`), but that lets stale, partial,
+ * or manually placed trees bypass the reviewed dependency graph (see
+ * ClawSweeper round 5 P2). This verifier closes that hole by comparing
+ * the shipped `package-lock.json` against the install's lock AND the
+ * installed package.json files.
+ *
+ * Manifest-side errors (missing file, malformed JSON, missing pinned
+ * version entry) are treated as fatal because a packaged openclaw install
+ * cannot recover from a broken shipped manifest. Install-side errors
+ * (missing lock, unreadable package.json) are returned as reinstall
+ * signals so npm ci can wipe and restage.
+ */
+export function verifyCopilotSdkInstall(
+  fallbackDir: string,
+  manifestDir: string,
+): CopilotSdkVerifyResult {
+  let manifestLock: { packages?: Record<string, { version?: string }> };
+  const manifestLockPath = path.join(manifestDir, "package-lock.json");
+  try {
+    manifestLock = JSON.parse(readFileSync(manifestLockPath, "utf8")) as {
+      packages?: Record<string, { version?: string }>;
+    };
+  } catch (err) {
+    throw new Error(
+      `[copilot] cannot read pinned SDK manifest at ${manifestLockPath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      { cause: err },
+    );
+  }
+
+  // Validate the shipped manifest contract upfront before touching the install
+  // tree. A broken manifest is a fatal build/packaging error and must surface
+  // regardless of whether the fallback dir is empty, partial, or already
+  // installed.
+  const expectedVersions: Record<string, string> = {};
+  for (const key of COPILOT_SDK_PINNED_PACKAGE_KEYS) {
+    const expected = manifestLock.packages?.[key]?.version;
+    if (!expected) {
+      throw new Error(
+        `[copilot] pinned SDK manifest at ${manifestLockPath} is missing a version for ${key}; refusing to verify install`,
+      );
+    }
+    expectedVersions[key] = expected;
+  }
+
+  const installedLockPath = path.join(fallbackDir, "package-lock.json");
+  if (!existsSync(installedLockPath)) {
+    return { ok: false, reason: `no pinned package-lock.json at ${installedLockPath}` };
+  }
+  let installedLock: { packages?: Record<string, { version?: string }> };
+  try {
+    installedLock = JSON.parse(readFileSync(installedLockPath, "utf8")) as {
+      packages?: Record<string, { version?: string }>;
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `unreadable fallback package-lock.json: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  for (const key of COPILOT_SDK_PINNED_PACKAGE_KEYS) {
+    const expected = expectedVersions[key];
+    const actualInLock = installedLock.packages?.[key]?.version;
+    if (actualInLock !== expected) {
+      return {
+        ok: false,
+        reason: `${key} lock drift: installed=${actualInLock ?? "(missing)"}, pinned=${expected}`,
+      };
+    }
+    const pkgJsonPath = path.join(fallbackDir, key, "package.json");
+    if (!existsSync(pkgJsonPath)) {
+      return { ok: false, reason: `missing installed package ${key}` };
+    }
+    try {
+      const actualVersion = (JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version?: string })
+        .version;
+      if (actualVersion !== expected) {
+        return {
+          ok: false,
+          reason: `${key} version drift: installed=${actualVersion ?? "(missing)"}, pinned=${expected}`,
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `unreadable ${key}/package.json: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
 export async function installCopilotSdk(
   options: InstallCopilotSdkOptions = {},
 ): Promise<InstallCopilotSdkResult> {
   const fallbackDir = options.fallbackDir ?? COPILOT_SDK_FALLBACK_DIR;
   const spec = options.spec ?? COPILOT_SDK_SPEC;
   const logger = options.logger ?? (() => undefined);
+  const manifestDir = options.manifestDir ?? COPILOT_SDK_INSTALL_MANIFEST_DIR;
 
-  if (isCopilotSdkInstalled(fallbackDir)) {
-    logger(`[copilot] @github/copilot-sdk already installed at ${fallbackDir}`);
+  const verify = verifyCopilotSdkInstall(fallbackDir, manifestDir);
+  if (verify.ok) {
+    logger(
+      `[copilot] @github/copilot-sdk already installed at ${fallbackDir} (pinned graph matches)`,
+    );
     return { installed: false, fallbackDir, spec };
+  }
+  if (isCopilotSdkInstalled(fallbackDir)) {
+    // Stale, partial, or manually-placed tree. Log the drift before letting
+    // `npm ci` wipe node_modules and reinstall from the pinned lock.
+    logger(
+      `[copilot] reinstalling Copilot SDK: ${verify.reason ?? "fallback install does not match pinned manifest"}`,
+    );
   }
 
   mkdirSync(fallbackDir, { recursive: true });
-  const manifestDir = options.manifestDir ?? COPILOT_SDK_INSTALL_MANIFEST_DIR;
   // Stage the pinned package.json + package-lock.json into the fallback dir
   // so the subsequent `npm ci` resolves the same dependency graph that this
   // PR was reviewed against. We intentionally overwrite any prior copies so a
@@ -116,14 +245,12 @@ export async function installCopilotSdk(
   const runInstall = options.runInstall ?? defaultRunInstall;
   logger(`[copilot] installing ${spec} into ${fallbackDir} (npm ci against pinned manifest) ...`);
   await runInstall({ dir: fallbackDir, spec, manifestDir });
-  if (!isCopilotSdkInstalled(fallbackDir)) {
+  const postVerify = verifyCopilotSdkInstall(fallbackDir, manifestDir);
+  if (!postVerify.ok) {
     throw new Error(
-      `[copilot] install of ${spec} appeared to succeed but ${path.join(
-        fallbackDir,
-        "node_modules",
-        "@github",
-        "copilot-sdk",
-      )} is missing`,
+      `[copilot] install of ${spec} reported success but the resulting fallback graph does not match the pinned manifest at ${manifestDir}: ${
+        postVerify.reason ?? "unknown"
+      }`,
     );
   }
   logger(`[copilot] installed ${spec}`);
@@ -178,7 +305,9 @@ export async function ensureCopilotSdkForModelSelection(params: {
     return { cfg: params.cfg, required: false, installed: false };
   }
 
-  const isInstalled = params.isInstalled ?? (() => isCopilotSdkInstalled());
+  const isInstalled =
+    params.isInstalled ??
+    (() => verifyCopilotSdkInstall(COPILOT_SDK_FALLBACK_DIR, COPILOT_SDK_INSTALL_MANIFEST_DIR).ok);
   if (isInstalled()) {
     return {
       cfg: params.cfg,

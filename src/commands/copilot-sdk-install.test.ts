@@ -10,6 +10,7 @@ import {
   installCopilotSdk,
   isCopilotSdkInstalled,
   selectedModelShouldEnsureCopilotSdk,
+  verifyCopilotSdkInstall,
 } from "./copilot-sdk-install.js";
 
 function fakeRuntime(): RuntimeEnv {
@@ -201,6 +202,42 @@ describe("ensureCopilotSdkForModelSelection", () => {
   });
 });
 
+function writeFakePinnedManifest(manifestDir: string): void {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  fs.writeFileSync(
+    path.join(manifestDir, "package.json"),
+    JSON.stringify({ dependencies: { "@github/copilot-sdk": "1.0.0-beta.4" } }),
+  );
+  fs.writeFileSync(
+    path.join(manifestDir, "package-lock.json"),
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/@github/copilot-sdk": { version: "1.0.0-beta.4" },
+        "node_modules/@github/copilot": { version: "1.0.48" },
+      },
+    }),
+  );
+}
+
+function installFakeFallbackGraph(dir: string, sdkVersion: string, cliVersion: string): void {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const path = require("node:path") as typeof import("node:path");
+  const sdkDir = path.join(dir, "node_modules", "@github", "copilot-sdk");
+  const cliDir = path.join(dir, "node_modules", "@github", "copilot");
+  fs.mkdirSync(sdkDir, { recursive: true });
+  fs.mkdirSync(cliDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(sdkDir, "package.json"),
+    JSON.stringify({ name: "@github/copilot-sdk", version: sdkVersion }),
+  );
+  fs.writeFileSync(
+    path.join(cliDir, "package.json"),
+    JSON.stringify({ name: "@github/copilot", version: cliVersion }),
+  );
+}
+
 describe("installCopilotSdk", () => {
   it("stages the pinned manifest and runs the install command when SDK is missing", async () => {
     const fs = await import("node:fs");
@@ -214,14 +251,29 @@ describe("installCopilotSdk", () => {
     );
     fs.writeFileSync(
       path.join(manifestDir, "package-lock.json"),
-      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "node_modules/@github/copilot-sdk": { version: "1.0.0-beta.4" },
+          "node_modules/@github/copilot": { version: "1.0.48" },
+        },
+      }),
     );
     try {
       const runInstall = vi.fn(
         async ({ dir }: { dir: string; spec: string; manifestDir: string }) => {
-          fs.mkdirSync(path.join(dir, "node_modules", "@github", "copilot-sdk"), {
-            recursive: true,
-          });
+          const sdkDir = path.join(dir, "node_modules", "@github", "copilot-sdk");
+          const cliDir = path.join(dir, "node_modules", "@github", "copilot");
+          fs.mkdirSync(sdkDir, { recursive: true });
+          fs.mkdirSync(cliDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(sdkDir, "package.json"),
+            JSON.stringify({ name: "@github/copilot-sdk", version: "1.0.0-beta.4" }),
+          );
+          fs.writeFileSync(
+            path.join(cliDir, "package.json"),
+            JSON.stringify({ name: "@github/copilot", version: "1.0.48" }),
+          );
         },
       );
       const result = await installCopilotSdk({
@@ -248,21 +300,103 @@ describe("installCopilotSdk", () => {
     }
   });
 
-  it("returns installed=false when SDK already present (skip install)", async () => {
+  it("returns installed=false when fallback graph matches the pinned manifest (skip install)", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const os = await import("node:os");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
     try {
-      fs.mkdirSync(path.join(tmp, "node_modules", "@github", "copilot-sdk"), {
-        recursive: true,
-      });
+      writeFakePinnedManifest(manifestDir);
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      // Copy the manifest lock into the fallback dir to simulate a prior
+      // successful install having staged it (npm ci does this).
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
       const runInstall = vi.fn();
-      const result = await installCopilotSdk({ fallbackDir: tmp, runInstall });
+      const result = await installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall });
       expect(runInstall).not.toHaveBeenCalled();
       expect(result.installed).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reinstalls when the fallback dir has the SDK but no pinned lock (stale tree)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      // Stale install: SDK dir exists but no package-lock.json at the
+      // fallback root, so the verifier must reject.
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      const runInstall = vi.fn(async ({ dir }: { dir: string }) => {
+        installFakeFallbackGraph(dir, "1.0.0-beta.4", "1.0.48");
+      });
+      const result = await installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall });
+      expect(runInstall).toHaveBeenCalledOnce();
+      expect(result.installed).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reinstalls when the installed SDK version differs from the pinned manifest", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      // Stage a fallback graph whose @github/copilot-sdk version drifts.
+      installFakeFallbackGraph(tmp, "1.0.0-beta.3", "1.0.48");
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
+      const runInstall = vi.fn(async ({ dir }: { dir: string }) => {
+        installFakeFallbackGraph(dir, "1.0.0-beta.4", "1.0.48");
+      });
+      const result = await installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall });
+      expect(runInstall).toHaveBeenCalledOnce();
+      expect(result.installed).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reinstalls when the installed Copilot CLI version drifts from the pinned manifest", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      // CLI version drift only; SDK matches.
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.54");
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
+      const runInstall = vi.fn(async ({ dir }: { dir: string }) => {
+        installFakeFallbackGraph(dir, "1.0.0-beta.4", "1.0.48");
+      });
+      const result = await installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall });
+      expect(runInstall).toHaveBeenCalledOnce();
+      expect(result.installed).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
     }
   });
 
@@ -272,19 +406,12 @@ describe("installCopilotSdk", () => {
     const os = await import("node:os");
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-install-"));
     const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
-    fs.writeFileSync(
-      path.join(manifestDir, "package.json"),
-      JSON.stringify({ dependencies: { "@github/copilot-sdk": "1.0.0-beta.4" } }),
-    );
-    fs.writeFileSync(
-      path.join(manifestDir, "package-lock.json"),
-      JSON.stringify({ lockfileVersion: 3, packages: {} }),
-    );
+    writeFakePinnedManifest(manifestDir);
     try {
       const runInstall = vi.fn(async () => undefined);
       await expect(
         installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall }),
-      ).rejects.toThrow(/missing/);
+      ).rejects.toThrow(/does not match the pinned manifest/);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.rmSync(manifestDir, { recursive: true, force: true });
@@ -301,7 +428,7 @@ describe("installCopilotSdk", () => {
       const runInstall = vi.fn();
       await expect(
         installCopilotSdk({ fallbackDir: tmp, manifestDir, runInstall }),
-      ).rejects.toThrow(/missing Copilot SDK install manifest/);
+      ).rejects.toThrow(/cannot read pinned SDK manifest/);
       expect(runInstall).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -321,6 +448,152 @@ describe("constants", () => {
 
   it("isCopilotSdkInstalled returns false for nonexistent dirs", () => {
     expect(isCopilotSdkInstalled("/tmp/definitely-does-not-exist-openclaw")).toBe(false);
+  });
+});
+
+describe("verifyCopilotSdkInstall", () => {
+  it("returns ok when fallback lock and installed package.json match the pinned manifest", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
+      expect(verifyCopilotSdkInstall(tmp, manifestDir)).toEqual({ ok: true });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the missing fallback lock with the full path so logs are actionable", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      const result = verifyCopilotSdkInstall(tmp, manifestDir);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain(path.join(tmp, "package-lock.json"));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports drift when the installed package.json version differs from the manifest", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      // Lock looks correct; on-disk @github/copilot/package.json drifts.
+      installFakeFallbackGraph(tmp, "1.0.0-beta.4", "1.0.48");
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
+      fs.writeFileSync(
+        path.join(tmp, "node_modules", "@github", "copilot", "package.json"),
+        JSON.stringify({ name: "@github/copilot", version: "1.0.54" }),
+      );
+      const result = verifyCopilotSdkInstall(tmp, manifestDir);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("version drift");
+      expect(result.reason).toContain("1.0.54");
+      expect(result.reason).toContain("1.0.48");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports missing installed package dir even when the lock is present", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      writeFakePinnedManifest(manifestDir);
+      fs.copyFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        path.join(tmp, "package-lock.json"),
+      );
+      // node_modules/@github/copilot-sdk was never created.
+      const result = verifyCopilotSdkInstall(tmp, manifestDir);
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain("missing installed package");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when the shipped manifest is missing a pinned version (build broke contract)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      // Manifest lock declares no packages at all -> fatal misconfiguration.
+      fs.writeFileSync(
+        path.join(manifestDir, "package-lock.json"),
+        JSON.stringify({ lockfileVersion: 3, packages: {} }),
+      );
+      expect(() => verifyCopilotSdkInstall(tmp, manifestDir)).toThrow(
+        /missing a version for node_modules\/@github\/copilot-sdk/,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when the shipped manifest package-lock.json cannot be read", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-"));
+    const manifestDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-manifest-"));
+    try {
+      // No package-lock.json in manifestDir -> readFileSync throws -> fatal.
+      expect(() => verifyCopilotSdkInstall(tmp, manifestDir)).toThrow(
+        /cannot read pinned SDK manifest/,
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(manifestDir, { recursive: true, force: true });
+    }
+  });
+
+  it("contract: the shipped manifest at COPILOT_SDK_INSTALL_MANIFEST_DIR pins both packages", () => {
+    // Reading from the real shipped manifest dir must not throw, which means
+    // the build pipeline keeps the pinned versions for both keys present.
+    // The verifier returns ok=false here because the fallback dir is empty,
+    // but it must not throw.
+    const fs = require("node:fs") as typeof import("node:fs");
+    const os = require("node:os") as typeof import("node:os");
+    const path = require("node:path") as typeof import("node:path");
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-sdk-verify-real-"));
+    try {
+      const result = verifyCopilotSdkInstall(tmp, COPILOT_SDK_INSTALL_MANIFEST_DIR);
+      expect(result.ok).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 
