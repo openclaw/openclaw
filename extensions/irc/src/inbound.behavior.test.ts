@@ -241,6 +241,7 @@ describe("irc inbound behavior", () => {
     ).toBe(1);
     expect(runtime.log).not.toHaveBeenCalled();
     expect(ctx?.From).toBe("channel:#ops");
+    expect(ctx?.To).toBe("channel:#ops");
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 });
