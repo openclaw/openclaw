@@ -5,8 +5,8 @@ import {
   type ChatCommandDefinition,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   Button,
   StringSelectMenu,
@@ -257,6 +257,7 @@ export async function handleDiscordModelPickerInteraction(params: {
       provider: parsed.provider,
       page: parsed.page,
       providerPage: parsed.providerPage,
+      modelBucket: parsed.modelBucket,
     });
     await updatePicker(toDiscordModelPickerMessagePayload(rendered));
     return;

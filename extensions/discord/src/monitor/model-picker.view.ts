@@ -650,6 +650,7 @@ function buildModelRows(params: {
           runtimeIndex: compactRuntimeIndex,
           page: params.modelPage.page,
           providerPage: providerPage.page,
+          modelBucket: activeModelBucket,
           userId: params.userId,
         }),
       }),
@@ -866,6 +867,7 @@ export type DiscordModelPickerRecentsViewParams = {
   provider?: string;
   page?: number;
   providerPage?: number;
+  modelBucket?: string;
   layout?: DiscordModelPickerLayout;
 };
 
@@ -951,6 +953,7 @@ export function renderDiscordModelPickerRecentsView(
         runtimeIndex: params.runtimeIndex,
         page: params.page,
         providerPage: params.providerPage,
+        modelBucket: params.modelBucket,
         userId: params.userId,
       }),
     }),

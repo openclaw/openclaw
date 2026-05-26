@@ -609,7 +609,8 @@ describe("Discord model picker rendering", () => {
           {
             id: "google-gemini-cli",
             label: "Google Gemini CLI",
-            description: "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            description:
+              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
           },
           {
             id: "pi",
@@ -661,7 +662,8 @@ describe("Discord model picker rendering", () => {
           {
             id: "google-gemini-cli",
             label: "Google Gemini CLI",
-            description: "Use the Google Gemini CLI runtime selected by the effective harness policy.",
+            description:
+              "Use the Google Gemini CLI runtime selected by the effective harness policy.",
           },
           {
             id: "pi",
@@ -1153,6 +1155,40 @@ describe("Discord model picker rendering", () => {
     expect(favoritesState.view).toBe("recents");
   });
 
+  it("preserves the active model bucket when opening Recents", () => {
+    const data = createModelsProviderData({
+      openai: Array.from({ length: 30 }, (_, i) => `model-${String(i + 1).padStart(2, "0")}`),
+    });
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "12345678901234567890",
+      data,
+      provider: "openai",
+      page: 1,
+      providerPage: 1,
+      modelBucket: "21-30",
+      currentModel: "openai/model-21",
+      quickModels: ["openai/model-21"],
+    });
+    const buttonRow = rows.at(-1);
+    const recentsButton = requireValue(
+      buttonRow?.components?.find(
+        (button) => parseDiscordModelPickerCustomId(button.custom_id ?? "")?.action === "recents",
+      ),
+      "models view should render Recents button",
+    );
+    const state = requireValue(
+      parseDiscordModelPickerCustomId(recentsButton.custom_id ?? ""),
+      "recents button custom id should parse",
+    );
+
+    expect(state.action).toBe("recents");
+    expect(state.view).toBe("recents");
+    expect(state.modelBucket).toBe("21-30");
+    expect((recentsButton.custom_id ?? "").length).toBeLessThanOrEqual(DISCORD_CUSTOM_ID_MAX_CHARS);
+  });
+
   it("omits Recents button when no quickModels", () => {
     const data = createModelsProviderData({
       openai: ["gpt-4.1", "gpt-4o"],
@@ -1275,6 +1311,33 @@ describe("Discord model picker recents view", () => {
     expect(defaultState.runtime).toBe("codex");
     expect(recentState.runtime).toBe("codex");
     expect(backState.runtime).toBe("codex");
+  });
+
+  it("preserves the browse model bucket on recents back buttons", () => {
+    const data = createModelsProviderData({
+      openai: Array.from({ length: 30 }, (_, i) => `model-${String(i + 1).padStart(2, "0")}`),
+    });
+
+    const rows = renderRecentsViewRows({
+      command: "model",
+      userId: "12345678901234567890",
+      data,
+      quickModels: ["openai/model-21"],
+      currentModel: "openai/model-21",
+      provider: "openai",
+      page: 1,
+      providerPage: 1,
+      modelBucket: "21-30",
+    });
+
+    const backState = requireValue(
+      parseDiscordModelPickerCustomId(rows.at(-1)?.components?.[0]?.custom_id ?? ""),
+      "recents back button custom id should parse",
+    );
+
+    expect(backState.action).toBe("back");
+    expect(backState.view).toBe("models");
+    expect(backState.modelBucket).toBe("21-30");
   });
 
   it("keeps compact runtime state on recents buttons under the customId limit", () => {
