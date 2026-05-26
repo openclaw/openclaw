@@ -1401,7 +1401,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(result.assistantTexts).toContain("final answer");
   });
 
-  it("compacts first-turn context overflow before surfacing Codex failure", async () => {
+  it("surfaces first-turn Codex context overflow when the precheck fits", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const compact = vi.fn<ContextEngine["compact"]>(async () => ({
@@ -1429,7 +1429,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "Codex ran out of room in the model's context window",
     );
 
-    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/start",

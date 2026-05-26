@@ -101,6 +101,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import {
+  DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -1530,6 +1531,12 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  const resetCodexPromptInputs = () => {
+    promptText = params.prompt;
+    developerInstructions = baseDeveloperInstructions;
+    prePromptMessageCount = historyMessages.length;
+    contextEngineProjection = undefined;
+  };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: CodexAppServerThreadBinding | undefined,
   ) => {
@@ -1689,6 +1696,9 @@ export async function runCodexAppServerAttempt(
   const decorateCodexTurnPromptText = (prompt: string) =>
     prependCodexOpenClawPromptContext(prompt, openClawPromptContext);
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  const refreshCodexTurnPromptText = () => {
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  };
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -3406,9 +3416,15 @@ export async function runCodexAppServerAttempt(
       );
       try {
         const preRetrySessionFile = activeSessionFile;
-        await forceContextEngineCompactionForCodexOverflow(turnStartError, {
-          threadId: thread.threadId,
-        });
+        const compactedForRetry = await forceContextEngineCompactionForCodexOverflow(
+          turnStartError,
+          {
+            threadId: thread.threadId,
+          },
+        );
+        if (compactedForRetry) {
+          await rebuildPromptAfterContextEngineCompaction();
+        }
         emitCodexNativeThreadLifecycleDiagnostic({
           action: "rotated",
           reason: CodexNativeThreadLifecycleReason.AppServerRejectedThread,

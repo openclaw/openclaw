@@ -66,14 +66,14 @@ import {
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
 import {
+  CodexNativeThreadLifecycleReason,
+  emitCodexNativeThreadLifecycleDiagnostic,
+} from "./native-thread-diagnostics.js";
+import {
   buildCodexPluginAppCacheKey,
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
-import {
-  CodexNativeThreadLifecycleReason,
-  emitCodexNativeThreadLifecycleDiagnostic,
-} from "./native-thread-diagnostics.js";
 import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,

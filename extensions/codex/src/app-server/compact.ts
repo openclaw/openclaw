@@ -18,10 +18,7 @@ import {
 } from "./native-thread-diagnostics.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import {
-  readCodexAppServerBinding,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
