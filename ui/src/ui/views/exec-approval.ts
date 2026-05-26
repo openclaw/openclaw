@@ -123,6 +123,7 @@ function approvalDecisionLabel(decision: ExecApprovalDecision): string {
     case "deny":
       return t("execApproval.deny");
   }
+  return t("execApproval.deny");
 }
 
 function approvalDecisionClass(decision: ExecApprovalDecision): string {
@@ -134,6 +135,7 @@ function approvalDecisionClass(decision: ExecApprovalDecision): string {
     case "deny":
       return "btn danger";
   }
+  return "btn danger";
 }
 
 function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApprovalDecision[] {
