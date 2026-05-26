@@ -312,6 +312,12 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-external-ref",
+        {
+          $ref: "https://example.com/missing",
+        },
+      ],
+      [
         "schema-validator.test.invalid-dependencies-value",
         {
           type: "object",
@@ -438,6 +444,24 @@ describe("schema validator", () => {
             },
           },
           $ref: "value",
+        },
+        value: "ok",
+      },
+      expectedValue: "ok",
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.resolved-relative-id-ref",
+        schema: {
+          $id: "https://example.com/root/",
+          $defs: {
+            Value: {
+              $id: "value",
+              type: "string",
+            },
+          },
+          $ref: "https://example.com/root/value",
         },
         value: "ok",
       },
@@ -648,6 +672,31 @@ describe("schema validator", () => {
             },
           },
           $ref: "settings",
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.resolved-relative-id-default-ref",
+        schema: {
+          $id: "https://example.com/root/",
+          $defs: {
+            Settings: {
+              $id: "settings",
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+            },
+          },
+          $ref: "https://example.com/root/settings",
         },
         value: {},
         applyDefaults: true,
