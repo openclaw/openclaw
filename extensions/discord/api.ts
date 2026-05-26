@@ -83,6 +83,7 @@ export {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
+  shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./src/exec-approvals.js";
 export type {
   DiscordInteractiveHandlerContext,
