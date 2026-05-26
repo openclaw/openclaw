@@ -119,11 +119,27 @@ def extract_current_request(text: str) -> str:
 def iter_records(rollout_path: str) -> Iterable[ChatRecord]:
     path = Path(rollout_path)
     with path.open("r", encoding="utf-8") as handle:
+        rows = []
         for raw in handle:
             try:
-                row = json.loads(raw)
+                rows.append(json.loads(raw))
             except json.JSONDecodeError:
                 continue
+    telegram_session_key = None
+    telegram_source = "telegram-direct"
+    for row in rows:
+        payload = row.get("payload")
+        if not isinstance(payload, dict) or payload.get("type") != "message" or payload.get("role") != "user":
+            continue
+        text = content_text(payload)
+        meta = parse_json_block("Conversation info (untrusted metadata):", text)
+        chat_id = str(meta.get("chat_id") or "")
+        if chat_id.startswith("telegram:"):
+            telegram_session_key = chat_id
+            break
+    if not telegram_session_key:
+        return
+    for row in rows:
             payload = row.get("payload")
             if not isinstance(payload, dict) or payload.get("type") != "message":
                 continue
@@ -136,17 +152,19 @@ def iter_records(rollout_path: str) -> Iterable[ChatRecord]:
             if role == "user":
                 meta = parse_json_block("Conversation info (untrusted metadata):", text)
                 chat_id = str(meta.get("chat_id") or "unknown")
+                if not chat_id.startswith("telegram:"):
+                    continue
                 message_id = str(meta.get("message_id")) if meta.get("message_id") else None
                 timestamp = str(meta.get("timestamp")) if meta.get("timestamp") else row.get("timestamp")
                 message = extract_current_request(text)
-                source = "telegram-direct" if chat_id.startswith("telegram:") else "openclaw-session"
-                session_key = chat_id if chat_id.startswith("telegram:") else "openclaw-session"
+                source = telegram_source
+                session_key = chat_id
             else:
                 message = text
                 message_id = None
                 timestamp = row.get("timestamp")
-                session_key = "openclaw-session"
-                source = "openclaw-session"
+                session_key = telegram_session_key
+                source = telegram_source
             if message:
                 yield ChatRecord(session_key, source, role, message, message_id, timestamp, str(path))
 
