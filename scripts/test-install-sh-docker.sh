@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 
 resolve_default_smoke_platform() {
   local host_os
@@ -241,13 +243,13 @@ restore_local_dist_from_image() {
   local container_id=""
 
   echo "==> Reuse local dist/ from Docker image: $image"
-  container_id="$(docker create "$image")"
+  container_id="$(docker_e2e_docker_cmd create "$image")"
   rm -rf "$ROOT_DIR/dist"
-  if ! docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker rm -f "$container_id" >/dev/null 2>&1 || true
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
+    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
     return 1
   fi
-  docker rm -f "$container_id" >/dev/null
+  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
 }
 
 ensure_local_update_dist_import_closure() {

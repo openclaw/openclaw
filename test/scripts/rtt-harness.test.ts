@@ -143,6 +143,8 @@ describe("RTT harness", () => {
     expect(installEnvSnapshotIndex).toBeGreaterThanOrEqual(0);
     expect(convexSecretForwardIndex).toBeGreaterThan(installEnvSnapshotIndex);
     expect(packageInstallIndex).toBeLessThan(credentialAcquireIndex);
+    expect(script).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(script).not.toContain("run_logged docker run --rm");
     expect(heartbeatStartIndex).toBeGreaterThan(sourceIndex);
     expect(heartbeatStartIndex).toBeLessThan(driverIndex);
     expect(script).toContain("start_credential_heartbeat() {\n  (\n    set +e");

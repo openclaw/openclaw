@@ -1051,6 +1051,9 @@ describe("package artifact reuse", () => {
 
   it("summarizes queue time separately from execution time in full validation", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
+    const summaryJob = parsedWorkflow.jobs?.summary;
+    const manifestStep = workflowStep(summaryJob ?? {}, "Write release validation manifest");
 
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
@@ -1065,6 +1068,8 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
     expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
+    expect(manifestStep.env?.PERFORMANCE_RUN_ID).toBe("${{ needs.performance.outputs.run_id }}");
+    expect(manifestStep.run).toContain('--arg performanceRunId "$PERFORMANCE_RUN_ID"');
   });
 
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {

@@ -104,6 +104,18 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("rejects installer options with missing values", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --prefix --no-onboard
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
+    expect(result.stdout + result.stderr).not.toContain("unbound variable");
+  });
+
   it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
     const osHome = join(tmp, "os-home");

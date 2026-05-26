@@ -221,7 +221,7 @@ run_logged() {
 }
 
 echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \

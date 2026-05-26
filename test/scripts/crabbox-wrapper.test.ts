@@ -1117,6 +1117,28 @@ describe("scripts/crabbox-wrapper", () => {
     expectGroupedShellCommand(remoteCommand, shellScript);
   });
 
+  it("preserves macOS JS and Git bootstraps for shell-wrapped sparse changed gates", () => {
+    const shellScript = "bash -lc 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
+    expectGroupedShellCommand(remoteCommand, shellScript);
+  });
+
   it("preserves sparse changed-gate Git bootstrap for assignment-prefix command substitutions", () => {
     const shellScript = "TOOL_ROOT=$(pwd) pnpm check:changed";
     const result = runWrapper(
@@ -1140,6 +1162,94 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("preserves sparse changed-gate Git bootstrap for command-prefixed shell commands", () => {
     const shellScript = "command pnpm check:changed";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for bash -lc shell commands", () => {
+    const shellScript =
+      "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 bash -lc 'set -euo pipefail; pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(
+      "git fetch -q --depth=1 origin abc123:refs/remotes/origin/main",
+    );
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for shell option values before -c", () => {
+    const shellScript = "bash -o pipefail -c 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for attached shell option values before -c", () => {
+    const shellScript = "bash --rcfile=./ci.bashrc -c 'pnpm check:changed'";
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--shell", "--", shellScript],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+          ["merge-base\u0000origin/main\u0000HEAD"]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
+    expect(result.status).toBe(0);
+    expect(remoteCommand).toContain("git init -q");
+    expect(remoteCommand).toContain(`&& ${shellScript}`);
+  });
+
+  it("preserves sparse changed-gate Git bootstrap for grouped shell options before -c", () => {
+    const shellScript = "bash -eo pipefail -c 'pnpm check:changed'";
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--provider", "aws", "--shell", "--", shellScript],

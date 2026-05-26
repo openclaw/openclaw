@@ -9,6 +9,8 @@ set -euo pipefail
 # - dist/OpenClaw-<version>.dmg
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
@@ -64,10 +66,10 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
-VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
-BUNDLE_VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
-ACTUAL_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
-ACTUAL_FEED_URL=$(/usr/libexec/PlistBuddy -c "Print SUFeedURL" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
+VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"
+BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"
+ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"
+ACTUAL_FEED_URL="$(plist_print_required "$APP/Contents/Info.plist" SUFeedURL)"
 ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"
 DMG="$ROOT_DIR/dist/OpenClaw-$VERSION.dmg"
 NOTARY_ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.notary.zip"
@@ -82,8 +84,8 @@ if [[ "$SKIP_NOTARIZE" == "1" ]]; then
 fi
 
 if [[ "$BUILD_CONFIG" == "release" ]]; then
-  if [[ "$ACTUAL_BUNDLE_ID" == *.debug ]]; then
-    echo "Error: release packaging produced debug bundle id '$ACTUAL_BUNDLE_ID'." >&2
+  if [[ "$ACTUAL_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
+    echo "Error: release packaging produced bundle id '$ACTUAL_BUNDLE_ID', expected '$BUNDLE_ID'." >&2
     exit 1
   fi
 

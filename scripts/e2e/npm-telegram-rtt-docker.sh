@@ -249,7 +249,7 @@ run_logged() {
 }
 
 echo "Installing ${PACKAGE_LABEL} from ${package_install_source}..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   "${install_env[@]}" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
@@ -269,7 +269,7 @@ node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version"
 EOF
 
 echo "Running package Telegram RTT Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/scripts:/app/scripts:ro" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \

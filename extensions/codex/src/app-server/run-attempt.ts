@@ -5671,9 +5671,16 @@ function remapCodexContextFilePath(params: {
   ) {
     return params.file;
   }
+  const targetUsesPosixSeparators =
+    params.targetWorkspaceDir.includes("/") && !params.targetWorkspaceDir.includes("\\");
+  const normalizedRelativePath = targetUsesPosixSeparators
+    ? relativePath.replaceAll("\\", "/")
+    : relativePath.replaceAll("/", "\\");
   return {
     ...params.file,
-    path: path.join(params.targetWorkspaceDir, relativePath),
+    path: targetUsesPosixSeparators
+      ? path.posix.join(params.targetWorkspaceDir, normalizedRelativePath)
+      : path.win32.join(params.targetWorkspaceDir, normalizedRelativePath),
   };
 }
 

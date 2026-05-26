@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Shared in-container lifecycle helpers for Docker/Bash E2E lanes.
-openclaw_e2e_eval_test_state_from_b64() { eval "$(printf '%s' "${1:?missing OpenClaw test-state script}" | base64 -d)"; }
+openclaw_e2e_eval_test_state_from_b64() {
+  local encoded="${1:?missing OpenClaw test-state script}"
+  local decoded
+  if ! decoded="$(printf '%s' "$encoded" | base64 -d)"; then
+    echo "Invalid OpenClaw test-state base64 payload" >&2
+    return 1
+  fi
+  if [ -z "${decoded//[[:space:]]/}" ]; then
+    echo "OpenClaw test-state base64 payload decoded to an empty script" >&2
+    return 1
+  fi
+  eval "$decoded"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do

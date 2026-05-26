@@ -75,6 +75,20 @@ function assertFileContains() {
   assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
 }
 
+function assertPackageVersion() {
+  const packageRoot = process.argv[3];
+  const expectedVersion = process.argv[4];
+  const label = process.argv[5] ?? "package";
+  assert(packageRoot, "missing package root");
+  assert(expectedVersion, "missing expected package version");
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const packageJson = readJson(packageJsonPath);
+  assert(
+    packageJson.version === expectedVersion,
+    `${label} package version mismatch: expected ${expectedVersion}, got ${packageJson.version}`,
+  );
+}
+
 function assertImageDescribe() {
   const outputPath = process.argv[3];
   const requestLogPath = process.argv[4];
@@ -138,6 +152,7 @@ const commands = {
   "assert-openai-env-ref": assertOpenAiEnvRef,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,
+  "assert-package-version": assertPackageVersion,
   "assert-image-describe": assertImageDescribe,
   "assert-image-generate": assertImageGenerate,
   "assert-memory-search": assertMemorySearch,

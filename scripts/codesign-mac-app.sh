@@ -6,9 +6,13 @@ IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
-ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
-ENT_TMP_APP_BASE=$(mktemp -t openclaw-entitlements-app-base.XXXXXX)
-ENT_TMP_RUNTIME=$(mktemp -t openclaw-entitlements-runtime.XXXXXX)
+ENT_TMP_DIR=""
+
+cleanup() {
+  if [[ -n "$ENT_TMP_DIR" ]]; then
+    rm -rf "$ENT_TMP_DIR"
+  fi
+}
 
 if [[ "${APP_BUNDLE}" == "--help" || "${APP_BUNDLE}" == "-h" ]]; then
   cat <<'HELP'
@@ -128,6 +132,12 @@ esac
 if [[ "$IDENTITY" == "-" ]]; then
   timestamp_arg="--timestamp=none"
 fi
+
+ENT_TMP_DIR=$(mktemp -d -t openclaw-entitlements.XXXXXX)
+trap cleanup EXIT
+ENT_TMP_BASE="$ENT_TMP_DIR/base.plist"
+ENT_TMP_APP_BASE="$ENT_TMP_DIR/app-base.plist"
+ENT_TMP_RUNTIME="$ENT_TMP_DIR/runtime.plist"
 
 options_args=()
 if [[ "$IDENTITY" != "-" ]]; then
@@ -291,5 +301,4 @@ sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
 verify_team_ids
 
-rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"

@@ -134,6 +134,15 @@ const shellControlCommandPrefixes = new Set([
   "!",
 ]);
 const shellCommandExecutionPrefixes = new Set(["exec"]);
+const shellInlineCommandInterpreters = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+const shellInlineCommandOptionsWithNextValue = new Set([
+  "+O",
+  "+o",
+  "-O",
+  "-o",
+  "--init-file",
+  "--rcfile",
+]);
 
 function escapeBatchCommand(command) {
   return `${command}`.replace(cmdMetaCharactersRe, "^$1");
@@ -553,18 +562,38 @@ function commandRuntimeEntrypoint(commandArgs) {
 
 function commandWordsRuntimeEntrypoint(words) {
   const first = (words[0] ?? "").split("/").pop();
-  return jsRuntimeEntrypoints.has(first) ? first : "";
+  if (jsRuntimeEntrypoints.has(first)) {
+    return first;
+  }
+
+  const inlineCommand = shellInlineCommand(words);
+  if (!inlineCommand) {
+    return "";
+  }
+  for (const candidateWords of shellCommandWordCandidates(inlineCommand)) {
+    const shellRuntime = commandWordsRuntimeEntrypoint(candidateWords);
+    if (shellRuntime) {
+      return shellRuntime;
+    }
+  }
+  return "";
 }
 
 function isChangedGateCommand(commandArgs) {
   if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateWords);
+    return shellCommandWordCandidates(commandArgs[0]).some(isChangedGateCommandWords);
   }
   const words = normalizedCommandWords(commandArgs);
+  return isChangedGateCommandWords(words);
+}
+
+function isChangedGateCommandWords(words) {
   if (isChangedGateWords(words)) {
     return true;
   }
-  return false;
+
+  const inlineCommand = shellInlineCommand(words);
+  return inlineCommand ? shellCommandWordCandidates(inlineCommand).some(isChangedGateCommandWords) : false;
 }
 
 function isChangedGateWords(words) {
@@ -577,6 +606,34 @@ function isChangedGateWords(words) {
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     (words[0] === "node" && (words[1] ?? "").endsWith("scripts/check-changed.mjs"))
   );
+}
+
+function shellInlineCommand(words) {
+  const command = shellWordBasename(words[0]);
+  if (!shellInlineCommandInterpreters.has(command)) {
+    return "";
+  }
+
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index];
+    if (word === "--") {
+      return "";
+    }
+    if (!word.startsWith("-") && !word.startsWith("+")) {
+      return "";
+    }
+    if (word === "-c" || /^-[^-]*c/u.test(word)) {
+      return words[index + 1] ?? "";
+    }
+    if (shellInlineCommandOptionConsumesNextValue(word)) {
+      index += 1;
+    }
+  }
+  return "";
+}
+
+function shellInlineCommandOptionConsumesNextValue(word) {
+  return shellInlineCommandOptionsWithNextValue.has(word) || /^[+-][^-+]*[oO]$/u.test(word);
 }
 
 function shellCommandWordCandidates(command) {

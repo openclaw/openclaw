@@ -60,7 +60,17 @@ describe("test-install-sh-docker", () => {
 
     expect(script).toContain('UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"');
     expect(script).toContain("restore_local_dist_from_image");
-    expect(script).toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain(
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
+    );
+    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(script).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    );
+    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).not.toContain('container_id="$(docker create "$image")"');
+    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
     expect(script).toContain("ensure_local_update_dist_import_closure");
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
@@ -258,6 +268,17 @@ describe("bun global install smoke", () => {
     expect(script).toContain("assert-image-providers");
     expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"');
+    expect(script).toContain(
+      'DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"',
+    );
+    expect(script).toContain('container_id="$(docker_e2e_docker_cmd create "$image")"');
+    expect(script).toContain(
+      'docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"',
+    );
+    expect(script).toContain('docker_e2e_docker_cmd rm -f "$container_id"');
+    expect(script).not.toContain('container_id="$(docker create "$image")"');
+    expect(script).not.toContain('docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"');
   });
 
   it("gates workflow Bun install smoke to scheduled and release-check runs", () => {

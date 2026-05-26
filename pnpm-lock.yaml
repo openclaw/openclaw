@@ -88,9 +88,9 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
+      '@silvia-odwyer/photon-node':
+        specifier: 0.3.4
+        version: 0.3.4
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -492,9 +492,9 @@ importers:
       '@openai/codex':
         specifier: 0.133.0
         version: 0.133.0
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -896,9 +896,6 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.5.22
         version: 2026.5.22
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
       typebox:
         specifier: 1.1.38
         version: 1.1.38

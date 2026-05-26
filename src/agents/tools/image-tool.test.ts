@@ -28,6 +28,9 @@ type MockOpenClawToolsOptions = {
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
   fsPolicy?: NonNullable<Parameters<typeof createImageTool>[0]>["fsPolicy"];
+  agentChannel?: string | null;
+  agentAccountId?: string | null;
+  currentChannelId?: string | null;
   modelHasVision?: boolean;
 };
 
@@ -167,6 +170,9 @@ vi.mock("../openclaw-tools.js", async () => {
               }
             : undefined,
         fsPolicy: options?.fsPolicy,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
         modelHasVision: options?.modelHasVision,
       });
       return imageTool ? [imageTool] : [];
@@ -1636,6 +1642,85 @@ describe("image tool implicit imageModel config", () => {
         expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from the current iMessage account attachment roots", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const attachmentRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-root-"));
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          ...createMinimaxImageConfig(),
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [attachmentRoot],
+                },
+              },
+            },
+          },
+        };
+
+        const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
+        await expect(
+          withoutChannel.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("allows image paths from current iMessage wildcard attachment roots", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const attachmentRootParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-imessage-wildcard-root-"),
+      );
+      const attachmentRoot = path.join(attachmentRootParent, "work", "Attachments");
+      const imagePath = path.join(attachmentRoot, "photo.png");
+      await fs.mkdir(attachmentRoot, { recursive: true });
+      await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const cfg: OpenClawConfig = {
+          ...createMinimaxImageConfig(),
+          channels: {
+            imessage: {
+              accounts: {
+                work: {
+                  attachmentRoots: [path.join(attachmentRootParent, "*", "Attachments")],
+                },
+              },
+            },
+          },
+        };
+
+        const withImessage = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          agentChannel: "imessage",
+          agentAccountId: "work",
+        });
+
+        await expectImageToolExecOk(withImessage, imagePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(attachmentRootParent, { recursive: true, force: true });
       }
     });
   });
