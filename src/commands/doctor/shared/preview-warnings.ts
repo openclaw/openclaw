@@ -460,12 +460,12 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     : params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   const uncoveredEntries = configuredEntries
-    .map((entry) => ({
-      ...entry,
-      grants: entry.grants.filter(
+    .map((entry) => {
+      const grants = entry.grants.filter(
         (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
-      ),
-    }))
+      );
+      return { grants, label: entry.label };
+    })
     .filter((entry) => entry.grants.length > 0);
   if (uncoveredEntries.length === 0) {
     return [];
