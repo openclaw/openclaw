@@ -12,6 +12,7 @@ const discoverModelsMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const ensureAuthProfileStoreMock = vi.fn();
 const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
+const resolveModelAsyncMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
@@ -57,6 +58,7 @@ vi.mock("./agent-model-discovery.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/model.js", () => ({
+  resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 
@@ -368,6 +370,7 @@ describe("runBtwSideQuestion", () => {
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
+    resolveModelAsyncMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();

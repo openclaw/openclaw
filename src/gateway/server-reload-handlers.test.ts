@@ -119,7 +119,7 @@ vi.mock("../agents/model-provider-auth.js", () => ({
   },
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
