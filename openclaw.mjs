@@ -250,22 +250,35 @@ if (
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
+const hasDirectModuleNotFoundMessage = (message, specifier, expectedPath) =>
+  message.includes(`Cannot find module '${specifier}'`) ||
+  message.includes(`Cannot find module "${specifier}"`) ||
+  message.includes(`Cannot find module '${expectedPath}'`) ||
+  message.includes(`Cannot find module "${expectedPath}"`);
+
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
+  if (!err || typeof err !== "object") {
     return false;
   }
 
   const expectedUrl = new URL(specifier, import.meta.url);
+  const expectedPath = fileURLToPath(expectedUrl);
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+
+  // Bun does not attach Node's ERR_MODULE_NOT_FOUND code to import misses.
+  if (hasDirectModuleNotFoundMessage(message, specifier, expectedPath)) {
+    return true;
+  }
+
+  if (!isModuleNotFoundError(err)) {
+    return false;
+  }
+
   if ("url" in err && err.url === expectedUrl.href) {
     return true;
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  const expectedPath = fileURLToPath(expectedUrl);
-  return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
-  );
+  return false;
 };
 
 const installProcessWarningFilter = async () => {
