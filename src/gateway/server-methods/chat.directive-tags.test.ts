@@ -203,6 +203,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
           message?: unknown;
+          resolveMessage?: () => Promise<unknown>;
           markRuntimePersisted: (message: { role: "user"; content: string }) => void;
           markRuntimePersistencePending: (pending: Promise<void>) => void;
         };
@@ -213,8 +214,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
-      mockState.lastDispatchUserTurnInput =
-        params.replyOptions?.userTurnTranscriptRecorder?.message;
+      const recorder = params.replyOptions?.userTurnTranscriptRecorder;
+      mockState.lastDispatchUserTurnInput = recorder?.resolveMessage
+        ? await recorder.resolveMessage()
+        : recorder?.message;
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
       }

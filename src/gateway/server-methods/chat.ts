@@ -2690,6 +2690,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
         ctx.MediaStaged = true;
       }
+      const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
+        type.startsWith("image/"),
+      );
+      const replyOptionImages = mediaPathOffloadsIncludeImages
+        ? undefined
+        : parsedImages.length > 0
+          ? parsedImages
+          : undefined;
 
       const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
@@ -2875,7 +2883,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             replyOptions: {
               runId: clientRunId,
               abortSignal: activeRunAbort.controller.signal,
-              images: parsedImages.length > 0 ? parsedImages : undefined,
+              images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
