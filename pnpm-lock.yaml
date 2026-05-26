@@ -615,6 +615,9 @@ importers:
       https-proxy-agent:
         specifier: 9.0.0
         version: 9.0.0
+      opus-decoder:
+        specifier: 0.7.11
+        version: 0.7.11
       opusscript:
         specifier: 0.1.1
         version: 0.1.1

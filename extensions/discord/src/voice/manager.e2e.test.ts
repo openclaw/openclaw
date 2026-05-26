@@ -23,6 +23,7 @@ const {
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
+  decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
 } = vi.hoisted(() => {
@@ -73,6 +74,7 @@ const {
         },
         subscribe: vi.fn(() => ({
           on: vi.fn(),
+          off: vi.fn(),
           destroy: vi.fn(),
           [Symbol.asyncIterator]: async function* () {},
         })),
@@ -162,6 +164,7 @@ const {
       }),
     ),
     realtimeSessionMock,
+    decodeOpusStreamMock: vi.fn(),
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
   };
@@ -251,6 +254,10 @@ vi.mock("./audio.js", async () => {
   const actual = await vi.importActual<typeof import("./audio.js")>("./audio.js");
   return {
     ...actual,
+    decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
+      decodeOpusStreamMock.getMockImplementation()
+        ? decodeOpusStreamMock(...args)
+        : actual.decodeOpusStream(...args),
     decodeOpusStreamChunks: decodeOpusStreamChunksMock,
   };
 });
@@ -380,6 +387,7 @@ describe("DiscordVoiceManager", () => {
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
+    decodeOpusStreamMock.mockReset();
     decodeOpusStreamChunksMock.mockReset();
     decodeOpusStreamChunksMock.mockResolvedValue(undefined);
   });
@@ -4897,6 +4905,163 @@ describe("DiscordVoiceManager", () => {
     expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
     expect(entry.receiveRecovery.lastDecryptFailureAt).toBe(0);
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cleans up realtime receive streams after WASM bounds failures", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    decodeOpusStreamChunksMock.mockImplementationOnce(
+      async (
+        stream: Readable,
+        params: {
+          onError: (err: unknown) => void;
+        },
+      ) => {
+        const err = new Error("memory access out of bounds");
+        params.onError(err);
+        const errorListener = (
+          stream as unknown as {
+            on: ReturnType<typeof vi.fn>;
+          }
+        ).on.mock.calls.find(([event]) => event === "error")?.[1] as
+          | ((err: unknown) => void)
+          | undefined;
+        errorListener?.(err);
+      },
+    );
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u-speaker"],
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      capture: {
+        activeSpeakers: Set<string>;
+        activeCaptureStreams: Map<string, unknown>;
+      };
+      receiveRecovery: { decryptFailureCount: number };
+    };
+    const stream = {
+      on: vi.fn(),
+      off: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+      async *[Symbol.asyncIterator]() {},
+    };
+    connection.receiver.subscribe.mockReturnValueOnce(stream);
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-speaker");
+
+    const errorListener = stream.on.mock.calls.find(([event]) => event === "error")?.[1];
+    expect(errorListener).toBeTypeOf("function");
+    expect(stream.off).toHaveBeenCalledWith("error", errorListener);
+    expect(stream.destroy).toHaveBeenCalledTimes(1);
+    expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
+    expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
+    expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
+  });
+
+  it("keeps receive recovery state after non-realtime decoder failures", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    decodeOpusStreamMock.mockImplementationOnce(
+      async (
+        _stream: Readable,
+        params: {
+          onError: (err: unknown) => void;
+        },
+      ) => {
+        params.onError(new Error("memory access out of bounds"));
+        return Buffer.alloc(8);
+      },
+    );
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u-speaker"],
+      voice: { enabled: true, mode: "stt-tts" },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      receiveRecovery: { decryptFailureCount: number; lastDecryptFailureAt: number };
+    };
+    const stream = {
+      on: vi.fn(),
+      off: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+      async *[Symbol.asyncIterator]() {},
+    };
+    connection.receiver.subscribe.mockReturnValueOnce(stream);
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-speaker");
+
+    expect(transcribeAudioFileMock).not.toHaveBeenCalled();
+    expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
+    expect(entry.receiveRecovery.lastDecryptFailureAt).toBeGreaterThan(0);
+    expect(stream.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("processes partial non-realtime audio after abort-like stream endings", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    decodeOpusStreamMock.mockImplementationOnce(
+      async (
+        _stream: Readable,
+        params: {
+          onError: (err: unknown) => void;
+        },
+      ) => {
+        const err = new Error("The operation was aborted");
+        err.name = "AbortError";
+        params.onError(err);
+        return Buffer.alloc(48_000);
+      },
+    );
+    const manager = createManager({
+      groupPolicy: "open",
+      allowFrom: ["discord:u-speaker"],
+      voice: { enabled: true, mode: "stt-tts" },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      receiveRecovery: { decryptFailureCount: number };
+      processingQueue: Promise<void>;
+    };
+    const stream = {
+      on: vi.fn(),
+      off: vi.fn(),
+      destroy: vi.fn(),
+      destroyed: false,
+      async *[Symbol.asyncIterator]() {},
+    };
+    connection.receiver.subscribe.mockReturnValueOnce(stream);
+
+    await (
+      manager as unknown as {
+        handleSpeakingStart: (entry: unknown, userId: string) => Promise<void>;
+      }
+    ).handleSpeakingStart(entry, "u-speaker");
+    await entry.processingQueue;
+
+    expect(transcribeAudioFileMock).toHaveBeenCalledTimes(1);
+    expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
+    expect(stream.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("allows the same speaker to restart after finalize fires", async () => {
