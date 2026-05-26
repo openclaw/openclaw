@@ -11,31 +11,20 @@ afterEach(async () => {
 });
 
 describe("loadExtensions", () => {
-  it("resolves public LLM plugin SDK subpaths in jiti-loaded extensions", async () => {
+  it("resolves the generic LLM plugin SDK subpath in jiti-loaded extensions", async () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-extension-sdk-"));
     tempDirs.push(dir);
     const extensionPath = join(dir, "extension.ts");
     await writeFile(
       extensionPath,
       `
-import * as llmAnthropic from "openclaw/plugin-sdk/llm-anthropic";
-import * as llmBedrock from "openclaw/plugin-sdk/llm-bedrock";
-import * as llmGoogleShared from "openclaw/plugin-sdk/llm-google-shared";
-import * as llmOpenAiCodexResponses from "openclaw/plugin-sdk/llm-openai-codex-responses";
-import * as llmOpenAiCompletions from "openclaw/plugin-sdk/llm-openai-completions";
-import * as llmOpenAiResponses from "openclaw/plugin-sdk/llm-openai-responses";
-import * as llmProviderRuntime from "openclaw/plugin-sdk/llm-provider-runtime";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 
 export default async function(api) {
-  if (!llmBedrock.supportsBedrockPromptCaching("anthropic.claude-3-7-sonnet")) {
-    throw new Error("bedrock helper unavailable");
+  const stream = createAssistantMessageEventStream();
+  if (!stream || typeof stream.result !== "function") {
+    throw new Error("generic LLM helper unavailable");
   }
-  void llmAnthropic;
-  void llmGoogleShared;
-  void llmOpenAiCodexResponses;
-  void llmOpenAiCompletions;
-  void llmOpenAiResponses;
-  void llmProviderRuntime;
   api.registerCommand("sdk-subpath-probe", {
     description: "probe",
     handler() {},

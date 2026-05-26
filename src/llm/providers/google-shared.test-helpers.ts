@@ -1,5 +1,5 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { expect } from "vitest";
+import type { Model } from "../types.js";
 
 function makeZeroUsageSnapshot() {
   return {

@@ -6,34 +6,17 @@ import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const OAUTH_MODULE_ID = "openclaw/plugin-sdk/llm-oauth";
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
   "../../../extensions/openai/openai-codex-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
-const getOAuthProvidersMock = vi.fn(() => [
-  { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" },
-  { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" },
-  { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" },
-]);
 
 function installProviderRuntimeContractMocks() {
-  vi.doMock(OAUTH_MODULE_ID, async () => {
-    const actual =
-      await vi.importActual<typeof import("openclaw/plugin-sdk/llm-oauth")>(OAUTH_MODULE_ID);
-    return {
-      ...actual,
-      refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
-      getOAuthProviders: getOAuthProvidersMock,
-    };
-  });
-
   vi.doMock(OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID, () => ({
     refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
   }));
 }
 
 function removeProviderRuntimeContractMocks() {
-  vi.doUnmock(OAUTH_MODULE_ID);
   vi.doUnmock(OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID);
 }
 
@@ -132,7 +115,6 @@ function installRuntimeHooks(fixtures: readonly ProviderRuntimeContractFixture[]
 
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
-    getOAuthProvidersMock.mockClear();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   return requireProviderContractProvider;

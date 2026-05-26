@@ -1,6 +1,6 @@
-import type { Context, Tool } from "openclaw/plugin-sdk/llm";
-import { convertMessages, convertTools } from "openclaw/plugin-sdk/llm-google-shared";
 import { describe, expect, it } from "vitest";
+import type { Context, Tool } from "../types.js";
+import { convertMessages, convertTools } from "./google-shared.js";
 import {
   asRecord,
   expectConvertedRoles,

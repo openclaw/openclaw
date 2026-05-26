@@ -5,9 +5,8 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
+  streamSimple,
 } from "openclaw/plugin-sdk/llm";
-import { streamSimpleOpenAICodexResponses } from "openclaw/plugin-sdk/llm-openai-codex-responses";
-import { streamSimpleOpenAIResponses } from "openclaw/plugin-sdk/llm-openai-responses";
 import { describe, expect, it } from "vitest";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-codex-responses">;
@@ -78,7 +77,7 @@ describe("OpenAI thinking contract", () => {
   it("serializes OpenAI Responses reasoning effort from shared model runtime simple options", async () => {
     const payload = await captureProviderPayload({
       model: openaiModel,
-      streamFn: streamSimpleOpenAIResponses,
+      streamFn: streamSimple,
       options: { reasoning: "high" },
     });
 
@@ -88,7 +87,7 @@ describe("OpenAI thinking contract", () => {
   it("serializes Codex Responses reasoning effort from shared model runtime simple options", async () => {
     const payload = await captureProviderPayload({
       model: codexModel,
-      streamFn: streamSimpleOpenAICodexResponses,
+      streamFn: streamSimple,
       options: { reasoning: "high", transport: "sse" },
     });
 
@@ -98,7 +97,7 @@ describe("OpenAI thinking contract", () => {
   it("leaves Codex Responses reasoning absent when agent runtime disables thinking", async () => {
     const payload = await captureProviderPayload({
       model: codexModel,
-      streamFn: streamSimpleOpenAICodexResponses,
+      streamFn: streamSimple,
       options: { transport: "sse" },
     });
 
@@ -108,7 +107,7 @@ describe("OpenAI thinking contract", () => {
   it("keeps OpenAI Responses reasoning explicitly disabled when agent runtime disables thinking", async () => {
     const payload = await captureProviderPayload({
       model: openaiModel,
-      streamFn: streamSimpleOpenAIResponses,
+      streamFn: streamSimple,
       options: {},
     });
 

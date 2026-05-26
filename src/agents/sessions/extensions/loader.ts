@@ -10,14 +10,6 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti/static";
 import * as bundledLlm from "openclaw/plugin-sdk/llm";
-import * as bundledLlmAnthropic from "openclaw/plugin-sdk/llm-anthropic";
-import * as bundledLlmBedrock from "openclaw/plugin-sdk/llm-bedrock";
-import * as bundledLlmGoogleShared from "openclaw/plugin-sdk/llm-google-shared";
-import * as bundledLlmOauth from "openclaw/plugin-sdk/llm-oauth";
-import * as bundledLlmOpenAiCodexResponses from "openclaw/plugin-sdk/llm-openai-codex-responses";
-import * as bundledLlmOpenAiCompletions from "openclaw/plugin-sdk/llm-openai-completions";
-import * as bundledLlmOpenAiResponses from "openclaw/plugin-sdk/llm-openai-responses";
-import * as bundledLlmProviderRuntime from "openclaw/plugin-sdk/llm-provider-runtime";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
@@ -58,14 +50,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
   "@sinclair/typebox/value": bundledTypeboxValue,
   "openclaw/plugin-sdk/agent-core": bundledAgentCore,
   "openclaw/plugin-sdk/llm": bundledLlm,
-  "openclaw/plugin-sdk/llm-anthropic": bundledLlmAnthropic,
-  "openclaw/plugin-sdk/llm-bedrock": bundledLlmBedrock,
-  "openclaw/plugin-sdk/llm-google-shared": bundledLlmGoogleShared,
-  "openclaw/plugin-sdk/llm-oauth": bundledLlmOauth,
-  "openclaw/plugin-sdk/llm-openai-codex-responses": bundledLlmOpenAiCodexResponses,
-  "openclaw/plugin-sdk/llm-openai-completions": bundledLlmOpenAiCompletions,
-  "openclaw/plugin-sdk/llm-openai-responses": bundledLlmOpenAiResponses,
-  "openclaw/plugin-sdk/llm-provider-runtime": bundledLlmProviderRuntime,
   "openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
   "@openclaw/plugin-sdk/agent-sessions": bundledAgentSessions,
 };

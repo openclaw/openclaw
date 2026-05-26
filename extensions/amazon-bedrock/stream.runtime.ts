@@ -22,7 +22,6 @@ import {
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
-import { supportsBedrockPromptCaching, type BedrockOptions } from "openclaw/plugin-sdk/llm-bedrock";
 import {
   adjustMaxTokensForThinking,
   AssistantMessageEventStream,
@@ -47,7 +46,8 @@ import {
   type Tool,
   type ToolCall,
   type ToolResultMessage,
-} from "openclaw/plugin-sdk/llm-provider-runtime";
+} from "openclaw/plugin-sdk/llm";
+import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 

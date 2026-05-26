@@ -5,20 +5,6 @@ type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
   [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
 };
 
-vi.mock("openclaw/plugin-sdk/llm-oauth", () => ({
-  getOAuthProvider: () => undefined,
-  getOAuthApiKey: () => undefined,
-  getOAuthProviders: () => [],
-  loginOpenAICodex: vi.fn(),
-  registerOAuthProvider: vi.fn(),
-  resetOAuthProviders: vi.fn(),
-  refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
-    (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
-      ...args,
-    ),
-  ),
-}));
-
 vi.mock("../src/llm/oauth.js", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],

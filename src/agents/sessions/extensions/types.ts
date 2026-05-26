@@ -26,8 +26,6 @@ import type {
   Context,
   ImageContent,
   Model,
-  OAuthCredentials,
-  OAuthLoginCallbacks,
   SimpleStreamOptions,
   TextContent,
   ToolResultMessage,
@@ -80,6 +78,44 @@ export type { ExecOptions, ExecResult } from "../exec.js";
 export type { BuildSystemPromptOptions } from "../system-prompt.js";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.js";
+
+export type OAuthCredentials = {
+  refresh: string;
+  access: string;
+  expires: number;
+  [key: string]: unknown;
+};
+
+export type OAuthPrompt = {
+  message: string;
+  placeholder?: string;
+  allowEmpty?: boolean;
+};
+
+export type OAuthAuthInfo = {
+  url: string;
+  instructions?: string;
+};
+
+export type OAuthSelectOption = {
+  id: string;
+  label: string;
+};
+
+export type OAuthSelectPrompt = {
+  message: string;
+  options: OAuthSelectOption[];
+};
+
+export interface OAuthLoginCallbacks {
+  onAuth: (info: OAuthAuthInfo) => void;
+  onPrompt: (prompt: OAuthPrompt) => Promise<string>;
+  onProgress?: (message: string) => void;
+  onManualCodeInput?: () => Promise<string>;
+  /** Show an interactive selector and return the selected option id, or undefined on cancel. */
+  onSelect?: (prompt: OAuthSelectPrompt) => Promise<string | undefined>;
+  signal?: AbortSignal;
+}
 
 // ============================================================================
 // UI Context

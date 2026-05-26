@@ -78,17 +78,7 @@ vi.mock("openclaw/plugin-sdk/llm", () => {
     getApiProvider,
     getModel: vi.fn(),
     registerApiProvider: vi.fn(),
-    streamAnthropic: vi.fn(),
     streamSimple: vi.fn(),
-    streamSimpleOpenAICompletions: vi.fn(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/llm-oauth", () => {
-  return {
-    getOAuthProviders: () => [],
-    getOAuthApiKey: vi.fn(async () => null),
-    loginOpenAICodex: vi.fn(),
   };
 });
 

@@ -12,17 +12,6 @@ vi.mock("openclaw/plugin-sdk/llm", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/llm-oauth", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/llm-oauth")>(
-    "openclaw/plugin-sdk/llm-oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: () => undefined,
-    getOAuthProviders: () => [],
-  };
-});
-
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,

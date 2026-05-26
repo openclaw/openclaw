@@ -32,17 +32,6 @@ const hoisted = vi.hoisted(() => ({
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 
-vi.mock("openclaw/plugin-sdk/llm-oauth", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/llm-oauth")>(
-    "openclaw/plugin-sdk/llm-oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: () => "",
-    getOAuthProviders: () => [],
-  };
-});
-
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig("/tmp/workspace-main", {
     agents: {
