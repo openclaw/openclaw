@@ -12,7 +12,8 @@ describe("embedded runner compatibility aliases", () => {
     expect(embeddedAgent.abortEmbeddedAgentRun).toBe(embeddedAgentRunner.abortEmbeddedAgentRun);
   });
 
-  it("normalizes shipped Codex runtime aliases", () => {
+  it("normalizes shipped runtime aliases", () => {
+    expect(normalizeEmbeddedAgentRuntime("pi")).toBe("openclaw");
     expect(normalizeEmbeddedAgentRuntime("codex-app-server")).toBe("codex");
   });
 

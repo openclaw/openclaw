@@ -8,7 +8,7 @@ export function normalizeEmbeddedAgentRuntime(raw: string | undefined): Embedded
   if (!value) {
     return OPENCLAW_AGENT_RUNTIME_ID;
   }
-  if (value === "openclaw") {
+  if (value === "openclaw" || value === "pi") {
     return OPENCLAW_AGENT_RUNTIME_ID;
   }
   if (value === "auto") {
