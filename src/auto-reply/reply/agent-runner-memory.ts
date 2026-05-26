@@ -49,6 +49,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -123,6 +124,14 @@ const memoryDeps = {
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
+
+function isRecoverableNativeHarnessBindingFailure(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const failure = (result as { failure?: { reason?: unknown } }).failure;
+  return failure?.reason === "missing_thread_binding" || failure?.reason === "stale_thread_binding";
+}
 
 export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
   Object.assign(memoryDeps, {
@@ -229,6 +238,19 @@ function resolveFollowupContextConfigProvider(params: {
   runtimePolicySessionKey?: string;
 }): string {
   const provider = params.followupRun.run.provider;
+  return resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: resolveFollowupAgentRuntimeId(params),
+  });
+}
+
+function resolveFollowupAgentRuntimeId(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): string {
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -243,13 +265,10 @@ function resolveFollowupContextConfigProvider(params: {
       ? persistedRuntimeOverride
       : matchingSessionEntry?.agentHarnessId;
   if (persistedRuntimeId) {
-    return resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: persistedRuntimeId,
-    });
+    return persistedRuntimeId;
   }
   const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
     config: params.cfg,
     agentId: params.followupRun.run.agentId,
@@ -259,10 +278,17 @@ function resolveFollowupContextConfigProvider(params: {
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
   });
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-  });
+  return harnessPolicy.runtime;
+}
+
+function followupUsesCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): boolean {
+  return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -613,6 +639,23 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
+  if (
+    followupUsesCodexRuntime({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    })
+  ) {
+    // Codex runtime sessions should reach Codex with their real thread state.
+    // Its harness owns automatic compaction; OpenClaw preflight compaction is
+    // only for non-Codex embedded runtimes.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
+    );
+    return entry ?? params.sessionEntry;
+  }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
@@ -693,11 +736,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const serverCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+  });
+  const threshold = Math.max(
+    contextWindowTokens - reserveTokensFloor - softThresholdTokens,
+    serverCompactionThreshold ?? 0,
+  );
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
+      `serverCompactionThreshold=${serverCompactionThreshold ?? "undefined"} ` +
       `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
@@ -713,6 +765,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     contextWindowTokens,
     reserveTokensFloor,
     softThresholdTokens,
+    minimumThresholdTokens: serverCompactionThreshold,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
   if (!shouldCompact) {
@@ -761,14 +814,27 @@ export async function runPreflightCompactionIfNeeded(params: {
     bashElevated: params.followupRun.run.bashElevated,
     trigger: "budget",
     currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+    contextTokenBudget: contextWindowTokens,
     ownerNumbers: params.followupRun.run.ownerNumbers,
     abortSignal: params.replyOperation.abortSignal,
   });
 
-  if (!result?.ok || !result.compacted) {
+  if (!result?.ok) {
     const reason = result?.reason ?? "not_compacted";
     logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
+    if (isRecoverableNativeHarnessBindingFailure(result)) {
+      logVerbose(
+        `preflightCompaction continuing after recoverable native harness binding failure: sessionKey=${params.sessionKey} reason=${reason}`,
+      );
+      return entry ?? params.sessionEntry;
+    }
     throw new Error(`Preflight compaction required but failed: ${reason}`);
+  }
+
+  if (!result.compacted) {
+    const reason = result.reason ?? "not_compacted";
+    logVerbose(`preflightCompaction no-op: sessionKey=${params.sessionKey} reason=${reason}`);
+    return entry ?? params.sessionEntry;
   }
 
   await incrementCompactionCount({

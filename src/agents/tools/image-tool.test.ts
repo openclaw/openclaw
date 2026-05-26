@@ -1963,8 +1963,6 @@ describe("image tool data URL support", () => {
 });
 
 describe("image tool MiniMax VLM routing", () => {
-  const pngB64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
   const priorFetch = global.fetch;
   registerImageToolEnvReset(priorFetch, [
     "MINIMAX_API_KEY",
@@ -1997,7 +1995,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Describe the image.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -2021,7 +2019,10 @@ describe("image tool MiniMax VLM routing", () => {
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/png;base64,${secondPngB64}`],
+      images: [
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+      ],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -2039,9 +2040,9 @@ describe("image tool MiniMax VLM routing", () => {
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [
-        `data:image/png;base64,${pngB64}`,
+        `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         `data:image/png;base64,${secondPngB64}`,
         `data:image/png;base64,${secondPngB64}`,
       ],
@@ -2057,7 +2058,7 @@ describe("image tool MiniMax VLM routing", () => {
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
-      image: `data:image/png;base64,${pngB64}`,
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       images: [`data:image/gif;base64,${ONE_PIXEL_GIF_B64}`],
       maxImages: 1,
     });
@@ -2081,7 +2082,7 @@ describe("image tool MiniMax VLM routing", () => {
     await expect(
       tool.execute("t1", {
         prompt: "Describe the image.",
-        image: `data:image/png;base64,${pngB64}`,
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       }),
     ).rejects.toThrow(/MiniMax VLM API error/i);
   });

@@ -47,10 +47,16 @@ import { log } from "./logger.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
+import { normalizeContextTokenBudget } from "./utils.js";
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedPiCompactResult | undefined,
+  harnessPolicyRuntime: string | undefined,
+  explicitHarnessId: string | undefined,
 ): boolean {
+  if (harnessPolicyRuntime === "codex" || explicitHarnessId === "codex") {
+    return false;
+  }
   return (
     result?.ok === false &&
     (result.failure?.reason === "missing_thread_binding" ||
@@ -82,49 +88,61 @@ export async function compactEmbeddedPiSession(
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
   });
-  let contextTokenBudget = params.contextTokenBudget;
-  if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
-    const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-      config: params.config,
-      provider: params.provider,
-      modelId: params.model,
-      authProfileId: params.authProfileId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
-    const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-    const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-    const { model: ceModel } = await resolveModelAsync(
-      ceProvider,
-      ceModelId,
-      agentDir,
-      params.config,
-    );
-    const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-    const ceHarnessPolicy = resolveAgentHarnessPolicy({
-      provider: ceProvider,
-      modelId: ceModelId,
-      config: params.config,
-      agentId: agentIds.sessionAgentId,
-      sessionKey: params.sessionKey,
-    });
-    contextTokenBudget = resolveContextWindowInfo({
-      cfg: params.config,
-      provider: resolveContextConfigProviderForRuntime({
-        provider: ceProvider,
-        runtimeId: ceHarnessPolicy.runtime,
-      }),
-      modelId: ceModelId,
-      modelContextTokens: readPiModelContextTokens(ceModel),
-      modelContextWindow: ceRuntimeModel?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    }).tokens;
-  }
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const { model: ceModel } = await resolveModelAsync(
+    ceProvider,
+    ceModelId,
+    agentDir,
+    params.config,
+  );
+  const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+  const ceHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: ceProvider,
+    modelId: ceModelId,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  const resolvedContextTokenBudget =
+    normalizeContextTokenBudget(
+      resolveContextWindowInfo({
+        cfg: params.config,
+        provider: resolveContextConfigProviderForRuntime({
+          provider: ceProvider,
+          runtimeId: ceHarnessPolicy.runtime,
+        }),
+        modelId: ceModelId,
+        modelContextTokens: readPiModelContextTokens(ceModel),
+        modelContextWindow: ceRuntimeModel?.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      }).tokens,
+    ) ?? DEFAULT_CONTEXT_TOKENS;
+  const requestedContextTokenBudget = normalizeContextTokenBudget(params.contextTokenBudget);
+  const contextTokenBudget = Math.min(
+    requestedContextTokenBudget ?? resolvedContextTokenBudget,
+    resolvedContextTokenBudget,
+  );
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
+  });
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -133,7 +151,13 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
-    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+    if (
+      !shouldFallbackAfterHarnessCompaction(
+        harnessResult,
+        harnessPolicy.runtime,
+        params.agentHarnessId,
+      )
+    ) {
       await contextEngine.dispose?.();
       return harnessResult;
     }

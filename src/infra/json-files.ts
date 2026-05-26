@@ -117,6 +117,12 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  /**
+   * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
+   * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
+   * temp (from a crash between write and rename) is identifiable and reclaimable.
+   */
+  tempPrefix?: string;
 };
 
 export async function writeTextAtomic(
@@ -133,5 +139,6 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

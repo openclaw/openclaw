@@ -4,7 +4,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
-  emitDiagnosticEvent,
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
   isDiagnosticsEnabled,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
@@ -1258,6 +1258,7 @@ export function startDiagnosticHeartbeat(
               queueDepth: state.queueDepth,
               expectedState: state.state,
               stateGeneration: state.generation,
+              staleActiveProgressAbortMs: stuckSessionAbortMs,
             },
           });
         } else if (

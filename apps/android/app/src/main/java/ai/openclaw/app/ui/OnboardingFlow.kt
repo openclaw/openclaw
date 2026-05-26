@@ -128,6 +128,7 @@ fun OnboardingFlow(
     val gateways by viewModel.gateways.collectAsState()
     val savedToken by viewModel.gatewayToken.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     val ready = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
@@ -152,6 +153,13 @@ fun OnboardingFlow(
     val qrScanner = remember(context, qrScannerOptions) { GmsBarcodeScanning.getClient(context, qrScannerOptions) }
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
+
+    LaunchedEffect(startAtGatewaySetup) {
+      if (startAtGatewaySetup) {
+        step = OnboardingStep.Gateway
+        viewModel.clearGatewaySetupStartRequest()
+      }
+    }
 
     LaunchedEffect(ready, attemptedConnect) {
       if (attemptedConnect && ready) {
@@ -604,7 +612,11 @@ private fun PermissionSetupScreen(
 ) {
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-      LazyColumn(contentPadding = PaddingValues(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
         item {
           PermissionTopBar(onBack = onBack)
         }

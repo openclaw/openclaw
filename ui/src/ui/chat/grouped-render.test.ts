@@ -12,6 +12,9 @@ import {
 import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const markdownRenderMock = vi.hoisted(() =>
+  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+);
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -22,7 +25,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
+  toSanitizedMarkdownHtml: markdownRenderMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -97,10 +100,14 @@ vi.mock("./chat-avatar.ts", () => ({
 
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
+  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,
     label: name,
     icon: "zap",
+    detail:
+      args && typeof args === "object" && "detail" in args
+        ? String((args as { detail: unknown }).detail)
+        : undefined,
   }),
 }));
 
@@ -490,6 +497,7 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  markdownRenderMock.mockClear();
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     element.remove();
   });
@@ -560,6 +568,36 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
+  it("renders user markdown without code-block copy chrome", () => {
+    const container = document.createElement("div");
+    const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: markdown,
+        timestamp: 1001,
+      },
+      "user",
+    );
+
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+  });
+
+  it("keeps assistant markdown code-block copy chrome enabled", () => {
+    const container = document.createElement("div");
+    const markdown = "```bash\necho ok\n```";
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: markdown,
+      timestamp: 1000,
+    });
+
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
   });
 
   it("positions delete confirm by message side", () => {
@@ -940,6 +978,42 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
+    );
+  });
+
+  it("cleans collapsed tool connector copy while preserving expanded raw input", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-string-tool",
+      role: "assistant",
+      toolCallId: "call-string-tool",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-string-tool",
+          name: "presentation_create",
+          arguments: "with Example Deck",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent?.trim()).toBe(
+      "Example Deck",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary")?.textContent).not.toContain(
+      "with Example Deck",
+    );
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => true,
+    });
+
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "with Example Deck",
     );
   });
 
