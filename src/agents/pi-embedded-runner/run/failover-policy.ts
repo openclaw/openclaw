@@ -127,10 +127,11 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
 }
 
 function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
-  if (isConcreteNonTimeoutAssistantFailure(params)) {
-    return params.failoverReason;
+  const failoverReason = params.failoverReason;
+  if (params.failoverFailure && failoverReason && failoverReason !== "timeout") {
+    return failoverReason;
   }
-  return isAssistantTimeoutFailure(params) ? "timeout" : (params.failoverReason ?? "unknown");
+  return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
 export function mergeRetryFailoverReason(params: {

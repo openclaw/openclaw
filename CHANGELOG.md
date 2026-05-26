@@ -196,7 +196,6 @@ Docs: https://docs.openclaw.ai
 - Auth/Codex: emit a one-shot actionable `log.warn` from the embedded legacy Codex OAuth sidecar loader when the only available seed lives in the macOS Keychain, naming `openclaw doctor --fix` and macOS Keychain instead of letting the credential silently fall through to a downstream `No API key found for provider "openai-codex"`. Thanks @romneyda.
 - Agents: fail closed when provider-less session models match multiple provider-prefixed runtime policies so CLI runtime routing no longer depends on config order. (#85970) Thanks @potterdigital.
 - Control UI/agents: keep collapsed tool rows readable without early ellipses, preserve raw expanded tool details, and make post-compaction AGENTS.md reinjection opt-in to avoid duplicated project context. Fixes #45649 and #45488. Thanks @BunsDev.
-- Codex: keep harness-owned turn timeouts inside the Codex runtime boundary instead of rotating auth profiles, falling back to public OpenAI, or retiring the shared app-server.
 
 ## 2026.5.24
 
