@@ -253,13 +253,21 @@ async function runIMessageCliJson(
       stderr += chunk;
     });
     child.on("error", (error) => {
-      if (timer) clearTimeout(timer);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
       reject(error);
     });
     child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
-      if (killEscalation) clearTimeout(killEscalation);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
       const lines = stdout
         .split(/\r?\n/u)
         .map((line) => line.trim())
