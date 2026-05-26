@@ -2726,6 +2726,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
+      let webchatAgentMediaFinalMessage: Record<string, unknown> | undefined;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       let agentRunStarted = false;
       const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
@@ -2892,6 +2893,21 @@ export const chatHandlers: GatewayRequestHandlers = {
               blocks: assistantContent,
             });
           }
+          const broadcastText =
+            extractAssistantDisplayTextFromContent(persistedContentForAppend) ?? transcriptReply;
+          webchatAgentMediaFinalMessage = {
+            ...(appended.message ?? {}),
+            role: "assistant",
+            content: persistedContentForAppend,
+            ...(broadcastText ? { text: broadcastText } : {}),
+            timestamp:
+              typeof appended.message?.timestamp === "number"
+                ? appended.message.timestamp
+                : Date.now(),
+            ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+          };
           appendedWebchatAgentMedia = true;
           return;
         }
@@ -2995,7 +3011,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   .map((payload) => payload.text?.trim())
                   .filter((text): text is string => Boolean(text))
                   .join(" | ") || undefined;
-              let broadcastedSourceReplyFinal = false;
+              let broadcastedAgentRunFinal = false;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -3491,12 +3507,21 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionKey,
                       message,
                     });
-                    broadcastedSourceReplyFinal = true;
+                    broadcastedAgentRunFinal = true;
                   }
+                }
+                if (!broadcastedAgentRunFinal && webchatAgentMediaFinalMessage) {
+                  broadcastChatFinal({
+                    context,
+                    runId: clientRunId,
+                    sessionKey,
+                    message: webchatAgentMediaFinalMessage,
+                  });
+                  broadcastedAgentRunFinal = true;
                 }
               }
               const shouldBroadcastAgentError =
-                returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
+                returnedAgentErrorPayloads.length > 0 && !broadcastedAgentRunFinal;
               if (shouldBroadcastAgentError) {
                 if (!hasBeforeAgentRunGate) {
                   await emitUserTranscriptUpdateAfterAgentRun();

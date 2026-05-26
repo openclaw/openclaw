@@ -892,13 +892,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await runNonStreamingChatSend({
+    const payload = await runNonStreamingChatSend({
       context,
       respond,
       idempotencyKey: "idem-agent-tts",
-      expectBroadcast: false,
-      waitFor: "dedupe",
     });
+
+    expect(payload).toMatchObject({
+      runId: "idem-agent-tts",
+      sessionKey: "main",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(getMessage(payload)?.role).toBe("assistant");
+    expect(broadcastContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(broadcastContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain(
+      "This text is already in the model transcript.",
+    );
 
     const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
       (update) =>
