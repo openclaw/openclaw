@@ -653,7 +653,7 @@ export async function sampleProcess(pid, options = {}) {
   if (platform === "win32") {
     return sampleWindowsProcess(pid, run, options.windowsCommandLineNeedles);
   }
-  return samplePosixProcess(pid, run);
+  return samplePosixProcess(pid, run, options.posixCommandLineNeedles);
 }
 
 export function summarizeProcessSamples(samples) {
@@ -675,7 +675,13 @@ export function summarizeProcessSamples(samples) {
   };
 }
 
-async function samplePosixProcess(pid, run) {
+async function samplePosixProcess(pid, run, commandLineNeedles = []) {
+  const needles = commandLineNeedles
+    .map((needle) => String(needle ?? "").trim())
+    .filter((needle) => needle.length > 0);
+  if (needles.length > 0) {
+    return samplePosixProcessTree(pid, run, needles);
+  }
   try {
     const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
       timeoutMs: 5000,
@@ -693,6 +699,106 @@ async function samplePosixProcess(pid, run) {
   } catch {
     return null;
   }
+}
+
+async function samplePosixProcessTree(pid, run, commandLineNeedles) {
+  const safePid = Number(pid);
+  if (!Number.isInteger(safePid) || safePid <= 0) {
+    return null;
+  }
+  try {
+    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+      timeoutMs: 5000,
+    });
+    const rows = parsePosixProcessRows(stdout);
+    const descendants = collectPosixProcessTree(rows, safePid).filter(
+      (row) => row.processId !== safePid,
+    );
+    const commandMatches = descendants.filter((row) =>
+      commandLineNeedles.every((needle) =>
+        row.command.toLowerCase().includes(needle.toLowerCase()),
+      ),
+    );
+    const gatewayTitleMatches = descendants.filter((row) =>
+      row.command.toLowerCase().includes("openclaw-gateway"),
+    );
+    const selected = selectPeakRssProcess(
+      commandMatches.length > 0
+        ? commandMatches
+        : gatewayTitleMatches.length > 0
+          ? gatewayTitleMatches
+          : descendants,
+    );
+    if (!selected) {
+      return null;
+    }
+    return formatPosixProcessSample(selected);
+  } catch {
+    return null;
+  }
+}
+
+function parsePosixProcessRows(stdout) {
+  return stdout
+    .split(/\r?\n/u)
+    .map((line) => {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)\s+(.*)$/u);
+      if (!match) {
+        return null;
+      }
+      const [, pidRaw, ppidRaw, rssKbRaw, cpuRaw, command] = match;
+      const processId = Number.parseInt(pidRaw, 10);
+      const parentProcessId = Number.parseInt(ppidRaw, 10);
+      const rssKb = Number.parseInt(rssKbRaw, 10);
+      const cpuPercent = Number.parseFloat(cpuRaw);
+      if (
+        !Number.isInteger(processId) ||
+        !Number.isInteger(parentProcessId) ||
+        !Number.isFinite(rssKb)
+      ) {
+        return null;
+      }
+      return {
+        processId,
+        parentProcessId,
+        rssKb,
+        cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null,
+        command: command ?? "",
+      };
+    })
+    .filter(Boolean);
+}
+
+function collectPosixProcessTree(rows, rootPid) {
+  const byParent = new Map();
+  for (const row of rows) {
+    const children = byParent.get(row.parentProcessId) ?? [];
+    children.push(row);
+    byParent.set(row.parentProcessId, children);
+  }
+  const root = rows.find((row) => row.processId === rootPid);
+  const collected = root ? [root] : [];
+  const pending = [rootPid];
+  while (pending.length > 0) {
+    const nextPid = pending.shift();
+    for (const child of byParent.get(nextPid) ?? []) {
+      collected.push(child);
+      pending.push(child.processId);
+    }
+  }
+  return collected;
+}
+
+function selectPeakRssProcess(rows) {
+  return rows.reduce((peak, row) => (peak && peak.rssKb >= row.rssKb ? peak : row), null);
+}
+
+function formatPosixProcessSample(row) {
+  return {
+    rssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
+    cpuPercent: row.cpuPercent,
+    processId: row.processId,
+  };
 }
 
 function parseTasklistCsvLine(line) {
@@ -930,10 +1036,14 @@ export async function main() {
 
     child = await startGateway(runner, port, env, logPath);
     const sampleGateway = async () => {
-      const windowsSampleOptions = runner.pnpm
-        ? { windowsCommandLineNeedles: ["gateway", "--port", String(port)] }
+      const gatewayCommandLineNeedles = ["gateway", "--port", String(port)];
+      const processSampleOptions = runner.pnpm
+        ? {
+            posixCommandLineNeedles: gatewayCommandLineNeedles,
+            windowsCommandLineNeedles: gatewayCommandLineNeedles,
+          }
         : {};
-      let sample = await sampleProcess(child.pid, windowsSampleOptions);
+      let sample = await sampleProcess(child.pid, processSampleOptions);
       if (!sample && process.platform === "win32") {
         sample = await sampleWindowsProcessByPort(port);
       }
