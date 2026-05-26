@@ -56,6 +56,7 @@ import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js"
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
+  maybeRecoverSuspiciousConfigRead,
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
 } from "./io.observe-recovery.js";
@@ -1795,14 +1796,19 @@ export function createConfigIO(
     }
   }
 
-  async function readConfigFileSnapshotInternal(): Promise<ReadConfigFileSnapshotInternalResult> {
+  async function readConfigFileSnapshotInternal(opts?: {
+    skipFinalize?: boolean;
+  }): Promise<ReadConfigFileSnapshotInternalResult> {
+    const finalizeSnapshotReadResult = opts?.skipFinalize
+      ? (result: ReadConfigFileSnapshotInternalResult) => result
+      : (result: ReadConfigFileSnapshotInternalResult) => finalizeSnapshotReadResult(result);
     maybeLoadDotEnvForConfig(deps.env);
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
       const config = {};
       const legacyIssues: LegacyConfigIssue[] = [];
-      return await finalizeReadConfigSnapshotInternalResult(deps, {
+      return await finalizeSnapshotReadResult({
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: false,
@@ -1835,7 +1841,7 @@ export function createConfigIO(
         parseConfigJson5(raw, deps.json5),
       );
       if (!parsedRes.ok) {
-        return await finalizeReadConfigSnapshotInternalResult(deps, {
+        return await finalizeSnapshotReadResult({
           snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
@@ -1872,7 +1878,7 @@ export function createConfigIO(
           err instanceof ConfigIncludeError
             ? err.message
             : `Include resolution failed: ${String(err)}`;
-        return await finalizeReadConfigSnapshotInternalResult(deps, {
+        return await finalizeSnapshotReadResult({
           snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
@@ -1949,7 +1955,7 @@ export function createConfigIO(
         const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
           collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
         );
-        return await finalizeReadConfigSnapshotInternalResult(deps, {
+        return await finalizeSnapshotReadResult({
           snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
@@ -1978,7 +1984,7 @@ export function createConfigIO(
         ),
       );
       return await deps.measure("config.snapshot.read.observe", () =>
-        finalizeReadConfigSnapshotInternalResult(deps, {
+        finalizeSnapshotReadResult({
           snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
@@ -2018,7 +2024,7 @@ export function createConfigIO(
       } else {
         message = `read failed: ${String(err)}`;
       }
-      return await finalizeReadConfigSnapshotInternalResult(deps, {
+      return await finalizeSnapshotReadResult({
         snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
@@ -2036,13 +2042,44 @@ export function createConfigIO(
     }
   }
 
+  /**
+   * Read the raw config file and attempt recovery from backup if corrupted.
+   * This runs BEFORE observeConfigSnapshot so the dedupe mechanism in
+   * resolveConfigReadRecoveryContext sees a different signature than any
+   * previously-observed suspicious one.
+   *
+   * readBestEffortConfig intentionally bypasses this path — best-effort
+   * reads should return what's on disk, not silently override direct edits.
+   */
+  async function readConfigFileSnapshotWithRecovery(): Promise<ReadConfigFileSnapshotInternalResult> {
+    // Read raw — skip finalization so observeConfigSnapshot doesn't see the
+    // potentially-corrupted file before we have a chance to recover it.
+    const result = await readConfigFileSnapshotInternal({ skipFinalize: true });
+    if (!deps.observe) return result;
+    const snapshot = result.snapshot;
+    if (!snapshot.exists || typeof snapshot.raw !== "string") return result;
+    const recovered = await maybeRecoverSuspiciousConfigRead({
+      deps: deps as unknown as Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"],
+      configPath: snapshot.path,
+      raw: snapshot.raw,
+      parsed: snapshot.parsed,
+    });
+    if (recovered.raw === snapshot.raw) {
+      // No recovery — finalize the original result with observation
+      return await finalizeSnapshotReadResult(result);
+    }
+    // Recovery restored the file — re-read (with finalization this time,
+    // so observeConfigSnapshot sees the healthy restored content)
+    return await readConfigFileSnapshotInternal();
+  }
+
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-    const result = await readConfigFileSnapshotInternal();
+    const result = await readConfigFileSnapshotWithRecovery();
     return result.snapshot;
   }
 
   async function readConfigFileSnapshotWithPluginMetadata(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
-    const result = await readConfigFileSnapshotInternal();
+    const result = await readConfigFileSnapshotWithRecovery();
     return {
       snapshot: result.snapshot,
       ...(result.pluginMetadataSnapshot
@@ -2081,7 +2118,7 @@ export function createConfigIO(
   }
 
   async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
-    const result = await readConfigFileSnapshotInternal();
+    const result = await readConfigFileSnapshotWithRecovery();
     return {
       snapshot: result.snapshot,
       writeOptions: {
