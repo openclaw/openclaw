@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-25 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-26 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 6      | 39     | 45      | 0      | 45        |
-| Windows platform          | 68     | 26     | 94      | 0      | 94        |
+| MS Teams (channel plugin) | 6      | 38     | 44      | 0      | 44        |
+| Windows platform          | 67     | 26     | 93      | 0      | 93        |
 | WSL                       | 11     | 3      | 14      | 0      | 14        |
 | Azure                     | 7      | 3      | 10      | 0      | 10        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **92** | **71** | **163** | **0**  | **163**   |
+| **Total**                 | **91** | **70** | **161** | **0**  | **161**   |
 
 ---
 
@@ -50,10 +50,10 @@
 
 | Resolved? | Priority | #      | Title                                                                                                            | Size | Assignee    |
 | --------- | -------- | ------ | ---------------------------------------------------------------------------------------------------------------- | ---- | ----------- |
+| [ ]       | P0       | #86751 | fix(proxy): add error handler on upstream response stream                                                        |      |             |
 | [ ]       | P0       | #85651 | feat(continuation): context-pressure-aware continuation (continue_work / continue_delegate / request_compaction) | XL   |             |
 | [ ]       | P0       | #85478 | fix(slack): soften benign search no-result progress                                                              | L    |             |
 | [ ]       | P0       | #85341 | refactor: internalize OpenClaw agent runtime                                                                     | XL   | @steipete   |
-| [ ]       | P0       | #82918 | fix(install): add pipe guard to prevent stdin stealing in curl \| bash                                           | XL   |             |
 | [ ]       | P0       | #81729 | Remove system event trust metadata                                                                               | S    |             |
 | [ ]       | P0       | #81402 | refactor: move runtime state to SQLite                                                                           | XL   |             |
 | [ ]       | P0       | #77784 | Add Teams delegated auth for plugin tools                                                                        | XL   |             |
@@ -63,10 +63,9 @@
 | [ ]       | P0       | #57511 | feat(msteams): Teams live voice support with .NET media worker                                                   | XL   |             |
 | [ ]       | P0       | #55828 | feat(msteams): add native plugin interactivity parity                                                            | XL   |             |
 | [ ]       | P0       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                             | L    |             |
-| [ ]       | P1       | #86419 | refactor: reuse shared coercion helpers                                                                          | XL   |             |
 | [ ]       | P1       | #76262 | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration                                             | XL   | @BradGroux  |
 | [ ]       | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                 | XL   |             |
-| [ ]       | P2       | #86443 | fix(runtime-llm): forward reasoning param in LlmCompleteParams                                                   |      |             |
+| [ ]       | P2       | #86479 | refactor: centralize inbound supplemental context                                                                | XL   |             |
 | [ ]       | P2       | #85845 | fix(msteams): route file.download.info links via graph shares                                                    | XS   |             |
 | [ ]       | P2       | #85058 | fix(plugins): force native require for own dist chunks via jiti nativeModules                                    |      |             |
 | [ ]       | P2       | #84560 | feat(cli): support --dm-policy and --dm-allowlist in channels add                                                |      |             |
@@ -99,7 +98,7 @@
 | Resolved? | Priority | #      | Title                                                                                                                                                   | Labels                                                                                                                                                                      | Assignee    |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
 | [ ]       | P0       | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix                                                                         | `bug` `bug:behavior` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-security-review` `clawsweeper:source-repro` +4                                                     |             |
-| [ ]       | P1       | #86328 | [Bug] Discord /users/@me probe self-starves event loop on startup, crashes gateway (Windows, v2026.5.22)                                                | `P1` `clawsweeper:needs-live-repro` `impact:message-loss` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                                            |             |
+| [ ]       | P1       | #86599 | [Bug]: Local model provider calls thread block gateway event loop on Windows beta; trivial infer run takes ~4 minutes                                   | `bug` `bug:behavior` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +4                                                     |             |
 | [ ]       | P1       | #86087 | [Bug]: [Beta][Windows] 2026.5.24-beta.1 Codex harness fails: removed plugin-sdk/codex-native-task-runtime export still imported by @openclaw/codex      | `bug` `regression` `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:needs-live-repro` +3                                                         |             |
 | [ ]       | P1       | #86044 | 2026.5.22: CLI hangs on Windows — provider auth-state pre-warm blocks all CLI commands                                                                  | `bug` `regression` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +3                                                       |             |
 | [ ]       | P1       | #86031 | [Bug]: Windows gateway listens but local health/status time out after Telegram polling stall (v2026.5.20)                                               | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:session-state` `impact:message-loss` +2                       |             |
@@ -112,7 +111,7 @@
 | [ ]       | P1       | #83943 | [Bug]: Session resource loader grows unbounded across warm turns — 5.x regression vs 4.23 baseline (Windows + Feishu + MiniMax OAuth)                   | `bug`                                                                                                                                                                       |             |
 | [ ]       | P1       | #83277 | WhatsApp channel: "web login provider is not available" on Windows despite wacli installed and authenticated                                            | `bug` `bug:behavior` `P2` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` +1                                                           |             |
 | [ ]       | P1       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:crash-loop`                                                   |             |
-| [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  | `bug` `stale` `bug:crash` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` +3                                                                         |             |
+| [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  | `bug` `bug:crash` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                                        |             |
 | [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |                                                                                                                                                                             |             |
 | [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          | `bug` `regression`                                                                                                                                                          |             |
 | [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              | `bug` `regression`                                                                                                                                                          |             |
@@ -133,7 +132,6 @@
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      | `P1` `clawsweeper:fix-shape-clear` `clawsweeper:queueable-fix` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster`                                                |             |
 | [ ]       | P1       | #44559 | [Bug]: Windows： Gateway 关闭 PowerShell 窗口后断连                                                                                                     | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` +4                                                |             |
 | [ ]       | P1       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                      | `bug` `bug:behavior` `P1` `clawsweeper:source-repro` `impact:crash-loop` `issue-rating: 🦞 diamond lobster`                                                                 |             |
-| [ ]       | P2       | #86073 | [Bug]: Severe slowness and near-unusability of WebUI after upgrading to OpenClaw 2026.5.22 on Windows 11                                                | `bug`                                                                                                                                                                       |             |
 | [ ]       | P2       | #85262 | Windows: lstat bottleneck causes 2-3x slower performance vs Mac (59% of CPU time)                                                                       | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:linked-pr-open` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit`                                             |             |
 | [ ]       | P2       | #84644 | [Bug]: Windows node-host connects but reports no commands                                                                                               | `bug` `P1` `clawsweeper:needs-info` `issue-rating: 🦐 gold shrimp`                                                                                                          |             |
 | [ ]       | P2       | #84600 | Bug: Windows heartbeat cmd window not hidden - 'findstr /I /C:"Running"' stays visible                                                                  | `P2` `clawsweeper:source-repro` `issue-rating: 🦞 diamond lobster`                                                                                                          |             |
@@ -211,19 +209,19 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                           | Labels                                                                                                                                              | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P1       | #86201 | 2026.5.22: slow responses / high CPU after upgrade on WSL2, with event-loop delay, timeout warnings, and aborted transport requests             | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:auth-provider` `impact:crash-loop` +1 |          |
-| [ ]       | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                    |                                                                                                                                                     |          |
-| [ ]       | P1       | #85537 | Build fails resolving protobufjs google/protobuf descriptor on WSL source checkout                                                              | `maintainer` `P2` `clawsweeper:needs-live-repro` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                             |          |
-| [ ]       | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:message-loss` `impact:crash-loop` +1        |          |
-| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                     | `bug` `bug:crash` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                |          |
-| [ ]       | P1       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                               | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-info` +3       |          |
-| [ ]       | P2       | #86314 | [Bug] openclaw-weixin channel not registered in gateway runtime - invalid channels.start channel on WSL2                                        |                                                                                                                                                     |          |
-| [ ]       | P2       | #81873 | Bug: browser user profile (existing-session / Chrome MCP) ignores cdpUrl config in WSL environment                                              |                                                                                                                                                     |          |
-| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior`                                                                                                                                |          |
-| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          |                                                                                                                                                     |          |
-| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                          |                                                                                                                                                     |          |
+| Resolved? | Priority | #      | Title                                                                                                                                           | Labels                                                                                                                                                | Assignee |
+| --------- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [ ]       | P1       | #86752 | [Bug]: 2026.5.22 Docker/WSL2 gateway event-loop starvation, 284s provider-auth prewarm, slow Telegram turn, and local RPC timeouts              | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `impact:message-loss` `impact:auth-provider` +2 |          |
+| [ ]       | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                    |                                                                                                                                                       |          |
+| [ ]       | P1       | #85537 | Build fails resolving protobufjs google/protobuf descriptor on WSL source checkout                                                              | `maintainer` `P2` `clawsweeper:needs-live-repro` `impact:crash-loop` `issue-rating: 🐚 platinum hermit`                                               |          |
+| [ ]       | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` `impact:message-loss` `impact:crash-loop` +1          |          |
+| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                     | `bug` `bug:crash` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-info` +2                                  |          |
+| [ ]       | P1       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                               | `bug` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-info` +3         |          |
+| [ ]       | P2       | #86314 | [Bug] openclaw-weixin channel not registered in gateway runtime - invalid channels.start channel on WSL2                                        |                                                                                                                                                       | @sliverp |
+| [ ]       | P2       | #81873 | Bug: browser user profile (existing-session / Chrome MCP) ignores cdpUrl config in WSL environment                                              |                                                                                                                                                       |          |
+| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                                  | `bug` `bug:behavior`                                                                                                                                  |          |
+| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                          |                                                                                                                                                       |          |
+| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                          |                                                                                                                                                       |          |
 
 ### Feature Requests
 
@@ -294,10 +292,10 @@ _No currently open items found._
 
 | Category                  | Type  | Priority | #      | Title                                                                                                                                     |
 | ------------------------- | ----- | -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| MS Teams (channel plugin) | pr    | P0       | #86751 | fix(proxy): add error handler on upstream response stream                                                                                 |
 | MS Teams (channel plugin) | pr    | P0       | #85651 | feat(continuation): context-pressure-aware continuation (continue_work / continue_delegate / request_compaction)                          |
 | MS Teams (channel plugin) | pr    | P0       | #85478 | fix(slack): soften benign search no-result progress                                                                                       |
 | MS Teams (channel plugin) | pr    | P0       | #85341 | refactor: internalize OpenClaw agent runtime                                                                                              |
-| MS Teams (channel plugin) | pr    | P0       | #82918 | fix(install): add pipe guard to prevent stdin stealing in curl \| bash                                                                    |
 | MS Teams (channel plugin) | pr    | P0       | #81729 | Remove system event trust metadata                                                                                                        |
 | MS Teams (channel plugin) | pr    | P0       | #81402 | refactor: move runtime state to SQLite                                                                                                    |
 | MS Teams (channel plugin) | pr    | P0       | #77784 | Add Teams delegated auth for plugin tools                                                                                                 |
@@ -325,10 +323,9 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                         |
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
-| MS Teams (channel plugin) | pr    | P1       | #86419 | refactor: reuse shared coercion helpers                                                                                                                 |
 | MS Teams (channel plugin) | pr    | P1       | #76262 | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration                                                                                    |
 | MS Teams (channel plugin) | pr    | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                                                        |
-| Windows platform          | issue | P1       | #86328 | [Bug] Discord /users/@me probe self-starves event loop on startup, crashes gateway (Windows, v2026.5.22)                                                |
+| Windows platform          | issue | P1       | #86599 | [Bug]: Local model provider calls thread block gateway event loop on Windows beta; trivial infer run takes ~4 minutes                                   |
 | Windows platform          | issue | P1       | #86087 | [Bug]: [Beta][Windows] 2026.5.24-beta.1 Codex harness fails: removed plugin-sdk/codex-native-task-runtime export still imported by @openclaw/codex      |
 | Windows platform          | issue | P1       | #86044 | 2026.5.22: CLI hangs on Windows — provider auth-state pre-warm blocks all CLI commands                                                                  |
 | Windows platform          | issue | P1       | #86031 | [Bug]: Windows gateway listens but local health/status time out after Telegram polling stall (v2026.5.20)                                               |
@@ -365,7 +362,7 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #40540 | [Bug]: `openclaw update` command fails with EBUSY error on Windows                                                                                      |
 | Windows platform          | pr    | P1       | #85284 | fix(daemon): shouldFallbackToStartupEntry locale blind spot on non-English Windows (#85255)                                                             |
 | Windows platform          | pr    | P1       | #69059 | fix: retry sqlite-vec load without .dll suffix on Windows                                                                                               |
-| WSL                       | issue | P1       | #86201 | 2026.5.22: slow responses / high CPU after upgrade on WSL2, with event-loop delay, timeout warnings, and aborted transport requests                     |
+| WSL                       | issue | P1       | #86752 | [Bug]: 2026.5.22 Docker/WSL2 gateway event-loop starvation, 284s provider-auth prewarm, slow Telegram turn, and local RPC timeouts                      |
 | WSL                       | issue | P1       | #86048 | WSL2 GPU-PV driver lockup: nvidia-smi hangs after llama-server D-state crash                                                                            |
 | WSL                       | issue | P1       | #85537 | Build fails resolving protobufjs google/protobuf descriptor on WSL source checkout                                                                      |
 | WSL                       | issue | P1       | #84610 | [Bug]: Gateway loops with SIGTERM every ~90s after upgrade 2026.4.23→2026.5.18 (WSL2). Inbound msg received but cli watchdog kills mid-response         |
@@ -377,9 +374,7 @@ _No currently open items found._
 
 ## Appendix: Stale Items (Consider Closing)
 
-| Category         | Type  | Priority | #      | Title                                                                                                                  |
-| ---------------- | ----- | -------- | ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| Windows platform | issue | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation |
+_No matching items found._
 
 ## Audit Notes
 
