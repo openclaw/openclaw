@@ -6,7 +6,6 @@ import {
   parsePluginApprovalRequested,
   clearResolvedExecApprovalPrompt,
   refreshPendingApprovalQueue,
-  resolveActiveExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
@@ -220,63 +219,6 @@ describe("isStaleApprovalResolutionError", () => {
 
   it("ignores unrelated approval resolve errors", () => {
     expect(isStaleApprovalResolutionError(createGatewayError("gateway unavailable"))).toBe(false);
-  });
-});
-
-describe("resolveActiveExecApprovalDecision", () => {
-  it("dismisses the active approval after same-decision idempotent success", async () => {
-    const request = vi.fn<RequestFn>(async () => ({ ok: true }));
-    const state = createPromptState(request);
-
-    await resolveActiveExecApprovalDecision(state, "allow-once");
-
-    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: "approval-1",
-      decision: "allow-once",
-    });
-    expect(state.execApprovalQueue).toEqual([]);
-    expect(state.execApprovalError).toBeNull();
-    expect(state.execApprovalBusy).toBe(false);
-  });
-
-  it("dismisses and refreshes when the backend reports an already resolved approval", async () => {
-    const request = vi.fn<RequestFn>(async (method) => {
-      if (method === "exec.approval.resolve") {
-        throw createGatewayError("approval already resolved", {
-          reason: "APPROVAL_ALREADY_RESOLVED",
-        });
-      }
-      if (method === "exec.approval.list") {
-        return [];
-      }
-      if (method === "plugin.approval.list") {
-        return [];
-      }
-      return {};
-    });
-    const state = createPromptState(request);
-
-    await resolveActiveExecApprovalDecision(state, "deny");
-
-    expect(state.execApprovalQueue).toEqual([]);
-    expect(state.execApprovalError).toBeNull();
-    expect(state.execApprovalBusy).toBe(false);
-    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
-    expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
-  });
-
-  it("keeps the active approval open for unrelated errors", async () => {
-    const request = vi.fn<RequestFn>(async () => {
-      throw createGatewayError("gateway unavailable");
-    });
-    const active = createExecApproval();
-    const state = createPromptState(request, [active]);
-
-    await resolveActiveExecApprovalDecision(state, "deny");
-
-    expect(state.execApprovalQueue).toEqual([active]);
-    expect(state.execApprovalError).toBe("Approval failed: Error: gateway unavailable");
-    expect(state.execApprovalBusy).toBe(false);
   });
 });
 

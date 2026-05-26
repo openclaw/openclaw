@@ -95,8 +95,9 @@ import type {
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
 import {
-  resolveActiveExecApprovalDecision,
-  type ExecApprovalDecision,
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -1217,8 +1218,33 @@ export class OpenClawApp extends LitElement {
     handleNostrProfileToggleAdvancedInternal(this);
   }
 
-  async handleExecApprovalDecision(decision: ExecApprovalDecision) {
-    await resolveActiveExecApprovalDecision(this, decision);
+  async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
+    const active = this.execApprovalQueue[0];
+    if (!active || !this.client || this.execApprovalBusy) {
+      return;
+    }
+    this.execApprovalBusy = true;
+    this.execApprovalError = null;
+    try {
+      const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+      await this.client.request(method, {
+        id: active.id,
+        decision,
+      });
+      dismissExecApprovalPrompt(this, active.id);
+    } catch (err) {
+      if (isStaleApprovalResolutionError(err)) {
+        dismissExecApprovalPrompt(this, active.id);
+        await refreshPendingApprovalQueue(this);
+        return;
+      }
+      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        return;
+      }
+      this.execApprovalError = `Approval failed: ${String(err)}`;
+    } finally {
+      this.execApprovalBusy = false;
+    }
   }
 
   handleGatewayUrlConfirm() {

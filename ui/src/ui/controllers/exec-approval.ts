@@ -34,14 +34,10 @@ export type ExecApprovalResolved = {
   ts?: number | null;
 };
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
-
-export type ExecApprovalRpcClient = {
-  request(method: string, params?: unknown): Promise<unknown>;
-};
-
 export type ExecApprovalPromptState = {
-  client: ExecApprovalRpcClient | null;
+  client: {
+    request(method: string, params?: unknown): Promise<unknown>;
+  } | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
@@ -361,38 +357,4 @@ export function dismissExecApprovalPrompt(state: ExecApprovalPromptState, id: st
 export function clearResolvedExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
   removeExecApprovalFromState(state, id);
   state.execApprovalRefreshRemovedIds?.add(id);
-}
-
-export async function resolveActiveExecApprovalDecision(
-  state: ExecApprovalPromptState,
-  decision: ExecApprovalDecision,
-): Promise<void> {
-  const active = state.execApprovalQueue[0];
-  const client = state.client;
-  if (!active || !client || state.execApprovalBusy) {
-    return;
-  }
-
-  state.execApprovalBusy = true;
-  state.execApprovalError = null;
-  try {
-    const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-    await client.request(method, {
-      id: active.id,
-      decision,
-    });
-    dismissExecApprovalPrompt(state, active.id);
-  } catch (err) {
-    if (isStaleApprovalResolutionError(err)) {
-      dismissExecApprovalPrompt(state, active.id);
-      await refreshPendingApprovalQueue(state);
-      return;
-    }
-    if (!state.execApprovalQueue.some((entry) => entry.id === active.id)) {
-      return;
-    }
-    state.execApprovalError = `Approval failed: ${String(err)}`;
-  } finally {
-    state.execApprovalBusy = false;
-  }
 }
