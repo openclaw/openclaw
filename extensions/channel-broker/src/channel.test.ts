@@ -55,6 +55,49 @@ describe("channel-broker plugin", () => {
     ).toBe("direct");
   });
 
+  it("delivers broker-prefixed DM aliases as direct conversations", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-dm-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["native-dm-1"],
+      }),
+    );
+    setChannelBrokerRuntime({ sendOutboundRequest, createRequestId: () => "broker-dm-1" });
+
+    await channelBrokerPlugin.message?.send?.text?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:slack:user:U12345678",
+      text: "hello",
+      accountId: "acme",
+    } as never);
+
+    expect(sendOutboundRequest).toHaveBeenCalledWith({
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        platform: "slack",
+        conversation: {
+          id: "U12345678",
+          type: "direct",
+        },
+      }),
+    });
+  });
+
   it("delivers text through the configured provider and maps the provider receipt", async () => {
     const controller = new AbortController();
     const sendOutboundRequest = vi.fn(async () =>

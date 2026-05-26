@@ -15,6 +15,9 @@ function normalizeConversationType(raw: string | undefined): BrokerConversationT
     return undefined;
   }
   const normalized = raw.trim().toLowerCase();
+  if (DIRECT_CONVERSATION_TYPE_ALIASES.has(normalized)) {
+    return "direct";
+  }
   return CONVERSATION_TYPE_PREFIXES.has(normalized)
     ? (normalized as BrokerConversationType)
     : undefined;
@@ -106,7 +109,11 @@ export function parseChannelBrokerTarget(params: {
   }
   const colonParts = rawConversationId.split(":");
   const explicitType = normalizeConversationType(colonParts[0]);
-  const conversationId = explicitType ? colonParts.slice(1).join(":") : rawConversationId;
+  const rawId = explicitType ? colonParts.slice(1).join(":") : rawConversationId;
+  const conversationId = rawId.trim();
+  if (!conversationId) {
+    throw new Error("broker conversation id is required");
+  }
   const threadId =
     params.threadId == null ? parsed.threadId : String(params.threadId).trim() || parsed.threadId;
   return {
