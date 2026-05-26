@@ -353,7 +353,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       );
       writeFileSync(
         join(packageRoot, "dist", "discord-voice-runtime.js"),
-        'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
+        [
+          'const { OpusDecoder } = require("opus-decoder");',
+          'const OpusScript = require("opusscript");',
+          "export { OpusDecoder, OpusScript };",
+          "",
+        ].join("\n"),
         "utf8",
       );
       writeFileSync(
