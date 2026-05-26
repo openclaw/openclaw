@@ -31,6 +31,7 @@ const {
         handlers.set(event, [...(handlers.get(event) ?? []), callback]);
         return watcher;
       }),
+      add: vi.fn((_path: string | string[]) => watcher),
       close: vi.fn(async () => undefined),
       emit: (event: ChokidarEvent, ...args: unknown[]) => {
         for (const callback of handlers.get(event) ?? []) {
@@ -408,7 +409,7 @@ describe("memory watcher config", () => {
     );
   });
 
-  it("logs and removes native watcher on runtime error and marks dirty", async () => {
+  it("logs and removes native watcher on runtime error, marks dirty, and restores coverage via chokidar", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
 
@@ -428,6 +429,14 @@ describe("memory watcher config", () => {
     expect(memoryWatcher).toBeDefined();
     const closeSpy = memoryWatcher!.close;
 
+    // Pre-error: chokidar has MEMORY.md only; memoryDir is not in its set.
+    const existingChokidar = createdChokidarWatchers[0];
+    expect(existingChokidar).toBeDefined();
+    const addSpy = vi.spyOn(
+      existingChokidar as unknown as { add: (path: string) => unknown },
+      "add",
+    );
+
     memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
     await vi.advanceTimersByTimeAsync(50);
 
@@ -435,7 +444,48 @@ describe("memory watcher config", () => {
       expect.stringContaining("memory native watcher error"),
     );
     expect(closeSpy).toHaveBeenCalled();
+    // Broad re-sync should be scheduled to cover the gap.
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    // Coverage must be restored: the affected directory should now be
+    // attached to the existing chokidar watcher.
+    expect(addSpy).toHaveBeenCalledWith(memoryDir);
+
+    // Sanity: a subsequent chokidar-style event on the now-fallback path
+    // continues to schedule sync.
+    syncSpy.mockClear();
+    existingChokidar?.emit("change");
+    await vi.advanceTimersByTimeAsync(25);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
+
+  it("creates a chokidar watcher on the fly when no file-path chokidar exists yet", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig({ extraPaths: [] });
+
+    // Force the only chokidar caller (MEMORY.md) to NOT exist by deleting it
+    // before manager construction so fileWatchPaths starts empty. Note that
+    // MEMORY.md is still a watch *path* in source even if missing on disk —
+    // chokidar handles missing paths fine. To truly test the "no chokidar
+    // yet" branch we instead simulate by clearing the watchMock buffer and
+    // exercising attachMemoryChokidarFallback directly.
+    await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+
+    const memoryDir = path.join(workspaceDir, "memory");
+    const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
+    expect(memoryWatcher).toBeDefined();
+
+    // Pretend chokidar was never set up by clearing the manager.watcher slot,
+    // then trigger the native error; the fallback must spin up a new chokidar.
+    (manager as unknown as { watcher: unknown }).watcher = null;
+    const chokidarCallsBefore = watchMock.mock.calls.length;
+
+    memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(watchMock.mock.calls.length).toBe(chokidarCallsBefore + 1);
+    const newChokidarCall = watchMock.mock.calls[chokidarCallsBefore];
+    expect(newChokidarCall?.[0]).toStrictEqual([memoryDir]);
   });
 
   it("ignores re-entrant ensureWatcher calls", async () => {

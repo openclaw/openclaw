@@ -537,10 +537,12 @@ export abstract class MemoryManagerSyncOps {
           if (idx >= 0) {
             this.nativeMemoryWatchers.splice(idx, 1);
           }
-          // Lost coverage for this directory — force a broad re-sync. The
-          // periodic interval sync continues to maintain freshness from
-          // this point.
+          // Force a broad re-sync to cover the gap, then restore directory
+          // coverage by reattaching to chokidar so subsequent file changes
+          // still drive watch sync (intervalMinutes defaults to 0; without
+          // a watcher the directory would stop being indexed).
           markDirty();
+          this.attachMemoryChokidarFallback(dir, markDirty);
         });
         this.nativeMemoryWatchers.push(w);
         nativeAttached = true;
@@ -571,6 +573,41 @@ export abstract class MemoryManagerSyncOps {
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory watcher error: ${message}`);
       });
+    }
+  }
+
+  // Reattach `dir` to chokidar after a native recursive watcher dies, so
+  // subsequent memory changes under `dir` continue to drive watch sync.
+  // Called from the native watcher `error` handler in ensureWatcher();
+  // factored out so the fallback shape can be unit-tested in isolation.
+  protected attachMemoryChokidarFallback(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): void {
+    try {
+      if (this.watcher) {
+        // Existing chokidar watcher (handling MEMORY.md and/or other file
+        // paths) — extend it to cover this directory too.
+        this.watcher.add(dir);
+        return;
+      }
+      // No chokidar watcher exists yet. Spin one up just for this directory
+      // so the periodic-sync gap is closed.
+      this.watcher = resolveMemoryWatchFactory()([dir], {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.on("unlinkDir", markDirty);
+      this.watcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory watcher error: ${message}`);
+      });
+    } catch (err) {
+      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
     }
   }
 
