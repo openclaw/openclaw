@@ -396,3 +396,4 @@ class DeviceHandler(
       if (!hasKnownTransport) add(JsonPrimitive("other"))
     }
 }
+
