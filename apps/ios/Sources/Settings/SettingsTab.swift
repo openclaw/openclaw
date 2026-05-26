@@ -612,7 +612,7 @@ struct SettingsTab: View {
     private var shouldShowRealtimeVoicePicker: Bool {
         let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
         return providerSelection == .openAIRealtime
-            || self.appModel.talkMode.gatewayTalkUsesRealtimeRelay
+            || self.appModel.talkMode.gatewayTalkUsesRealtime
     }
 
     private func talkVoiceSettingsView() -> AnyView {

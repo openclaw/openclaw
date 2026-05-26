@@ -116,6 +116,7 @@ final class TalkModeManager: NSObject {
     var gatewayTalkDefaultVoiceId: String?
     var gatewayTalkProviderLabel: String = "Not loaded"
     var gatewayTalkTransportLabel: String = "Not loaded"
+    var gatewayTalkUsesRealtime: Bool = false
     var gatewayTalkUsesRealtimeRelay: Bool = false
     var gatewayTalkRealtimeProviderLabel: String?
     var gatewayTalkRealtimeModelId: String?
@@ -1095,6 +1096,7 @@ final class TalkModeManager: NSObject {
             })
         self.realtimeRelaySession = relaySession
         do {
+            try Self.configureAudioSession()
             try await relaySession.start()
             guard self.realtimeRelaySession === relaySession, self.isEnabled else {
                 relaySession.stop()
@@ -1518,6 +1520,7 @@ final class TalkModeManager: NSObject {
 
         self.stopRecognition()
         self.isSpeaking = false
+        self.restoreConfiguredVoiceModeDescriptor()
     }
 
     private func stopSpeaking(storeInterruption: Bool = true) {
@@ -2515,6 +2518,7 @@ extension TalkModeManager {
             let transport = usesRealtimeConfig ? (usesRealtimeRelay ? "gateway-relay" : "webrtc") : "native"
             let transportLabel = usesRealtimeRelay ? "Gateway Relay" : (usesRealtimeConfig ? "Native WebRTC" : "Native")
             self.gatewayTalkProviderLabel = providerLabel
+            self.gatewayTalkUsesRealtime = usesRealtimeConfig
             self.gatewayTalkUsesRealtimeRelay = usesRealtimeRelay
             self.gatewayTalkTransportLabel = transportLabel
             self.gatewayTalkRealtimeProviderLabel = realtimeProvider.map { Self.displayName(forProvider: $0) }
@@ -2563,6 +2567,7 @@ extension TalkModeManager {
             self.realtimeVoiceId = nil
             self.gatewayTalkProviderLabel = "Not loaded"
             self.gatewayTalkTransportLabel = "Not loaded"
+            self.gatewayTalkUsesRealtime = false
             self.gatewayTalkUsesRealtimeRelay = false
             self.gatewayTalkRealtimeProviderLabel = nil
             self.gatewayTalkRealtimeModelId = nil
