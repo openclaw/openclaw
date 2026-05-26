@@ -201,6 +201,20 @@ describe("schema validator", () => {
     });
   });
 
+  it("accepts AJV-style nullable typed schemas", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.nullable-keyword",
+        schema: {
+          type: "string",
+          nullable: true,
+        },
+        value: null,
+      },
+      expectedValue: null,
+    });
+  });
+
   it("keeps non-type constraints on nullable JSON Schema type arrays", () => {
     const result = expectValidationFailure({
       cacheKey: "schema-validator.test.nullable-enum",

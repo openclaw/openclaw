@@ -120,12 +120,19 @@ function normalizeSchemaDependencies(value: unknown): unknown {
 }
 
 function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
-  const { type, ...rest } = schema;
-  if (!Array.isArray(type)) {
+  const { nullable, type, ...rest } = schema;
+  const types = Array.isArray(type) ? [...type] : typeof type === "string" ? [type] : null;
+  if (!types) {
+    return schema;
+  }
+  if (nullable === true && !types.includes("null")) {
+    types.push("null");
+  }
+  if (types.length === 1 && !Array.isArray(type)) {
     return schema;
   }
   return {
-    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
+    anyOf: types.map((entry) => Object.assign({}, rest, { type: entry })),
   };
 }
 
