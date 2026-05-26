@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isGenericProviderInternalError,
+  parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -675,14 +676,10 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
-    if (messageReason === "billing") {
+    if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
-    if (
-      message &&
-      (isProvider(provider, "moonshot") || isProvider(provider, "kimi")) &&
-      isBillingErrorMessage(message)
-    ) {
+    if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
     return toReasonClassification("rate_limit");
@@ -800,6 +797,39 @@ function isProvider(provider: string | undefined, match: string): boolean {
   return Boolean(normalized && normalized.includes(match));
 }
 
+function hasProviderBilling429Override(provider: string | undefined): boolean {
+  return (
+    isProvider(provider, "xai") || isProvider(provider, "moonshot") || isProvider(provider, "kimi")
+  );
+}
+
+function hasStructuredBilling429Signal(raw: string): boolean {
+  if (hasBillingApiErrorType(raw)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  return Boolean(leadingStatus?.rest && hasBillingApiErrorType(leadingStatus.rest));
+}
+
+function hasBillingApiErrorType(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (!type) {
+    return false;
+  }
+  return isBillingErrorMessage(type) || isBillingErrorMessage(type.replaceAll("_", " "));
+}
+
+function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
+  return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
+}
+
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+  if (!isBillingErrorMessage(raw)) {
+    return false;
+  }
+  return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+}
+
 // pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
 // (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
 // stream ends with stopReason === "aborted" | "error" without specific info. Treat
@@ -864,10 +894,8 @@ function classifyFailoverClassificationFromMessage(
   ) {
     return toReasonClassification("billing");
   }
-  // Billing runs before broad 429/resource-exhausted checks so providers that
-  // use a rate-limit-ish transport code for credit exhaustion still land in
-  // the actionable billing lane.
-  if (isBillingErrorMessage(raw)) {
+  const leadingStatus = extractLeadingHttpStatus(raw.trim());
+  if (leadingStatus?.code !== 429 && isBillingErrorMessage(raw)) {
     return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
@@ -1187,7 +1215,13 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  if (isBillingErrorMessage(raw)) {
+  if (
+    isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
+    isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
+  ) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+  if (isBilling429MessageForProvider(raw, opts?.provider)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
@@ -1207,6 +1241,10 @@ export function formatAssistantErrorText(
 
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
+  }
+
+  if (isBillingErrorMessage(raw)) {
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (providerRuntimeFailureKind === "schema") {
