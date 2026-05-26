@@ -1605,6 +1605,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
           CommandAuthorized: commandAuthorized,
+          // Tag typed text-slash control commands (e.g. ` /new`, ` /reset` sent via the regular
+          // post path rather than Mattermost's native slash UI) so the explicit-command turn
+          // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
+          // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
+          CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
           OriginatingChannel: "mattermost" as const,
           OriginatingTo: to,
           ...mediaPayload,
