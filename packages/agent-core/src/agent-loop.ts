@@ -19,6 +19,15 @@ import { validateToolArguments } from "./validation.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 
+const EMPTY_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -45,6 +54,8 @@ export function agentLoop(
     runtime,
   ).then((messages) => {
     stream.end(messages);
+  }).catch((error) => {
+    pushLoopFailure(stream, config, error, signal?.aborted === true);
   });
 
   return stream;
@@ -86,6 +97,8 @@ export function agentLoopContinue(
     runtime,
   ).then((messages) => {
     stream.end(messages);
+  }).catch((error) => {
+    pushLoopFailure(stream, config, error, signal?.aborted === true);
   });
 
   return stream;
@@ -148,6 +161,37 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
     (event: AgentEvent) => event.type === "agent_end",
     (event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
   );
+}
+
+function createLoopFailureMessage(
+  config: AgentLoopConfig,
+  error: unknown,
+  aborted: boolean,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    api: config.model.api,
+    provider: config.model.provider,
+    model: config.model.id,
+    usage: EMPTY_USAGE,
+    stopReason: aborted ? "aborted" : "error",
+    errorMessage: error instanceof Error ? error.message : String(error),
+    timestamp: Date.now(),
+  };
+}
+
+function pushLoopFailure(
+  stream: EventStream<AgentEvent, AgentMessage[]>,
+  config: AgentLoopConfig,
+  error: unknown,
+  aborted: boolean,
+): void {
+  const failureMessage = createLoopFailureMessage(config, error, aborted);
+  stream.push({ type: "message_start", message: failureMessage });
+  stream.push({ type: "message_end", message: failureMessage });
+  stream.push({ type: "turn_end", message: failureMessage, toolResults: [] });
+  stream.push({ type: "agent_end", messages: [failureMessage] });
 }
 
 /**
