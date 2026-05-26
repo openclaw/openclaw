@@ -861,6 +861,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
       });
     });
+    expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
@@ -947,6 +948,81 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
+  });
+
+  it("broadcasts final agent media instead of an earlier media-bearing block", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-block-then-tts-");
+    const blockAudioPath = path.join(transcriptDir, "block.mp3");
+    const finalAudioPath = path.join(transcriptDir, "tts.mp3");
+    fs.writeFileSync(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    fs.writeFileSync(finalAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const spokenText = "This text is already in the model transcript.";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "block",
+        payload: {
+          mediaUrl: blockAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final",
+        payload: {
+          text: spokenText,
+          spokenText,
+          mediaUrl: finalAudioPath,
+          mediaUrls: [finalAudioPath],
+          trustedLocalMedia: true,
+          audioAsVoice: true,
+          ttsSupplement: { spokenText },
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-block-then-tts",
+    });
+
+    expect(payload).toMatchObject({
+      runId: "idem-agent-block-then-tts",
+      sessionKey: "main",
+      state: "final",
+    });
+    const broadcastContent = getMessageContent(payload);
+    expect(broadcastContent[0]).toEqual({ type: "text", text: "Audio reply" });
+    expect(broadcastContent[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(finalAudioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
+    expect(JSON.stringify(payload?.message)).not.toContain(spokenText);
+    expect(JSON.stringify(payload?.message)).not.toContain(fs.realpathSync(blockAudioPath));
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toHaveLength(1);
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {

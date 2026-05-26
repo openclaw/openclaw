@@ -2809,8 +2809,15 @@ export const chatHandlers: GatewayRequestHandlers = {
           cfg,
         });
       };
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
+      const appendWebchatAgentMediaTranscriptIfNeeded = async (
+        payload: ReplyPayload,
+        deliveryKind: "block" | "final",
+      ) => {
+        if (!agentRunStarted || !isMediaBearingPayload(payload)) {
+          return;
+        }
+        const shouldBroadcastAsFinal = deliveryKind === "final";
+        if (appendedWebchatAgentMedia && !shouldBroadcastAsFinal) {
           return;
         }
         if (isSourceReplyTranscriptMirrorPayload(payload)) {
@@ -2874,46 +2881,53 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
-        const appended = await appendAssistantTranscriptMessage({
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
+        let appendedMessage: Record<string, unknown> | undefined;
+        if (!appendedWebchatAgentMedia) {
+          const appended = await appendAssistantTranscriptMessage({
+            message: transcriptReply,
+            ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
+            sessionId,
+            storePath: latestStorePath,
+            sessionFile: latestEntry?.sessionFile,
+            agentId,
+            createIfMissing: true,
+            idempotencyKey: `${clientRunId}:assistant-media`,
+            ttsSupplement: ttsSupplementMarker,
+            cfg,
+          });
+          if (appended.ok) {
+            if (appended.messageId && assistantContent?.length) {
+              await attachManagedOutgoingImagesToMessage({
+                messageId: appended.messageId,
+                blocks: assistantContent,
+              });
+            }
+            appendedMessage = appended.message;
+            appendedWebchatAgentMedia = true;
+          } else {
+            context.logGateway.warn(
+              `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
+            );
+            return;
           }
+        }
+        if (shouldBroadcastAsFinal) {
           const broadcastText =
             extractAssistantDisplayTextFromContent(persistedContentForAppend) ?? transcriptReply;
           webchatAgentMediaFinalMessage = {
-            ...(appended.message ?? {}),
+            ...(appendedMessage ?? {}),
             role: "assistant",
             content: persistedContentForAppend,
             ...(broadcastText ? { text: broadcastText } : {}),
             timestamp:
-              typeof appended.message?.timestamp === "number"
-                ? appended.message.timestamp
+              typeof appendedMessage?.timestamp === "number"
+                ? appendedMessage.timestamp
                 : Date.now(),
             ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
             stopReason: "stop",
             usage: { input: 0, output: 0, totalTokens: 0 },
           };
-          appendedWebchatAgentMedia = true;
-          return;
         }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
       };
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
@@ -2925,7 +2939,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+              await appendWebchatAgentMediaTranscriptIfNeeded(payload, info.kind);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted

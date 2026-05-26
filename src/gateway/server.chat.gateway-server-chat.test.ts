@@ -1279,7 +1279,9 @@ describe("gateway server chat", () => {
   test("chat.send broadcasts agent-run TTS audio over the running gateway", async () => {
     await withMainSessionStore(async (dir) => {
       const previousAgentConfig = testState.agentConfig;
+      const blockAudioPath = path.join(dir, "block.mp3");
       const audioPath = path.join(dir, "tts.mp3");
+      await fs.writeFile(blockAudioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
       testState.agentConfig = { workspace: dir };
       const spokenText = "This text is already in the model transcript.";
@@ -1297,6 +1299,11 @@ describe("gateway server chat", () => {
                 audioAsVoice?: boolean;
                 ttsSupplement?: { spokenText: string };
               }) => boolean;
+              sendBlockReply: (payload: {
+                mediaUrl?: string;
+                mediaUrls?: string[];
+                trustedLocalMedia?: boolean;
+              }) => boolean;
               markComplete: () => void;
               waitForIdle: () => Promise<void>;
               getQueuedCounts: () => { final: number; block: number; tool: number };
@@ -1310,6 +1317,11 @@ describe("gateway server chat", () => {
         params.replyOptions?.onAgentRunStart?.(
           params.replyOptions.runId ?? "idem-running-gateway-agent-tts",
         );
+        params.dispatcher.sendBlockReply({
+          mediaUrl: blockAudioPath,
+          mediaUrls: [blockAudioPath],
+          trustedLocalMedia: true,
+        });
         params.dispatcher.sendFinalReply({
           text: spokenText,
           spokenText,
