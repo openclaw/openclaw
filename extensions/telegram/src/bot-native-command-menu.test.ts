@@ -90,6 +90,24 @@ describe("bot-native-command-menu", () => {
     expect(result.overflowCount).toBe(1);
   });
 
+  it("preserves alias order when the Telegram command cap is not exceeded", () => {
+    const allCommands = [
+      { command: "btw", description: "Ask a side question" },
+      { command: "side", description: "Alias", isAlias: true },
+      { command: "plugin_command", description: "Plugin command" },
+    ];
+
+    const result = buildCappedTelegramMenuCommands({ allCommands });
+
+    expect(result.commandsToRegister).toEqual([
+      { command: "btw", description: "Ask a side question" },
+      { command: "side", description: "Alias" },
+      { command: "plugin_command", description: "Plugin command" },
+    ]);
+    expect(result.totalCommands).toBe(3);
+    expect(result.overflowCount).toBe(0);
+  });
+
   it("counts aliases dropped by the Telegram command cap", () => {
     const canonicalCommands = Array.from({ length: 99 }, (_, i) => ({
       command: `cmd_${i}`,

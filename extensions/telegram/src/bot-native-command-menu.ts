@@ -254,12 +254,15 @@ function buildUncachedCappedTelegramMenuCommands(params: {
 } {
   const { allCommands } = params;
   const { maxCommands, maxTotalChars } = params;
+  const totalCommands = allCommands.length;
+  const overflowCount = Math.max(0, totalCommands - maxCommands);
   const canonicalCommands = allCommands.filter((command) => !command.isAlias);
   const aliasCommands = allCommands.filter((command) => command.isAlias);
   const aliasBudget = Math.max(0, maxCommands - canonicalCommands.length);
-  const budgetedCommands = [...canonicalCommands, ...aliasCommands.slice(0, aliasBudget)];
-  const totalCommands = allCommands.length;
-  const overflowCount = Math.max(0, totalCommands - maxCommands);
+  const budgetedCommands =
+    overflowCount === 0
+      ? allCommands
+      : [...canonicalCommands, ...aliasCommands.slice(0, aliasBudget)];
   const {
     commands: fittedCommands,
     descriptionTrimmed,
