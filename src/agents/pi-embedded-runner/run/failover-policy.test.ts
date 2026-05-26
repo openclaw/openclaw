@@ -319,6 +319,27 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("does not rotate harness-owned assistant errors classified as timeout", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        harnessOwnsTransport: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
   it("rotates concrete assistant failover failures that accompany harness-owned timeouts", () => {
     expect(
       resolveRunFailoverDecision({

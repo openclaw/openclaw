@@ -4160,7 +4160,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("interrupts but keeps the app-server client alive when a turn timeout fires", async () => {
+  it("unsubscribes and closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
     const close = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -4204,7 +4204,14 @@ describe("runCodexAppServerAttempt", () => {
       },
       { timeoutMs: 5_000 },
     );
-    expect(close).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      {
+        threadId: "thread-1",
+      },
+      { timeoutMs: 5_000 },
+    );
+    expect(close).toHaveBeenCalledTimes(1);
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
@@ -5562,9 +5569,13 @@ describe("runCodexAppServerAttempt", () => {
         ),
       { interval: 1 },
     );
-    expect(warn).not.toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       "codex app-server client retired after timed-out turn",
-      expect.anything(),
+      expect.objectContaining({
+        reason: "turn_completion_idle_timeout",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
     );
   });
 
