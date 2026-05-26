@@ -33,6 +33,12 @@ type MockCompactionResult =
       compacted: false;
       reason: string;
       result?: undefined;
+    }
+  | {
+      ok: true;
+      compacted: false;
+      reason: string;
+      result?: undefined;
     };
 
 export const mockedGlobalHookRunner = {

@@ -207,7 +207,20 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function isNoRealConversationCompactionNoop(params: {
+  ok?: boolean;
+  compacted?: boolean;
+  reason?: string;
+}): boolean {
+  return (
+    params.ok === true &&
+    params.compacted === false &&
+    params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
+  );
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -2114,6 +2127,17 @@ export async function runEmbeddedAgent(
                 };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
+                lastCompactionTokensAfter = 0;
+                log.info(
+                  `[context-overflow-precheck] stale token state had no real conversation messages for ` +
+                    `${provider}/${modelId}; resetting the context snapshot and retrying prompt`,
+                );
+                if (preflightRecovery.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                }
+                continue;
+              }
               if (compactResult.compacted) {
                 adoptCompactionTranscript(compactResult);
                 if (

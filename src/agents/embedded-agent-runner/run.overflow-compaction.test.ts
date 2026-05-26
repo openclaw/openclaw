@@ -1799,6 +1799,31 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
 
+  it("recovers preflight compaction when stale tokens point at an empty transcript", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+          assistantTexts: [],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.compactionTokensAfter).toBe(0);
+  });
+
   it("passes observed overflow token counts into compaction when providers report them", async () => {
     const overflowError = new Error(
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 277403 tokens > 200000 maximum"}}',
