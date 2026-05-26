@@ -184,9 +184,10 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 ```
 
 `--only` and `--skip` accept full check ids and may be repeated. If an `--only`
-id is not registered, no check runs for that id; use the command's `checksRun`
-and `checksSkipped` fields to verify a focused gate is selecting the checks you
-expect.
+id is not registered, `--lint` exits with a `core/doctor/lint-selection` error
+instead of reporting a false-clean run. Use the command's `checksRun`,
+`checksSkipped`, and `findings` fields to verify a focused gate is selecting the
+checks you expect.
 
 Notes:
 
