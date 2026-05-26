@@ -569,6 +569,49 @@ describe("connectGateway", () => {
     expect(host.execApprovalBusy).toBe(true);
   });
 
+  it("clears active approval errors when event-enqueued approvals expire", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const { host, client } = connectHostGateway();
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const activeExpiresAtMs = Date.now() + 1_000;
+
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-queued",
+          request: {
+            command: "pnpm test",
+            host: "gateway",
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: queuedExpiresAtMs,
+        },
+      });
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-active-expiring",
+          request: {
+            command: "pnpm check:changed",
+            host: "gateway",
+          },
+          createdAtMs: Date.now() + 1,
+          expiresAtMs: activeExpiresAtMs,
+        },
+      });
+      host.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(host.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears pending session reload timers when the active client closes", () => {
     vi.useFakeTimers();
     try {

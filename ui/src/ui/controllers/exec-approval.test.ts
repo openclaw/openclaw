@@ -337,6 +337,62 @@ describe("refreshPendingApprovalQueue", () => {
     ]);
   });
 
+  it("does not requeue approvals resolved while a refresh is in flight", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+    const resolvingApproval = createExecApproval({ id: "approval-resolving" });
+    const state = createPromptState(request, [resolvingApproval]);
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    clearResolvedExecApprovalPrompt(state, "approval-resolving");
+    resolveExecList([resolvingApproval]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue).toEqual([]);
+  });
+
+  it("does not requeue new approvals resolved before refresh completes", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    let resolvePluginList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const pluginApprovalList = new Promise<unknown[]>((resolve) => {
+      resolvePluginList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return pluginApprovalList;
+      }
+      return {};
+    });
+    const state = createPromptState(request, []);
+    const transientApproval = createExecApproval({ id: "approval-transient" });
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    state.execApprovalQueue = addExecApproval(state.execApprovalQueue, transientApproval);
+    resolveExecList([transientApproval]);
+    clearResolvedExecApprovalPrompt(state, "approval-transient");
+    resolvePluginList([]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue).toEqual([]);
+  });
+
   it("removes refreshed approvals after their expiry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
@@ -364,6 +420,78 @@ describe("refreshPendingApprovalQueue", () => {
       expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-refreshed-1"]);
 
       vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears active prompt errors when expiry advances the queue", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const activeExpiresAtMs = Date.now() + 1_000;
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-active-expiring",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now() + 1,
+              expiresAtMs: activeExpiresAtMs,
+            },
+            {
+              id: "approval-queued",
+              request: { command: "pnpm test" },
+              createdAtMs: Date.now(),
+              expiresAtMs: queuedExpiresAtMs,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
+      state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(state.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not requeue expired approvals returned by refresh lists", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-expired-1",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now() - 2_000,
+              expiresAtMs: Date.now() - 1_000,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
 
       expect(state.execApprovalQueue).toEqual([]);
     } finally {
