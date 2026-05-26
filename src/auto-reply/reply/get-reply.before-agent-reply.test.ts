@@ -83,9 +83,11 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
       reply: { text: "plugin reply" },
     });
 
-    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {
-      abortSignal: abortController.signal,
-    });
+    const result = await getReplyFromConfig(
+      buildGetReplyGroupCtx(),
+      { abortSignal: abortController.signal },
+      {},
+    );
 
     expect(result).toEqual({ text: "plugin reply" });
     expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
