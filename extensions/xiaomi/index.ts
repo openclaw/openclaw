@@ -6,6 +6,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderCatalogContext,
   ProviderAuthResult,
+  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -20,6 +21,7 @@ import {
 import {
   applyModelCompatPatch,
   buildProviderReplayFamilyHooks,
+  type ModelCompatConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import {
@@ -51,22 +53,22 @@ const XIAOMI_WIZARD_GROUP = {
   groupId: "xiaomi",
   groupLabel: "Xiaomi",
   groupHint: "Pay-as-you-go / Token Plan",
-} as const;
+};
 const XIAOMI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "openai-compatible",
     dropReasoningFromHistory: false,
   }),
-  normalizeResolvedModel: ({ model }: { model: unknown }) =>
+  normalizeResolvedModel: ({ model }: { model: ProviderRuntimeModel }) =>
     applyModelCompatPatch(model, { omitEmptyArrayItems: true }),
   wrapStreamFn: (ctx: {
-    streamFn: Parameters<typeof createMiMoThinkingWrapper>[0];
-    thinkingLevel: Parameters<typeof createMiMoThinkingWrapper>[1];
+    streamFn?: Parameters<typeof createMiMoThinkingWrapper>[0];
+    thinkingLevel?: Parameters<typeof createMiMoThinkingWrapper>[1];
   }) => createMiMoThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
   resolveThinkingProfile: ({ modelId }: { modelId: string }) => resolveMiMoThinkingProfile(modelId),
   isModernModelRef: ({ modelId }: { modelId: string }) =>
     Boolean(resolveMiMoThinkingProfile(modelId)),
-} as const;
+};
 
 function trimConfiguredBaseUrl(
   ctx: ProviderCatalogContext,

@@ -61,19 +61,20 @@ function withProviderBaseUrl(
   providerId: string,
   baseUrl: string,
 ): OpenClawConfig {
+  const providers: Record<string, unknown> = {
+    ...cfg.models?.providers,
+    [providerId]: {
+      ...cfg.models?.providers?.[providerId],
+      baseUrl,
+    },
+  };
   return {
     ...cfg,
     models: {
       ...cfg.models,
-      providers: {
-        ...cfg.models?.providers,
-        [providerId]: {
-          ...cfg.models?.providers?.[providerId],
-          baseUrl,
-        },
-      },
+      providers,
     },
-  };
+  } as OpenClawConfig;
 }
 
 export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
