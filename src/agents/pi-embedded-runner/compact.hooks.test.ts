@@ -1475,6 +1475,37 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("clamps caller context token budget before queued engine-owned compaction", async () => {
+    resolveContextWindowInfoMock.mockReturnValueOnce({ tokens: 32_000 });
+
+    await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        contextTokenBudget: 64_000,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const harnessArg = mockCallArg(maybeCompactAgentHarnessSessionMock) as Record<string, unknown>;
+    expect(harnessArg.contextTokenBudget).toBe(32_000);
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      tokenBudget?: number;
+      runtimeContext?: Record<string, unknown>;
+    };
+    expect(compactArg.tokenBudget).toBe(32_000);
+    expectRecordFields(compactArg.runtimeContext, {
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+  });
+
   it("passes resolved context-engine runtime context to harness compaction", async () => {
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: true,
