@@ -2449,6 +2449,12 @@ export async function runCodexAppServerAttempt(
       turnCrossedToolHandoff &&
       isRawAssistantCompletionNotification(notification) &&
       activeTurnItemIds.size === 0;
+    const rawResponseItemCompletedWithNoActiveItems =
+      isCurrentTurnNotification &&
+      notification.method === "rawResponseItem/completed" &&
+      activeTurnItemIds.size === 0 &&
+      activeAppServerTurnRequests === 0 &&
+      !postToolRawAssistantCompletionNeedsTerminalGuard;
     const shouldArmPostReasoningSourceReplyWatch =
       isCurrentTurnNotification &&
       isReasoningItemCompletionNotification(notification) &&
@@ -2483,6 +2489,8 @@ export async function runCodexAppServerAttempt(
       // bridge then goes quiet, reset the short completion-idle guard from that
       // final completion so the remaining silent-turn gap fails fast.
       armTurnCompletionIdleWatch();
+    } else if (rawResponseItemCompletedWithNoActiveItems) {
+      armTurnCompletionIdleWatch();
     } else if (isCurrentTurnNotification && rawToolOutputCompletion) {
       // Raw OpenAI response streams can report the tool-output handoff without
       // a matching app-server `item/completed`; keep the post-tool guard alive.
@@ -2501,6 +2509,7 @@ export async function runCodexAppServerAttempt(
       !trackedDynamicToolCompletion &&
       !rawToolOutputCompletion &&
       !postToolRawAssistantCompletionNeedsTerminalGuard &&
+      !rawResponseItemCompletedWithNoActiveItems &&
       !shouldArmPostReasoningSourceReplyWatch &&
       !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem
     ) {
