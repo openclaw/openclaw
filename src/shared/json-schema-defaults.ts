@@ -282,6 +282,91 @@ function resolveLocalRef(resourceRoot: JsonSchemaValue, ref: string): LocalRefRe
   return { found: false };
 }
 
+function resolveSchemaResourceRef(schema: JsonSchemaValue, ref: string): LocalRefResolution {
+  const seen = new Set<object>();
+  const visit = (current: JsonSchemaValue): LocalRefResolution => {
+    if (!isRecord(current) || seen.has(current)) {
+      return { found: false };
+    }
+    seen.add(current);
+
+    if (typeof current.$id === "string" && current.$id !== "") {
+      if (ref === current.$id) {
+        return { found: true, schema: current, resourceRoot: current };
+      }
+      if (ref.startsWith(`${current.$id}#`)) {
+        return resolveLocalRef(current, ref.slice(current.$id.length));
+      }
+    }
+
+    for (const key of schemaMapKeywords) {
+      const value = current[key];
+      if (!isRecord(value)) {
+        continue;
+      }
+      for (const entry of Object.values(value)) {
+        const resolved = visit(entry as JsonSchemaValue);
+        if (resolved.found) {
+          return resolved;
+        }
+      }
+    }
+    if (isRecord(current.dependencies)) {
+      for (const entry of Object.values(current.dependencies)) {
+        if (isStringArray(entry)) {
+          continue;
+        }
+        const resolved = visit(entry as JsonSchemaValue);
+        if (resolved.found) {
+          return resolved;
+        }
+      }
+    }
+    for (const key of schemaValueKeywords) {
+      const value = current[key];
+      if (typeof value === "boolean" || isRecord(value)) {
+        const resolved = visit(value as JsonSchemaValue);
+        if (resolved.found) {
+          return resolved;
+        }
+        continue;
+      }
+      if (key === "items" && Array.isArray(value)) {
+        for (const entry of value) {
+          const resolved = visit(entry as JsonSchemaValue);
+          if (resolved.found) {
+            return resolved;
+          }
+        }
+      }
+    }
+    for (const key of schemaArrayKeywords) {
+      const value = current[key];
+      if (!Array.isArray(value)) {
+        continue;
+      }
+      for (const entry of value) {
+        const resolved = visit(entry as JsonSchemaValue);
+        if (resolved.found) {
+          return resolved;
+        }
+      }
+    }
+    return { found: false };
+  };
+
+  return visit(schema);
+}
+
+function resolveSchemaRef(
+  root: JsonSchemaValue,
+  resourceRoot: JsonSchemaValue,
+  ref: string,
+): LocalRefResolution {
+  const localTarget = resolveLocalRef(resourceRoot, ref);
+  return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref);
+}
+
 function shouldPreflightLocalRef(resourceRoot: JsonSchemaValue, ref: string): boolean {
   return (
     ref.startsWith("#") ||
@@ -824,6 +909,7 @@ function applyObjectApplicatorDefaults(
 ): Record<string, unknown> {
   let nextValue = value;
   const maxIterations = countSchemaNodes(schema);
+  let evaluatedConditional = false;
   for (let index = 0; index < maxIterations; index++) {
     const before = JSON.stringify(nextValue);
     nextValue = applyObjectPropertyDefaults(
@@ -840,13 +926,16 @@ function applyObjectApplicatorDefaults(
       resolvingRefs,
       currentResourceRoot,
     );
-    nextValue = applyObjectConditionalDefaults(
-      schema,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-    );
+    if (!evaluatedConditional) {
+      nextValue = applyObjectConditionalDefaults(
+        schema,
+        nextValue,
+        root,
+        resolvingRefs,
+        currentResourceRoot,
+      );
+      evaluatedConditional = true;
+    }
     nextValue = applyObjectPropertyDefaults(
       schema,
       nextValue,
@@ -892,7 +981,7 @@ function applySchemaDefaults(
       ? schemaResourceRefKey(currentResourceRoot, schema.$ref)
       : undefined;
   if (typeof schema.$ref === "string" && refKey !== undefined && !resolvingRefs.has(refKey)) {
-    const target = resolveLocalRef(currentResourceRoot, schema.$ref);
+    const target = resolveSchemaRef(root, currentResourceRoot, schema.$ref);
     if (target.found) {
       resolvingRefs.add(refKey);
       nextValue = applySchemaDefaults(

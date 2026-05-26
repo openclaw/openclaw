@@ -606,6 +606,54 @@ describe("schema validator", () => {
         },
       },
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.absolute-id-default-ref",
+        schema: {
+          $defs: {
+            Settings: {
+              $id: "https://example.com/settings",
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+            },
+          },
+          $ref: "https://example.com/settings",
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.relative-id-default-ref",
+        schema: {
+          $defs: {
+            Settings: {
+              $id: "settings",
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  default: "auto",
+                },
+              },
+            },
+          },
+          $ref: "settings",
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { mode: "auto" },
+    });
   });
 
   it("accepts draft-07 tuple item schemas", () => {
@@ -1045,7 +1093,7 @@ describe("schema validator", () => {
         value: {},
         applyDefaults: true,
       },
-      expectedValue: { mode: "auto", explicit: true },
+      expectedValue: { mode: "auto" },
     });
 
     expectSuccessfulValidationValue({
