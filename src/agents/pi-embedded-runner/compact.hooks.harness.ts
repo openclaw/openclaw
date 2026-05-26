@@ -822,11 +822,15 @@ export async function loadCompactHooksHarness(): Promise<{
     createSystemPromptOverride: vi.fn(() => () => ""),
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => String(err)),
-    mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
-    resolveExecToolDefaults: vi.fn(() => undefined),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => String(err)),
+      mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
+      resolveExecToolDefaults: vi.fn(() => undefined),
+    };
+  });
 
   const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
     import("./compact.js"),
