@@ -1,0 +1,284 @@
+name: runtime-cli-surface
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.multitenant"
+      - "scripts/check-cli-surface.sh"
+      - ".github/workflows/runtime-cli-surface.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.multitenant"
+      - "scripts/check-cli-surface.sh"
+      - ".github/workflows/runtime-cli-surface.yml"
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image ref to smoke; defaults to GHCR latest"
+        required: false
+        type: string
+
+concurrency:
+  group: runtime-cli-surface-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      issues: write
+      packages: read
+      pull-requests: read
+    env:
+      IMAGE_REPOSITORY: ghcr.io/saml212/rockielab-runtime-multitenant
+      PR_IMAGE: rockielab-runtime-multitenant:cli-surface-${{ github.sha }}
+      BASELINE_DIR: .artifacts/cli-surface-baseline
+      OUTPUT_DIR: .artifacts/cli-surface
+      SKILLS_READ_TOKEN: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
+      SHOULD_BUILD_PR_IMAGE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+      CAN_MUTATE_GITHUB: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      CHECKED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Restore previous normalized baseline
+        id: restore-baseline
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BASELINE_DIR }}
+          key: cli-surface-baseline-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            cli-surface-baseline-${{ github.ref_name }}-
+            cli-surface-baseline-main-
+
+      - name: Preflight platform-skills token for PR image build
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true' && env.SKILLS_READ_TOKEN == ''
+        run: |
+          echo "::error::PLATFORM_SKILLS_READ_TOKEN secret is required to build Dockerfile.multitenant for PR smoke."
+          exit 1
+
+      - name: Checkout platform-skills for PR image build
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: saml212/platform-skills
+          path: vendor/platform-skills
+          token: ${{ secrets.PLATFORM_SKILLS_READ_TOKEN }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Strip platform-skills checkout metadata
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true'
+        run: rm -rf vendor/platform-skills/.git
+
+      - name: Set up Buildx for PR image build
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build PR multitenant image
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.multitenant
+          build-contexts: |
+            skills=vendor/platform-skills
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.PR_IMAGE }}
+          cache-from: type=registry,ref=${{ env.IMAGE_REPOSITORY }}:buildcache
+
+      - name: Log in to GHCR
+        if: env.SHOULD_BUILD_PR_IMAGE != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image
+        id: image
+        if: env.SHOULD_BUILD_PR_IMAGE != 'true'
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_IMAGE:-}" ]; then
+            image_ref="$INPUT_IMAGE"
+            docker pull "$image_ref"
+          elif docker pull "${IMAGE_REPOSITORY}:${GITHUB_SHA}"; then
+            image_ref="${IMAGE_REPOSITORY}:${GITHUB_SHA}"
+          else
+            dockerfile_changed="$(
+              node -e '
+                const fs = require("fs");
+                const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+                const commits = event.commits?.length ? event.commits : [event.head_commit || {}];
+                const files = commits.flatMap((commit) => [
+                  ...(commit.added || []),
+                  ...(commit.modified || []),
+                  ...(commit.removed || []),
+                ]);
+                process.stdout.write(files.includes("Dockerfile.multitenant") ? "true" : "false");
+              '
+            )"
+            if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "$dockerfile_changed" = "true" ]; then
+              echo "::error::${IMAGE_REPOSITORY}:${GITHUB_SHA} is unavailable after a Dockerfile.multitenant push; refusing to smoke stale latest."
+              exit 1
+            fi
+            image_ref="${IMAGE_REPOSITORY}:latest"
+            docker pull "$image_ref"
+          fi
+          digest="$(docker image inspect "$image_ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve PR image
+        id: pr-image
+        if: env.SHOULD_BUILD_PR_IMAGE == 'true'
+        run: |
+          echo "image_ref=${PR_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "image_digest=" >> "$GITHUB_OUTPUT"
+
+      - name: Run CLI surface smoke
+        id: surface
+        env:
+          IMAGE_REF: ${{ steps.pr-image.outputs.image_ref || steps.image.outputs.image_ref }}
+        run: |
+          set +e
+          scripts/check-cli-surface.sh \
+            --image "$IMAGE_REF" \
+            --baseline "${BASELINE_DIR}/baseline.json" \
+            --output-dir "$OUTPUT_DIR"
+          status=$?
+          set -e
+          mkdir -p "$BASELINE_DIR"
+          if [ "$status" -eq 0 ]; then
+            cp "$OUTPUT_DIR/current.json" "$BASELINE_DIR/baseline.json"
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat "$OUTPUT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Save normalized baseline
+        if: steps.surface.outputs.status == '0' && hashFiles('.artifacts/cli-surface-baseline/baseline.json') != ''
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.BASELINE_DIR }}
+          key: cli-surface-baseline-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload CLI surface artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-surface-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.OUTPUT_DIR }}/current.json
+            ${{ env.OUTPUT_DIR }}/summary.md
+            ${{ env.OUTPUT_DIR }}/diff.txt
+            ${{ env.OUTPUT_DIR }}/failures.txt
+            ${{ env.OUTPUT_DIR }}/raw/
+          if-no-files-found: error
+
+      - name: Comment on checked commit
+        if: always() && env.CAN_MUTATE_GITHUB == 'true'
+        uses: actions/github-script@v9
+        env:
+          SUMMARY_PATH: ${{ env.OUTPUT_DIR }}/summary.md
+          IMAGE_REF: ${{ steps.pr-image.outputs.image_ref || steps.image.outputs.image_ref }}
+          IMAGE_DIGEST: ${{ steps.pr-image.outputs.image_digest || steps.image.outputs.image_digest }}
+          CHECKED_SHA: ${{ env.CHECKED_SHA }}
+        with:
+          script: |
+            const fs = require("fs");
+            const summary = fs.readFileSync(process.env.SUMMARY_PATH, "utf8");
+            const digestLine = process.env.IMAGE_DIGEST
+              ? `\n\nImage digest: \`${process.env.IMAGE_DIGEST}\``
+              : "";
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: process.env.CHECKED_SHA,
+              body: `${summary}\nImage ref: \`${process.env.IMAGE_REF}\`${digestLine}`,
+            });
+
+      - name: Open CLI drift issue on assertion failure
+        if: steps.surface.outputs.status != '0' && env.CAN_MUTATE_GITHUB == 'true'
+        uses: actions/github-script@v9
+        env:
+          SUMMARY_PATH: ${{ env.OUTPUT_DIR }}/summary.md
+          DIFF_PATH: ${{ env.OUTPUT_DIR }}/diff.txt
+          FAILURES_PATH: ${{ env.OUTPUT_DIR }}/failures.txt
+          IMAGE_REF: ${{ steps.pr-image.outputs.image_ref || steps.image.outputs.image_ref }}
+          IMAGE_DIGEST: ${{ steps.pr-image.outputs.image_digest || steps.image.outputs.image_digest }}
+          CHECKED_SHA: ${{ env.CHECKED_SHA }}
+        with:
+          script: |
+            const fs = require("fs");
+            const labels = [
+              { name: "fleet-task", color: "7057ff", description: "Fleet task follow-up" },
+              { name: "cli-drift", color: "d73a4a", description: "Claude/Codex CLI surface drift" },
+            ];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label,
+                });
+              }
+            }
+
+            const summary = fs.readFileSync(process.env.SUMMARY_PATH, "utf8");
+            const failures = fs.readFileSync(process.env.FAILURES_PATH, "utf8").trim() || "No failure details captured.";
+            const diff = fs.readFileSync(process.env.DIFF_PATH, "utf8").trim() || "No prior normalized baseline diff was available.";
+            const digestLine = process.env.IMAGE_DIGEST
+              ? `\n- Image digest: \`${process.env.IMAGE_DIGEST}\``
+              : "";
+            const body = [
+              "The runtime CLI surface smoke failed.",
+              "",
+              `- Workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `- Commit: ${process.env.CHECKED_SHA}`,
+              `- Image ref: \`${process.env.IMAGE_REF}\`${digestLine}`,
+              "",
+              summary,
+              "",
+              "### Failing command(s)",
+              "```text",
+              failures,
+              "```",
+              "",
+              "### Normalized diff vs prior run",
+              "```diff",
+              diff.slice(0, 60000),
+              "```",
+            ].join("\n");
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `CLI surface drift in multitenant runtime (${process.env.CHECKED_SHA.slice(0, 7)})`,
+              labels: labels.map((label) => label.name),
+              body,
+            });
+
+      - name: Fail on assertion failure
+        if: steps.surface.outputs.status != '0'
+        run: exit 1

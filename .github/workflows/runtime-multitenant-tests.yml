@@ -20,11 +20,15 @@ on:
   pull_request:
     paths:
       - "overlay/multitenant/**"
+      - "scripts/check-cli-surface.sh"
+      - ".github/workflows/runtime-cli-surface.yml"
       - ".github/workflows/runtime-multitenant-tests.yml"
   push:
     branches: [main]
     paths:
       - "overlay/multitenant/**"
+      - "scripts/check-cli-surface.sh"
+      - ".github/workflows/runtime-cli-surface.yml"
       - ".github/workflows/runtime-multitenant-tests.yml"
   # Manual re-run path (e.g. after a transient runner failure) without
   # pushing a no-op commit — mirrors build-runtime-image.yml.
