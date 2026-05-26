@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { appendInlineUserTurnTranscriptMessage } from "../sessions/user-turn-transcript.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -132,26 +132,25 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     return;
   }
 
-  const transcriptTarget = {
-    transcriptPath: params.sessionFile,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    cwd: params.workspaceDir,
-    ...(params.config ? { config: params.config } : {}),
-  };
-  const persisted = params.userTurnTranscript.message
-    ? await appendInlineUserTurnTranscriptMessage({
-        ...transcriptTarget,
-        message: params.userTurnTranscript.message,
-      })
-    : await appendInlineUserTurnTranscriptMessage({
-        ...transcriptTarget,
-        input: {
-          text: params.userTurnTranscript.text,
-          timestamp: Date.now(),
-        },
-      });
+  const recorder = createUserTurnTranscriptRecorder({
+    ...(params.userTurnTranscript.message
+      ? { message: params.userTurnTranscript.message }
+      : {
+          input: {
+            text: params.userTurnTranscript.text,
+            timestamp: Date.now(),
+          },
+        }),
+    target: {
+      transcriptPath: params.sessionFile,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cwd: params.workspaceDir,
+      ...(params.config ? { config: params.config } : {}),
+    },
+  });
+  const persisted = await recorder.persistApproved();
   if (persisted) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);

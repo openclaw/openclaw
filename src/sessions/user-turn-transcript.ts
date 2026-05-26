@@ -74,6 +74,19 @@ export type UserTurnTranscriptPersistenceTarget = Omit<
   "input" | "message" | "updateMode"
 >;
 
+export type UserTurnTranscriptFileTarget = {
+  transcriptPath: string;
+  sessionId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  cwd?: string;
+  config?: OpenClawConfig;
+};
+
+export type UserTurnTranscriptTarget =
+  | UserTurnTranscriptPersistenceTarget
+  | UserTurnTranscriptFileTarget;
+
 export type UserTurnTranscriptPersistResult = {
   sessionFile: string;
   sessionEntry: SessionEntry | undefined;
@@ -82,11 +95,8 @@ export type UserTurnTranscriptPersistResult = {
 };
 
 export type UserTurnTranscriptTargetResolver =
-  | UserTurnTranscriptPersistenceTarget
-  | (() =>
-      | UserTurnTranscriptPersistenceTarget
-      | undefined
-      | Promise<UserTurnTranscriptPersistenceTarget | undefined>);
+  | UserTurnTranscriptTarget
+  | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
@@ -522,8 +532,14 @@ export async function tryPersistInlineUserTurnTranscript(
 
 async function resolveUserTurnTranscriptTarget(
   target: UserTurnTranscriptTargetResolver,
-): Promise<UserTurnTranscriptPersistenceTarget | undefined> {
+): Promise<UserTurnTranscriptTarget | undefined> {
   return typeof target === "function" ? await target() : target;
+}
+
+function isUserTurnTranscriptFileTarget(
+  target: UserTurnTranscriptTarget,
+): target is UserTurnTranscriptFileTarget {
+  return "transcriptPath" in target;
 }
 
 export function createUserTurnTranscriptRecorder(
@@ -585,11 +601,25 @@ export function createUserTurnTranscriptRecorder(
       if (!target) {
         return undefined;
       }
-      const result = await persistUserTurnTranscript({
-        ...target,
-        message,
-        updateMode: options.updateMode ?? params.updateMode ?? "inline",
-      });
+      const updateMode = options.updateMode ?? params.updateMode ?? "inline";
+      const result = isUserTurnTranscriptFileTarget(target)
+        ? await appendUserTurnTranscriptMessage({
+            ...target,
+            message,
+            updateMode,
+          }).then((appended) =>
+            appended
+              ? {
+                  ...appended,
+                  sessionEntry: undefined,
+                }
+              : undefined,
+          )
+        : await persistUserTurnTranscript({
+            ...target,
+            message,
+            updateMode,
+          });
       if (result) {
         persisted = true;
         persistedResult = result;
