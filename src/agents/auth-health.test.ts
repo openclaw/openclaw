@@ -12,6 +12,7 @@ vi.mock("./cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
     provider === "codex-cli" ? "openai-codex" : provider,
 }));

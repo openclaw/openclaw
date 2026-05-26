@@ -7,6 +7,7 @@ import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
     provider.trim().toLowerCase() === "z.ai" ? "zai" : provider.trim().toLowerCase(),
 }));

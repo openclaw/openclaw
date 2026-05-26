@@ -4,6 +4,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 
 vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
