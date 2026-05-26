@@ -374,10 +374,9 @@ export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
           maxSide: params.maxSide,
           enlarge: params.withoutEnlargement === false,
         },
-        png:
-          params.compressionLevel === undefined
-            ? {}
-            : { compressionLevel: params.compressionLevel },
+        ...(params.compressionLevel === undefined
+          ? {}
+          : { compressionLevel: params.compressionLevel }),
       })
     ).data;
   } catch (error) {

@@ -48,7 +48,7 @@
         "playwright-core": "1.60.0",
         "qrcode": "1.5.4",
         "quickjs-wasi": "2.2.0",
-        "rastermill": "https://codeload.github.com/openclaw/rastermill/tar.gz/5ffce4f9f534a41f9ec1cb61ea19668bc1d93565",
+        "rastermill": "https://codeload.github.com/openclaw/rastermill/tar.gz/c94b728a4179c836ae182a4d507774bd4ce2ea00",
         "tar": "7.5.15",
         "tokenjuice": "0.7.1",
         "tree-sitter-bash": "0.25.1",
@@ -3844,8 +3844,8 @@
     },
     "node_modules/rastermill": {
       "version": "0.2.0",
-      "resolved": "https://codeload.github.com/openclaw/rastermill/tar.gz/5ffce4f9f534a41f9ec1cb61ea19668bc1d93565",
-      "integrity": "sha512-vboNwXRmzC+sZmHSid3FLiGaTYiCk/xqRlJsj1+FwsclZBargj27PiIBQyEBhiS6qAZIJhyltFz+iHsIIskXew==",
+      "resolved": "https://codeload.github.com/openclaw/rastermill/tar.gz/c94b728a4179c836ae182a4d507774bd4ce2ea00",
+      "integrity": "sha512-s6TagyTvXsUuy7VeCVOQlFy6WzJjC1lCQh4M6pEeQGe4xkiv5BxSnvpPCTjQqxGWPwBWuO/0upvhO4Y58jFCAA==",
       "license": "MIT",
       "dependencies": {
         "@silvia-odwyer/photon-node": "0.3.4"
