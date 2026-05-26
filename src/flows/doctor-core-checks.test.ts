@@ -394,6 +394,19 @@ describe("registerCoreHealthChecks", () => {
   it("executes exec SecretRefs when gateway auth lint explicitly allows exec checks", async () => {
     tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
     const markerPath = join(tmp, "exec-ran");
+    const resolverPath = join(tmp, "resolve-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      [
+        "const fs = require('node:fs');",
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  fs.writeFileSync(process.argv[2], 'executed');",
+        "  process.stdout.write('resolved-token');",
+        "});",
+      ].join("\n"),
+      "utf8",
+    );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
 
     const findings = await check?.detect({
@@ -415,13 +428,11 @@ describe("registerCoreHealthChecks", () => {
           providers: {
             default: {
               source: "exec",
-              command: "/bin/sh",
-              args: [
-                "-c",
-                `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}; printf resolved-token`,
-              ],
+              command: process.execPath,
+              args: [resolverPath, markerPath],
               jsonOnly: false,
               allowInsecurePath: true,
+              allowSymlinkCommand: true,
             },
           },
         },
@@ -435,6 +446,13 @@ describe("registerCoreHealthChecks", () => {
   });
 
   it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const resolverPath = join(tmp, "fail-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
+      "utf8",
+    );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
 
     const findings = await check?.detect({
@@ -456,10 +474,11 @@ describe("registerCoreHealthChecks", () => {
           providers: {
             default: {
               source: "exec",
-              command: "/bin/sh",
-              args: ["-c", "cat >/dev/null; exit 12"],
+              command: process.execPath,
+              args: [resolverPath],
               jsonOnly: false,
               allowInsecurePath: true,
+              allowSymlinkCommand: true,
             },
           },
         },
