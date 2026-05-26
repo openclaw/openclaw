@@ -936,6 +936,21 @@
         "text",
         "channel"
       ]
+    },
+    "transcripts": {
+      "emoji": "📝",
+      "title": "Transcripts",
+      "detailKeys": [
+        "action",
+        "sessionId",
+        "title",
+        "providerId",
+        "accountId",
+        "guildId",
+        "channelId",
+        "meetingUrl",
+        "speakerLabel"
+      ]
     }
   }
 }
