@@ -764,7 +764,9 @@ actor MacNodeRuntime {
                         ask: context.ask.rawValue,
                         agentId: context.agentId,
                         resolvedPath: context.resolution?.resolvedPath,
-                        sessionKey: context.sessionKey))
+                        sessionKey: context.sessionKey,
+                        allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                            forAsk: context.ask.rawValue)))
             }
             switch decision {
             case .deny:

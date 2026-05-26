@@ -14,6 +14,76 @@ struct ExecApprovalPromptRequest: Codable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var allowedDecisions: [ExecApprovalDecision]?
+
+    init(
+        command: String,
+        cwd: String? = nil,
+        host: String? = nil,
+        security: String? = nil,
+        ask: String? = nil,
+        agentId: String? = nil,
+        resolvedPath: String? = nil,
+        sessionKey: String? = nil,
+        allowedDecisions: [ExecApprovalDecision]? = nil)
+    {
+        self.command = command
+        self.cwd = cwd
+        self.host = host
+        self.security = security
+        self.ask = ask
+        self.agentId = agentId
+        self.resolvedPath = resolvedPath
+        self.sessionKey = sessionKey
+        self.allowedDecisions = allowedDecisions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case host
+        case security
+        case ask
+        case agentId
+        case resolvedPath
+        case sessionKey
+        case allowedDecisions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.command = try container.decode(String.self, forKey: .command)
+        self.cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
+        self.host = try container.decodeIfPresent(String.self, forKey: .host)
+        self.security = try container.decodeIfPresent(String.self, forKey: .security)
+        self.ask = try container.decodeIfPresent(String.self, forKey: .ask)
+        self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
+        self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
+        let decodedDecisions = try container.decodeIfPresent(
+            [DecodedExecApprovalDecision].self,
+            forKey: .allowedDecisions) ?? []
+        self.allowedDecisions = decodedDecisions.compactMap(\.decision)
+    }
+
+    static func allowedDecisions(forAsk ask: String?) -> [ExecApprovalDecision] {
+        ask == ExecAsk.always.rawValue
+            ? [.allowOnce, .deny]
+            : [.allowOnce, .allowAlways, .deny]
+    }
+}
+
+private struct DecodedExecApprovalDecision: Decodable {
+    var decision: ExecApprovalDecision?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        guard let raw = try? container.decode(String.self) else {
+            self.decision = nil
+            return
+        }
+        self.decision = ExecApprovalDecision(rawValue: raw)
+    }
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -235,20 +305,39 @@ enum ExecApprovalsPromptPresenter {
         alert.informativeText = "Review the command details before allowing."
         alert.accessoryView = self.buildAccessoryView(request)
 
-        alert.addButton(withTitle: "Allow Once")
-        alert.addButton(withTitle: "Always Allow")
-        alert.addButton(withTitle: "Don't Allow")
-        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
-            alert.buttons[2].hasDestructiveAction = true
+        let decisions = self.allowedPromptDecisions(request)
+        for decision in decisions {
+            alert.addButton(withTitle: self.buttonTitle(for: decision))
+        }
+        if #available(macOS 11.0, *),
+           let denyIndex = decisions.firstIndex(of: .deny),
+           alert.buttons.indices.contains(denyIndex)
+        {
+            alert.buttons[denyIndex].hasDestructiveAction = true
         }
 
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return .allowOnce
-        case .alertSecondButtonReturn:
-            return .allowAlways
-        default:
-            return .deny
+        let selectedIndex = alert.runModal().rawValue
+            - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        return decisions.indices.contains(selectedIndex)
+            ? decisions[selectedIndex]
+            : .deny
+    }
+
+    static func allowedPromptDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
+        if let allowedDecisions = request.allowedDecisions, !allowedDecisions.isEmpty {
+            return allowedDecisions
+        }
+        return ExecApprovalPromptRequest.allowedDecisions(forAsk: request.ask)
+    }
+
+    private static func buttonTitle(for decision: ExecApprovalDecision) -> String {
+        switch decision {
+        case .allowOnce:
+            "Allow Once"
+        case .allowAlways:
+            "Always Allow"
+        case .deny:
+            "Don't Allow"
         }
     }
 
@@ -401,7 +490,9 @@ private enum ExecHostExecutor {
                     ask: context.ask.rawValue,
                     agentId: context.agentId,
                     resolvedPath: context.resolution?.resolvedPath,
-                    sessionKey: request.sessionKey))
+                    sessionKey: request.sessionKey,
+                    allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                        forAsk: context.ask.rawValue)))
 
             let followupDecision: ExecApprovalDecision
             switch decision {
