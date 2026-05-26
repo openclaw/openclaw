@@ -3569,6 +3569,8 @@ export async function runCodexAppServerAttempt(
             messagesSnapshot: buildTurnStartFailureMessages(),
             systemPromptReport,
           }),
+          sessionIdUsed: activeSessionId,
+          sessionFileUsed: activeSessionFile,
         };
       }
       throw turnStartError;
@@ -3904,6 +3906,8 @@ export async function runCodexAppServerAttempt(
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
+      sessionIdUsed: activeSessionId,
+      sessionFileUsed: activeSessionFile,
       ...(codexAppServerFailureKind
         ? {
             codexAppServerFailure: {
@@ -4034,6 +4038,7 @@ function buildCodexTurnStartFailureResult(params: {
     promptError: params.message,
     promptErrorSource: "prompt",
     sessionIdUsed: params.params.sessionId,
+    sessionFileUsed: params.params.sessionFile,
     messagesSnapshot: params.messagesSnapshot,
     assistantTexts: [],
     toolMetas: [],
