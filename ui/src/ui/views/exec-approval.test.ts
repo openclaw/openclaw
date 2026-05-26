@@ -139,6 +139,17 @@ describe("approval and confirmation modals", () => {
     ).toEqual(["Allow once", "Always allow", "Deny"]);
   });
 
+  it("denies exec approval on Escape", async () => {
+    const handleExecApprovalDecision = vi.fn(async () => undefined);
+    render(renderExecApprovalPrompt(createExecState({ handleExecApprovalDecision })), container);
+
+    const { dialog } = await getRenderedDialog();
+
+    dispatchEscape(dialog);
+
+    expect(handleExecApprovalDecision).toHaveBeenCalledWith("deny");
+  });
+
   it("renders exec approval chrome from the active locale", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-29T00:00:00.000Z"));
