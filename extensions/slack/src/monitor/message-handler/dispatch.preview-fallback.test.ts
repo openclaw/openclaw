@@ -1574,7 +1574,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     const renderedUpdates = draftStream.update.mock.calls.flat().join("\n");
-    expect(renderedUpdates).toContain("exit 2");
+    expect(renderedUpdates).toContain("Command exited with code 2");
     expect(renderedUpdates).not.toContain("No matches found");
   });
 

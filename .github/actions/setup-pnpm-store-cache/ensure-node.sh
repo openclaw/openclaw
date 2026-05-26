@@ -185,7 +185,7 @@ openclaw_download_node() {
   install_root="${temp_root}/openclaw-node-${version}-${platform}"
   if [[ "$platform" == win-* ]]; then
     local archive_path ps_archive_path ps_install_root ps_bin_dir node_bin_dir
-    archive_path="${temp_root}/node-${version}-${platform}.zip"
+    archive_path="${install_root}.zip"
     archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
     rm -rf "$install_root"
     mkdir -p "$install_root"

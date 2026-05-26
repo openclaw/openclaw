@@ -57,7 +57,8 @@ describe("classifyExecOutcome", () => {
     ).toBe("benign_no_result");
     expect(
       classifyExecOutcome({
-        command: "find docs -name '*.md' -print0 | env LC_ALL=C command xargs -0 rg 'missing phrase'",
+        command:
+          "find docs -name '*.md' -print0 | env LC_ALL=C command xargs -0 rg 'missing phrase'",
         status: "completed",
         exitCode: 123,
         aggregated: "\n\n(Command exited with code 123)",
