@@ -114,7 +114,15 @@ function resolveIMessageAccountSourceOwner(params: {
   return defaultOwner;
 }
 
-function resolveIMessageDuplicateSourceOwner(params: {
+/**
+ * Returns the owner account id when `account` is an enabled duplicate of
+ * another enabled account that targets the same local Messages source. Used
+ * by the iMessage gateway lifecycle to skip starting redundant `imsg rpc`
+ * watchers (openclaw/openclaw#65141) without otherwise marking the duplicate
+ * disabled — outbound selection, status surfaces, and capability listings
+ * keep treating both accounts normally.
+ */
+export function resolveIMessageDuplicateSourceOwner(params: {
   cfg: OpenClawConfig;
   account: ResolvedIMessageAccount;
 }): string | undefined {
@@ -128,28 +136,10 @@ function resolveIMessageDuplicateSourceOwner(params: {
   return owner && owner !== params.account.accountId ? owner : undefined;
 }
 
-export function isIMessageAccountEnabledForRuntime(
-  account: ResolvedIMessageAccount,
-  cfg: OpenClawConfig,
-): boolean {
-  return account.enabled && !resolveIMessageDuplicateSourceOwner({ cfg, account });
-}
-
-export function resolveIMessageAccountDisabledReason(
-  account: ResolvedIMessageAccount,
-  cfg: OpenClawConfig,
-): string {
-  if (!account.enabled) {
-    return "disabled";
-  }
-  const owner = resolveIMessageDuplicateSourceOwner({ cfg, account });
-  return owner ? `duplicate iMessage source; using account "${owner}"` : "disabled";
-}
-
 export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessageAccount[] {
   return listIMessageAccountIds(cfg)
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
-    .filter((account) => isIMessageAccountEnabledForRuntime(account, cfg));
+    .filter((account) => account.enabled);
 }
 
 export function collectIMessageDuplicateAccountSourceWarnings(params: {
@@ -185,7 +175,7 @@ export function collectIMessageDuplicateAccountSourceWarnings(params: {
     const dbPath = normalizeIMessageDbPath(owner.config.dbPath);
     const where = dbPath ? `cliPath=${cliPath}, dbPath=${dbPath}` : `cliPath=${cliPath}`;
     warnings.push(
-      `- channels.imessage: accounts "${owner.accountId}" and ${dupIds} watch the same local Messages source (${where}). OpenClaw now runs one watcher (owner: "${owner.accountId}") and reports the duplicates as disabled. Inbound messages arrive tagged with accountId="${owner.accountId}", so any bindings, status dashboards, or message-tool targets pinned to ${dupIds} should be re-pointed at "${owner.accountId}" (or set "enabled": false on "${owner.accountId}" to make the other account the owner instead). Set "enabled": false on the unused duplicates to silence this warning.`,
+      `- channels.imessage: accounts "${owner.accountId}" and ${dupIds} watch the same local Messages source (${where}). OpenClaw runs one watcher (owner: "${owner.accountId}") and idles the duplicate; the other accounts stay enabled for outbound sends and status. Inbound messages arrive tagged with accountId="${owner.accountId}", so bindings pinned to ${dupIds} should be re-pointed at "${owner.accountId}" (or set "enabled": false on "${owner.accountId}" to flip ownership). Set "enabled": false on the unused duplicates to silence this warning.`,
     );
   }
   return warnings;

@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   collectIMessageDuplicateAccountSourceWarnings,
-  isIMessageAccountEnabledForRuntime,
   listEnabledIMessageAccounts,
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
-  resolveIMessageAccountDisabledReason,
+  resolveIMessageDuplicateSourceOwner,
 } from "./accounts.js";
 
 describe("resolveIMessageAccount", () => {
@@ -53,8 +52,8 @@ describe("resolveIMessageAccount", () => {
   });
 });
 
-describe("iMessage duplicate-source account filtering", () => {
-  it("treats default and a named account that share cliPath as duplicates", () => {
+describe("iMessage duplicate-source watcher ownership", () => {
+  it("flags default as a non-owner when a named account shares its source", () => {
     const cfg = {
       channels: {
         imessage: {
@@ -73,21 +72,22 @@ describe("iMessage duplicate-source account filtering", () => {
       },
     } as never;
 
+    // Both accounts stay enabled so outbound, status, and capability surfaces
+    // keep treating them normally; only the watcher startup path consults
+    // resolveIMessageDuplicateSourceOwner to skip the redundant `imsg rpc`.
     const enabled = listEnabledIMessageAccounts(cfg).map((a) => a.accountId);
-    expect(enabled).toEqual(["swang430-gmail-com"]);
+    expect(enabled).toEqual(["default", "swang430-gmail-com"]);
 
     const dupAccount = resolveIMessageAccount({ cfg, accountId: "default" });
-    expect(isIMessageAccountEnabledForRuntime(dupAccount, cfg)).toBe(false);
-    expect(resolveIMessageAccountDisabledReason(dupAccount, cfg)).toBe(
-      'duplicate iMessage source; using account "swang430-gmail-com"',
+    expect(resolveIMessageDuplicateSourceOwner({ cfg, account: dupAccount })).toBe(
+      "swang430-gmail-com",
     );
 
     const ownerAccount = resolveIMessageAccount({ cfg, accountId: "swang430-gmail-com" });
-    expect(isIMessageAccountEnabledForRuntime(ownerAccount, cfg)).toBe(true);
-    expect(resolveIMessageAccountDisabledReason(ownerAccount, cfg)).toBe("disabled");
+    expect(resolveIMessageDuplicateSourceOwner({ cfg, account: ownerAccount })).toBeUndefined();
   });
 
-  it("keeps both accounts when they target different cliPaths", () => {
+  it("reports no duplicate ownership when accounts target different cliPaths", () => {
     const cfg = {
       channels: {
         imessage: {
@@ -101,9 +101,13 @@ describe("iMessage duplicate-source account filtering", () => {
 
     const enabled = listEnabledIMessageAccounts(cfg).map((a) => a.accountId);
     expect(enabled).toEqual(["home", "work"]);
+    for (const accountId of enabled) {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      expect(resolveIMessageDuplicateSourceOwner({ cfg, account })).toBeUndefined();
+    }
   });
 
-  it("does not let a disabled duplicate suppress the enabled named account", () => {
+  it("ignores a disabled duplicate when computing ownership", () => {
     const cfg = {
       channels: {
         imessage: {
@@ -117,6 +121,9 @@ describe("iMessage duplicate-source account filtering", () => {
 
     const enabled = listEnabledIMessageAccounts(cfg).map((a) => a.accountId);
     expect(enabled).toEqual(["swang430-gmail-com"]);
+
+    const ownerAccount = resolveIMessageAccount({ cfg, accountId: "swang430-gmail-com" });
+    expect(resolveIMessageDuplicateSourceOwner({ cfg, account: ownerAccount })).toBeUndefined();
   });
 
   it("emits one preview warning per collision group", () => {
