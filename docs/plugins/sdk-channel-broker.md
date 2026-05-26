@@ -50,6 +50,17 @@ With the conformance layer installed, V1 uses signed inbound HTTP webhooks and
 outbound HTTP calls. WebSocket and provider polling transports are intentionally
 deferred so providers can first prove the stable message lifecycle contract.
 
+Inbound webhook providers should send `x-openclaw-broker-provider` with their
+configured provider id, `x-openclaw-broker-timestamp`, and
+`x-openclaw-broker-signature`. The signature is an HMAC SHA-256 over
+`${timestamp}.${rawBody}` using the provider signing secret. OpenClaw uses the
+provider header only to select the configured signing secret and body limit
+before authentication; the JSON payload `providerId` must still match the
+header, and the raw body must verify before the event is accepted. Providers
+that include inline `contentBase64` attachments should always send the provider
+header so legitimate media payloads use the signed-provider body limit instead
+of the smaller anonymous request limit.
+
 ## Outbound request
 
 `BrokerOutboundRequestV1` includes:

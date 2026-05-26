@@ -12,6 +12,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
   readWebhookBodyOrReject,
+  WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { isListedChannelBrokerProviderId, resolveChannelBrokerAccount } from "./accounts.js";
 import { normalizeKnownChannelBrokerPlatformId } from "./platforms.js";
@@ -19,9 +20,11 @@ import { receiveBrokerInboundEvent } from "./runtime.js";
 import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const INBOUND_PATH = "/channel-broker/inbound";
+const PROVIDER_HEADER = "x-openclaw-broker-provider";
 const SIGNATURE_HEADER = "x-openclaw-broker-signature";
 const TIMESTAMP_HEADER = "x-openclaw-broker-timestamp";
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
+const TRUSTED_PROVIDER_BODY_MAX_BYTES = WEBHOOK_BODY_READ_DEFAULTS.postAuth.maxBytes;
 const channelBrokerInboundInFlightLimiter = createWebhookInFlightLimiter();
 
 function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): true {
@@ -245,10 +248,16 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   };
 
   try {
+    const providerIdHint = normalizeOptionalString(getHeader(params.req, PROVIDER_HEADER));
+    if (providerIdHint && !isListedChannelBrokerProviderId(params.cfg, providerIdHint)) {
+      return sendJson(params.res, 404, { ok: false, error: "provider_not_configured" });
+    }
+
     const body = await readWebhookBodyOrReject({
       req: params.req,
       res: params.res,
       profile: "pre-auth",
+      maxBytes: providerIdHint ? TRUSTED_PROVIDER_BODY_MAX_BYTES : undefined,
       invalidBodyMessage: "invalid payload",
     });
     if (!body.ok) {
@@ -266,7 +275,15 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
       });
     }
 
-    const providerId = extractInboundProviderId(parsedBody);
+    const bodyProviderId = extractInboundProviderId(parsedBody);
+    if (providerIdHint && bodyProviderId && bodyProviderId !== providerIdHint) {
+      return sendJson(params.res, 400, {
+        ok: false,
+        error: "provider_id_mismatch",
+      });
+    }
+
+    const providerId = providerIdHint ?? bodyProviderId;
     if (!providerId) {
       return sendJson(params.res, 400, {
         ok: false,

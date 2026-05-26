@@ -35,6 +35,7 @@ function createRequest(params: {
   signature?: string;
   timestamp?: number | string;
   method?: string;
+  providerIdHeader?: string;
   remoteAddress?: string;
 }): IncomingMessage {
   const req = Readable.from([params.body]) as IncomingMessage;
@@ -42,6 +43,7 @@ function createRequest(params: {
   req.headers = {
     "content-type": "application/json",
     "x-openclaw-broker-timestamp": String(params.timestamp ?? TEST_SIGNATURE_TIMESTAMP),
+    ...(params.providerIdHeader ? { "x-openclaw-broker-provider": params.providerIdHeader } : {}),
     ...(params.signature ? { "x-openclaw-broker-signature": params.signature } : {}),
   };
   if (params.remoteAddress) {
@@ -658,6 +660,43 @@ describe("channel-broker HTTP routes", () => {
             messageId: "image-1",
           }),
         ],
+      }),
+    );
+  });
+
+  it("allows signed provider-scoped inline attachments above the anonymous body limit", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "see image",
+        attachments: [
+          {
+            id: "image-1",
+            mediaType: "image",
+            mimeType: "image/png",
+            contentBase64: "a".repeat(70 * 1024),
+          },
+        ],
+      },
+    });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        providerIdHeader: "acme",
+        signature: sign(body, "broker-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(receiveInboundEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account: expect.objectContaining({ providerId: "acme" }),
       }),
     );
   });
@@ -1976,6 +2015,27 @@ describe("channel-broker HTTP routes", () => {
     expect(res.statusCode).toBe(202);
     expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
     expect(receiveInboundEvent).toHaveBeenCalledOnce();
+  });
+
+  it("rejects inbound broker webhooks when provider header and payload disagree", async () => {
+    const body = inboundBody("user-1", { providerId: "other-provider" });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        providerIdHeader: "acme",
+        signature: sign(body, "broker-secret"),
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: false, error: "provider_id_mismatch" });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
   });
 
   it("applies the pre-auth body limit before signature verification", async () => {
