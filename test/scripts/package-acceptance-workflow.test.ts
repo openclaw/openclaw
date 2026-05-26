@@ -1217,6 +1217,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
     expect(workflow).toContain("Write release validation manifest");
+    expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
     expect(workflow).toContain("Upload release validation manifest");
     expect(workflow).toContain("Failed child detail: ${label}");
     expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
