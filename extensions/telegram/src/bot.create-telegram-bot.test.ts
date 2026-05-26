@@ -1042,7 +1042,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
     expect(payload.Body).toContain("cmd:option_a");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1", { text: "Received" });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
 
   it("acknowledges final-button callbacks before sequentialized processing", async () => {
@@ -1083,15 +1083,13 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-fastlane-1", {
       text: "Proceeding...",
     });
-    expect(sendMessageSpy).toHaveBeenCalledWith(-1007, "Proceeding...", {
-      message_thread_id: 5531,
-    });
+    expect(sendMessageSpy).not.toHaveBeenCalled();
 
     requireValue(releaseSequentializer, "sequentializer release")();
     await runPromise;
   });
 
-  it("does not duplicate visible final-button acknowledgments after the fast lane sends one", async () => {
+  it("sends one visible final-button acknowledgment after authorization passes", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
 
@@ -1132,6 +1130,58 @@ describe("createTelegramBot", () => {
       (call) => call[0] === -1007 && call[1] === "Checking status...",
     );
     expect(visibleAckCalls).toHaveLength(1);
+  });
+
+  it("does not send a visible final-button acknowledgment for unauthorized callbacks", async () => {
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query");
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 108,
+          callback_query: {
+            id: "cbq-final-unauthorized-1",
+            data: "Proceed",
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 108,
+            },
+          },
+        },
+        callbackQuery: {
+          id: "cbq-final-unauthorized-1",
+          data: "Proceed",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 108,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      },
+      finalHandler: callbackHandler,
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-unauthorized-1", {
+      text: "Proceeding...",
+    });
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
   it("falls back to a visible final-button acknowledgment when callback toasts are stale", async () => {
@@ -1235,9 +1285,7 @@ describe("createTelegramBot", () => {
       },
     });
     expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1", {
-      text: "Received",
-    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
   });
 
   it("submits OC_MULTI selections as a synthetic inbound message", async () => {
@@ -1347,9 +1395,7 @@ describe("createTelegramBot", () => {
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
     expect(payload.CommandBody).toBe("/fast status");
     expect(payload.CommandSource).toBe("native");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1", {
-      text: "Received",
-    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
