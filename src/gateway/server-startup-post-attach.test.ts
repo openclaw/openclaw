@@ -964,7 +964,7 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
       });
 
-      sidecar.stop();
+      await sidecar.stop();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(hoisted.warmCurrentProviderAuthState).not.toHaveBeenCalled();
 
@@ -1400,7 +1400,7 @@ describe("startGatewayPostAttachRuntime", () => {
     if (!resolveWatcher) {
       throw new Error("Expected gmail watcher resolver to be initialized");
     }
-    result.postReadySidecars[0]?.stop();
+    await result.postReadySidecars[0]?.stop();
     expect(watcherSignal?.aborted).toBe(true);
     resolveWatcher();
   });
@@ -1459,7 +1459,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(result.postReadySidecars).toHaveLength(1);
-    result.postReadySidecars[0]?.stop();
+    await result.postReadySidecars[0]?.stop();
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
@@ -1503,7 +1503,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.waitFor(() => {
         expect(releaseImport).toBeDefined();
       });
-      result.postReadySidecars[0]?.stop();
+      await result.postReadySidecars[0]?.stop();
       releaseImport?.();
       await new Promise<void>((resolve) => setImmediate(resolve));
 

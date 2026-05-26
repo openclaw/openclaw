@@ -57,7 +57,7 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
     return;
   }
   for (const postReadySidecar of params.postReadySidecars) {
-    postReadySidecar.stop();
+    void postReadySidecar.stop();
   }
 }
 
