@@ -1576,6 +1576,93 @@ describe("CLI attempt execution", () => {
     );
   });
 
+  it("mirrors only the ACP reply when the shared recorder already persisted the user turn", async () => {
+    const sessionKey = "agent:main:direct:acp-recorder-owned-user";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-recorder-owned-user",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+      {
+        message: {
+          role: "user",
+          content: "canonical current ask",
+          timestamp: Date.now(),
+        },
+        cwd: tmpDir,
+      },
+    );
+
+    await persistAcpTurnTranscript({
+      body: "canonical current ask",
+      finalText: "hello from acp",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      skipUserTurn: true,
+    });
+
+    const messages = await readSessionMessages(
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: sessionEntry.sessionId,
+        storePath,
+      }),
+    );
+    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "hello from acp" }],
+      }),
+    );
+  });
+
+  it("touches the session after a recorder-owned ACP turn with no visible reply", async () => {
+    const sessionKey = "agent:main:direct:acp-recorder-owned-empty";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-recorder-owned-empty",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+
+    await persistAcpTurnTranscript({
+      body: "canonical current ask",
+      finalText: "",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      skipUserTurn: true,
+    });
+
+    const persisted = readSessionStore();
+    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(1);
+    expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
+    expect(
+      await readSessionMessages(
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: sessionEntry.sessionId,
+          storePath,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
   it("persists a media-only ACP user turn when the reply is empty", async () => {
     const sessionKey = "agent:main:direct:acp-media-only";
     const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");

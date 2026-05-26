@@ -1174,6 +1174,12 @@ async function agentCommandInternal(
         let stopReason: string | undefined;
         let resultStatus: "completed" | "cancelled" | undefined;
         let terminalOutcome: "blocked" | undefined;
+        let acpSessionCwd = workspaceDir;
+        let acpInternalTarget:
+          | Awaited<ReturnType<typeof prepareInternalSessionEffectsSession>>
+          | undefined;
+        let acpUserTurnHandled: boolean;
+        let acpTranscriptPersistenceBlocked = false;
         try {
           const {
             resolveAcpAgentPolicyError,
@@ -1195,6 +1201,86 @@ async function agentCommandInternal(
           if (agentPolicyError) {
             terminalOutcome = "blocked";
             throw agentPolicyError;
+          }
+
+          try {
+            const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
+            acpSessionCwd = resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir;
+            const internalSource = suppressVisibleSessionEffects
+              ? resolveInternalSessionEffectsSource({
+                  agentId: sessionAgentId,
+                  sessionId,
+                  sessionKey,
+                  storePath,
+                })
+              : undefined;
+            acpInternalTarget = suppressVisibleSessionEffects
+              ? await prepareInternalSessionEffectsSession({
+                  agentId: sessionAgentId,
+                  cwd: acpSessionCwd,
+                  runId,
+                  source: internalSource,
+                  storePath,
+                })
+              : undefined;
+            trackInternalModelRunTarget(acpInternalTarget);
+            const transcriptMedia = opts.transcriptMedia ?? [];
+            const suppressUserTurnPersistence =
+              opts.suppressPromptPersistence === true ||
+              (opts.transcriptMessage === "" && transcriptMedia.length === 0);
+            const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+              ...(!suppressUserTurnPersistence && (transcriptBody || transcriptMedia.length > 0)
+                ? {
+                    input: {
+                      text: transcriptBody,
+                      ...(transcriptMedia.length > 0
+                        ? {
+                            media: transcriptMedia,
+                            mediaOnlyText: "[User sent media without caption]",
+                          }
+                        : {}),
+                    },
+                  }
+                : {}),
+              target: {
+                sessionId: acpInternalTarget?.sessionId ?? sessionId,
+                ...(!acpInternalTarget ? { expectedSessionId: sessionId } : {}),
+                agentId: acpInternalTarget?.agentId ?? sessionAgentId,
+                sessionKey: acpInternalTarget?.sessionKey ?? sessionKey,
+                sessionEntry: acpInternalTarget?.sessionEntry ?? sessionEntry,
+                sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+                storePath: acpInternalTarget?.storePath ?? storePath,
+                threadId: opts.threadId,
+                cwd: acpSessionCwd,
+                config: cfg,
+              },
+              beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+              errorContext: "ACP user turn transcript",
+            });
+            if (suppressUserTurnPersistence) {
+              userTurnTranscriptRecorder.markBlocked();
+            }
+            const persistedUserTurn = await userTurnTranscriptRecorder.persistApproved({
+              cwd: acpSessionCwd,
+            });
+            if (
+              !persistedUserTurn &&
+              !userTurnTranscriptRecorder.hasPersisted() &&
+              (await userTurnTranscriptRecorder.resolveMessage())
+            ) {
+              userTurnTranscriptRecorder.markBlocked();
+            }
+            acpUserTurnHandled =
+              userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked();
+            if (!acpInternalTarget && persistedUserTurn?.sessionEntry) {
+              sessionEntry = persistedUserTurn.sessionEntry;
+            }
+          } catch (error) {
+            acpUserTurnHandled = false;
+            acpTranscriptPersistenceBlocked = suppressVisibleSessionEffects && !acpInternalTarget;
+            log.warn(
+              `ACP pre-turn transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
+            );
           }
 
           const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
@@ -1278,57 +1364,43 @@ async function agentCommandInternal(
 
         const finalTextRaw = visibleTextAccumulator.finalizeRaw();
         const finalText = visibleTextAccumulator.finalize();
-        try {
-          const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
-          const internalSource = suppressVisibleSessionEffects
-            ? resolveInternalSessionEffectsSource({
-                agentId: sessionAgentId,
-                sessionId,
-                sessionKey,
-                storePath,
-              })
-            : undefined;
-          const internalTarget = suppressVisibleSessionEffects
-            ? await prepareInternalSessionEffectsSession({
-                agentId: sessionAgentId,
-                cwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
-                runId,
-                source: internalSource,
-                storePath,
-              })
-            : undefined;
-          trackInternalModelRunTarget(internalTarget);
-          const transcriptSessionEntry = internalTarget?.sessionEntry ?? sessionEntry;
-          const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
-            body,
-            transcriptBody,
-            ...(opts.suppressPromptPersistence !== true && opts.transcriptMedia?.length
-              ? {
-                  userInput: {
-                    text: transcriptBody,
-                    media: opts.transcriptMedia,
-                    mediaOnlyText: "[User sent media without caption]",
-                  },
-                }
-              : {}),
-            finalText: finalTextRaw,
-            sessionId: internalTarget?.sessionId ?? sessionId,
-            sessionKey: internalTarget?.sessionKey ?? sessionKey,
-            sessionEntry: transcriptSessionEntry,
-            sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
-            storePath: internalTarget?.storePath ?? storePath,
-            sessionAgentId: internalTarget?.agentId ?? sessionAgentId,
-            threadId: opts.threadId,
-            sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
-            config: cfg,
-          });
-          if (!internalTarget) {
-            sessionEntry = transcriptResult.sessionEntry;
+        if (!acpTranscriptPersistenceBlocked) {
+          try {
+            const transcriptSessionEntry = acpInternalTarget?.sessionEntry ?? sessionEntry;
+            const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
+              body,
+              transcriptBody,
+              ...(acpUserTurnHandled ? { skipUserTurn: true } : {}),
+              ...(!acpUserTurnHandled &&
+              opts.suppressPromptPersistence !== true &&
+              opts.transcriptMedia?.length
+                ? {
+                    userInput: {
+                      text: transcriptBody,
+                      media: opts.transcriptMedia,
+                      mediaOnlyText: "[User sent media without caption]",
+                    },
+                  }
+                : {}),
+              finalText: finalTextRaw,
+              sessionId: acpInternalTarget?.sessionId ?? sessionId,
+              sessionKey: acpInternalTarget?.sessionKey ?? sessionKey,
+              sessionEntry: transcriptSessionEntry,
+              sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
+              storePath: acpInternalTarget?.storePath ?? storePath,
+              sessionAgentId: acpInternalTarget?.agentId ?? sessionAgentId,
+              threadId: opts.threadId,
+              sessionCwd: acpSessionCwd,
+              config: cfg,
+            });
+            if (!acpInternalTarget) {
+              sessionEntry = transcriptResult.sessionEntry;
+            }
+          } catch (error) {
+            log.warn(
+              `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
+            );
           }
-        } catch (error) {
-          log.warn(
-            `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
-          );
         }
         const restartAbortReason = opts.abortSignal?.reason;
         if (isAgentRunRestartAbortReason(restartAbortReason)) {
