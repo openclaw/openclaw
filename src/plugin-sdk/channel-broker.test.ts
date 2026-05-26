@@ -329,6 +329,20 @@ describe("channel-broker SDK", () => {
     ).toThrow("broker message text must be a string");
   });
 
+  it("preserves intentional inbound message whitespace", () => {
+    const event = normalizeBrokerInboundEvent({
+      version: BROKER_PROTOCOL_VERSION,
+      eventId: "evt-1",
+      providerId: "acme",
+      platform: "telegram",
+      conversation: { id: "chat-1", type: "channel" },
+      sender: { id: "user-1" },
+      message: { id: "msg-1", text: "  pasted code  \n" },
+    });
+
+    expect(event.message.text).toBe("  pasted code  \n");
+  });
+
   it("merges provider-wide and platform-specific capability badges", () => {
     const capabilities: BrokerProviderCapabilities = {
       providerId: "acme",
