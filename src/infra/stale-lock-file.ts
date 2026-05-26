@@ -24,12 +24,20 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
   isPidDefinitelyDead?: (pid: number) => boolean;
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
-  if (payload?.pid) {
-    return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
+  if (!payload) {
+    return false;
   }
-  if (payload?.createdAt) {
+  // createdAt expiry must be evaluated before pid liveness: the OS can recycle
+  // a dead owner's pid to an unrelated process, in which case a still-alive
+  // probe would otherwise pin a stale lock open past `staleMs` forever.
+  if (payload.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
-    return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
+    if (!Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs) {
+      return true;
+    }
+  }
+  if (payload.pid) {
+    return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
   }
   return false;
 }

@@ -117,7 +117,7 @@ describe("acquireFileLock", () => {
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
   });
 
-  it("keeps a reported stale lock when its owner pid is alive", async () => {
+  it("keeps a reported stale lock when its owner pid is alive and createdAt is still fresh", async () => {
     const filePath = path.join(tempDir, "live-owner");
     const lockPath = `${filePath}.lock`;
     const options = {
@@ -127,12 +127,12 @@ describe("acquireFileLock", () => {
         minTimeout: 1,
         maxTimeout: 1,
       },
-      stale: 10,
+      stale: 10_000,
     } as const;
 
     await fs.writeFile(
       lockPath,
-      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
       "utf8",
     );
 
@@ -151,6 +151,34 @@ describe("acquireFileLock", () => {
     });
     await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
     await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+  });
+
+  it("removes a reported stale lock when createdAt is older than stale even if the recorded pid is currently alive (pid reuse safeguard)", async () => {
+    const filePath = path.join(tempDir, "pid-reuse");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 0,
+        factor: 1,
+        minTimeout: 1,
+        maxTimeout: 1,
+      },
+      stale: 10,
+    } as const;
+
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      "utf8",
+    );
+
+    const lock = await acquireFileLock(filePath, options);
+    try {
+      await expect(fs.realpath(lock.lockPath)).resolves.toBe(await fs.realpath(lockPath));
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid"`);
+    } finally {
+      await lock.release();
+    }
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
