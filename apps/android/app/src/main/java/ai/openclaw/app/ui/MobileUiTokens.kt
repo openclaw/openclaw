@@ -104,3 +104,4 @@ internal val mobileCaption2 =
     lineHeight = 14.sp,
     letterSpacing = 0.4.sp,
   )
+
