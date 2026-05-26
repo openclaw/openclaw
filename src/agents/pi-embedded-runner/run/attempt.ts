@@ -1034,11 +1034,11 @@ function installRuntimeContextMessageForPrompt(params: {
   };
   install();
   const agent = session.agent;
-  const originalContinue = agent.continue;
+  const originalContinue = Reflect.get(agent, "continue", agent).bind(agent) as () => Promise<void>;
   agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
     // Pi overflow recovery can rebuild state from the persisted branch before retrying.
     install();
-    return originalContinue.call(this);
+    return originalContinue();
   };
   return () => {
     agent.continue = originalContinue;
