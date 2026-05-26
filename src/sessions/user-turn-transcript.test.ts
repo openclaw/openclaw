@@ -17,7 +17,6 @@ import {
   createUserTurnTranscriptRecorder,
   persistUserTurnTranscript,
   resolvePersistedUserTurnText,
-  tryPersistInlineUserTurnTranscript,
 } from "./user-turn-transcript.js";
 
 describe("user turn transcript persistence", () => {
@@ -683,45 +682,6 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           role: "user",
           content: "pending failed turn",
-        }),
-      ]);
-    });
-  });
-
-  describe("tryPersistInlineUserTurnTranscript", () => {
-    it("persists clean text turns with inline transcript update policy", async () => {
-      const dir = createTempDir("openclaw-user-turn-inline-");
-      const transcriptPath = path.join(dir, "session.jsonl");
-      const sessionStore = {
-        main: {
-          sessionId: "session-1",
-          sessionFile: transcriptPath,
-          updatedAt: 1,
-        },
-      };
-
-      const persisted = await tryPersistInlineUserTurnTranscript({
-        sessionId: "session-1",
-        sessionKey: "main",
-        sessionEntry: sessionStore.main,
-        sessionStore,
-        storePath: path.join(dir, "sessions.json"),
-        agentId: "agent",
-        cwd: dir,
-        text: "display prompt",
-        timestamp: 123,
-      });
-
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "display prompt",
-        timestamp: 123,
-      });
-      expect(readTranscriptMessages(persisted?.sessionFile ?? "")).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "display prompt",
-          timestamp: 123,
         }),
       ]);
     });

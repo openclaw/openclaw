@@ -124,33 +124,6 @@ export type CreateUserTurnTranscriptRecorderParams = {
   onPersistenceError?: (error: unknown) => void;
 };
 
-type InlineUserTurnTranscriptSource =
-  | {
-      message: PersistedUserTurnMessage;
-      input?: UserTurnInput;
-      text?: string | null;
-      timestamp?: number;
-    }
-  | {
-      message?: undefined;
-      input: UserTurnInput;
-      text?: string | null;
-      timestamp?: number;
-    }
-  | {
-      message?: undefined;
-      input?: undefined;
-      text: string;
-      timestamp?: number;
-    };
-
-export type PersistInlineUserTurnTranscriptParams = UserTurnTranscriptPersistenceTarget &
-  InlineUserTurnTranscriptSource;
-
-export type TryPersistInlineUserTurnTranscriptParams = PersistInlineUserTurnTranscriptParams & {
-  errorContext?: string;
-};
-
 export type PersistedUserTurnTextFieldSource = {
   Transcript?: string | null;
   RawBody?: string | null;
@@ -483,51 +456,6 @@ export async function persistUserTurnTranscript(
     ...appended,
     sessionEntry,
   };
-}
-
-export async function persistInlineUserTurnTranscript(
-  params: PersistInlineUserTurnTranscriptParams,
-): ReturnType<typeof persistUserTurnTranscript> {
-  const target: UserTurnTranscriptPersistenceTarget = {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    ...(params.sessionStore ? { sessionStore: params.sessionStore } : {}),
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-    agentId: params.agentId,
-    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-    ...(params.cwd ? { cwd: params.cwd } : {}),
-    ...(params.config ? { config: params.config } : {}),
-  };
-  const userTurn = params.message
-    ? { message: params.message }
-    : params.input
-      ? { input: params.input }
-      : {
-          input: {
-            text: params.text,
-            timestamp: params.timestamp ?? Date.now(),
-          },
-        };
-
-  return await persistUserTurnTranscript({
-    ...target,
-    ...userTurn,
-    updateMode: "inline",
-  });
-}
-
-export async function tryPersistInlineUserTurnTranscript(
-  params: TryPersistInlineUserTurnTranscriptParams,
-): ReturnType<typeof persistUserTurnTranscript> {
-  try {
-    return await persistInlineUserTurnTranscript(params);
-  } catch (error) {
-    logVerbose(
-      `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
-    );
-    return undefined;
-  }
 }
 
 async function resolveUserTurnTranscriptTarget(
