@@ -16,6 +16,17 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
+const CANVAS_COMMANDS = [
+  "canvas.a2ui.push",
+  "canvas.a2ui.pushJSONL",
+  "canvas.a2ui.reset",
+  "canvas.eval",
+  "canvas.hide",
+  "canvas.navigate",
+  "canvas.present",
+  "canvas.snapshot",
+];
+
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
 const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
@@ -108,6 +119,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
     ...SCREEN_COMMANDS,
+    ...CANVAS_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
   windows: [

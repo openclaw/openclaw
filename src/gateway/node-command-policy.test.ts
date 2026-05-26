@@ -168,6 +168,11 @@ describe("gateway/node-command-policy", () => {
     expect(macAllowlist.has("system.run")).toBe(false);
     expect(macAllowlist.has("system.which")).toBe(false);
     expect(macAllowlist.has("screen.snapshot")).toBe(false);
+    // canvas commands are native to the macOS node app and must be in the
+    // platform defaults (sister fix to #57169 for screen.record)
+    expect(macAllowlist.has("canvas.present")).toBe(true);
+    expect(macAllowlist.has("canvas.snapshot")).toBe(true);
+    expect(macAllowlist.has("canvas.eval")).toBe(true);
   });
 
   it("keeps explicitly approved host commands for desktop platforms", () => {
