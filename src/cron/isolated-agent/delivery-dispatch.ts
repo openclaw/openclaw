@@ -17,6 +17,7 @@ import {
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -58,11 +59,17 @@ type NormalizedSilentReplyText = {
   strippedTrailingSilentToken: boolean;
 };
 
-function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
+export function normalizeCronOutboundReplyText(
+  text: string | undefined,
+): NormalizedSilentReplyText {
   if (!text) {
     return { text, strippedTrailingSilentToken: false };
   }
-  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+  // Whole-text control tokens — SILENT, REPLY_SKIP, ANNOUNCE_SKIP. The
+  // chat-display path already drops these via `isSuppressedControlReplyText`;
+  // applying the same contract here closes the cron-announce leak in #85421
+  // where bare `REPLY_SKIP` replies posted verbatim to Discord.
+  if (isSuppressedControlReplyText(text)) {
     return { text: undefined, strippedTrailingSilentToken: false };
   }
 
@@ -828,7 +835,7 @@ export async function dispatchCronDelivery(
           if (!p.text) {
             return p;
           }
-          const normalized = normalizeSilentReplyText(p.text);
+          const normalized = normalizeCronOutboundReplyText(p.text);
           return Object.assign({}, p, {
             text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
           });
@@ -1177,7 +1184,7 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
+    const normalizedSynthesizedText = normalizeCronOutboundReplyText(synthesizedText);
     if (
       normalizedSynthesizedText.text === undefined ||
       normalizedSynthesizedText.strippedTrailingSilentToken
