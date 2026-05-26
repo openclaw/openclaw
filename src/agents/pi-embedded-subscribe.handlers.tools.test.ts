@@ -1852,3 +1852,440 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
   });
 });
+
+describe("handleToolExecutionUpdate non-exec progress", () => {
+  afterEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  it("populates progressText on the kind:'tool' item for non-exec partialResult", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-progress",
+        args: { url: "https://example.com/page" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-progress",
+        partialResult: {
+          content: [{ type: "text", text: "web_fetch: connecting to example.com…" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    const itemUpdates = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string; phase?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      );
+    expect(itemUpdates.length).toBeGreaterThanOrEqual(1);
+    const lastItem = itemUpdates.at(-1) as { data?: Record<string, unknown> };
+    expect(lastItem?.data?.progressText).toBe("web_fetch: connecting to example.com…");
+  });
+
+  it("does not add progressText for exec tools on the kind:'tool' item (regression)", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-no-tool-progressText",
+        args: { command: "ls" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-no-tool-progressText",
+        partialResult: {
+          details: { status: "running", aggregated: "file1\nfile2" },
+        },
+      } as never,
+    );
+
+    const toolItemUpdates = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      );
+    expect(toolItemUpdates.length).toBeGreaterThanOrEqual(1);
+    for (const evt of toolItemUpdates) {
+      const data = (evt as { data?: Record<string, unknown> }).data ?? {};
+      expect(data).not.toHaveProperty("progressText");
+    }
+    // Exec still flows progressText through the kind:'command' item (the
+    // existing exec path is untouched).
+    const commandItemUpdates = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "command" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      );
+    expect(commandItemUpdates.length).toBeGreaterThanOrEqual(1);
+    const lastCommand = commandItemUpdates.at(-1) as { data?: Record<string, unknown> };
+    expect(lastCommand?.data?.progressText).toContain("file1");
+  });
+
+  it("emits upstream stream:'tool' partialResult unthrottled for non-exec while throttling channel-visible item updates with a burst budget", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-throttle",
+        args: { url: "https://example.com/" },
+      } as never,
+    );
+
+    const startEventCount = events.length;
+    const startCallbackCount = onAgentEvent.mock.calls.length;
+
+    // 5 partials back-to-back within the same time window. The upstream
+    // tool stream must deliver all five (ACP/TUI/gateway consumers depend
+    // on it). The channel-visible item path gets a burst budget of 4 then
+    // throttles the 5th.
+    for (let i = 0; i < 5; i += 1) {
+      handleToolExecutionUpdate(
+        ctx as never,
+        {
+          type: "tool_execution_update",
+          toolName: "web_fetch",
+          toolCallId: "tool-non-exec-throttle",
+          partialResult: {
+            content: [{ type: "text", text: `web_fetch: milestone-${i}` }],
+            details: { status: "running" },
+          },
+        } as never,
+      );
+    }
+
+    const upstreamUpdateEvents = events
+      .slice(startEventCount)
+      .filter(
+        (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+      );
+    expect(upstreamUpdateEvents).toHaveLength(5);
+
+    const itemUpdateCallbacks = onAgentEvent.mock.calls
+      .slice(startCallbackCount)
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      );
+    expect(itemUpdateCallbacks).toHaveLength(4);
+    for (const evt of itemUpdateCallbacks) {
+      const data = (evt as { data?: { progressText?: string } }).data ?? {};
+      expect(typeof data.progressText).toBe("string");
+      expect((data.progressText as string).startsWith("web_fetch: milestone-")).toBe(true);
+    }
+
+    resetAgentEventsForTest();
+  });
+
+  it("allows web_fetch's two-emit sequence (connect → headers) within a single throttle window (regression for Codex pass 2 P2)", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-web-fetch-two-emit",
+        args: { url: "https://example.com/" },
+      } as never,
+    );
+
+    const startCallbackCount = onAgentEvent.mock.calls.length;
+
+    // Both web_fetch emit boundaries fire well within 250 ms when TTFB is fast.
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-web-fetch-two-emit",
+        partialResult: {
+          content: [{ type: "text", text: "web_fetch: connecting to example.com…" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-web-fetch-two-emit",
+        partialResult: {
+          content: [{ type: "text", text: "web_fetch: HTTP 200 text/html, reading body…" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    const itemUpdateProgressTexts = onAgentEvent.mock.calls
+      .slice(startCallbackCount)
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      )
+      .map((evt) => (evt as { data?: { progressText?: string } }).data?.progressText);
+
+    expect(itemUpdateProgressTexts).toEqual([
+      "web_fetch: connecting to example.com…",
+      "web_fetch: HTTP 200 text/html, reading body…",
+    ]);
+  });
+
+  it("non-allowlisted non-exec tools emit upstream partialResult but never produce a channel-visible item update with progressText (privacy)", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "third_party_plugin_tool",
+        toolCallId: "tool-non-allowlisted",
+        args: {},
+      } as never,
+    );
+
+    const startEventCount = events.length;
+    const startCallbackCount = onAgentEvent.mock.calls.length;
+
+    // Simulate a non-allowlisted tool emitting an `onUpdate` payload that
+    // contains content which would be unsafe to render (URL + secret).
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "third_party_plugin_tool",
+        toolCallId: "tool-non-allowlisted",
+        partialResult: {
+          content: [
+            {
+              type: "text",
+              text: "fetched https://internal-api.example.com/secrets?token=ABC123 OK 200",
+            },
+          ],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    // Upstream stream:"tool" partialResult must still fire (ACP/TUI/gateway
+    // consumers depend on it for plugin tool partial results).
+    const upstreamUpdates = events
+      .slice(startEventCount)
+      .filter(
+        (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+      );
+    expect(upstreamUpdates).toHaveLength(1);
+
+    // Channel-visible item event must NOT fire because (a) no progressText
+    // would be added (tool not in allow-list) and (b) we skip the bare item
+    // to avoid A/B/A draft churn.
+    const itemUpdateCallbacks = onAgentEvent.mock.calls
+      .slice(startCallbackCount)
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool" &&
+          (arg as { data?: { phase?: string } })?.data?.phase === "update",
+      );
+    expect(itemUpdateCallbacks).toHaveLength(0);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps non-exec progressText length at LIVE_EXEC_OUTPUT_MAX_CHARS", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const huge = "y".repeat(9000);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-cap",
+        args: { url: "https://example.com/" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-cap",
+        partialResult: {
+          content: [{ type: "text", text: huge }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    const itemUpdates = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg: unknown) =>
+          (arg as { stream?: string })?.stream === "item" &&
+          (arg as { data?: { kind?: string } })?.data?.kind === "tool",
+      );
+    const lastItem = itemUpdates.at(-1) as { data?: { progressText?: string } } | undefined;
+    expect(typeof lastItem?.data?.progressText).toBe("string");
+    expect((lastItem?.data?.progressText as string).length).toBeLessThan(huge.length);
+    expect(lastItem?.data?.progressText as string).toContain("(live output truncated)");
+  });
+
+  it("clears non-exec throttle state on tool execution end", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-cleanup",
+        args: { url: "https://example.com/" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-cleanup",
+        partialResult: {
+          content: [{ type: "text", text: "first update" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.nonExecLiveUpdateStateById?.has("tool-non-exec-cleanup")).toBe(true);
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "web_fetch",
+        toolCallId: "tool-non-exec-cleanup",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: '{"ok":true}' }],
+          details: { status: "completed" },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.nonExecLiveUpdateStateById?.has("tool-non-exec-cleanup")).toBe(false);
+  });
+
+  it("does not throttle one tool call against another (per-callId state)", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "call-A",
+        args: { url: "https://example.com/" },
+      } as never,
+    );
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "web_fetch",
+        toolCallId: "call-B",
+        args: { url: "https://example.org/" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "call-A",
+        partialResult: {
+          content: [{ type: "text", text: "A: connecting" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "call-B",
+        partialResult: {
+          content: [{ type: "text", text: "B: connecting" }],
+          details: { status: "running" },
+        },
+      } as never,
+    );
+
+    const updateEvents = events.filter(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "update",
+    );
+    // Both calls should emit because the throttle is keyed by toolCallId.
+    expect(updateEvents).toHaveLength(2);
+
+    resetAgentEventsForTest();
+  });
+});

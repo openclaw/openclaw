@@ -47,6 +47,16 @@ export type EmbeddedPiSubscribeState = {
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
+  /**
+   * Per-toolCall throttle state for non-exec tools that emit `partialResult`
+   * progress. The shape differs from `execLiveUpdateStateById` because the
+   * non-exec rate-limit allows a small unthrottled burst before applying the
+   * time-based interval — short bounded progress sequences (e.g. web_fetch's
+   * `connecting` + `headers received` milestones landing within the same
+   * 250 ms window) must both reach channel progress drafts. Cleared in
+   * `handleToolExecutionEnd`.
+   */
+  nonExecLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number; emitsSoFar: number }>;
   itemActiveIds: Set<string>;
   itemStartedCount: number;
   itemCompletedCount: number;
@@ -220,6 +230,7 @@ type ToolHandlerState = Pick<
   | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"
+  | "nonExecLiveUpdateStateById"
   | "itemActiveIds"
   | "itemStartedCount"
   | "itemCompletedCount"

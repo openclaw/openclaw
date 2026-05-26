@@ -1,3 +1,4 @@
+import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -267,6 +268,44 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   return trimmed || undefined;
 }
 
+/**
+ * Safe host-only label for progress text. Strips path/query/auth/fragment so
+ * progress updates never carry tokens, search terms, or other URL-borne
+ * sensitive data into channel-visible draft lines.
+ */
+function safeHostForProgress(rawUrl: string): string {
+  try {
+    const host = new URL(rawUrl).host;
+    return host || "url";
+  } catch {
+    return "url";
+  }
+}
+
+/** Build a minimal AgentToolResult shape for the `onUpdate` progress callback. */
+function buildWebFetchProgressUpdate(text: string): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text }],
+    details: { status: "running" },
+  };
+}
+
+function emitWebFetchProgress(
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  text: string,
+): void {
+  if (!onUpdate) {
+    return;
+  }
+  try {
+    onUpdate(buildWebFetchProgressUpdate(text));
+  } catch (error) {
+    // Progress callback is best-effort. A misbehaving consumer must not break
+    // the fetch itself; log and continue.
+    logDebug(`[web-fetch] progress callback failed: ${String(error)}`);
+  }
+}
+
 type WebFetchRuntimeParams = {
   url: string;
   extractMode: ExtractMode;
@@ -286,6 +325,16 @@ type WebFetchRuntimeParams = {
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
+  /**
+   * Optional progress callback. When supplied, runWebFetch emits short status
+   * updates at "connecting" and "headers received" boundaries so channel
+   * progress drafts surface activity during slow TTFB on web_fetch turns.
+   *
+   * Payloads carry only the request host and HTTP status / short content-type;
+   * URL paths, query strings, request bodies, and response headers are never
+   * included.
+   */
+  onUpdate?: AgentToolUpdateCallback<unknown>;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -425,6 +474,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
 
+  const progressHost = safeHostForProgress(params.url);
+  emitWebFetchProgress(params.onUpdate, `web_fetch: connecting to ${progressHost}…`);
+
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null = null;
@@ -449,6 +501,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    const headerContentType = normalizeContentType(res.headers.get("content-type"));
+    const headerStatusLabel = headerContentType
+      ? `HTTP ${res.status} ${headerContentType}`
+      : `HTTP ${res.status}`;
+    emitWebFetchProgress(params.onUpdate, `web_fetch: ${headerStatusLabel}, reading body…`);
 
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
@@ -630,7 +688,7 @@ export function createWebFetchTool(options?: {
     description:
       "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     parameters: WebFetchSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, onUpdate) => {
       const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
         {
           config: options?.config,
@@ -702,6 +760,7 @@ export function createWebFetchTool(options?: {
         ...(providerCacheKey ? { providerCacheKey } : {}),
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
+        ...(onUpdate ? { onUpdate } : {}),
       });
       return jsonResult(result);
     },

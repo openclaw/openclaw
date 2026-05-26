@@ -76,6 +76,15 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+/**
+ * Number of initial `partialResult` updates per non-exec tool call that bypass
+ * the time-based throttle. Set to a small bound so short bounded progress
+ * sequences (e.g. `web_fetch`'s connect + headers-received milestones, which
+ * can both land within 250 ms when the remote TTFB is fast) reach channel
+ * progress drafts without being suppressed.
+ */
+const NON_EXEC_LIVE_UPDATE_UNTHROTTLED_BURST = 4;
+
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
@@ -356,6 +365,74 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
   }
   state.set(toolCallId, { lastEmittedAtMs: now });
   return true;
+}
+
+/**
+ * Per-tool-call rate-limit for non-exec progress updates. Tools listed in
+ * `NON_EXEC_PROGRESS_SAFE_TOOLS` emit short bounded progress sequences whose
+ * semantic milestones (connect → headers → …) frequently land within a
+ * single 250 ms window when the remote responds quickly. Allow the first
+ * `NON_EXEC_LIVE_UPDATE_UNTHROTTLED_BURST` updates per tool call unthrottled
+ * so those milestones reach channel progress drafts, then apply the same
+ * 250 ms floor as exec to keep behavior predictable for any future tool that
+ * is added to the allow-list with a longer emission tail.
+ */
+function shouldEmitLiveNonExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
+  const now = Date.now();
+  const state =
+    ctx.state.nonExecLiveUpdateStateById ??
+    new Map<string, { lastEmittedAtMs: number; emitsSoFar: number }>();
+  ctx.state.nonExecLiveUpdateStateById = state;
+  const previous = state.get(toolCallId);
+  const emitsSoFar = previous?.emitsSoFar ?? 0;
+  if (emitsSoFar < NON_EXEC_LIVE_UPDATE_UNTHROTTLED_BURST) {
+    state.set(toolCallId, { lastEmittedAtMs: now, emitsSoFar: emitsSoFar + 1 });
+    return true;
+  }
+  if (previous && now - previous.lastEmittedAtMs < LIVE_EXEC_UPDATE_MIN_INTERVAL_MS) {
+    return false;
+  }
+  state.set(toolCallId, { lastEmittedAtMs: now, emitsSoFar: emitsSoFar + 1 });
+  return true;
+}
+
+/**
+ * Allow-list of non-exec tool names whose `partialResult` `onUpdate` payload
+ * is contractually safe to surface as visible channel progress text.
+ *
+ * Each entry here promises that the tool's `onUpdate` payload first-text-block
+ * contains only host-class / status-class data and never carries:
+ *   - full URL with path/query/fragment
+ *   - request body / response body content
+ *   - response headers (cookies, auth tokens, set-cookie)
+ *   - tool arguments other than safe summaries
+ *
+ * Adding a new entry requires auditing that tool's `onUpdate` call sites and
+ * confirming the contract holds — see `src/agents/tools/web-fetch.ts`
+ * `emitWebFetchProgress` for the reference contract.
+ */
+const NON_EXEC_PROGRESS_SAFE_TOOLS: ReadonlySet<string> = new Set(["web_fetch"]);
+
+function isNonExecProgressSafeTool(toolName: string): boolean {
+  return NON_EXEC_PROGRESS_SAFE_TOOLS.has(toolName);
+}
+
+/**
+ * Extract a safe progress string from a non-exec `partialResult`. Reads the
+ * first text content block produced by the tool's `onUpdate` callback and
+ * caps it at the same character budget as the exec live-output path so it
+ * never flushes large bodies into a channel progress draft.
+ *
+ * The caller MUST gate by `isNonExecProgressSafeTool(toolName)` before
+ * invoking this helper. The safe-tool allow-list is the contract boundary;
+ * this helper performs no semantic filtering of its own.
+ */
+function extractLiveNonExecProgressText(result: unknown): string | undefined {
+  const text = extractToolResultText(result);
+  if (typeof text !== "string" || text.length === 0) {
+    return undefined;
+  }
+  return truncateLiveExecOutput(text);
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
@@ -1062,6 +1139,11 @@ export function handleToolExecutionUpdate(
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
+  // Upstream `stream:"tool"` `partialResult` is consumed by ACP `tool_call_update`,
+  // TUI verbose output, and gateway subscribers — keep it unthrottled for non-exec
+  // so existing streaming consumers do not silently drop plugin tool partials.
+  // Exec retains its existing 250 ms throttle on this path because exec lives
+  // alone alongside the heavier `kind:"command"` rendering downstream.
   const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
@@ -1075,17 +1157,50 @@ export function handleToolExecutionUpdate(
       },
     });
   }
-  const itemData: AgentItemEventData = {
-    itemId: buildToolItemId(toolCallId),
-    phase: "update",
-    kind: "tool",
-    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
-    status: "running",
-    name: toolName,
-    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
-    toolCallId,
-  };
-  emitTrackedItemEvent(ctx, itemData);
+  // Channel-visible progress draft path: surface `progressText` on the
+  // `stream:"item"` `kind:"tool"` event so channel renderers (which already
+  // consume `progressText` for exec command items) show a visible draft line
+  // during long silent gaps such as a slow web_fetch connect.
+  //
+  // Privacy: only tools in `NON_EXEC_PROGRESS_SAFE_TOOLS` populate
+  // `progressText` from `partialResult`. Other non-exec tools may emit text
+  // partials carrying URLs, tokens, or response snippets that must not leak
+  // into a channel-visible draft.
+  //
+  // Throttle: a separate `shouldEmitLiveNonExecUpdate` budget governs ONLY
+  // this channel-render path, with a small unthrottled burst so short bounded
+  // progress sequences (web_fetch's connect + headers milestones, which can
+  // both land within 250 ms when TTFB is fast) reach the draft. The upstream
+  // tool stream above is unaffected by this decision.
+  const nonExecProgressText =
+    !isExecTool &&
+    isNonExecProgressSafeTool(toolName) &&
+    shouldEmitLiveNonExecUpdate(ctx, toolCallId)
+      ? extractLiveNonExecProgressText(sanitized)
+      : undefined;
+
+  // For non-exec tools, emit the item update only when there is fresh
+  // `progressText` to render. Letting the bare item event through without
+  // `progressText` would cause the channel progress draft to alternate
+  // between the useful progress text and the default tool-name label
+  // (A/B/A churn). Exec keeps the unconditional emit because its sibling
+  // `kind:"command"` item carries the `progressText` (the `kind:"tool"`
+  // item is just the tool-name label and does not alternate).
+  const shouldEmitToolItemUpdate = isExecTool || Boolean(nonExecProgressText);
+  if (shouldEmitToolItemUpdate) {
+    const itemData: AgentItemEventData = {
+      itemId: buildToolItemId(toolCallId),
+      phase: "update",
+      kind: "tool",
+      title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+      status: "running",
+      name: toolName,
+      meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+      toolCallId,
+      ...(nonExecProgressText ? { progressText: nonExecProgressText } : {}),
+    };
+    emitTrackedItemEvent(ctx, itemData);
+  }
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -1155,6 +1270,7 @@ export async function handleToolExecutionEnd(
   const startData = toolStartData.get(toolStartKey);
   toolStartData.delete(toolStartKey);
   ctx.state.execLiveUpdateStateById?.delete(toolCallId);
+  ctx.state.nonExecLiveUpdateStateById?.delete(toolCallId);
   const callSummary = ctx.state.toolMetaById.get(toolCallId);
   const completedMutatingAction = !isToolError && Boolean(callSummary?.mutatingAction);
   const meta = callSummary?.meta;
