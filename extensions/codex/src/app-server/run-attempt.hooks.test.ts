@@ -219,7 +219,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     try {
       const sessionFile = path.join(tempDir, "session.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
-      createAppServerHarness(async (method) => {
+      const harness = createAppServerHarness(async (method) => {
         if (method === "thread/start") {
           return threadStartResult();
         }
@@ -257,10 +257,15 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           },
         },
       } as never;
+      params.sessionId = "diagnostic-session-1";
+      params.sessionKey = "agent:diagnostic:diagnostic-session-1";
+      params.runId = "diagnostic-run-1";
       const run = runCodexAppServerAttempt(params, {
         nativeHookRelay: { enabled: false },
         turnCompletionIdleTimeoutMs: 5,
       });
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await vi.waitFor(
         () =>
@@ -274,7 +279,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const completedEvent = diagnosticEvents.find(
         (event) => event.type === "model.call.completed",
       );
-      expect(startedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(startedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
       expect(startedEvent?.trace?.traceId).toBeTypeOf("string");
       expect(JSON.stringify(startedEvent)).not.toContain("hello");
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
@@ -282,7 +287,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );
-      expect(completedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(startedContent?.toolDefinitions).toContainEqual(
+        expect.objectContaining({
+          name: "message",
+          parameters: expect.objectContaining({
+            type: "object",
+            additionalProperties: false,
+          }),
+        }),
+      );
+      expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
       expect(JSON.stringify(completedEvent)).not.toContain("hello back");
       expect(
         JSON.stringify(diagnosticContentByType.get("model.call.completed")?.modelContent),
