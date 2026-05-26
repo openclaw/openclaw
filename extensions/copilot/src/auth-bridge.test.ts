@@ -288,6 +288,8 @@ describe("resolveCopilotAuth - contract-resolved auth (resolvedApiKey + authProf
       authProfileId: "p",
       env: {
         OPENCLAW_GITHUB_TOKEN: "env-should-be-ignored",
+        COPILOT_GITHUB_TOKEN: "copilot-env-should-be-ignored",
+        GH_TOKEN: "gh-env-should-be-ignored",
         GITHUB_TOKEN: "github-env-should-be-ignored",
       } as NodeJS.ProcessEnv,
       homeDir: fakeHomeDir,
@@ -335,6 +337,72 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
     expect(result.authProfileVersion).toBe(tokenFingerprint("openclaw-tok"));
   });
 
+  it("falls back to COPILOT_GITHUB_TOKEN with synthesised profile id + fingerprint", () => {
+    const result = resolveCopilotAuth({
+      agentId: "agent-1",
+      env: { COPILOT_GITHUB_TOKEN: "copilot-tok-123" } as NodeJS.ProcessEnv,
+      homeDir: fakeHomeDir,
+    });
+    expect(result.authMode).toBe("gitHubToken");
+    expect(result.gitHubToken).toBe("copilot-tok-123");
+    expect(result.authProfileId).toBe("env:COPILOT_GITHUB_TOKEN");
+    expect(result.authProfileVersion).toBe(tokenFingerprint("copilot-tok-123"));
+  });
+
+  it("falls back to GH_TOKEN with synthesised profile id + fingerprint", () => {
+    const result = resolveCopilotAuth({
+      agentId: "agent-1",
+      env: { GH_TOKEN: "gh-tok-456" } as NodeJS.ProcessEnv,
+      homeDir: fakeHomeDir,
+    });
+    expect(result.authMode).toBe("gitHubToken");
+    expect(result.gitHubToken).toBe("gh-tok-456");
+    expect(result.authProfileId).toBe("env:GH_TOKEN");
+    expect(result.authProfileVersion).toBe(tokenFingerprint("gh-tok-456"));
+  });
+
+  it("OPENCLAW_GITHUB_TOKEN takes precedence over COPILOT_GITHUB_TOKEN, GH_TOKEN and GITHUB_TOKEN", () => {
+    const result = resolveCopilotAuth({
+      agentId: "agent-1",
+      env: {
+        OPENCLAW_GITHUB_TOKEN: "openclaw-tok",
+        COPILOT_GITHUB_TOKEN: "copilot-tok",
+        GH_TOKEN: "gh-tok",
+        GITHUB_TOKEN: "github-tok",
+      } as NodeJS.ProcessEnv,
+      homeDir: fakeHomeDir,
+    });
+    expect(result.gitHubToken).toBe("openclaw-tok");
+    expect(result.authProfileId).toBe("env:OPENCLAW_GITHUB_TOKEN");
+  });
+
+  it("COPILOT_GITHUB_TOKEN takes precedence over GH_TOKEN and GITHUB_TOKEN", () => {
+    const result = resolveCopilotAuth({
+      agentId: "agent-1",
+      env: {
+        COPILOT_GITHUB_TOKEN: "copilot-tok",
+        GH_TOKEN: "gh-tok",
+        GITHUB_TOKEN: "github-tok",
+      } as NodeJS.ProcessEnv,
+      homeDir: fakeHomeDir,
+    });
+    expect(result.gitHubToken).toBe("copilot-tok");
+    expect(result.authProfileId).toBe("env:COPILOT_GITHUB_TOKEN");
+  });
+
+  it("GH_TOKEN takes precedence over GITHUB_TOKEN", () => {
+    const result = resolveCopilotAuth({
+      agentId: "agent-1",
+      env: {
+        GH_TOKEN: "gh-tok",
+        GITHUB_TOKEN: "github-tok",
+      } as NodeJS.ProcessEnv,
+      homeDir: fakeHomeDir,
+    });
+    expect(result.gitHubToken).toBe("gh-tok");
+    expect(result.authProfileId).toBe("env:GH_TOKEN");
+  });
+
   it("token rotation in env changes the pool fingerprint (cache-busting)", () => {
     const a = resolveCopilotAuth({
       agentId: "agent-1",
@@ -375,7 +443,12 @@ describe("resolveCopilotAuth - env var fallbacks", () => {
   it("ignores empty-string env tokens (treated as absent)", () => {
     const result = resolveCopilotAuth({
       agentId: "agent-1",
-      env: { GITHUB_TOKEN: "", OPENCLAW_GITHUB_TOKEN: "" } as NodeJS.ProcessEnv,
+      env: {
+        GITHUB_TOKEN: "",
+        OPENCLAW_GITHUB_TOKEN: "",
+        COPILOT_GITHUB_TOKEN: "",
+        GH_TOKEN: "",
+      } as NodeJS.ProcessEnv,
       homeDir: fakeHomeDir,
     });
     expect(result.authMode).toBe("useLoggedInUser");
@@ -390,6 +463,8 @@ describe("resolveCopilotAuth - defaults wiring", () => {
     process.env = { ...originalEnv };
     delete process.env.GITHUB_TOKEN;
     delete process.env.OPENCLAW_GITHUB_TOKEN;
+    delete process.env.COPILOT_GITHUB_TOKEN;
+    delete process.env.GH_TOKEN;
     delete process.env.OPENCLAW_HOME;
   });
 

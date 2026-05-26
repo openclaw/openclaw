@@ -18,7 +18,8 @@ import { join, normalize, resolve, sep } from "node:path";
  *   - Reads optional explicit overrides from the harness attempt params
  *     (`auth.useLoggedInUser`, `auth.gitHubToken`) for direct CLI / test
  *     use cases.
- *   - Falls back to OPENCLAW_GITHUB_TOKEN / GITHUB_TOKEN env vars when
+ *   - Falls back to OPENCLAW_GITHUB_TOKEN, COPILOT_GITHUB_TOKEN,
+ *     GH_TOKEN, or GITHUB_TOKEN env vars (in that precedence) when
  *     no contract-resolved token is given; synthesises a stable,
  *     non-reversible pool fingerprint so token rotation busts the
  *     client pool cleanly.
@@ -35,7 +36,13 @@ import { join, normalize, resolve, sep } from "node:path";
  *   3. `resolvedApiKey` + `authProfileId` from the contract (core's
  *      AuthProfileStore-resolved token — the production main path for
  *      a configured `github-copilot` auth profile)
- *   4. OPENCLAW_GITHUB_TOKEN / GITHUB_TOKEN env vars
+ *   4. OPENCLAW_GITHUB_TOKEN, then COPILOT_GITHUB_TOKEN, then
+ *      GH_TOKEN, then GITHUB_TOKEN env vars (mirrors the
+ *      shipped `github-copilot` provider precedence so headless
+ *      users who already follow the documented
+ *      COPILOT_GITHUB_TOKEN / GH_TOKEN setup get the token they
+ *      configured rather than silently falling through to the
+ *      logged-in CLI user.)
  *   5. `useLoggedInUser` (default)
  */
 
@@ -255,10 +262,20 @@ function safeHomeDir(homeDir: () => string): string {
 function readEnvTokenFallback(
   env: NodeJS.ProcessEnv,
 ): { token: string; profileId: string; profileVersion: string } | undefined {
-  // OPENCLAW_GITHUB_TOKEN takes precedence over GITHUB_TOKEN so operators
-  // can pin a harness-specific token without disturbing system-wide gh.
+  // OPENCLAW_GITHUB_TOKEN is the harness-specific override and stays at
+  // the top so operators can pin a token without disturbing system-wide
+  // gh / Copilot CLI config. The remaining entries mirror the shipped
+  // `github-copilot` provider precedence
+  // (COPILOT_GITHUB_TOKEN -> GH_TOKEN -> GITHUB_TOKEN, see
+  // extensions/github-copilot/auth.ts:24) and the documented Copilot SDK
+  // setup in docs/providers/github-copilot.md, so a headless user who
+  // already configured COPILOT_GITHUB_TOKEN / GH_TOKEN and opted into
+  // agentRuntime.id: "copilot" gets the token they configured rather
+  // than silently falling through to the logged-in CLI user.
   const candidates: Array<{ name: string; value: string | undefined }> = [
     { name: "OPENCLAW_GITHUB_TOKEN", value: readString(env.OPENCLAW_GITHUB_TOKEN) },
+    { name: "COPILOT_GITHUB_TOKEN", value: readString(env.COPILOT_GITHUB_TOKEN) },
+    { name: "GH_TOKEN", value: readString(env.GH_TOKEN) },
     { name: "GITHUB_TOKEN", value: readString(env.GITHUB_TOKEN) },
   ];
   for (const { name, value } of candidates) {
