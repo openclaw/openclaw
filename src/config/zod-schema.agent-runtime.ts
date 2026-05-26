@@ -367,6 +367,29 @@ const LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS = new Set([
   "tavily",
 ]);
 
+// Plugin manifests whose `compatibilityRuntimePaths` declare
+// `tools.web.search.<id>` or `tools.web.search.apiKey` cause
+// `mergeScopedSearchConfig` (in `src/agents/tools/web-search-provider-config.ts`)
+// to inject `tools.web.search[<id>] = pluginConfig.webSearch` at gateway boot —
+// exactly the shape `LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS` rejects (see #86779).
+// To unblock fresh deploys without giving up the rejection of hand-written
+// legacy configs, the merge layer marks each key it writes as a trusted
+// compatibility shim and the validator skips the legacy-shape rejection for
+// those keys only. Hand-written legacy configs without a backing plugin still
+// fail validation with the documented "use plugins.entries.<plugin>.config.webSearch"
+// pointer.
+const trustedLegacyWebSearchPluginKeys = new Set<string>();
+
+export function markLegacyWebSearchPluginKeyTrusted(key: string): void {
+  if (typeof key === "string" && key.length > 0) {
+    trustedLegacyWebSearchPluginKeys.add(key);
+  }
+}
+
+export function clearTrustedLegacyWebSearchPluginKeysForTest(): void {
+  trustedLegacyWebSearchPluginKeys.clear();
+}
+
 const BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD = "__openclawBlockedWebSearchKeys";
 
 const ToolsWebSearchSchema = z
@@ -427,6 +450,9 @@ const ToolsWebSearchSchema = z
             continue;
           }
           if (LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS.has(key) && isPlainRecord(entry)) {
+            if (trustedLegacyWebSearchPluginKeys.has(key)) {
+              continue;
+            }
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: [key],

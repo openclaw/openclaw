@@ -1,5 +1,6 @@
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { markLegacyWebSearchPluginKeyTrusted } from "../../config/zod-schema.agent-runtime.js";
 
 export function getTopLevelCredentialValue(searchConfig?: Record<string, unknown>): unknown {
   return searchConfig?.apiKey;
@@ -45,6 +46,11 @@ export function mergeScopedSearchConfig(
   if (!pluginConfig) {
     return searchConfig;
   }
+
+  // The plugin compatibility shim is the source of truth for "this legacy-named
+  // key was injected by an installed plugin, not hand-written" — record it so
+  // `ToolsWebSearchSchema` can let the same shape pass validation (#86779).
+  markLegacyWebSearchPluginKeyTrusted(key);
 
   const currentScoped =
     searchConfig?.[key] &&
