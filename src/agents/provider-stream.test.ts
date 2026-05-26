@@ -103,6 +103,28 @@ describe("registerProviderStreamForModel", () => {
     ).toThrow(/models\.providers\.google api "openai-responses"/);
   });
 
+  it("fails closed when a Google provider model entry resolves to a non-Google API", () => {
+    expect(() =>
+      registerProviderStreamForModel({
+        model: googleModelResolvedThroughMismatchedProvider,
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                models: [
+                  {
+                    id: "gemini-3.5-flash",
+                    api: "openai-responses",
+                  },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toThrow(/resolved model api "openai-responses"/);
+  });
+
   it("does not include configured API keys in the mismatched Google provider error", () => {
     const secret = "google-secret-that-must-not-leak";
 

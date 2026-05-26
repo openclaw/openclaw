@@ -27,16 +27,24 @@ function assertProviderConfigMatchesModel<TApi extends Api>(params: {
   const configuredApi = normalizeOptionalString(googleProviderConfig?.api);
   const modelApi = normalizeOptionalString(params.model.api);
 
-  if (!configuredApi || configuredApi === "google-generative-ai") {
+  if (
+    (!configuredApi || configuredApi === "google-generative-ai") &&
+    modelApi === "google-generative-ai"
+  ) {
     return;
   }
 
-  if (configuredApi === "google-vertex" && modelApi === "google-vertex") {
+  if ((!configuredApi || configuredApi === "google-vertex") && modelApi === "google-vertex") {
     return;
   }
+
+  const mismatchSource =
+    configuredApi && configuredApi !== "google-generative-ai" && configuredApi !== "google-vertex"
+      ? `models.providers.google api "${configuredApi}"`
+      : `resolved model api "${modelApi ?? "unknown"}"`;
 
   throw new Error(
-    `Google model "google/${params.model.id}" cannot use models.providers.google api "${configuredApi}". Expected api "google-generative-ai"${modelApi === "google-vertex" ? ' or "google-vertex"' : ""}. Configure the Google provider correctly or remove the mismatched provider config.`,
+    `Google model "google/${params.model.id}" cannot use ${mismatchSource}. Expected api "google-generative-ai"${modelApi === "google-vertex" ? ' or "google-vertex"' : ""}. Configure the Google provider correctly or remove the mismatched provider config.`,
   );
 }
 
