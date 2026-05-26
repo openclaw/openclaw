@@ -3,19 +3,18 @@ import SwiftUI
 
 struct CommandCenterTab: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("command.activeWork.showSessions") private var showSessionsInActiveWork: Bool = true
-    @AppStorage("command.activeWork.didDefaultSessions") private var didDefaultSessionsInActiveWork = false
     @State private var activeChatSessions: [OpenClawChatSessionEntry] = []
     var openChat: () -> Void
     var openSettings: () -> Void
 
-    private enum WorkRoute {
+    fileprivate enum WorkRoute {
         case chat(String?)
         case settings
     }
 
-    private struct WorkItem: Identifiable {
+    fileprivate struct WorkItem: Identifiable {
         let id: String
         let icon: String
         let title: String
@@ -23,22 +22,35 @@ struct CommandCenterTab: View {
         let state: String
         let trailing: String
         let color: Color
-        let progress: Double? = nil
+        let progress: Double?
         let route: WorkRoute
+    }
+
+    fileprivate struct ApprovalItem: Identifiable {
+        let id: String
+        let icon: String
+        let title: String
+        let detail: String
+        let priority: String
+        let color: Color
     }
 
     var body: some View {
         NavigationStack {
             ZStack {
-                OpenClawProBackground()
+                CommandControlBackground()
+                self.commandAmbientOverlay
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 10) {
                         self.header
-                        self.attentionCard
-                        self.quickCommand
-                        self.activeWork
+                        self.gatewayCard
+                        self.pendingApprovals
+                        self.activeTasks
+                        self.liveActivity
+                        self.startWorkAction
                     }
-                    .padding(.vertical, 18)
+                    .padding(.top, 16)
+                    .padding(.bottom, 18)
                 }
                 .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
@@ -47,77 +59,143 @@ struct CommandCenterTab: View {
         .task(id: self.activeSessionsRefreshID) {
             await self.refreshActiveSessionsIfNeeded()
         }
-        .onAppear {
-            self.defaultSessionsIntoActiveWorkIfNeeded()
-        }
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            OpenClawProMark()
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("OpenClaw")
-                    .font(.title3.weight(.bold))
-                Text(self.gatewaySubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
+        HStack(alignment: .center, spacing: 11) {
+            OpenClawProMark(size: 31, shadowRadius: 9)
+            Text("OpenClaw")
+                .font(.system(size: 27, weight: .bold, design: .rounded))
             Spacer()
-
-            HStack(spacing: 7) {
-                ProStatusDot(color: self.gatewayConnected ? OpenClawBrand.ok : .secondary)
-                Text(self.gatewayConnected ? "Connected" : "Offline")
-                    .font(.caption.weight(.semibold))
-            }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: Capsule())
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var attentionCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Attention Queue")
-            self.attentionCardContent
-                .padding(.horizontal, OpenClawProMetric.pagePadding)
+    private var commandAmbientOverlay: some View {
+        Group {
+            if self.colorScheme == .light {
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.05),
+                        Color.clear,
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
         }
     }
 
-    private var attentionCardContent: some View {
-        ProCard(
+    private var gatewayCard: some View {
+        CommandPanel(isProminent: true, padding: 12) {
+            VStack(alignment: .leading, spacing: 10) {
+                self.cardHeader(
+                    title: "Gateway",
+                    value: self.gatewayStateText,
+                    color: self.gatewayStatusColor,
+                    icon: self.gatewayConnected ? "hourglass" : "wifi.slash")
+
+                HStack(spacing: 0) {
+                    self.gatewayFact(
+                        icon: "network",
+                        title: "Connection",
+                        value: self.gatewayConnected ? "Online" : "Offline",
+                        color: self.gatewayStatusColor)
+                    Divider().frame(height: 38)
+                    self.gatewayFact(
+                        icon: "server.rack",
+                        title: "Address",
+                        value: self.gatewayAddressText,
+                        color: OpenClawBrand.accent)
+                    Divider().frame(height: 38)
+                    self.gatewayFact(
+                        icon: "person.2.fill",
+                        title: "Agents",
+                        value: self.gatewayAgentCountText,
+                        color: OpenClawBrand.accentHot)
+                }
+                .padding(.vertical, 9)
+                .background {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(self.colorScheme == .dark ? Color.black.opacity(0.16) : Color.black.opacity(0.026))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(
+                                    Color.primary.opacity(self.colorScheme == .dark ? 0.08 : 0.045),
+                                    lineWidth: 1)
+                        }
+                }
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func gatewayFact(icon: String, title: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(title == "Connection" ? color : .primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+    }
+
+    private var pendingApprovals: some View {
+        self.pendingApprovalsContent
+            .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var pendingApprovalsContent: some View {
+        CommandPanel(
             tint: self.pendingApproval == nil ? nil : OpenClawBrand.warn,
-            isProminent: self.pendingApproval != nil)
+            isProminent: self.pendingApproval != nil,
+            padding: self.pendingApproval == nil ? 11 : 13)
         {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    ProIconBadge(
-                        systemName: self
-                            .pendingApproval == nil ? "checkmark.shield.fill" : "exclamationmark.triangle.fill",
-                        color: self.pendingApproval == nil ? OpenClawBrand.ok : OpenClawBrand.warn)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(self.pendingApproval == nil ? "No approvals waiting" : "Approval waiting")
-                                .font(.headline)
-                            Spacer()
-                            if self.pendingApproval != nil {
-                                Text(self.appModel.pendingExecApprovalPromptResolving ? "Resolving" : "Review")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(OpenClawBrand.warn)
+            VStack(alignment: .leading, spacing: 10) {
+                self.cardHeader(
+                    title: "Pending approvals",
+                    value: self.pendingApproval == nil ? nil : "Review requests ›",
+                    color: OpenClawBrand.accentHot,
+                    badgeValue: self.approvalItems.isEmpty ? nil : "\(self.approvalItems.count)")
+
+                if self.approvalItems.isEmpty {
+                    CommandEmptyStateRow(
+                        icon: "checkmark.shield.fill",
+                        title: "No approvals waiting",
+                        detail: self
+                            .gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway.")
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(Array(self.approvalItems.enumerated()), id: \.element.id) { index, item in
+                            CommandApprovalRow(item: item)
+                            if index < self.approvalItems.count - 1 {
+                                Divider().padding(.leading, 48)
                             }
                         }
-                        Text(self.pendingApproval?.commandPreview ?? self.pendingApproval?.commandText
-                            ?? "Device and shell actions wait here until you approve them.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
                     }
-                    Image(systemName: self.pendingApproval == nil ? "checkmark" : "bell.badge")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+                    .background {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(self.approvalRowsFill)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(
+                                        Color.primary.opacity(self.colorScheme == .dark ? 0.08 : 0.04),
+                                        lineWidth: 1)
+                            }
+                    }
                 }
 
                 if let pendingApproval {
@@ -132,7 +210,9 @@ struct CommandCenterTab: View {
 
                         if pendingApproval.allowsAllowAlways {
                             Button {
-                                Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always") }
+                                Task {
+                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
+                                }
                             } label: {
                                 Label("Always", systemImage: "checkmark.shield")
                             }
@@ -156,148 +236,239 @@ struct CommandCenterTab: View {
         }
     }
 
-    private var quickCommand: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Start Work")
-            Button(action: self.openChat) {
-                HStack(spacing: 11) {
-                    Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(OpenClawBrand.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Open Chat")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Text("Ask OpenClaw or start code work")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "arrow.right")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(OpenClawBrand.accentHot, in: Circle())
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 6)
-                .frame(height: 50)
-                .background(.regularMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-        }
-    }
+    private var activeTasks: some View {
+        CommandPanel(padding: 0) {
+            VStack(spacing: 0) {
+                self.cardHeader(
+                    title: "Active sessions",
+                    value: self.activeSessionsSummaryText,
+                    color: .secondary)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 3)
 
-    private var activeWork: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            self.activeWorkHeader
-            ProCard(padding: 0) {
-                let items = self.activeWorkItems
-                if items.isEmpty {
-                    self.emptyActiveWorkState
-                        .padding(14)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            Button {
-                                self.open(item.route)
-                            } label: {
-                                ProWorkRow(
-                                    icon: item.icon,
-                                    title: item.title,
-                                    detail: item.detail,
-                                    state: item.state,
-                                    trailing: item.trailing,
-                                    color: item.color,
-                                    progress: item.progress)
-                                    .padding(.horizontal, 14)
-                            }
-                            .buttonStyle(.plain)
-
-                            if index < items.count - 1 {
-                                Divider().padding(.leading, 60)
-                            }
+                VStack(spacing: 8) {
+                    ForEach(self.visibleActiveSessionRows) { item in
+                        Button {
+                            self.open(item.route)
+                        } label: {
+                            CommandSessionRow(item: item)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-        }
-    }
-
-    private var activeWorkHeader: some View {
-        HStack(spacing: 12) {
-            Text("Active Work")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-            Spacer(minLength: 8)
-            Toggle("Sessions", isOn: self.$showSessionsInActiveWork)
-                .font(.caption.weight(.medium))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .fixedSize()
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var liveActivity: some View {
+        CommandPanel(padding: 0) {
+            VStack(spacing: 0) {
+                self.cardHeader(
+                    title: "Live activity",
+                    value: nil,
+                    color: OpenClawBrand.accent)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 11)
+                    .padding(.bottom, 3)
+
+                CommandLiveActivityRow(
+                    title: self.liveActivityTitle,
+                    value: self.liveActivityValue,
+                    color: self.liveActivityColor)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var startWorkAction: some View {
+        CommandPanel(tint: OpenClawBrand.accent, isProminent: true, padding: 9) {
+            Button(action: self.openChat) {
+                Label("Start work", systemImage: "play.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(LinearGradient(
+                                colors: [OpenClawBrand.accentHot, OpenClawBrand.accent],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing))
+                            .shadow(color: OpenClawBrand.accentHot.opacity(0.34), radius: 18, y: 8)
+                    }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private func cardHeader(
+        title: String,
+        value: String?,
+        color: Color,
+        icon: String? = nil,
+        badgeValue: String? = nil,
+        action: (() -> Void)? = nil) -> some View
+    {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.bold))
+            if let badgeValue {
+                Text(badgeValue)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(OpenClawBrand.accentHot, in: Capsule())
+            }
+            Spacer(minLength: 8)
+            if let value {
+                if let action {
+                    Button(value, action: action)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(color)
+                } else {
+                    HStack(spacing: 4) {
+                        if let icon {
+                            Image(systemName: icon)
+                                .font(.caption2.weight(.bold))
+                        }
+                        Text(value)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color)
+                }
+            }
+        }
     }
 
     private var gatewayConnected: Bool {
         GatewayStatusBuilder.build(appModel: self.appModel) == .connected
     }
 
+    private var gatewayStateText: String {
+        guard !self.gatewayConnected else { return "Healthy" }
+        let status = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = status.lowercased()
+        if lowercased.contains("approval") { return "Approval" }
+        if lowercased.contains("reconnect") { return "Reconnecting" }
+        if lowercased.contains("connect") { return "Connecting" }
+        if lowercased.contains("idle") { return "Idle" }
+        return "Offline"
+    }
+
+    private var gatewayStatusColor: Color {
+        self.gatewayConnected ? OpenClawBrand.ok : .secondary
+    }
+
+    private var gatewayAddressText: String {
+        self.normalized(self.appModel.gatewayRemoteAddress)
+            ?? self.normalized(self.appModel.gatewayServerName)
+            ?? "Unknown"
+    }
+
+    private var gatewayAgentCountText: String {
+        guard self.gatewayConnected else { return "—" }
+        return "\(self.appModel.gatewayAgents.count)"
+    }
+
+    private var activeSessionsSummaryText: String {
+        let count = self.activeSessionRows.count
+        if count == 0 {
+            return self.gatewayConnected ? "No sessions" : "Offline"
+        }
+        if self.sessionWorkItems.isEmpty {
+            return self.gatewayConnected ? "\(count) ready" : "Offline"
+        }
+        return "\(count) \(count == 1 ? "session" : "sessions")"
+    }
+
+    private var approvalItems: [ApprovalItem] {
+        if let pendingApproval {
+            return [
+                ApprovalItem(
+                    id: "pending-real",
+                    icon: "terminal.fill",
+                    title: pendingApproval.commandPreview ?? "Review gateway action",
+                    detail: "Agent: \(self.appModel.activeAgentName)",
+                    priority: self.appModel.pendingExecApprovalPromptResolving ? "Resolving" : "High",
+                    color: OpenClawBrand.danger),
+                ApprovalItem(
+                    id: "pending-context",
+                    icon: "doc.text.fill",
+                    title: pendingApproval.allowsAllowAlways ? "Permission can be saved" : "One-time approval",
+                    detail: "Gateway request",
+                    priority: pendingApproval.allowsAllowAlways ? "Medium" : "Review",
+                    color: OpenClawBrand.warn),
+            ]
+        }
+
+        return []
+    }
+
+    private var approvalRowsFill: Color {
+        self.colorScheme == .dark ? Color.black.opacity(0.12) : Color.black.opacity(0.022)
+    }
+
+    private var activeSessionRows: [WorkItem] {
+        self.sessionItems
+    }
+
+    private var visibleActiveSessionRows: [WorkItem] {
+        Array(self.activeSessionRows.prefix(3))
+    }
+
+    private var liveActivityTitle: String {
+        if let session = self.activeChatSessions.first(where: { !Self.isHiddenInternalSession($0.key) }) {
+            return "\(Self.sessionTitle(session)) updated"
+        }
+        if self.pendingApproval != nil {
+            return "Approval waiting"
+        }
+        return self.gatewayConnected ? "Gateway connected" : self.gatewayStateText
+    }
+
+    private var liveActivityValue: String {
+        if let session = self.activeChatSessions.first(where: { !Self.isHiddenInternalSession($0.key) }),
+           let updatedAt = session.updatedAt,
+           updatedAt > 0
+        {
+            return Self.relativeTimeText(forMilliseconds: updatedAt)
+        }
+        if self.pendingApproval != nil {
+            return "review"
+        }
+        return self.gatewayConnected ? self.gatewayAddressText : self.gatewayDisplayStatusValue
+    }
+
+    private var liveActivityColor: Color {
+        if self.pendingApproval != nil { return OpenClawBrand.warn }
+        return self.gatewayConnected ? OpenClawBrand.ok : .secondary
+    }
+
+    private var gatewayDisplayStatusValue: String {
+        let status = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return status.isEmpty ? self.gatewayStateText : status
+    }
+
     private var activeSessionsRefreshID: String {
         [
-            self.showSessionsInActiveWork ? "sessions" : "no-sessions",
             self.appModel.isOperatorGatewayConnected ? "connected" : "offline",
             self.appModel.chatSessionKey,
             self.scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
     }
 
-    private var activeWorkItems: [WorkItem] {
-        var items: [WorkItem] = []
-
-        if self.appModel.talkMode.isListening || self.appModel.talkMode.isSpeaking {
-            items.append(WorkItem(
-                id: "talk-session",
-                icon: "waveform",
-                title: "Talk session",
-                detail: self.appModel.talkMode.statusText,
-                state: self.appModel.talkMode.isListening ? "listening" : "speaking",
-                trailing: "voice",
-                color: OpenClawBrand.ok,
-                route: .settings))
-        }
-
-        if self.appModel.screenRecordActive {
-            items.append(WorkItem(
-                id: "screen-share",
-                icon: "display",
-                title: "Screen share",
-                detail: "Screen capture is active",
-                state: "running",
-                trailing: "device",
-                color: OpenClawBrand.ok,
-                route: .settings))
-        } else if let cameraText = appModel.cameraHUDText, !cameraText.isEmpty {
-            items.append(WorkItem(
-                id: "camera-event",
-                icon: "camera.fill",
-                title: "Camera",
-                detail: cameraText,
-                state: "recent",
-                trailing: "device",
-                color: OpenClawBrand.ok,
-                route: .settings))
-        }
-
-        if self.showSessionsInActiveWork {
-            items.append(contentsOf: self.sessionWorkItems)
-        }
-
-        return Array(items.prefix(4))
+    private var sessionItems: [WorkItem] {
+        let liveItems = self.sessionWorkItems
+        if !liveItems.isEmpty { return liveItems }
+        return self.defaultSessionItems
     }
 
     private var sessionWorkItems: [WorkItem] {
@@ -315,23 +486,54 @@ struct CommandCenterTab: View {
                     state: isCurrent ? "current" : "recent",
                     trailing: "chat",
                     color: isCurrent ? OpenClawBrand.accent : OpenClawBrand.ok,
+                    progress: nil,
                     route: .chat(session.key))
             }
     }
 
-    private var emptyActiveWorkState: some View {
-        HStack(spacing: 11) {
-            ProIconBadge(systemName: "checkmark.circle", color: .secondary)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("No active work")
-                    .font(.subheadline.weight(.semibold))
-                Text("Live talk, screen share, and device capture activity will appear here.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-        }
+    private var defaultSessionItems: [WorkItem] {
+        [
+            WorkItem(
+                id: "main-chat",
+                icon: "bubble.left.and.text.bubble.right.fill",
+                title: "Main chat",
+                detail: self.appModel.activeAgentName,
+                state: self.gatewayConnected ? "ready" : "offline",
+                trailing: "session",
+                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary,
+                progress: nil,
+                route: .chat(self.appModel.chatSessionKey)),
+            WorkItem(
+                id: "talk-mode",
+                icon: "waveform",
+                title: "Talk",
+                detail: self.appModel.talkMode.statusText,
+                state: self.appModel.talkMode.isEnabled ? "active" : "off",
+                trailing: "voice",
+                color: self.appModel.talkMode.isEnabled ? OpenClawBrand.ok : .secondary,
+                progress: nil,
+                route: .settings),
+            WorkItem(
+                id: "device-capture",
+                icon: self.appModel.screenRecordActive ? "record.circle.fill" : "display",
+                title: "Device capture",
+                detail: self.appModel.screenRecordActive ? "Screen capture is active" : "Screen and device tools",
+                state: self.appModel.screenRecordActive ? "running" : "idle",
+                trailing: "device",
+                color: self.appModel.screenRecordActive ? OpenClawBrand.warn : .secondary,
+                progress: nil,
+                route: .settings),
+            WorkItem(
+                id: "agent-roster",
+                icon: "person.2.fill",
+                title: "Agents",
+                detail: self.gatewayConnected ? "\(self.appModel.gatewayAgents.count) available" : "Roster unavailable",
+                state: self.gatewayConnected ? "online" : "offline",
+                trailing: "gateway",
+                color: self.gatewayConnected ? OpenClawBrand.ok : .secondary,
+                progress: nil,
+                route: .settings),
+        ]
     }
 
     private func open(_ route: WorkRoute) {
@@ -346,12 +548,6 @@ struct CommandCenterTab: View {
 
     private func refreshActiveSessionsIfNeeded() async {
         guard self.scenePhase == .active else { return }
-        guard self.showSessionsInActiveWork else {
-            if !self.activeChatSessions.isEmpty {
-                self.activeChatSessions = []
-            }
-            return
-        }
         guard self.appModel.isOperatorGatewayConnected else {
             if !self.activeChatSessions.isEmpty {
                 self.activeChatSessions = []
@@ -360,7 +556,7 @@ struct CommandCenterTab: View {
         }
 
         do {
-            let transport = IOSGatewayChatTransport(gateway: self.appModel.operatorSession)
+            let transport = IOSGatewayChatTransport(gateway: appModel.operatorSession)
             let response = try await transport.listSessions(limit: 12)
             self.activeChatSessions = Self.sessionChoices(
                 response.sessions,
@@ -368,12 +564,6 @@ struct CommandCenterTab: View {
         } catch {
             self.activeChatSessions = []
         }
-    }
-
-    private func defaultSessionsIntoActiveWorkIfNeeded() {
-        guard !self.didDefaultSessionsInActiveWork else { return }
-        self.showSessionsInActiveWork = true
-        self.didDefaultSessionsInActiveWork = true
     }
 
     private static func sessionChoices(
@@ -401,24 +591,73 @@ struct CommandCenterTab: View {
     }
 
     private static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
+        if let title = redactedSessionTitle(for: session.key) {
+            return title
+        }
+
         let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let displayName, !displayName.isEmpty {
-            return displayName
+            return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
         let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let subject, !subject.isEmpty {
-            return subject
+            return Self.redactedSessionTitle(for: subject) ?? subject
         }
         return session.key
     }
 
+    private static func redactedSessionTitle(for key: String) -> String? {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = trimmed.lowercased()
+        guard !trimmed.isEmpty else { return nil }
+        if lowercased.contains(":ios-") {
+            return "iOS chat"
+        }
+        if lowercased.hasPrefix("telegram:") {
+            return "Telegram chat"
+        }
+        if lowercased.hasPrefix("user:+") {
+            return "Direct chat"
+        }
+        if lowercased.hasPrefix("cron:") {
+            return Self.humanizedSessionKey(String(trimmed.dropFirst("cron:".count)))
+        }
+        return nil
+    }
+
+    private static func humanizedSessionKey(_ key: String) -> String? {
+        let words = key
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !words.isEmpty else { return nil }
+
+        return words
+            .map { word in
+                switch word.lowercased() {
+                case "ai", "api", "ios", "qmd", "url":
+                    word.uppercased()
+                default:
+                    word.prefix(1).uppercased() + String(word.dropFirst())
+                }
+            }
+            .joined(separator: " ")
+    }
+
     private static func sessionDetail(_ session: OpenClawChatSessionEntry) -> String {
         if let updatedAt = session.updatedAt, updatedAt > 0 {
-            return Date(timeIntervalSince1970: updatedAt / 1000).formatted(
-                date: .abbreviated,
-                time: .shortened)
+            return self.relativeTimeText(forMilliseconds: updatedAt)
         }
         return session.key
+    }
+
+    private static func relativeTimeText(forMilliseconds milliseconds: Double) -> String {
+        let date = Date(timeIntervalSince1970: milliseconds / 1000)
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .numeric
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: .now)
     }
 
     private static func isHiddenInternalSession(_ key: String) -> Bool {
@@ -449,5 +688,285 @@ struct CommandCenterTab: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private struct CommandPanel<Content: View>: View {
+    var tint: Color?
+    var isProminent = false
+    var padding: CGFloat = 13
+    @ViewBuilder var content: Content
+
+    init(
+        tint: Color? = nil,
+        isProminent: Bool = false,
+        padding: CGFloat = 13,
+        @ViewBuilder content: () -> Content)
+    {
+        self.tint = tint
+        self.isProminent = isProminent
+        self.padding = padding
+        self.content = content()
+    }
+
+    var body: some View {
+        ProCard(
+            tint: self.tint,
+            isProminent: self.isProminent,
+            padding: self.padding,
+            radius: 12)
+        {
+            self.content
+        }
+    }
+}
+
+private struct CommandControlBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        LinearGradient(
+            colors: self.colorScheme == .dark ? self.darkColors : self.lightColors,
+            startPoint: .top,
+            endPoint: .bottom)
+            .overlay(alignment: .top) {
+                if self.colorScheme == .light {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.34),
+                            Color.clear,
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing)
+                        .frame(height: 260)
+                }
+            }
+            .ignoresSafeArea()
+    }
+
+    private var darkColors: [Color] {
+        [
+            Color(red: 12 / 255, green: 13 / 255, blue: 15 / 255),
+            Color(red: 7 / 255, green: 8 / 255, blue: 10 / 255),
+            Color(red: 4 / 255, green: 5 / 255, blue: 6 / 255),
+        ]
+    }
+
+    private var lightColors: [Color] {
+        [
+            Color(red: 247 / 255, green: 248 / 255, blue: 249 / 255),
+            Color(red: 251 / 255, green: 252 / 255, blue: 253 / 255),
+            .white,
+        ]
+    }
+}
+
+private struct CommandSessionRow: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let item: CommandCenterTab.WorkItem
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: self.item.icon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(self.item.color)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(self.item.color.opacity(0.12))
+                }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(self.item.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+                    Spacer(minLength: 6)
+                    Text(self.item.trailing)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 8) {
+                    Text(self.item.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if let progress = self.item.progress {
+                        ProProgressBar(progress: progress, color: self.item.color)
+                            .frame(width: 68)
+                    }
+                    Text(self.progressLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(self.item.color)
+                        .lineLimit(1)
+                        .frame(width: 48, alignment: .trailing)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(self.rowFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(self.rowBorder, lineWidth: 1)
+                }
+        }
+    }
+
+    private var progressLabel: String {
+        guard let progress = self.item.progress else {
+            return self.item.state
+        }
+        if self.item.state == "offline" || self.item.state == "off" || self.item.state == "idle" {
+            return self.item.state
+        }
+        return "\(Int((progress * 100).rounded()))%"
+    }
+
+    private var rowFill: Color {
+        self.colorScheme == .dark ? Color.white.opacity(0.035) : Color.black.opacity(0.025)
+    }
+
+    private var rowBorder: Color {
+        self.colorScheme == .dark ? Color.white.opacity(0.065) : Color.black.opacity(0.045)
+    }
+}
+
+private struct CommandApprovalRow: View {
+    let item: CommandCenterTab.ApprovalItem
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: self.item.icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(self.item.color)
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(self.item.detail)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Text(self.item.priority)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(self.item.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background {
+                    Capsule()
+                        .fill(self.item.color.opacity(0.10))
+                }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+    }
+}
+
+private struct CommandEmptyStateRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: self.icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(OpenClawBrand.ok)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(OpenClawBrand.ok.opacity(0.10))
+                }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(self.detail)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 9)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.06))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.055), lineWidth: 1)
+                }
+        }
+    }
+}
+
+private struct CommandTaskRow: View {
+    let item: CommandCenterTab.WorkItem
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text(self.item.title)
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.80)
+                .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+            Text(self.item.detail)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .frame(width: 64, alignment: .leading)
+            if let progress = self.item.progress {
+                ProProgressBar(progress: progress, color: self.item.color)
+                    .frame(width: 56)
+            }
+            Text(self.item.state)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(self.item.progress == nil ? self.item.color : .secondary)
+                .lineLimit(1)
+                .frame(width: self.item.progress == nil ? 58 : 34, alignment: .trailing)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct CommandLiveActivityRow: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProStatusDot(color: self.color)
+            Text(self.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(self.value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.08))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                }
+        }
     }
 }

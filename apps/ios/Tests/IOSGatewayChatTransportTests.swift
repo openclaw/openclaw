@@ -3,6 +3,15 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct IOSGatewayChatTransportTests {
+    @Test func agentWaitTreatsSuccessAsCompletion() {
+        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
+        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
+        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
+        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("succeeded"))
+        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("timeout"))
+        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
+    }
+
     @Test func requestsFailFastWhenGatewayNotConnected() async {
         let gateway = GatewayNodeSession()
         let transport = IOSGatewayChatTransport(gateway: gateway)

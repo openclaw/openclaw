@@ -21,7 +21,7 @@ struct RootTabs: View {
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
         AppAppearancePreference.system.rawValue
-    @State private var selectedTab: AppTab = .control
+    @State private var selectedTab: AppTab = Self.initialTab
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
@@ -31,12 +31,47 @@ struct RootTabs: View {
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
+    @State private var didApplyInitialAppearance: Bool = false
+    @State private var didApplyInitialChatSession: Bool = false
 
     private enum AppTab: Hashable {
         case control
         case chat
         case agent
         case settings
+    }
+
+    private static var initialTab: AppTab {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else {
+            return .control
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else {
+            return .control
+        }
+
+        switch arguments[valueIndex].lowercased() {
+        case "chat":
+            return .chat
+        case "agent", "agents":
+            return .agent
+        case "settings":
+            return .settings
+        default:
+            return .control
+        }
+    }
+
+    private static var initialChatSessionKey: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-chat-session") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        let trimmed = arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private enum PresentedSheet: Identifiable {
@@ -64,7 +99,7 @@ struct RootTabs: View {
             CommandCenterTab(
                 openChat: { self.selectedTab = .chat },
                 openSettings: { self.presentedSheet = .settings })
-                .tabItem { Label("Control", systemImage: "chart.bar.xaxis") }
+                .tabItem { Label("Command", systemImage: "target") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
 
@@ -154,6 +189,8 @@ struct RootTabs: View {
             .onAppear { self.evaluateOnboardingPresentation(force: false) }
             .onAppear { self.maybeAutoOpenSettings() }
             .onAppear { self.maybeShowQuickSetup() }
+            .onAppear { self.applyInitialAppearanceIfNeeded() }
+            .onAppear { self.applyInitialChatSessionIfNeeded() }
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.scenePhase) { _, newValue in
@@ -261,7 +298,9 @@ struct RootTabs: View {
     }
 
     private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
+        AppAppearancePreference.launchArgumentPreference
+            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
+            ?? .system
     }
 
     private var gatewayStatus: StatusPill.GatewayState {
@@ -484,6 +523,19 @@ struct RootTabs: View {
         guard route == .settings else { return }
         self.didAutoOpenSettings = true
         self.presentedSheet = .settings
+    }
+
+    private func applyInitialChatSessionIfNeeded() {
+        guard !self.didApplyInitialChatSession else { return }
+        self.didApplyInitialChatSession = true
+        self.appModel.focusChatSession(Self.initialChatSessionKey)
+    }
+
+    private func applyInitialAppearanceIfNeeded() {
+        guard !self.didApplyInitialAppearance else { return }
+        self.didApplyInitialAppearance = true
+        guard let preference = AppAppearancePreference.launchArgumentPreference else { return }
+        self.appearancePreferenceRaw = preference.rawValue
     }
 
     private func maybeShowQuickSetup() {

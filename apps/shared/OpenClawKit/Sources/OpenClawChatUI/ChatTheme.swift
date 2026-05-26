@@ -22,8 +22,12 @@ enum OpenClawChatTheme {
         static let lightCanvasBottom = UIColor.white
         static let lightAccent = UIColor(red: 220 / 255.0, green: 38 / 255.0, blue: 38 / 255.0, alpha: 1)
         static let lightAccentHot = UIColor(red: 239 / 255.0, green: 68 / 255.0, blue: 68 / 255.0, alpha: 1)
-        static let darkCanvasTop = UIColor(red: 4 / 255.0, green: 8 / 255.0, blue: 8 / 255.0, alpha: 1)
-        static let darkCanvasMiddle = UIColor(red: 16 / 255.0, green: 19 / 255.0, blue: 20 / 255.0, alpha: 1)
+        static let darkCanvasTop = UIColor(red: 12 / 255.0, green: 13 / 255.0, blue: 15 / 255.0, alpha: 1)
+        static let darkCanvasMiddle = UIColor(red: 7 / 255.0, green: 8 / 255.0, blue: 10 / 255.0, alpha: 1)
+        static let darkCanvasBottom = UIColor(red: 4 / 255.0, green: 5 / 255.0, blue: 6 / 255.0, alpha: 1)
+        static let darkPanel = UIColor(red: 10 / 255.0, green: 12 / 255.0, blue: 14 / 255.0, alpha: 1)
+        static let darkPanelRaised = UIColor(red: 17 / 255.0, green: 18 / 255.0, blue: 21 / 255.0, alpha: 1)
+        static let darkComposer = UIColor(red: 24 / 255.0, green: 25 / 255.0, blue: 28 / 255.0, alpha: 1)
         static let darkAccent = UIColor(red: 198 / 255.0, green: 49 / 255.0, blue: 42 / 255.0, alpha: 1)
         static let darkAccentHot = UIColor(red: 239 / 255.0, green: 62 / 255.0, blue: 82 / 255.0, alpha: 1)
     }
@@ -114,21 +118,10 @@ enum OpenClawChatTheme {
                         dark: IOSPalette.darkCanvasMiddle),
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasBottom,
-                        dark: .systemBackground),
+                        dark: IOSPalette.darkCanvasBottom),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
-            RadialGradient(
-                colors: [
-                    self.adaptiveColor(
-                        light: IOSPalette.lightAccentHot,
-                        dark: IOSPalette.darkAccentHot)
-                        .opacity(0.08),
-                    .clear,
-                ],
-                center: .topTrailing,
-                startRadius: 24,
-                endRadius: 360)
         }
         #endif
     }
@@ -137,7 +130,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: .textBackgroundColor)
         #else
-        Color(uiColor: .secondarySystemBackground)
+        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanel)
         #endif
     }
 
@@ -145,7 +138,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(Color(uiColor: .tertiarySystemBackground))
+        AnyShapeStyle(self.adaptiveColor(light: .tertiarySystemBackground, dark: IOSPalette.darkPanelRaised))
         #endif
     }
 
@@ -163,7 +156,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
-        Color(uiColor: .secondarySystemBackground)
+        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
         #endif
     }
 
@@ -171,7 +164,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: self.onboardingAssistantBubbleDynamicNSColor)
         #else
-        Color(uiColor: .secondarySystemBackground)
+        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
         #endif
     }
 
@@ -199,7 +192,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(.regularMaterial)
+        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemGroupedBackground, dark: IOSPalette.darkPanel))
         #endif
     }
 
@@ -207,7 +200,7 @@ enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.thinMaterial)
         #else
-        AnyShapeStyle(Color(uiColor: .secondarySystemBackground))
+        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkComposer))
         #endif
     }
 

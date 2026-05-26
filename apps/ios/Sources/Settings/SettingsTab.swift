@@ -307,7 +307,8 @@ struct SettingsTab: View {
                         self.featureToggle(
                             "Speakerphone",
                             isOn: self.talkSpeakerphoneBinding,
-                            help: "Routes Talk audio to the loudspeaker when headphones or Bluetooth audio are not connected.")
+                            help: "Routes Talk audio to the loudspeaker when headphones or Bluetooth audio are not "
+                                + "connected.")
 
                         NavigationLink {
                             VoiceWakeWordsSettingsView()

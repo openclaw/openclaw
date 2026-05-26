@@ -295,9 +295,7 @@ final class NodeAppModel {
         self.voiceWake.setEnabled(enabled)
         self.talkMode.attachGateway(self.operatorGateway)
         self.refreshLastShareEventFromRelay()
-        let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
-        // Route through the coordinator so VoiceWake and Talk don't fight over the microphone.
-        self.setTalkEnabled(talkEnabled)
+        UserDefaults.standard.set(false, forKey: "talk.enabled")
 
         // Wire up deep links from canvas taps
         self.screen.onDeepLink = { [weak self] url in
@@ -463,7 +461,7 @@ final class NodeAppModel {
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
                         await MainActor.run {
-                            self.operatorConnected = false
+                            self.setOperatorConnected(false)
                             self.gatewayConnected = false
                             // Foreground recovery must actively restart the saved gateway config.
                             // Disconnecting stale sockets alone can leave us idle if the old
@@ -554,7 +552,7 @@ final class NodeAppModel {
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
             await MainActor.run {
-                self.operatorConnected = false
+                self.setOperatorConnected(false)
                 self.gatewayConnected = false
                 self.talkMode.updateGatewayConnected(false)
                 if self.isBackgrounded {
@@ -908,7 +906,7 @@ final class NodeAppModel {
                 await self.operatorGateway.disconnect()
                 await self.nodeGateway.disconnect()
                 await MainActor.run {
-                    self.operatorConnected = false
+                    self.setOperatorConnected(false)
                     self.gatewayConnected = false
                     self.gatewayStatusText = "Reconnecting…"
                     self.talkMode.updateGatewayConnected(false)
@@ -1988,7 +1986,7 @@ extension NodeAppModel {
         self.connectedGatewayID = nil
         self.activeGatewayConnectConfig = nil
         self.gatewayConnected = false
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.seamColorHex = nil
         self.mainSessionBaseKey = "main"
@@ -2011,7 +2009,7 @@ extension NodeAppModel {
         self.gatewayRemoteAddress = nil
         self.connectedGatewayID = stableID
         self.gatewayConnected = false
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
         LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
@@ -2249,7 +2247,7 @@ extension NodeAppModel {
                         onConnected: { [weak self] in
                             guard let self else { return }
                             await MainActor.run {
-                                self.operatorConnected = true
+                                self.setOperatorConnected(true)
                                 self.forceOperatorTalkPermissionUpgradeRequest = false
                                 self.talkMode.updateGatewayConnected(true)
                             }
@@ -2267,7 +2265,7 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                self.operatorConnected = false
+                                self.setOperatorConnected(false)
                                 self.talkMode.updateGatewayConnected(false)
                                 LiveActivityManager.shared.endActivity(reason: "operator_disconnected")
                             }
@@ -2534,7 +2532,7 @@ extension NodeAppModel {
                 self.gatewayRemoteAddress = nil
                 self.connectedGatewayID = nil
                 self.gatewayConnected = false
-                self.operatorConnected = false
+                self.setOperatorConnected(false)
                 self.talkMode.updateGatewayConnected(false)
                 self.seamColorHex = nil
                 self.mainSessionBaseKey = "main"
@@ -2608,6 +2606,11 @@ extension NodeAppModel {
 
     private func isOperatorConnected() async -> Bool {
         self.operatorConnected
+    }
+
+    private func setOperatorConnected(_ connected: Bool) {
+        self.operatorConnected = connected
+        self.operatorStatusText = connected ? "Connected" : "Offline"
     }
 }
 
@@ -3951,7 +3954,7 @@ extension NodeAppModel {
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
-        self.operatorConnected = false
+        self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
 
@@ -4020,7 +4023,7 @@ extension NodeAppModel {
             self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
             await self.operatorGateway.disconnect()
             await self.nodeGateway.disconnect()
-            self.operatorConnected = false
+            self.setOperatorConnected(false)
             self.gatewayConnected = false
             self.gatewayStatusText = "Reconnecting…"
             self.talkMode.updateGatewayConnected(false)

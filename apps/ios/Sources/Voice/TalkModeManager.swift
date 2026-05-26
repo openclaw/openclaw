@@ -126,6 +126,15 @@ final class TalkModeManager: NSObject {
     var gatewayTalkVoiceModeAccessibilityValue: String = "Not loaded"
     var gatewayTalkPermissionState: TalkGatewayPermissionState = .unknown
 
+    var isGatewayConnected: Bool {
+        self.gatewayConnected
+    }
+
+    var hasActiveAudioCapture: Bool {
+        self.isEnabled || self.isListening || self.isPushToTalkActive || self.realtimeRelaySession != nil
+            || self.realtimeRelayStartInFlight
+    }
+
     private enum CaptureMode {
         case idle
         case continuous
@@ -135,6 +144,7 @@ final class TalkModeManager: NSObject {
     private var isStarting = false
     private var startAttemptID = 0
     private var captureMode: CaptureMode = .idle
+    private var foregroundAudioCaptureAllowed = true
     private var resumeContinuousAfterPTT: Bool = false
     private var activePTTCaptureId: String?
     private var pttAutoStopEnabled: Bool = false
@@ -152,6 +162,7 @@ final class TalkModeManager: NSObject {
     private var silenceTask: Task<Void, Never>?
     private var realtimeSession: TalkRealtimeWebRTCSession?
     private var realtimeRelaySession: RealtimeTalkRelaySession?
+    private var realtimeRelayStartInFlight = false
     private var prefetchedRealtimeSession: TalkRealtimeClientSession?
     private var realtimePrefetchTask: Task<Void, Never>?
 
@@ -999,7 +1010,7 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let runId = try await sendChat(prompt, gateway: gateway)
+            let runId = try await self.sendChat(prompt, gateway: gateway)
             self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId)")
             let shouldIncremental = self.shouldUseIncrementalTTS()
@@ -1303,7 +1314,7 @@ final class TalkModeManager: NSObject {
             "sessionKey": mainSessionKey,
             "message": message,
             "thinking": "low",
-            "timeoutMs": 30000,
+            "timeout": 120,
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -1313,7 +1324,7 @@ final class TalkModeManager: NSObject {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
         }
-        let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
+        let res = try await gateway.request(method: "agent", paramsJSON: json, timeoutSeconds: 30)
         let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
         return decoded.runId
     }
@@ -1331,26 +1342,53 @@ final class TalkModeManager: NSObject {
                     if Task.isCancelled {
                         return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)
                     }
-                    guard evt.event == "chat", let payload = evt.payload else { continue }
-                    guard let chatEvent = try? GatewayPayloadDecoding.decode(
-                        payload,
-                        as: OpenClawChatEventPayload.self)
-                    else {
-                        continue
-                    }
-                    guard chatEvent.runId == runId else { continue }
-                    if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
-                        latestAssistantText = text
-                    }
-                    switch chatEvent.state {
-                    case "final":
-                        return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
-                    case "aborted":
-                        return ChatCompletionResult(state: .aborted, assistantText: nil)
-                    case "error":
-                        return ChatCompletionResult(state: .error, assistantText: nil)
-                    default:
-                        break
+                    guard let payload = evt.payload else { continue }
+                    if evt.event == "chat" {
+                        guard let chatEvent = try? GatewayPayloadDecoding.decode(
+                            payload,
+                            as: OpenClawChatEventPayload.self)
+                        else {
+                            continue
+                        }
+                        guard chatEvent.runId == runId else { continue }
+                        if let text = OpenClawChatEventText.assistantText(from: chatEvent) {
+                            latestAssistantText = text
+                        }
+                        switch chatEvent.state {
+                        case "final":
+                            return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
+                        case "aborted":
+                            return ChatCompletionResult(state: .aborted, assistantText: nil)
+                        case "error":
+                            return ChatCompletionResult(state: .error, assistantText: nil)
+                        default:
+                            break
+                        }
+                    } else if evt.event == "agent" {
+                        guard let agentEvent = try? GatewayPayloadDecoding.decode(
+                            payload,
+                            as: OpenClawAgentEventPayload.self)
+                        else {
+                            continue
+                        }
+                        guard agentEvent.runId == runId else { continue }
+                        if agentEvent.stream == "assistant",
+                           let text = agentEvent.data["text"]?.value as? String
+                        {
+                            latestAssistantText = text
+                        } else if agentEvent.stream == "lifecycle" {
+                            let phase = (agentEvent.data["phase"]?.value as? String)?.lowercased()
+                            let status = (agentEvent.data["status"]?.value as? String)?.lowercased()
+                            if phase == "end" || status == "ok" || status == "completed" || status == "success" {
+                                return ChatCompletionResult(state: .final, assistantText: latestAssistantText)
+                            }
+                            if phase == "error" || status == "error" || status == "failed" {
+                                return ChatCompletionResult(state: .error, assistantText: nil)
+                            }
+                            if phase == "aborted" || status == "aborted" || status == "cancelled" {
+                                return ChatCompletionResult(state: .aborted, assistantText: nil)
+                            }
+                        }
                     }
                 }
                 return ChatCompletionResult(state: .timeout, assistantText: latestAssistantText)

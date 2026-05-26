@@ -1,10 +1,10 @@
 import OpenClawChatUI
-import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
 struct ChatProTab: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var viewModel: OpenClawChatViewModel?
 
     var body: some View {
@@ -17,11 +17,15 @@ struct ChatProTab: View {
                         OpenClawChatView(
                             viewModel: viewModel,
                             drawsBackground: false,
-                            showsSessionSwitcher: true,
-                            userAccent: OpenClawBrand.accent,
+                            showsSessionSwitcher: false,
+                            userAccent: self.chatUserAccent,
                             assistantName: self.agentDisplayName,
                             assistantAvatarText: self.agentBadge,
                             assistantAvatarTint: OpenClawBrand.accent,
+                            showsAssistantAvatars: false,
+                            composerChrome: .clean,
+                            messagePlaceholder: "Message \(self.agentDisplayName)...",
+                            emptyAssistantIntro: self.emptyAssistantIntro,
                             talkControl: self.talkControl)
                     } else {
                         ProCard {
@@ -49,47 +53,43 @@ struct ChatProTab: View {
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    Text(self.agentBadge)
-                        .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .minimumScaleFactor(0.6)
-                        .lineLimit(1)
-                        .frame(width: 38, height: 38)
-                        .background(
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            OpenClawBrand.accent,
-                                            OpenClawBrand.accentHot,
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing)))
-                        .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+        HStack(spacing: 11) {
+            Text(self.agentBadge)
+                .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .frame(width: 38, height: 38)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    OpenClawBrand.accent,
+                                    OpenClawBrand.accentHot,
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing)))
+                .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: 10, y: 5)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(self.agentDisplayName)
-                            .font(.headline.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 8)
-
-                if !self.appModel.gatewayAgents.isEmpty {
-                    self.agentMenu
-                }
-
-                if let viewModel {
-                    self.sessionMenu(viewModel: viewModel)
-                }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(self.agentDisplayName)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(1)
+                Text("AI Assistant")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
-            .padding(.top, 8)
+
+            Spacer(minLength: 8)
+
+            self.connectionPill
         }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private func syncChatViewModel() {
@@ -115,7 +115,7 @@ struct ChatProTab: View {
             isEnabled: self.appModel.talkMode.isEnabled,
             isListening: self.appModel.talkMode.isListening,
             isSpeaking: self.appModel.talkMode.isSpeaking,
-            isGatewayConnected: self.appModel.isOperatorGatewayConnected,
+            isGatewayConnected: self.appModel.talkMode.isGatewayConnected,
             statusText: self.appModel.talkMode.statusText,
             providerLabel: self.appModel.talkMode.gatewayTalkProviderLabel,
             toggle: { sessionKey in
@@ -124,106 +124,48 @@ struct ChatProTab: View {
             })
     }
 
-    private var agentMenu: some View {
-        Menu {
-            Button {
-                self.selectChatAgent(nil)
-            } label: {
-                Label(
-                    "Default",
-                    systemImage: self.normalized(self.appModel.selectedAgentId) == nil
-                        ? "checkmark.circle.fill"
-                        : "person")
-            }
-            ForEach(self.sortedAgents, id: \.id) { agent in
-                Button {
-                    self.selectChatAgent(agent.id)
-                } label: {
-                    let iconName = agent.id == self.activeAgentID
-                        ? "checkmark.circle.fill"
-                        : "person"
-                    Label(self.agentName(for: agent), systemImage: iconName)
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "person.crop.circle")
-                    .font(.caption.weight(.semibold))
-                Text(self.agentDisplayName)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .background(.regularMaterial, in: Capsule())
-        }
-        .accessibilityLabel("Chat agent")
-    }
-
-    private func selectChatAgent(_ agentId: String?) {
-        self.appModel.setSelectedAgentId(agentId)
-        self.syncChatViewModel()
-    }
-
-    private func sessionMenu(viewModel: OpenClawChatViewModel) -> some View {
-        Menu {
-            ForEach(viewModel.sessionChoices, id: \.key) { session in
-                Button {
-                    viewModel.switchSession(to: session.key)
-                } label: {
-                    let iconName = session.key == viewModel.sessionKey
-                        ? "checkmark.circle.fill"
-                        : "bubble.left"
-                    Label(self.sessionLabel(session), systemImage: iconName)
-                }
-            }
-            Button {
-                viewModel.refreshSessions(limit: 200)
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "rectangle.stack.fill")
-                    .font(.caption.weight(.semibold))
-                Text(self.currentSessionLabel(viewModel: viewModel))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .background(.regularMaterial, in: Capsule())
-        }
-    }
-
-    private func currentSessionLabel(viewModel: OpenClawChatViewModel) -> String {
-        let match = viewModel.sessions.first { $0.key == viewModel.sessionKey }
-        return match.map(self.sessionLabel) ?? viewModel.sessionKey
-    }
-
-    private func sessionLabel(_ session: OpenClawChatSessionEntry) -> String {
-        self.normalized(session.displayName)
-            ?? self.normalized(session.subject)
-            ?? session.key
-    }
-
     private var activeAgentID: String {
         self.normalized(self.appModel.selectedAgentId)
             ?? self.normalized(self.appModel.gatewayDefaultAgentId)
             ?? "main"
     }
 
-    private var sortedAgents: [AgentSummary] {
-        self.appModel.gatewayAgents.sorted { lhs, rhs in
-            if lhs.id == self.activeAgentID { return true }
-            if rhs.id == self.activeAgentID { return false }
-            return self.agentName(for: lhs)
-                .localizedCaseInsensitiveCompare(self.agentName(for: rhs)) == .orderedAscending
+    private var connectionPill: some View {
+        HStack(spacing: 6) {
+            ProStatusDot(color: self.gatewayConnected ? OpenClawBrand.ok : .orange)
+            Text(self.gatewayConnected ? "Connected" : "Connecting")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
         }
+        .foregroundStyle(self.gatewayConnected ? OpenClawBrand.ok : .orange)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background {
+            Capsule()
+                .fill((self.gatewayConnected ? OpenClawBrand.ok : Color.orange).opacity(0.11))
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder((self.gatewayConnected ? OpenClawBrand.ok : Color.orange).opacity(0.16), lineWidth: 1)
+        }
+    }
+
+    private var gatewayConnected: Bool {
+        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+    }
+
+    private var chatUserAccent: Color {
+        self.colorScheme == .light ? Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0) : OpenClawBrand.accent
+    }
+
+    private var emptyAssistantIntro: String {
+        """
+        Hi Colin! I'm \(self.agentDisplayName).
+
+        I can help you orchestrate agents, review system status, and run operations.
+
+        What would you like to work on?
+        """
     }
 
     private var activeAgent: AgentSummary? {
@@ -232,12 +174,6 @@ struct ChatProTab: View {
 
     private var agentDisplayName: String {
         self.normalized(self.activeAgent?.name) ?? self.appModel.activeAgentName
-    }
-
-    private var agentStateLabel: String {
-        if self.normalized(self.appModel.selectedAgentId) != nil { return "selected" }
-        if self.normalized(self.appModel.gatewayDefaultAgentId) != nil { return "default" }
-        return self.appModel.isOperatorGatewayConnected ? "live" : "idle"
     }
 
     private var agentBadge: String {
@@ -255,10 +191,6 @@ struct ChatProTab: View {
             return initials.uppercased()
         }
         return "OC"
-    }
-
-    private func agentName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
     }
 
     private func normalized(_ value: String?) -> String? {

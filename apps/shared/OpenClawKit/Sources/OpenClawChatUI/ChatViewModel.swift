@@ -2,13 +2,6 @@ import Foundation
 import Observation
 import OpenClawKit
 import OSLog
-import UniformTypeIdentifiers
-
-#if canImport(AppKit)
-import AppKit
-#elseif canImport(UIKit)
-import UIKit
-#endif
 
 private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
@@ -17,7 +10,7 @@ private let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawC
 // swiftlint:disable:next type_body_length
 public final class OpenClawChatViewModel {
     public static let defaultModelSelectionID = "__default__"
-    private static let maxAttachmentBytes = 5_000_000
+    static let maxAttachmentBytes = 5_000_000
 
     public private(set) var messages: [OpenClawChatMessage] = []
     public var input: String = ""
@@ -650,17 +643,27 @@ public final class OpenClawChatViewModel {
                 self.pendingRuns.insert(response.runId)
                 self.armPendingRunTimeout(runId: response.runId)
             }
-            self.armPostSendRefreshFallback(
+            await self.refreshHistoryAfterRun()
+            if !self.clearPendingRunIfAssistantMessagePresent(
                 runId: response.runId,
-                sessionKey: sessionKey,
-                userMessageTimestamp: userMessageTimestamp)
+                after: userMessageTimestamp)
+            {
+                self.armPostSendRefreshFallback(
+                    runId: response.runId,
+                    sessionKey: sessionKey,
+                    userMessageTimestamp: userMessageTimestamp)
+                self.armRunCompletionRefresh(
+                    runId: response.runId,
+                    sessionKey: sessionKey,
+                    userMessageTimestamp: userMessageTimestamp)
+            }
         } catch {
             self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             self.logDiagnostic(
                 "chat.ui send failed sessionKey=\(sessionKey) "
                     + "localRunId=\(runId) error=\(error.localizedDescription)")
-            chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
+            chatUILogger.error("chat transport send failed \(error.localizedDescription, privacy: .public)")
         }
 
         self.isSending = false
@@ -714,7 +717,21 @@ public final class OpenClawChatViewModel {
     }
 
     private func performStartNewSession() async {
-        let next = self.generatedNewSessionKey()
+        let requested = self.generatedNewSessionKey()
+        let parentSessionKey = self.sessionKey
+        let next: String
+        do {
+            let created = try await self.transport.createSession(
+                key: requested,
+                label: nil,
+                parentSessionKey: parentSessionKey)
+            let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            next = createdKey.isEmpty ? requested : createdKey
+        } catch {
+            chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
+            self.errorText = error.localizedDescription
+            return
+        }
         self.sessionKey = next
         self.onSessionChanged?(next)
         self.modelSelectionID = Self.defaultModelSelectionID
@@ -724,9 +741,7 @@ public final class OpenClawChatViewModel {
         self.streamingAssistantText = nil
         self.clearPendingRuns(reason: nil)
         self.errorText = nil
-        await self.pollHealthIfNeeded(force: true)
-        await self.fetchSessions(limit: 50)
-        await self.fetchModels()
+        await self.bootstrap()
     }
 
     private func performReset() async {
@@ -1406,31 +1421,61 @@ public final class OpenClawChatViewModel {
         Task { [weak self] in
             for delayMs in Self.postSendRefreshDelaysMs {
                 try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-                guard await MainActor.run(resultType: Bool.self, body: { [weak self] in
-                    guard let self else { return false }
-                    return self.sessionKey == sessionKey &&
-                        self.pendingRuns.contains(runId) &&
-                        !self.hasAssistantMessage(after: userMessageTimestamp)
-                }) else {
+                let shouldContinue = await self?.refreshIfPending(
+                    runId: runId,
+                    sessionKey: sessionKey,
+                    after: userMessageTimestamp,
+                    diagnostic: "chat.ui refresh fallback sessionKey=\(sessionKey) "
+                        + "runId=\(runId) delayMs=\(delayMs)")
+                guard shouldContinue == true else {
                     return
-                }
-                await MainActor.run { [weak self] in
-                    self?.logDiagnostic(
-                        "chat.ui refresh fallback sessionKey=\(sessionKey) "
-                            + "runId=\(runId) delayMs=\(delayMs)")
-                }
-                await self?.refreshHistoryAfterRun()
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    guard self.sessionKey == sessionKey else { return }
-                    if self.hasAssistantMessage(after: userMessageTimestamp) {
-                        self.clearPendingRun(runId)
-                        self.pendingToolCallsById = [:]
-                        self.streamingAssistantText = nil
-                    }
                 }
             }
         }
+    }
+
+    private func armRunCompletionRefresh(runId: String, sessionKey: String, userMessageTimestamp: Double) {
+        let timeoutMs = Int(self.pendingRunTimeoutMs)
+        let transport = self.transport
+        Task { [weak self, transport] in
+            let observedCompletion = await transport.waitForRunCompletion(runId: runId, timeoutMs: timeoutMs)
+            guard observedCompletion else { return }
+            _ = await self?.refreshIfPending(
+                runId: runId,
+                sessionKey: sessionKey,
+                after: userMessageTimestamp,
+                diagnostic: "chat.ui run completion refresh sessionKey=\(sessionKey) "
+                    + "runId=\(runId)")
+        }
+    }
+
+    private func refreshIfPending(
+        runId: String,
+        sessionKey: String,
+        after timestamp: Double,
+        diagnostic: String) async -> Bool
+    {
+        guard self.sessionKey == sessionKey, self.pendingRuns.contains(runId) else {
+            return false
+        }
+        guard !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp) else {
+            return false
+        }
+        self.logDiagnostic(diagnostic)
+        await self.refreshHistoryAfterRun()
+        guard self.sessionKey == sessionKey, self.pendingRuns.contains(runId) else {
+            return false
+        }
+        return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
+    }
+
+    @discardableResult
+    private func clearPendingRunIfAssistantMessagePresent(runId: String, after timestamp: Double) -> Bool {
+        guard self.hasAssistantMessage(after: timestamp) else { return false }
+        self.clearPendingRun(runId)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        return true
     }
 
     private func hasAssistantMessageAfterLatestUser() -> Bool {
@@ -1535,79 +1580,6 @@ public final class OpenClawChatViewModel {
         } catch {
             self.healthOK = false
         }
-    }
-
-    private func loadAttachments(urls: [URL]) async {
-        for url in urls {
-            do {
-                let data = try await Task.detached { try Data(contentsOf: url) }.value
-                await self.addImageAttachment(
-                    url: url,
-                    data: data,
-                    fileName: url.lastPathComponent,
-                    mimeType: Self.mimeType(for: url) ?? "application/octet-stream")
-            } catch {
-                await MainActor.run { self.errorText = error.localizedDescription }
-            }
-        }
-    }
-
-    private static func mimeType(for url: URL) -> String? {
-        let ext = url.pathExtension
-        guard !ext.isEmpty else { return nil }
-        return (UTType(filenameExtension: ext) ?? .data).preferredMIMEType
-    }
-
-    private func addImageAttachment(url: URL?, data: Data, fileName: String, mimeType: String) async {
-        let uti: UTType = {
-            if let url {
-                return UTType(filenameExtension: url.pathExtension) ?? .data
-            }
-            return UTType(mimeType: mimeType) ?? .data
-        }()
-        guard uti.conforms(to: .image) else {
-            self.errorText = "Only image attachments are supported right now"
-            return
-        }
-
-        let processed: Data
-        do {
-            processed = try await Task.detached(priority: .userInitiated) {
-                try ChatImageProcessor.processForUpload(data: data)
-            }.value
-        } catch {
-            self.errorText = "Could not process \(fileName): \(error.localizedDescription)"
-            return
-        }
-
-        if processed.count > Self.maxAttachmentBytes {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit after resizing"
-            return
-        }
-
-        let outputFileName: String = {
-            let baseName = (fileName as NSString).deletingPathExtension
-            return baseName.isEmpty ? "image.jpg" : "\(baseName).jpg"
-        }()
-
-        let preview = Self.previewImage(data: processed)
-        self.attachments.append(
-            OpenClawPendingAttachment(
-                url: url,
-                data: processed,
-                fileName: outputFileName,
-                mimeType: "image/jpeg",
-                preview: preview))
-    }
-
-    private static func previewImage(data: Data) -> OpenClawPlatformImage? {
-        #if canImport(AppKit)
-        NSImage(data: data)
-        #elseif canImport(UIKit)
-        UIImage(data: data)
-        #else
-        nil
-        #endif
     }
 
     private static func normalizedThinkingLevel(_ level: String?) -> String? {

@@ -206,6 +206,7 @@ struct ChatMessageBubble: View {
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
         if self.isUser {
@@ -215,11 +216,13 @@ struct ChatMessageBubble: View {
                 .padding(.horizontal, 2)
         } else {
             HStack(alignment: .top, spacing: 8) {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
-                    .padding(.top, 1)
+                if self.showsAssistantAvatar {
+                    ChatAgentAvatar(
+                        text: self.assistantAvatarText,
+                        name: self.assistantName,
+                        tint: self.assistantAvatarTint)
+                        .padding(.top, 1)
+                }
 
                 self.messageBody
                     .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
@@ -563,14 +566,17 @@ struct ChatTypingIndicatorBubble: View {
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            ChatAgentAvatar(
-                text: self.assistantAvatarText,
-                name: self.assistantName,
-                tint: self.assistantAvatarTint,
-                size: 28)
+            if self.showsAssistantAvatar {
+                ChatAgentAvatar(
+                    text: self.assistantAvatarText,
+                    name: self.assistantName,
+                    tint: self.assistantAvatarTint,
+                    size: 28)
+            }
 
             HStack(spacing: 9) {
                 TypingDots()
@@ -597,7 +603,8 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.style == rhs.style &&
             lhs.assistantName == rhs.assistantName &&
-            lhs.assistantAvatarText == rhs.assistantAvatarText
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar
     }
 }
 
@@ -623,14 +630,17 @@ struct ChatStreamingAssistantBubble: View {
     let assistantName: String?
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
+    let showsAssistantAvatar: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            ChatAgentAvatar(
-                text: self.assistantAvatarText,
-                name: self.assistantName,
-                tint: self.assistantAvatarTint)
-                .padding(.top, 1)
+            if self.showsAssistantAvatar {
+                ChatAgentAvatar(
+                    text: self.assistantAvatarText,
+                    name: self.assistantName,
+                    tint: self.assistantAvatarTint)
+                    .padding(.top, 1)
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 ChatAssistantTextBody(

@@ -8,8 +8,33 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
     private let gateway: GatewayNodeSession
 
+    static func isAgentWaitCompletionStatus(_ status: String) -> Bool {
+        switch status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "ok", "completed", "success", "succeeded":
+            true
+        default:
+            false
+        }
+    }
+
     init(gateway: GatewayNodeSession) {
         self.gateway = gateway
+    }
+
+    func createSession(
+        key: String,
+        label: String?,
+        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        struct Params: Codable {
+            var key: String
+            var label: String?
+            var parentSessionKey: String?
+        }
+        let data = try JSONEncoder().encode(Params(key: key, label: label, parentSessionKey: parentSessionKey))
+        let json = String(data: data, encoding: .utf8)
+        let res = try await self.gateway.request(method: "sessions.create", paramsJSON: json, timeoutSeconds: 15)
+        return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: res)
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -69,7 +94,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         let startLogMessage =
-            "chat.send start sessionKey=\(sessionKey) "
+            "agent start sessionKey=\(sessionKey) "
                 + "len=\(message.count) attachments=\(attachments.count)"
         Self.logger.info(
             "\(startLogMessage, privacy: .public)")
@@ -79,7 +104,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             var message: String
             var thinking: String
             var attachments: [OpenClawChatAttachmentPayload]?
-            var timeoutMs: Int
+            var timeout: Int
             var idempotencyKey: String
         }
 
@@ -88,20 +113,59 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             message: message,
             thinking: thinking,
             attachments: attachments.isEmpty ? nil : attachments,
-            timeoutMs: 30000,
+            timeout: 120,
             idempotencyKey: idempotencyKey)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         do {
-            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
+            let res = try await self.gateway.request(method: "agent", paramsJSON: json, timeoutSeconds: 35)
             let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
-            Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
-            GatewayDiagnostics.log("chat.send ok runId=\(decoded.runId) status=\(decoded.status)")
+            Self.logger.info("agent ok runId=\(decoded.runId, privacy: .public)")
+            GatewayDiagnostics.log("agent ok runId=\(decoded.runId) status=\(decoded.status)")
             return decoded
         } catch {
-            Self.logger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
-            GatewayDiagnostics.log("chat.send failed error=\(error.localizedDescription)")
+            Self.logger.error("agent failed \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("agent failed error=\(error.localizedDescription)")
             throw error
+        }
+    }
+
+    func waitForRunCompletion(runId rawRunId: String, timeoutMs: Int) async -> Bool {
+        struct AgentWaitParams: Codable {
+            var runId: String
+            var timeoutMs: Int
+        }
+        struct AgentWaitResponse: Codable {
+            var runId: String?
+            var status: String?
+            var error: String?
+        }
+
+        let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !runId.isEmpty else { return false }
+
+        do {
+            let params = AgentWaitParams(runId: runId, timeoutMs: timeoutMs)
+            let data = try JSONEncoder().encode(params)
+            let json = String(data: data, encoding: .utf8)
+            let requestTimeoutSeconds = max(1, Int(ceil(Double(timeoutMs) / 1000.0)) + 5)
+            GatewayDiagnostics.log("agent.wait start runId=\(runId)")
+            let res = try await self.gateway.request(
+                method: "agent.wait",
+                paramsJSON: json,
+                timeoutSeconds: requestTimeoutSeconds)
+            let decoded = try JSONDecoder().decode(AgentWaitResponse.self, from: res)
+            let status = (decoded.status ?? "unknown").lowercased()
+            let completed = Self.isAgentWaitCompletionStatus(status)
+            GatewayDiagnostics.log("agent.wait completed runId=\(decoded.runId ?? runId) status=\(status)")
+            if !completed {
+                Self.logger.warning("agent.wait status \(status, privacy: .public) runId=\(runId, privacy: .public)")
+            }
+            return completed
+        } catch {
+            Self.logger.warning("agent.wait failed \(error.localizedDescription, privacy: .public)")
+            GatewayDiagnostics.log("agent.wait failed runId=\(runId) error=\(error.localizedDescription)")
+            return false
         }
     }
 

@@ -891,7 +891,9 @@ final class GatewayConnectionController {
             }
         }
     }
+}
 
+extension GatewayConnectionController {
     private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
         let scheme = useTLS ? "wss" : "ws"
         var components = URLComponents()

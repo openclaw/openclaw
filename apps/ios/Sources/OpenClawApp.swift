@@ -644,7 +644,9 @@ struct OpenClawApp: App {
     }
 
     private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
+        AppAppearancePreference.launchArgumentPreference
+            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
+            ?? .system
     }
 
     @MainActor
