@@ -106,6 +106,12 @@ interface RequestBody {
   [key: string]: unknown;
 }
 
+type CodexJwtPayload = {
+  [JWT_CLAIM_PATH]?: {
+    chatgpt_account_id?: unknown;
+  };
+};
+
 // ============================================================================
 // Retry Helpers
 // ============================================================================
@@ -172,7 +178,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         throw new Error(`No API key for provider: ${model.provider}`);
       }
 
-      const accountId = extractAccountId(apiKey);
+      const accountId = extractOpenAICodexAccountId(apiKey);
       let body = buildRequestBody(model, context, options);
       const nextBody = await options?.onPayload?.(body, model);
       if (nextBody !== undefined) {
@@ -1458,21 +1464,29 @@ async function parseErrorResponse(
 // Auth & Headers
 // ============================================================================
 
-function extractAccountId(token: string): string {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) {
-      throw new Error("Invalid token");
-    }
-    const payload = JSON.parse(atob(parts[1]));
-    const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
-    if (!accountId) {
-      throw new Error("No account ID in token");
-    }
-    return accountId;
-  } catch {
-    throw new Error("Failed to extract accountId from token");
+function decodeCodexJwtPayload(token: string): CodexJwtPayload | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return null;
   }
+
+  try {
+    const decoded = Buffer.from(parts[1] ?? "", "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as CodexJwtPayload)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function extractOpenAICodexAccountId(token: string): string {
+  const accountId = decodeCodexJwtPayload(token)?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
+  if (typeof accountId === "string" && accountId.length > 0) {
+    return accountId;
+  }
+  throw new Error("Failed to extract accountId from token");
 }
 
 function createCodexRequestId(): string {

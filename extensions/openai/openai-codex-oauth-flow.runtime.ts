@@ -17,6 +17,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
+import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "./openai-codex-oauth-page.runtime.js";
 import type {
   OAuthCredentials,
@@ -32,7 +33,6 @@ const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 const SCOPE = "openid profile email offline_access";
-const JWT_CLAIM_PATH = "https://api.openai.com/auth";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
 type TokenFailure = { type: "failed"; message: string; status?: number };
@@ -41,13 +41,6 @@ type TokenResponseJson = {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
-};
-
-type JwtPayload = {
-  [JWT_CLAIM_PATH]?: {
-    chatgpt_account_id?: string;
-  };
-  [key: string]: unknown;
 };
 
 function createState(): string {
@@ -87,20 +80,6 @@ function parseAuthorizationInput(input: string): { code?: string; state?: string
   }
 
   return { code: value };
-}
-
-function decodeJwt(token: string): JwtPayload | null {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) {
-      return null;
-    }
-    const payload = parts[1] ?? "";
-    const decoded = atob(payload);
-    return JSON.parse(decoded) as JwtPayload;
-  } catch {
-    return null;
-  }
 }
 
 function formatMissingTokenResponseFields(json: TokenResponseJson): string {
@@ -310,9 +289,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 }
 
 function getAccountId(accessToken: string): string | null {
-  const payload = decodeJwt(accessToken);
-  const auth = payload?.[JWT_CLAIM_PATH];
-  const accountId = auth?.chatgpt_account_id;
+  const accountId = resolveCodexAuthIdentity({ accessToken }).accountId;
   return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
 }
 
