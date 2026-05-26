@@ -16,6 +16,7 @@ import {
 import { channelBrokerPluginConfigSchema } from "./config-schema.js";
 import {
   sendChannelBrokerMedia,
+  sendChannelBrokerOutboundMedia,
   sendChannelBrokerOutboundText,
   sendChannelBrokerText,
 } from "./outbound.js";
@@ -245,6 +246,7 @@ export const channelBrokerPlugin = createChatChannelPlugin({
     attachedResults: {
       channel: CHANNEL_ID,
       sendText: async (ctx) => await sendChannelBrokerOutboundText(ctx),
+      sendMedia: async (ctx) => await sendChannelBrokerOutboundMedia(ctx),
     },
   },
 }) satisfies import("openclaw/plugin-sdk/channel-core").ChannelPlugin<ResolvedChannelBrokerAccount>;

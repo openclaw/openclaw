@@ -675,6 +675,61 @@ describe("channel-broker plugin", () => {
     ).rejects.toThrow("broker send failed");
   });
 
+  it("preserves media sends through the lazy outbound adapter", async () => {
+    const sendOutboundRequest = vi.fn(async () =>
+      createBrokerReceipt({
+        requestId: "broker-media-1",
+        providerId: "acme",
+        platform: "Slack",
+        status: "sent",
+        messageIds: ["native-media-1"],
+      }),
+    );
+    setChannelBrokerRuntime({ sendOutboundRequest, createRequestId: () => "broker-media-1" });
+
+    const result = await channelBrokerPlugin.outbound?.sendMedia?.({
+      cfg: {
+        channels: {
+          "channel-broker": {
+            accounts: {
+              acme: {
+                enabled: true,
+                baseUrl: "https://broker.example.test",
+                platforms: ["slack"],
+              },
+            },
+          },
+        },
+      },
+      to: "broker:slack:C123",
+      text: "caption",
+      mediaUrl: "https://cdn.example.test/photo.png",
+      accountId: "acme",
+    } as never);
+
+    expect(result).toEqual({ channel: "channel-broker", messageId: "native-media-1" });
+    expect(sendOutboundRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          requestId: "broker-media-1",
+          platform: "slack",
+          payloads: [
+            expect.objectContaining({
+              text: "caption",
+              attachments: [
+                expect.objectContaining({
+                  url: "https://cdn.example.test/photo.png",
+                  mediaType: "media",
+                }),
+              ],
+            }),
+          ],
+          requirements: expect.objectContaining({ text: true, media: true }),
+        }),
+      }),
+    );
+  });
+
   it("rejects invalid broker targets during outbound resolution", () => {
     const result = channelBrokerPlugin.outbound?.resolveTarget?.({
       cfg: {

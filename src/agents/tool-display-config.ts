@@ -600,20 +600,5 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "TTS",
       detailKeys: ["text", "channel"],
     },
-    transcripts: {
-      emoji: "📝",
-      title: "Transcripts",
-      detailKeys: [
-        "action",
-        "sessionId",
-        "title",
-        "providerId",
-        "accountId",
-        "guildId",
-        "channelId",
-        "meetingUrl",
-        "speakerLabel",
-      ],
-    },
   },
 };

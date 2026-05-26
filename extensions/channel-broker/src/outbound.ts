@@ -327,3 +327,25 @@ export async function sendChannelBrokerOutboundText(
   });
   return { messageId: result.messageId ?? "" };
 }
+
+export async function sendChannelBrokerOutboundMedia(
+  ctx: ChannelOutboundContext,
+): Promise<{ messageId: string }> {
+  const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
+  if (!ctx.mediaUrl) {
+    throw new Error("Channel broker outbound media send requires a media URL.");
+  }
+  const result = await sendChannelBrokerMedia({
+    cfg: ctx.cfg as CoreConfig,
+    accountId: ctx.accountId,
+    to: ctx.to,
+    text: ctx.text,
+    mediaUrl: ctx.mediaUrl,
+    threadId: ctx.threadId,
+    replyToId: ctx.replyToId,
+    silent: ctx.silent,
+    audioAsVoice: ctx.audioAsVoice,
+    ...(signal ? { signal } : {}),
+  });
+  return { messageId: result.messageId ?? "" };
+}
