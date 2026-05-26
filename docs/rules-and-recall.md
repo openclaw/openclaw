@@ -14,6 +14,7 @@
 10. Recall quality must evolve additively toward vector/neural-style weighted semantic retrieval: add embeddings/vector slots, concepts/entities, aliases, graph edges, query feedback, LLM-readable recall hints, and materialized views without deleting source rows.
 11. Database repair/recovery is a hard continuity rule: predictable backups must exist; repair is attempted first; backup candidates are tested if repair fails; the first verified working backup is promoted; DB health/recall tests must pass before claiming success. See [`database-recovery.md`](database-recovery.md).
 12. "100% memory working" means end-to-end memory ingestion and recall across every active data-producing surface, not just PostgreSQL connectivity. Telegram/chat turns, assistant responses, generated instructions, code and documentation changes, GitHub publication events, system/process logs that carry operational facts, installer/upgrade decisions, and other newly generated durable data must be written into PostgreSQL memory or explicitly reported as blocked/degraded. Health checks must verify recent rows, ingestion bridges, recall queries, and absence of retired markdown memory output before claiming memory is working.
+13. Bad generated memory rows must not remain available for reactivation. If a row is wrong, broken, superseded, produced by a bad bridge/path, or otherwise unsafe to recall, deactivate it immediately and mark the reason. After a 24-hour quarantine window, prune it from active recall-producing tables so stale code cannot reactivate the bad path. Preserve real operator/source history and use minimal non-reactivating tombstone/audit metadata when needed; do not keep broken generated rows in normal recall merely because source preservation is important.
 
 ## Rule failure lockout
 
@@ -60,6 +61,19 @@ Memory is not healthy merely because the database accepts connections or a recal
 3. No retired `memory/` markdown/JSON surface is recreated or used for durable memory.
 4. Natural-language recall can retrieve newly stored rules and recent operational facts.
 5. Any ingestion gap is treated as a memory outage until the bridge, writer, trigger, or logging path is repaired and verified.
+
+## Bad-row quarantine and prune rule
+
+Broken, wrong, superseded, or bad-path generated rows must be removed from normal recall quickly enough that stale code cannot bring them back.
+
+Required behavior:
+
+1. Deactivate the bad row immediately when it is identified.
+2. Record why it was deactivated and what path created it.
+3. Keep it out of active recall and bridge reactivation logic during quarantine.
+4. After 24 hours, prune/delete the bad generated row from active recall-producing tables.
+5. Preserve real operator/source history; the 24-hour prune rule targets bad generated/derived rows and broken-path artifacts, not legitimate operator messages or raw source records.
+6. If an audit trail is needed, keep only a minimal tombstone that cannot be selected as live memory and cannot reactivate the bad path.
 
 ## Recall escalation
 
