@@ -5,6 +5,7 @@ import {
   inspectWindowsAcl,
   type ExecFn,
 } from "./windows-acl.js";
+import { isWSL2Sync } from "../infra/wsl.js";
 
 export type PermissionCheck = {
   ok: boolean;
@@ -19,6 +20,7 @@ export type PermissionCheck = {
   groupReadable: boolean;
   aclSummary?: string;
   error?: string;
+  wsl9pInsecure?: boolean;
 };
 
 export type PermissionCheckOptions = {
@@ -127,6 +129,18 @@ export async function inspectPathPermissions(
     };
   }
 
+  // Check if running in WSL2 with potentially unreliable 9p mount permissions
+  const isWSL2 = isWSL2Sync();
+  const worldWritable = isWorldWritable(bits);
+  const groupWritable = isGroupWritable(bits);
+  const worldReadable = isWorldReadable(bits);
+  const groupReadable = isGroupReadable(bits);
+
+  // WSL2 9p mounts report insecure permissions (777) even for secure files
+  // Detect this case and mark it for downstream handling rather than failing hard
+  const wsl9pInsecure =
+    isWSL2 && worldWritable && groupWritable && worldReadable && groupReadable && bits === 0o777;
+
   return {
     ok: true,
     isSymlink: st.isSymlink,
@@ -134,10 +148,11 @@ export async function inspectPathPermissions(
     mode: effectiveMode,
     bits,
     source: "posix",
-    worldWritable: isWorldWritable(bits),
-    groupWritable: isGroupWritable(bits),
-    worldReadable: isWorldReadable(bits),
-    groupReadable: isGroupReadable(bits),
+    worldWritable,
+    groupWritable,
+    worldReadable,
+    groupReadable,
+    wsl9pInsecure,
   };
 }
 

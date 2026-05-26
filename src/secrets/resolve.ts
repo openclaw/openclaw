@@ -252,10 +252,17 @@ async function assertSecurePath(params: {
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
   }
-  const writableByOthers = perms.worldWritable || perms.groupWritable;
-  const readableByOthers = perms.worldReadable || perms.groupReadable;
-  if (writableByOthers || (!params.allowReadableByOthers && readableByOthers)) {
-    throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
+
+  // WSL2 9p mounts report insecure permissions (777) even for secure files
+  // Skip the strict permission check in this case to avoid false positives
+  const isWSL9pFalsePositive = perms.wsl9pInsecure === true;
+
+  if (!isWSL9pFalsePositive) {
+    const writableByOthers = perms.worldWritable || perms.groupWritable;
+    const readableByOthers = perms.worldReadable || perms.groupReadable;
+    if (writableByOthers || (!params.allowReadableByOthers && readableByOthers)) {
+      throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
+    }
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
