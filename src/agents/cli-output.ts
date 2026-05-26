@@ -790,11 +790,6 @@ export function createCliJsonlStreamingParser(params: {
       });
       return;
     }
-    if (delta.thinkingDelta !== undefined) {
-      thinkingText += delta.thinkingDelta;
-      params.onAssistantDelta({ ...delta, thinkingText });
-      return;
-    }
     assistantText = delta.text;
     params.onAssistantDelta(delta);
   };

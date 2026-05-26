@@ -2018,15 +2018,18 @@ export const dispatchTelegramMessage = async ({
                           // checkpoint guards against re-deliveries of the
                           // same accumulated text.
                           clearActiveTimer();
-                          const fullText = typeof payload.text === "string" ? payload.text : "";
-                          const newPart = fullText.slice(rawReasoningCheckpoint);
+                          // Normalize via the same splitter the draft-lane path
+                          // uses (strips <think> tags + applies
+                          // formatReasoningMessage) so the interleaved reasoning
+                          // can't leak tags or duplicate already-formatted
+                          // labels. Checkpoint on the normalized text length.
+                          const rawText = typeof payload.text === "string" ? payload.text : "";
+                          const normalizedReasoning =
+                            splitTelegramReasoningText(rawText, true).reasoningText ?? "";
+                          const newPart = normalizedReasoning.slice(rawReasoningCheckpoint);
                           if (newPart) {
-                            const italicized = newPart
-                              .split("\n")
-                              .map((l) => (l.trim() ? `_${l}_` : ""))
-                              .join("\n");
-                            interleavedOutput += italicized;
-                            rawReasoningCheckpoint = fullText.length;
+                            interleavedOutput += newPart;
+                            rawReasoningCheckpoint = normalizedReasoning.length;
                           }
                           updateInterleavedDisplay();
                           // Lane has content the user shouldn't lose; mark
@@ -2085,11 +2088,18 @@ export const dispatchTelegramMessage = async ({
                     // legacy per-tool channel-progress message when the
                     // reasoning lane isn't active (room events, suppressed
                     // reasoning level, no streaming, etc.).
-                    if (!(await injectToolLineIntoInterleave(formatted, { startTimer: true }))) {
-                      await pushStreamToolProgress(formatted, {
-                        toolName,
-                        startImmediately: true,
-                      });
+                    // Honor the tool-progress opt-out — same gate as
+                    // pushStreamToolProgress (line ~984): only surface tool
+                    // lines when progress streaming is enabled / in progress
+                    // mode, so users who disabled tool progress don't get them
+                    // injected into the reasoning message either.
+                    if (streamMode === "progress" || streamToolProgressEnabled) {
+                      if (!(await injectToolLineIntoInterleave(formatted, { startTimer: true }))) {
+                        await pushStreamToolProgress(formatted, {
+                          toolName,
+                          startImmediately: true,
+                        });
+                      }
                     }
                     if (statusReactionController && toolName) {
                       await statusReactionController.setTool(toolName);
