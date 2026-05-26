@@ -1,12 +1,12 @@
 {
   "name": "openclaw",
-  "version": "2026.5.25",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw",
-      "version": "2026.5.25",
+      "version": "2026.5.26",
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
