@@ -1843,4 +1843,126 @@ describe("runCopilotAttempt", () => {
       expect(sessionConfig?.workingDirectory).toBe("C:\\workspace");
     });
   });
+
+  // ClawSweeper PR #86155 [P1] round-8: the SDK SessionConfig accepts
+  // `availableTools` as a hard catalog allowlist
+  // (`@github/copilot-sdk/dist/types.d.ts:1059-1066`). Without it, the
+  // CLI keeps its native read/write/shell/url/mcp/memory/hook tools
+  // visible to the model alongside our bridged overrides, which would
+  // bypass OpenClaw's wrapped-tool enforcement under any permissive
+  // permission policy and pollute the catalog under the default reject
+  // policy. `createSessionConfig` derives `availableTools` from the
+  // post-filter `sdkTools` so create- and resume-session always carry
+  // exactly the names of the tools the bridge actually exposed.
+  describe("availableTools surface restriction (PR #86155 [P1] round-8)", () => {
+    function makeFakeSdkTool(name: string): SdkTool {
+      return {
+        description: `Fake tool ${name}`,
+        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+        name,
+        parameters: { type: "object" },
+      };
+    }
+
+    function readAvailableTools(call: unknown): readonly string[] | undefined {
+      const cfg = (call as unknown[] | undefined)?.[0] as { availableTools?: string[] };
+      return cfg?.availableTools;
+    }
+
+    it("forwards exactly the bridged tool names when the bridge returns a narrow tool set", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read"), makeFakeSdkTool("edit")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["read", "edit"]);
+    });
+
+    it("forwards `[]` to the SDK when the bridge returns no tools (disable / raw / fully filtered)", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      // The bridge already collapses `disableTools: true`, raw model runs
+      // (`modelRun: true` or `promptMode: "none"`), an empty
+      // `toolsAllow: []`, and an unsupported provider to `sdkTools: []`.
+      // Whatever the upstream reason, `availableTools` must be the same
+      // empty list so the SDK cannot fall back to its native catalog.
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([]);
+    });
+
+    it("forwards the full bridged set when the run is unrestricted (no toolsAllow)", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [
+        makeFakeSdkTool("read"),
+        makeFakeSdkTool("write"),
+        makeFakeSdkTool("edit"),
+        makeFakeSdkTool("exec"),
+        makeFakeSdkTool("message"),
+      ];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+
+      // The bridge is the source of truth, not the raw `toolsAllow`
+      // input: wildcard `["*"]` and unrestricted both flow through as
+      // "all bridged tool names" so the SDK sees a concrete catalog.
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
+        "read",
+        "write",
+        "edit",
+        "exec",
+        "message",
+      ]);
+    });
+
+    it("forwards the same `availableTools` on the resumeSession path", async () => {
+      // `ResumeSessionConfig` picks `availableTools` per
+      // `@github/copilot-sdk/dist/types.d.ts:1198`, so the spread into
+      // `client.resumeSession(id, { ...sessionConfig })` must carry the
+      // same surface restriction; otherwise resumed sessions would
+      // silently restore the native catalog after every reconnect.
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({ initialReplayState: { sdkSessionId: "sess-resume-1" } } as never),
+        { createToolBridge, pool },
+      );
+
+      const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
+      const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
+      expect(resumeCfg?.availableTools).toEqual(["read"]);
+    });
+
+    it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({ initialReplayState: { sdkSessionId: "sess-resume-2" } } as never),
+        { createToolBridge, pool },
+      );
+
+      const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
+      const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
+      expect(resumeCfg?.availableTools).toEqual([]);
+    });
+  });
 });

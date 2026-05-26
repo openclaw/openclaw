@@ -638,6 +638,7 @@ function createSessionConfig(
   effectiveWorkspaceDir: string | undefined,
 ): Pick<
   SessionConfig,
+  | "availableTools"
   | "enableSessionTelemetry"
   | "gitHubToken"
   | "hooks"
@@ -657,16 +658,22 @@ function createSessionConfig(
     // Permission decisions for SDK built-in tool kinds (shell, write,
     // read, url, mcp, memory, hook) fall through to permission-bridge.
     // The default (`rejectAllPolicy`) keeps the harness fail-closed,
-    // but in practice the SDK should never invoke any of those because
-    // every bridged tool is registered with `overridesBuiltInTool: true`
-    // and `skipPermission: true` (see tool-bridge.ts), so 100% of tool
-    // calls go through OpenClaw's wrapped `execute()` which runs
-    // `runBeforeToolCallHook` (loop detection, trusted plugin policies,
-    // before-tool-call hooks, two-phase plugin approval). This mirrors
-    // the in-tree codex harness's split: bridged-tool enforcement
-    // happens inside the tool wrapper, and the SDK gate is a safety
-    // net for kinds we don't surface. See permission-bridge.ts and
-    // docs/plugins/copilot.md.
+    // but the primary catalog restriction is `availableTools` below
+    // (PR #86155 [P1] round-8): the SDK only exposes the exact set of
+    // bridged tool names to the model, so native shell/read/write/url/
+    // mcp/memory/hook tools never appear in the catalog and cannot be
+    // invoked even under a permissive permission policy. The
+    // permission-bridge stays in place as defense-in-depth for any
+    // built-in kind that future SDK versions might surface outside
+    // `availableTools`. Every bridged tool is also registered with
+    // `overridesBuiltInTool: true` and `skipPermission: true` (see
+    // tool-bridge.ts) so 100% of tool calls go through OpenClaw's
+    // wrapped `execute()` which runs `runBeforeToolCallHook` (loop
+    // detection, trusted plugin policies, before-tool-call hooks,
+    // two-phase plugin approval). This mirrors the in-tree codex
+    // harness's split: bridged-tool enforcement happens inside the
+    // tool wrapper, and the SDK gate is a safety net for kinds we
+    // don't surface. See permission-bridge.ts and docs/plugins/copilot.md.
     onPermissionRequest: createPermissionBridge(permissionPolicy),
     // `onUserInputRequest` is intentionally NOT registered: per the SDK
     // contract, omitting the handler hides the `ask_user` tool from the
@@ -698,6 +705,23 @@ function createSessionConfig(
     ...(infiniteSessions ? { infiniteSessions } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
+    // Restrict the SDK's tool catalog to exactly the bridged tool names
+    // returned by `createCopilotToolBridge`. Without this, the SDK
+    // would still expose its native read/write/shell/url/mcp/memory/
+    // hook tools to the model alongside our overrides, which would
+    // bypass OpenClaw's wrapped-tool enforcement under any permissive
+    // permission policy and pollute the catalog with disabled tools
+    // under the default reject policy. An empty list (`[]`) is
+    // meaningful per the SDK contract
+    // (`@github/copilot-sdk/dist/types.d.ts:1059-1061`): when set,
+    // only the listed tools are available. Derived inside this
+    // function (not passed as a parameter) so create/resume always
+    // stay coupled to the registered external `tools` array. See PR
+    // #86155 [P1] round-8 and ResumeSessionConfig at
+    // `@github/copilot-sdk/dist/types.d.ts:1198` (it picks
+    // `availableTools`, so the spread into `resumeSession` covers
+    // the resume path too).
+    availableTools: sdkTools.map((tool) => tool.name),
     workingDirectory:
       effectiveWorkspaceDir ?? readString(params.workspaceDir) ?? readString(params.cwd),
     // Session-level GitHub token. INDEPENDENT of the client-level
