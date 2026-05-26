@@ -44,9 +44,6 @@ Docs: https://docs.openclaw.ai
 - Build: include `ui:build` in the `full` and `ciArtifacts` profiles of `scripts/build-all.mjs` so `pnpm build` always rebuilds `dist/control-ui` after `tsdown` cleans `dist`, removing the second-command requirement and the missing-asset failure mode for source/runtime installs and CI artifact uploads. (#85206)
 - iOS: improve Talk mode with direct realtime voice sessions, compact toolbar status, and responsive voice waveform feedback. (#86355) Thanks @ngutman.
 - Media: replace the Sharp image backend with Rastermill for metadata, resizing, EXIF orientation, and PNG alpha-preserving optimization so OpenClaw no longer installs Sharp or the WhatsApp Jimp fallback for image processing. (#86437)
-=======
-- Media: replace the Sharp image backend with Photon for metadata, resizing, EXIF orientation, and PNG alpha-preserving optimization so OpenClaw no longer installs Sharp or the WhatsApp Jimp fallback for image processing. (#86437)
->>>>>>> e9b4bc65b2 (fix(cli-runner): scale Claude CLI reseed history)
 
 ### Fixes
 
@@ -1545,7 +1542,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: add the optional bundled `oc-path` plugin, providing `openclaw path` for surgical `oc://` access to markdown, JSONC, and JSONL workspace files.
 - Plugins/SDK: add unified model catalog registration for text, image, video, and music providers, including `providerCatalogEntry` manifests, shared media list help, live catalog caching, and per-model video capability overlays.
 - Plugin SDK: add presentation helpers for controls-only interactive rendering and opt-in empty fallback text so rich channel renderers can share `MessagePresentation` semantics without duplicating native cards or components.
-- CLI runner: expose `agents.defaults.cliBackends.<id>.maxReseedHistoryChars` so per-backend overrides can raise (or lower) the rendered `<conversation_history>` cap used when a fresh CLI session is reseeded from a prior transcript; the in-source default stays at 12288 characters.
 - CLI: make parser, startup, config, guardrail, channel, agent, task, session, and MCP failures explain what happened and point to the next recovery command.
 - GitHub Copilot: refresh the model catalog from `${baseUrl}/models` so per-account entitlement and accurate context windows surface at runtime; static manifest catalog (now including `gpt-5.5`) remains the fallback when discovery is disabled or the API is unreachable.
 - Active Memory: support concrete `plugins.entries.active-memory.config.toolsAllow` recall tool names for custom memory plugins while keeping the built-in memory-core default on `memory_search`/`memory_get` and preserving `memory_recall` automatically for `plugins.slots.memory: "memory-lancedb"`.
