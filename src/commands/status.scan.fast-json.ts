@@ -1,3 +1,4 @@
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
@@ -10,6 +11,14 @@ import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const STATUS_JSON_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+).map((entry) => `${entry.channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`);
+const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
+    (entry) => entry.channelEnvVars ?? [],
+  ),
+);
 
 type StatusJsonScanPolicy = {
   commandName: string;
@@ -44,8 +53,23 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
   return false;
 }
 
-async function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): Promise<boolean> {
-  return hasExplicitStatusJsonChannelConfig(cfg);
+function hasStatusJsonChannelEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      continue;
+    }
+    if (
+      STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
+      STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): boolean {
+  return hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig();
 }
 
 export async function scanStatusJsonWithPolicy(

@@ -15,6 +15,7 @@ type BundledPluginSource = {
   manifest: {
     id: string;
     channels?: unknown;
+    channelEnvVars?: unknown;
     name?: string;
     description?: string;
   } & Record<string, unknown>;
@@ -64,6 +65,7 @@ type BundledChannelConfigMetadata = {
   aliases?: readonly string[];
   order?: number;
   configurable?: boolean;
+  channelEnvVars?: readonly string[];
   label?: string;
   description?: string;
   schema: Record<string, unknown>;
@@ -169,6 +171,24 @@ function resolveRootConfigurable(source: BundledPluginSource, channelId: string)
   return exposure?.configured !== false;
 }
 
+function resolveRootChannelEnvVars(source: BundledPluginSource, channelId: string): string[] {
+  const raw = source.manifest.channelEnvVars;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return [];
+  }
+  const value = (raw as Record<string, unknown>)[channelId];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry) => entry.length > 0),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function formatTypeScriptModule(source: string, outputPath: string, repoRoot: string): string {
   return formatGeneratedModule(source, {
     repoRoot,
@@ -240,6 +260,7 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       const aliases = resolveRootAliases(source, channelId);
       const order = resolveRootOrder(source, channelId);
       const configurable = resolveRootConfigurable(source, channelId);
+      const channelEnvVars = resolveRootChannelEnvVars(source, channelId);
       const label = resolveRootLabel(source, channelId);
       const description = resolveRootDescription(source, channelId);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
@@ -252,6 +273,7 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
         ...(aliases.length > 0 ? { aliases } : {}),
         ...(order === undefined ? {} : { order }),
         ...(configurable ? {} : { configurable }),
+        ...(channelEnvVars.length > 0 ? { channelEnvVars } : {}),
         ...(label ? { label } : {}),
         ...(description ? { description } : {}),
         schema: surface.schema,
@@ -284,6 +306,7 @@ type BundledChannelConfigMetadata = {
   aliases?: readonly string[];
   order?: number;
   configurable?: boolean;
+  channelEnvVars?: readonly string[];
   label?: string;
   description?: string;
   schema: Record<string, unknown>;
