@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import type { BrokerInboundEventV1 } from "openclaw/plugin-sdk/channel-broker";
 import { BROKER_PROTOCOL_VERSION, createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-plugin-common";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChannelBrokerAccount } from "./accounts.js";
