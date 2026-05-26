@@ -79,6 +79,22 @@ export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
+  /**
+   * Optional resolver for the maximum number of announce retries. Called fresh on every
+   * cleanup decision so runtime config changes take effect without restart. Defaults to
+   * the hardcoded {@link MAX_ANNOUNCE_RETRY_COUNT} (3) to preserve prior behavior.
+   */
+  resolveMaxAnnounceRetryCount?: () => number;
+  /**
+   * Optional resolver for the base delay (ms) used in announce-retry exponential backoff.
+   * Called fresh on every cleanup decision. Defaults to {@link MIN_ANNOUNCE_RETRY_DELAY_MS}.
+   */
+  resolveAnnounceRetryBaseDelayMs?: () => number;
+  /**
+   * Optional resolver for the cap (ms) on announce-retry exponential backoff.
+   * Called fresh on every cleanup decision. Defaults to 8000 ms.
+   */
+  resolveAnnounceRetryMaxDelayMs?: () => number;
   persist(): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
@@ -792,15 +808,24 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     const now = Date.now();
+    const effectiveMaxRetries =
+      params.resolveMaxAnnounceRetryCount?.() ?? MAX_ANNOUNCE_RETRY_COUNT;
+    const effectiveBaseDelayMs =
+      params.resolveAnnounceRetryBaseDelayMs?.() ?? MIN_ANNOUNCE_RETRY_DELAY_MS;
+    const effectiveMaxDelayMs = params.resolveAnnounceRetryMaxDelayMs?.();
     const deferredDecision = resolveDeferredCleanupDecision({
       entry,
       now,
       activeDescendantRuns: Math.max(0, params.countPendingDescendantRuns(entry.childSessionKey)),
       announceExpiryMs: ANNOUNCE_EXPIRY_MS,
       announceCompletionHardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
-      maxAnnounceRetryCount: MAX_ANNOUNCE_RETRY_COUNT,
-      deferDescendantDelayMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
-      resolveAnnounceRetryDelayMs,
+      maxAnnounceRetryCount: effectiveMaxRetries,
+      deferDescendantDelayMs: effectiveBaseDelayMs,
+      resolveAnnounceRetryDelayMs: (retryCount) =>
+        resolveAnnounceRetryDelayMs(retryCount, {
+          baseDelayMs: effectiveBaseDelayMs,
+          maxDelayMs: effectiveMaxDelayMs,
+        }),
     });
 
     if (deferredDecision.kind === "defer-descendants") {

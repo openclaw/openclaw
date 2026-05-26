@@ -36,6 +36,14 @@ export const MAX_ANNOUNCE_RETRY_COUNT = 3;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
+/**
+ * Defaults used when `agents.defaults.subagents.*` overrides are absent. These mirror
+ * the original hardcoded constants so behavior is identical when no config is set.
+ */
+export const DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS = MIN_ANNOUNCE_RETRY_DELAY_MS;
+export const DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS = MAX_ANNOUNCE_RETRY_DELAY_MS;
+export const DEFAULT_MAX_ANNOUNCE_RETRY_COUNT = MAX_ANNOUNCE_RETRY_COUNT;
+
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
@@ -58,12 +66,32 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-export function resolveAnnounceRetryDelayMs(retryCount: number) {
+/**
+ * Compute the delay before the next announce retry using exponential backoff.
+ *
+ * Behavior preserved from the original hardcoded version when called with the
+ * default base/max values: retry #1 waits 1s, then 2s, 4s, capped at 8s.
+ *
+ * @param retryCount Attempts already made (1-based: pass 1 for the delay before retry #1)
+ * @param options Optional override for base and max delay; defaults match the previous constants.
+ */
+export function resolveAnnounceRetryDelayMs(
+  retryCount: number,
+  options?: { baseDelayMs?: number; maxDelayMs?: number },
+) {
+  const baseDelayMs = Math.max(0, options?.baseDelayMs ?? DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS);
+  const maxDelayMs = Math.max(
+    baseDelayMs,
+    options?.maxDelayMs ?? DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS,
+  );
+  if (baseDelayMs === 0) {
+    return 0;
+  }
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
-  // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
+  // retryCount is "attempts already made", so retry #1 waits base, then base*2, base*4...
   const backoffExponent = Math.max(0, boundedRetryCount - 1);
-  const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** backoffExponent;
-  return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+  const baseDelay = baseDelayMs * 2 ** backoffExponent;
+  return Math.min(baseDelay, maxDelayMs);
 }
 
 function formatAnnounceGiveUpLogField(value: string): string {

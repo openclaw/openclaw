@@ -458,6 +458,22 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
+    /**
+     * Maximum number of retries when announcing sub-agent completion back to the parent
+     * (default: 3). Set to 0 to disable retries. Increase for flaky channels (e.g. Feishu)
+     * to reduce silently-lost completions (#86488).
+     */
+    maxAnnounceRetryCount?: number;
+    /**
+     * Base delay in milliseconds between sub-agent completion announce retries (default: 1000).
+     * Each retry doubles this delay (exponential backoff) up to announceRetryMaxDelayMs.
+     */
+    announceRetryBaseDelayMs?: number;
+    /**
+     * Maximum delay in milliseconds between sub-agent completion announce retries (default: 8000).
+     * Caps the exponential backoff growth.
+     */
+    announceRetryMaxDelayMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
   };

@@ -58,6 +58,11 @@ import {
 } from "./subagent-announce-dispatch.js";
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS,
+  DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS,
+  DEFAULT_MAX_ANNOUNCE_RETRY_COUNT,
+} from "./subagent-registry-helpers.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -215,6 +220,48 @@ export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
   }
   return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+}
+
+/**
+ * Resolve the maximum number of retries used when announcing sub-agent completion back
+ * to the parent session. Defaults to {@link DEFAULT_MAX_ANNOUNCE_RETRY_COUNT} (3) so the
+ * behavior is unchanged when `agents.defaults.subagents.maxAnnounceRetryCount` is absent.
+ *
+ * See issue #86488: in flaky channels (e.g. Feishu) the previous hardcoded 3 retries
+ * could be exhausted within a few seconds, silently dropping the completion result.
+ */
+export function resolveSubagentMaxAnnounceRetryCount(cfg: OpenClawConfig): number {
+  const configured = cfg.agents?.defaults?.subagents?.maxAnnounceRetryCount;
+  if (typeof configured !== "number" || !Number.isFinite(configured) || configured < 0) {
+    return DEFAULT_MAX_ANNOUNCE_RETRY_COUNT;
+  }
+  return Math.min(Math.floor(configured), 20);
+}
+
+/**
+ * Resolve the base delay (in ms) for the exponential backoff between announce retries.
+ * Defaults to {@link DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS} (1000 ms) so the behavior is
+ * unchanged when `agents.defaults.subagents.announceRetryBaseDelayMs` is absent.
+ */
+export function resolveSubagentAnnounceRetryBaseDelayMs(cfg: OpenClawConfig): number {
+  const configured = cfg.agents?.defaults?.subagents?.announceRetryBaseDelayMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured) || configured < 0) {
+    return DEFAULT_ANNOUNCE_RETRY_BASE_DELAY_MS;
+  }
+  return Math.min(Math.floor(configured), MAX_TIMER_SAFE_TIMEOUT_MS);
+}
+
+/**
+ * Resolve the cap (in ms) for the exponential backoff between announce retries.
+ * Defaults to {@link DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS} (8000 ms) so the behavior is
+ * unchanged when `agents.defaults.subagents.announceRetryMaxDelayMs` is absent.
+ */
+export function resolveSubagentAnnounceRetryMaxDelayMs(cfg: OpenClawConfig): number {
+  const configured = cfg.agents?.defaults?.subagents?.announceRetryMaxDelayMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured) || configured < 0) {
+    return DEFAULT_ANNOUNCE_RETRY_MAX_DELAY_MS;
+  }
+  return Math.min(Math.floor(configured), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {

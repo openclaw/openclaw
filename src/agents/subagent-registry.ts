@@ -15,6 +15,11 @@ import { removeInternalSessionEffectsTranscript } from "./internal-session-effec
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import {
+  resolveSubagentAnnounceRetryBaseDelayMs,
+  resolveSubagentAnnounceRetryMaxDelayMs,
+  resolveSubagentMaxAnnounceRetryCount,
+} from "./subagent-announce-delivery.js";
+import {
   ensureCompletionState,
   ensureDeliveryState,
   getDeliveryAttemptCount,
@@ -34,7 +39,6 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_EXPIRY_MS,
-  MAX_ANNOUNCE_RETRY_COUNT,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
@@ -490,6 +494,15 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  // #86488: read retry knobs from runtime config on every cleanup decision so users can
+  // tune behavior for flaky channels (e.g. Feishu) without restart. Defaults preserve
+  // the previous hardcoded behavior (3 retries, 1s base / 8s max exponential backoff).
+  resolveMaxAnnounceRetryCount: () =>
+    resolveSubagentMaxAnnounceRetryCount(subagentRegistryDeps.getRuntimeConfig()),
+  resolveAnnounceRetryBaseDelayMs: () =>
+    resolveSubagentAnnounceRetryBaseDelayMs(subagentRegistryDeps.getRuntimeConfig()),
+  resolveAnnounceRetryMaxDelayMs: () =>
+    resolveSubagentAnnounceRetryMaxDelayMs(subagentRegistryDeps.getRuntimeConfig()),
   persist: persistSubagentRuns,
   clearPendingLifecycleError,
   countPendingDescendantRuns,
@@ -534,7 +547,11 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
-  if (getDeliveryAttemptCount(entry) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  // #86488: read the configurable cap so users can raise retries for flaky channels.
+  const effectiveMaxRetries = resolveSubagentMaxAnnounceRetryCount(
+    subagentRegistryDeps.getRuntimeConfig(),
+  );
+  if (getDeliveryAttemptCount(entry) >= effectiveMaxRetries) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
@@ -557,7 +574,12 @@ function resumeSubagentRun(runId: string) {
 
   const now = Date.now();
   const lastAttemptAt = getDeliveryLastAttemptAt(entry);
-  const delayMs = resolveAnnounceRetryDelayMs(getDeliveryAttemptCount(entry));
+  // #86488: pull the configurable base/max delay so backoff respects user overrides.
+  const cfgForDelay = subagentRegistryDeps.getRuntimeConfig();
+  const delayMs = resolveAnnounceRetryDelayMs(getDeliveryAttemptCount(entry), {
+    baseDelayMs: resolveSubagentAnnounceRetryBaseDelayMs(cfgForDelay),
+    maxDelayMs: resolveSubagentAnnounceRetryMaxDelayMs(cfgForDelay),
+  });
   const earliestRetryAt = (lastAttemptAt ?? 0) + delayMs;
   if (entry.expectsCompletionMessage === true && lastAttemptAt && now < earliestRetryAt) {
     const waitMs = Math.max(1, earliestRetryAt - now);

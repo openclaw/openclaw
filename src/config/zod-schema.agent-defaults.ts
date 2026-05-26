@@ -279,6 +279,31 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        maxAnnounceRetryCount: z
+          .number()
+          .int()
+          .min(0)
+          .max(20)
+          .optional()
+          .describe(
+            "Maximum number of retries when announcing sub-agent completion back to the parent (default: 3). Set to 0 to disable retries. Increase for flaky channels (e.g. Feishu) to reduce silently-lost completions (#86488).",
+          ),
+        announceRetryBaseDelayMs: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Base delay in milliseconds between sub-agent completion announce retries (default: 1000). Each retry doubles this delay (exponential backoff) up to announceRetryMaxDelayMs.",
+          ),
+        announceRetryMaxDelayMs: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "Maximum delay in milliseconds between sub-agent completion announce retries (default: 8000). Caps the exponential backoff growth.",
+          ),
         requireAgentId: z.boolean().optional(),
       })
       .strict()
