@@ -9,6 +9,7 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
@@ -286,17 +287,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
   });
 
   it("uses configured thumbnail sizing for managed outgoing previews", async () => {
-    const sharp = (await import("sharp")).default;
-    const original = await sharp({
-      create: {
-        width: 120,
-        height: 40,
-        channels: 4,
-        background: { r: 24, g: 64, b: 128, alpha: 1 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const original = createSolidPngBuffer(120, 40, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { original });
 
     const { result } = await requestManagedImage({
@@ -309,9 +300,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("image/png");
-    const metadata = await sharp(result.body).metadata();
-    expect(metadata.width).toBe(60);
-    expect(metadata.height).toBe(20);
+    await expect(getImageMetadata(result.body)).resolves.toEqual({ width: 60, height: 20 });
   });
 
   it("rejects unauthenticated requests before serving bytes", async () => {

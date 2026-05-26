@@ -4,8 +4,10 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -355,18 +357,8 @@ describe("handleControlUiHttpRequest", () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-thumb-",
       fn: async (tmpRoot) => {
-        const sharp = (await import("sharp")).default;
         const filePath = path.join(tmpRoot, "wide.png");
-        await sharp({
-          create: {
-            width: 120,
-            height: 40,
-            channels: 4,
-            background: { r: 24, g: 64, b: 128, alpha: 1 },
-          },
-        })
-          .png()
-          .toFile(filePath);
+        await fs.writeFile(filePath, createSolidPngBuffer(120, 40, { r: 24, g: 64, b: 128 }));
 
         const { res, handled, end } = await runAssistantMediaRequest({
           url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&thumbnail=1&token=test-token`,
@@ -379,9 +371,10 @@ describe("handleControlUiHttpRequest", () => {
         expect(res.statusCode).toBe(200);
         const thumbnail = end.mock.calls[0]?.[0];
         expect(Buffer.isBuffer(thumbnail)).toBe(true);
-        const metadata = await sharp(thumbnail as Buffer).metadata();
-        expect(metadata.width).toBe(60);
-        expect(metadata.height).toBe(20);
+        await expect(getImageMetadata(thumbnail as Buffer)).resolves.toEqual({
+          width: 60,
+          height: 20,
+        });
       },
     });
   });
