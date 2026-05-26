@@ -124,8 +124,10 @@ streaming speech on calls. Override examples and provider caveats live here:
 
 ```bash
 openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
+openclaw voicecall call --to "+15555550123" --message "Hello" --objective "Book a table for 2 tomorrow at 8pm."
 openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall speak --call-id <id> --message "One moment"
+openclaw voicecall dtmf --call-id <id> --digits "ww123456#"
 openclaw voicecall end --call-id <id>
 openclaw voicecall status --json
 openclaw voicecall status --call-id <id>
@@ -139,17 +141,19 @@ Tool name: `voice_call`
 
 Actions:
 
-- `initiate_call` (message, to?, mode?)
+- `initiate_call` (message, to?, mode?, objective?, dtmfSequence?)
 - `continue_call` (callId, message)
 - `speak_to_user` (callId, message)
+- `send_dtmf` (callId, digits)
 - `end_call` (callId)
 - `get_status` (callId)
 
 ## Gateway RPC
 
-- `voicecall.initiate` (to?, message, mode?)
+- `voicecall.initiate` (to?, message, mode?, objective?, dtmfSequence?)
 - `voicecall.continue` (callId, message)
 - `voicecall.speak` (callId, message)
+- `voicecall.dtmf` (callId, digits)
 - `voicecall.end` (callId)
 - `voicecall.status` (callId)
 
@@ -162,6 +166,11 @@ Actions:
 - Voice-call auto-responses enforce a spoken JSON contract (`{"spoken":"..."}`) and filter reasoning/meta output before playback.
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
+- `objective` is private call context for realtime task calls. It is not
+  spoken as the opener, but it is stored in OpenClaw call metadata and can be
+  returned by status/history/debug reads.
+- `dtmfSequence` is only valid for conversation-mode calls; use
+  `voicecall.dtmf` after connect for notify-mode calls.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
 - Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.
 - Runtime fallback still accepts the old voice-call keys for now, but migration is a doctor step and the compat shim is scheduled to go away in a future release.

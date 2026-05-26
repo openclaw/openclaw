@@ -778,6 +778,10 @@ This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
+`objective` is private call context for realtime task calls. It is not spoken
+as the opener, but it is stored in OpenClaw call metadata and can be returned
+by status/history/debug reads.
+
 ## Troubleshooting
 
 ### Setup fails webhook exposure
