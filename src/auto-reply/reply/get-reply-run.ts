@@ -36,7 +36,6 @@ import {
   buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
-  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -409,7 +408,6 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
-  userTurnInput?: UserTurnInput;
 };
 
 export async function runPreparedReply(
@@ -1150,14 +1148,17 @@ export async function runPreparedReply(
     },
   );
   const userTurnInput =
-    params.userTurnInput ??
-    (userTurnMediaForPersistence.length > 0
+    userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
-          media: userTurnMediaForPersistence,
-          mediaOnlyText: "[User sent media without caption]",
+          ...(userTurnMediaForPersistence.length > 0
+            ? {
+                media: userTurnMediaForPersistence,
+                mediaOnlyText: "[User sent media without caption]",
+              }
+            : {}),
         }
-      : undefined);
+      : undefined;
   const userTurnTranscriptRecorder =
     opts?.userTurnTranscriptRecorder ??
     (userTurnInput

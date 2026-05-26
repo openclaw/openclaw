@@ -7,7 +7,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -128,7 +127,7 @@ async function runCliAgentEndHook(
 }
 
 async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
-  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscript) {
+  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
     return;
   }
 
@@ -140,20 +139,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     cwd: params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),
   };
-  const recorder =
-    params.userTurnTranscriptRecorder ??
-    createUserTurnTranscriptRecorder({
-      ...(params.userTurnTranscript.message
-        ? { message: params.userTurnTranscript.message }
-        : {
-            input: {
-              text: params.userTurnTranscript.text,
-              timestamp: Date.now(),
-            },
-          }),
-      target,
-    });
-  const persisted = await recorder.persistApproved({ target });
+  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
   if (persisted) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);

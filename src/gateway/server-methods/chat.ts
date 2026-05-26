@@ -2868,13 +2868,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         "gateway.chat_send.dispatch_inbound",
         async () => {
           applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
-          const userTurnInput = await userTurnInputPromise;
           const userTurnRecorder = await userTurnRecorderPromise;
           const dispatchResult = await dispatchInboundMessage({
             ctx,
             cfg,
             dispatcher,
-            userTurnInput,
             replyOptions: {
               runId: clientRunId,
               abortSignal: activeRunAbort.controller.signal,

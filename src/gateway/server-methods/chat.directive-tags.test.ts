@@ -202,18 +202,19 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       replyOptions?: {
         onAgentRunStart?: (runId: string) => void;
         userTurnTranscriptRecorder?: {
+          message?: unknown;
           markRuntimePersisted: (message: { role: "user"; content: string }) => void;
           markRuntimePersistencePending: (pending: Promise<void>) => void;
         };
         images?: Array<{ mimeType: string; data: string }>;
         imageOrder?: string[];
       };
-      userTurnInput?: unknown;
     }) => {
       mockState.lastDispatchCtx = params.ctx;
       mockState.lastDispatchImages = params.replyOptions?.images;
       mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
-      mockState.lastDispatchUserTurnInput = params.userTurnInput;
+      mockState.lastDispatchUserTurnInput =
+        params.replyOptions?.userTurnTranscriptRecorder?.message;
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
       }
@@ -3051,7 +3052,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
     expect(mockState.lastDispatchUserTurnInput).toEqual({
-      text: "bench update",
+      role: "user",
+      content: "bench update",
       timestamp: expect.any(Number),
       idempotencyKey: "idem-system-provenance-acp:user",
     });
@@ -3074,7 +3076,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(findUserUpdate()).toBeUndefined();
     expect(mockState.lastDispatchUserTurnInput).toEqual({
-      text: "hello from dashboard",
+      role: "user",
+      content: "hello from dashboard",
       timestamp: expect.any(Number),
       idempotencyKey: "idem-user-transcript-agent-run:user",
     });
@@ -3232,19 +3235,21 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(typeof mockState.savedMediaCalls[1]?.size).toBe("number");
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            text?: unknown;
-            media?: Array<{ path?: string; contentType?: string }>;
+            content?: unknown;
+            MediaPaths?: string[];
+            MediaTypes?: string[];
           }
         | undefined;
       if (!userTurnInput) {
         throw new Error("expected user turn input with media metadata");
       }
       expect(findUserUpdate()).toBeUndefined();
-      expect(userTurnInput.text).toBe("edit these");
-      expect(userTurnInput.media).toEqual([
-        { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
-        { path: "/tmp/chat-send-image-b.jpg", contentType: "image/jpeg" },
+      expect(userTurnInput.content).toBe("edit these");
+      expect(userTurnInput.MediaPaths).toEqual([
+        "/tmp/chat-send-image-a.png",
+        "/tmp/chat-send-image-b.jpg",
       ]);
+      expect(userTurnInput.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
@@ -3283,8 +3288,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            text?: unknown;
-            media?: Array<{ path?: string; contentType?: string }>;
+            content?: unknown;
+            MediaPaths?: string[];
+            MediaTypes?: string[];
           }
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
@@ -3294,10 +3300,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.savedMediaCalls[0]?.subdir).toBe("inbound");
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
       expect(findUserUpdate()).toBeUndefined();
-      expect(userTurnInput?.text).toBe("summarize this");
-      expect(userTurnInput?.media).toEqual([
-        { path: "/tmp/chat-send-brief.pdf", contentType: "application/pdf" },
-      ]);
+      expect(userTurnInput?.content).toBe("summarize this");
+      expect(userTurnInput?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
+      expect(userTurnInput?.MediaTypes).toEqual(["application/pdf"]);
     });
   });
 
@@ -3351,17 +3356,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       const userTurnInput = mockState.lastDispatchUserTurnInput as
         | {
-            text?: unknown;
-            media?: Array<{ path?: string; contentType?: string }>;
+            content?: unknown;
+            MediaPaths?: string[];
           }
         | undefined;
       expect(findUserUpdate()).toBeUndefined();
-      expect(userTurnInput?.text).toBe("edit both");
-      expect(userTurnInput?.media).toEqual([
-        { path: "/tmp/chat-send-inline.png", contentType: "image/png" },
-        { path: "/tmp/offloaded-big.png", contentType: "image/png" },
+      expect(userTurnInput?.content).toBe("edit both");
+      expect(userTurnInput?.MediaPaths).toEqual([
+        "/tmp/chat-send-inline.png",
+        "/tmp/offloaded-big.png",
       ]);
-      expect(userTurnInput?.text).not.toContain("media://");
+      expect(userTurnInput?.content).not.toContain("media://");
     });
   });
 
@@ -3406,7 +3411,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
       expect(mockState.lastDispatchUserTurnInput).toEqual({
-        text: "bridge image",
+        role: "user",
+        content: "bridge image",
         timestamp: expect.any(Number),
         idempotencyKey: "idem-user-transcript-acp-images:user",
       });

@@ -997,7 +997,12 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.userTurnTranscriptRecorder?.message).toBeUndefined();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "follow up without media",
+    });
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
   });
 
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {

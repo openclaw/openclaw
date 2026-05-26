@@ -1826,13 +1826,15 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       agentId: "agent",
       sessionId: "session",
-      userTurnTranscript: { message: preparedUserTurnMessage },
       suppressNextUserMessagePersistence: false,
     });
     const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
-    expect(requireRecord(call[0], "CLI runtime").onUserMessagePersisted).toEqual(
-      expect.any(Function),
+    const callParams = requireRecord(call[0], "CLI runtime");
+    expect(callParams.userTurnTranscriptRecorder).toEqual(expect.any(Object));
+    expect(requireRecord(callParams.userTurnTranscriptRecorder, "user turn recorder").message).toBe(
+      preparedUserTurnMessage,
     );
+    expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
   it("passes clean transcript text for text-only CLI user persistence", async () => {
@@ -1852,6 +1854,10 @@ describe("runAgentTurnWithFallback", () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
+    followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder({
+      role: "user",
+      content: "display prompt",
+    } as never);
 
     await runAgentTurnWithFallback({
       ...createMinimalRunAgentTurnParams({ followupRun }),
@@ -1866,8 +1872,16 @@ describe("runAgentTurnWithFallback", () => {
       agentId: "agent",
       prompt: "runtime prompt with metadata",
       transcriptPrompt: "display prompt",
-      userTurnTranscript: { text: "display prompt" },
       suppressNextUserMessagePersistence: false,
+    });
+    const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
+    const callParams = requireRecord(call[0], "CLI runtime");
+    expect(callParams.userTurnTranscriptRecorder).toEqual(expect.any(Object));
+    expect(
+      requireRecord(callParams.userTurnTranscriptRecorder, "user turn recorder").message,
+    ).toMatchObject({
+      role: "user",
+      content: "display prompt",
     });
   });
 

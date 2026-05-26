@@ -728,9 +728,6 @@ export function createFollowupRunner(params: {
                     config: runtimeConfig,
                     prompt: queued.prompt,
                     transcriptPrompt: queued.transcriptPrompt,
-                    userTurnTranscript: userTurnTranscriptRecorder?.message
-                      ? { message: userTurnTranscriptRecorder.message }
-                      : { text: effectiveQueued.transcriptPrompt ?? effectiveQueued.prompt },
                     suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,

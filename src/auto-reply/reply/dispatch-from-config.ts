@@ -2512,7 +2512,6 @@ export async function dispatchReplyFromConfig(
             },
           },
           replyConfig,
-          params.userTurnInput,
         ),
       ),
     );

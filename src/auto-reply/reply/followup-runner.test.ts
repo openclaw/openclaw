@@ -843,6 +843,10 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         originatingChannel: "telegram",
+        userTurnTranscriptRecorder: createTestUserTurnRecorder({
+          role: "user",
+          content: "hello",
+        } as never),
         run: {
           config: runtimeConfig,
           sessionId: "session-cli-followup",
@@ -867,8 +871,11 @@ describe("createFollowupRunner runtime config", () => {
       agentId: "agent",
       workspaceDir: "/tmp",
       config: runtimeConfig,
-      userTurnTranscript: { text: "hello" },
       suppressNextUserMessagePersistence: false,
+    });
+    expect(call.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "hello",
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
   });
@@ -917,7 +924,7 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledOnce();
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
-    expect(mediaCall.userTurnTranscript).toEqual({ message: preparedUserTurnMessage });
+    expect(mediaCall.userTurnTranscriptRecorder?.message).toBe(preparedUserTurnMessage);
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {

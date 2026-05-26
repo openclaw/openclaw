@@ -25,16 +25,6 @@ import type {
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
-export type CliUserTurnTranscriptInput =
-  | {
-      message: PersistedUserTurnMessage;
-      text?: never;
-    }
-  | {
-      message?: never;
-      text: string;
-    };
-
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -46,11 +36,6 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
-  /**
-   * Canonical user turn to persist after before_agent_run allows the prompt.
-   * This is transcript projection only; model input still comes from prompt/images/context.
-   */
-  userTurnTranscript?: CliUserTurnTranscriptInput;
   suppressNextUserMessagePersistence?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;

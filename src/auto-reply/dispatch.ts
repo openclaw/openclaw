@@ -13,7 +13,6 @@ import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
 import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { UserTurnInput } from "../sessions/user-turn-transcript.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import {
   resolveCommandTurnContext,
@@ -382,7 +381,6 @@ export async function dispatchInboundMessage(params: {
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  userTurnInput?: UserTurnInput;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = measureDiagnosticsTimelineSpanSync(
@@ -414,7 +412,6 @@ export async function dispatchInboundMessage(params: {
             cfg: params.cfg,
             dispatcher: params.dispatcher,
             replyOptions: params.replyOptions,
-            userTurnInput: params.userTurnInput,
             replyResolver: params.replyResolver,
           }),
         {
@@ -432,7 +429,6 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  userTurnInput?: UserTurnInput;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
@@ -489,7 +485,6 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
         ...params.replyOptions,
         ...replyOptions,
       },
-      userTurnInput: params.userTurnInput,
     });
   } finally {
     try {
@@ -512,7 +507,6 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  userTurnInput?: UserTurnInput;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
@@ -528,6 +522,5 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     dispatcher,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
-    userTurnInput: params.userTurnInput,
   });
 }

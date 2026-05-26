@@ -103,6 +103,23 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   return { dir, sessionFile, storePath };
 }
 
+function createCliUserTurnRecorder(params: {
+  text: string;
+  sessionFile: string;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  return createUserTurnTranscriptRecorder({
+    input: { text: params.text },
+    target: {
+      transcriptPath: params.sessionFile,
+      sessionId: "s1",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cwd: params.workspaceDir,
+    },
+  });
+}
+
 function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
@@ -838,7 +855,12 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "runtime prompt",
-          userTurnTranscript: { text: "display prompt" },
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
           onUserMessagePersisted,
         },
       });
@@ -914,7 +936,6 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "runtime prompt",
-          userTurnTranscript: { text: "legacy display prompt" },
           userTurnTranscriptRecorder: recorder,
         },
       });
@@ -974,7 +995,12 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "runtime prompt",
-          userTurnTranscript: { text: "display prompt" },
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
           onUserMessagePersisted: () => {
             throw new Error("notification failed");
           },
@@ -1010,7 +1036,12 @@ describe("runCliAgent reliability", () => {
             sessionFile: path.join(blockedParent, "s1.jsonl"),
             workspaceDir: dir,
             prompt: "runtime prompt",
-            userTurnTranscript: { text: "display prompt" },
+            userTurnTranscriptRecorder: createCliUserTurnRecorder({
+              text: "display prompt",
+              sessionFile: path.join(blockedParent, "s1.jsonl"),
+              sessionKey: "agent:main:main",
+              workspaceDir: dir,
+            }),
             onUserMessagePersisted,
           },
         }),
@@ -1064,7 +1095,12 @@ describe("runCliAgent reliability", () => {
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
-          userTurnTranscript: { text: "secret prompt" },
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "secret prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
           onUserMessagePersisted,
         },
       }).then((result) => {
