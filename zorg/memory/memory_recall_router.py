@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
-import argparse, json, os
+import argparse, json, os, sys
 from pathlib import Path
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 BASE = Path(os.environ.get("OPENCLAW_WORKSPACE", Path.home() / ".openclaw" / "workspace"))
 SQL_CFG = Path(os.environ.get("ZORG_SQL_MEMORY_MAP", BASE / "sql_memory_map.json"))
+
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ModuleNotFoundError as e:
+    if e.name != "psycopg2":
+        raise
+    venv_python = BASE / ".venv-sqlmem" / "bin" / "python"
+    if venv_python.exists() and Path(sys.executable).resolve() != venv_python.resolve():
+        os.execv(str(venv_python), [str(venv_python), __file__, *sys.argv[1:]])
+    raise SystemExit(
+        "psycopg2 is missing. Run: "
+        f"{venv_python} -m pip install -r {BASE / 'zorg-memorydb' / 'requirements.txt'}"
+    )
 
 def main():
     ap = argparse.ArgumentParser(description="DB-only structured recall router")

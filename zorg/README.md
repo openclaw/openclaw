@@ -5,6 +5,7 @@ This directory contains the public-safe Zorg MemoryDB and LAN command chat insta
 ## Contents
 
 - `install-zorg-memorydb.sh` installs prerequisites and copies packaged components into the OpenClaw workspace.
+- `requirements.txt` declares the Python DB driver used by the recall tools.
 - `db/schema.sql` creates the database structure.
 - `db/seed_rules.sql` inserts public-safe production rules.
 - `db/import_markdown_rules.py` imports packaged rules and retired markdown memory files into the database.
@@ -22,3 +23,5 @@ The bootstrap prepares the database and LAN command chat for clean installs and 
 The bootstrap writes a Zorg MemoryDB usage block into the OpenClaw workspace markdown files the agent reads at startup: `AGENTS.md`, `SOUL.md`, `USER.md`, `TOOLS.md`, `IDENTITY.md`, and `HEARTBEAT.md`. It also copies `ZORG_MEMORYDB_MASTER_RULES.md` into the workspace root.
 
 This is required because importing rules into PostgreSQL alone is not enough: the local LLM must be able to read how to use the database memory path before it can reliably call the DB-backed recall tools.
+
+The Python recall tools install their dependencies from `zorg/requirements.txt` into `.venv-sqlmem`. They also re-exec through `.venv-sqlmem/bin/python` when launched with plain `python3`, so agent-readable commands do not fail just because the system Python lacks `psycopg2`.

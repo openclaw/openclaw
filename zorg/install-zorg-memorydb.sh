@@ -99,6 +99,9 @@ copy_packaged_components() {
   cp -R "$PACKAGE_ROOT/db/." "$ZORG_WORKSPACE_DIR/db/"
   cp -R "$PACKAGE_ROOT/rules/." "$ZORG_WORKSPACE_DIR/rules/"
   cp -R "$PACKAGE_ROOT/memory/." "$ZORG_WORKSPACE_DIR/memory/"
+  if [[ -f "$PACKAGE_ROOT/requirements.txt" ]]; then
+    cp "$PACKAGE_ROOT/requirements.txt" "$ZORG_WORKSPACE_DIR/requirements.txt"
+  fi
   log "Copying LAN command chat source into $LAN_CHAT_DIR"
   cp -R "$PACKAGE_ROOT/lan-command-chat/." "$LAN_CHAT_DIR/"
 }
@@ -192,10 +195,8 @@ Zorg MemoryDB is the active durable memory backend for this OpenClaw workspace. 
 
 ### Quick Verification Commands
 
-```bash
-python3 memory_sql_tool.py "Zorg MemoryDB" --limit 5
-python3 memory_recall_router.py "How do I use Zorg MemoryDB for memory?"
-```
+    .venv-sqlmem/bin/python memory_sql_tool.py "Zorg MemoryDB" --limit 5
+    .venv-sqlmem/bin/python memory_recall_router.py "How do I use Zorg MemoryDB for memory?"
 
 Expected result: the commands return DB-backed rules or source chunks explaining Zorg MemoryDB usage. A clean install is incomplete if these markdown instructions are missing from agent-readable files.
 <!-- /ZORG_MEMORYDB_AGENT_USAGE -->"""
@@ -222,7 +223,11 @@ import_markdown_rules() {
   fi
   if [[ -x "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" ]]; then
     "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true
-    "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" -m pip install psycopg2-binary >/dev/null 2>&1 || true
+    if [[ -f "$ZORG_WORKSPACE_DIR/requirements.txt" ]]; then
+      "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" -m pip install -r "$ZORG_WORKSPACE_DIR/requirements.txt" >/dev/null 2>&1 || true
+    else
+      "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" -m pip install psycopg2-binary >/dev/null 2>&1 || true
+    fi
     PGPASSWORD="$ZORG_DB_PASSWORD" "$OPENCLAW_WORKSPACE/.venv-sqlmem/bin/python" "$ZORG_WORKSPACE_DIR/db/import_markdown_rules.py" \
       --workspace "$OPENCLAW_WORKSPACE" \
       --rules-dir "$ZORG_WORKSPACE_DIR/rules" \
