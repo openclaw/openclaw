@@ -21,6 +21,7 @@ import {
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import {
@@ -651,6 +652,36 @@ describe("plugin sdk alias helpers", () => {
       }),
     );
     expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
+  });
+
+  it("backfills scoped aliases for real dist plugin-sdk artifacts even when exports are stale", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const corePath = path.join(fixture.root, "dist", "plugin-sdk", "core.js");
+    const taskRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "agent-harness-task-runtime.js",
+    );
+    fs.writeFileSync(corePath, "export const core = true;\n", "utf-8");
+    fs.writeFileSync(
+      taskRuntimePath,
+      'import "./agent-harness-task-runtime-missing-chunk.js";\nexport const marker = true;\n',
+      "utf-8",
+    );
+    const aliases = resolvePluginSdkScopedAliasMap({
+      modulePath: path.join(fixture.root, "dist", "plugins", "loader.js"),
+    });
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/core"] ?? "")).toBe(
+      fs.realpathSync(corePath),
+    );
+    expect(aliases["openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
+    expect(aliases["@openclaw/plugin-sdk/agent-harness-task-runtime"]).toBe(taskRuntimePath);
   });
 
   it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {

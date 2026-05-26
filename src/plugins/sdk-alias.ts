@@ -606,6 +606,17 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
   );
 }
 
+function shouldBackfillDistPluginSdkArtifactSubpath(params: {
+  packageRoot: string;
+  modulePath: string;
+  subpath: string;
+}) {
+  if (!readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).includes(params.subpath)) {
+    return true;
+  }
+  return shouldIncludePrivateLocalOnlyPluginSdkSubpath(params);
+}
+
 function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
   if (isUsableDistPluginSdkArtifact(distPath)) {
@@ -739,6 +750,20 @@ export function resolvePluginSdkScopedAliasMap(
       }
       if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
         break;
+      }
+    }
+  }
+  if (distPluginSdkArtifacts.size > 0) {
+    for (const subpath of distPluginSdkArtifacts) {
+      if (Object.prototype.hasOwnProperty.call(aliasMap, `openclaw/plugin-sdk/${subpath}`)) {
+        continue;
+      }
+      if (!shouldBackfillDistPluginSdkArtifactSubpath({ packageRoot, modulePath, subpath })) {
+        continue;
+      }
+      const candidate = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+      for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+        aliasMap[`${packageName}/${subpath}`] = candidate;
       }
     }
   }

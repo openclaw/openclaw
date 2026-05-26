@@ -80,6 +80,52 @@ function requireWithOptionalAliases(
   return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
 }
 
+function resolveAliasSubpathTarget(params: {
+  aliasTarget: string;
+  remainder: string;
+  parent: NodeJS.Module | undefined;
+  isMain: boolean;
+  options?: { paths?: string[] };
+  originalResolveFilename: ResolveFilename;
+}): string | null {
+  const { aliasTarget, isMain, options, originalResolveFilename, parent, remainder } = params;
+  const basePath = path.extname(aliasTarget) ? path.dirname(aliasTarget) : aliasTarget;
+  const targetPath = path.resolve(basePath, remainder);
+  try {
+    return originalResolveFilename(targetPath, parent, isMain, options);
+  } catch {
+    return null;
+  }
+}
+
+function resolveNativeRequireAlias(
+  request: string,
+  aliasMap: Record<string, string>,
+  parent: NodeJS.Module | undefined,
+  isMain: boolean,
+  options: { paths?: string[] } | undefined,
+  originalResolveFilename: ResolveFilename,
+): string | null {
+  const exactTarget = aliasMap[request];
+  if (exactTarget) {
+    return exactTarget;
+  }
+  const prefix = Object.keys(aliasMap)
+    .filter((key) => request.startsWith(`${key}/`))
+    .toSorted((left, right) => right.length - left.length)[0];
+  if (!prefix) {
+    return null;
+  }
+  return resolveAliasSubpathTarget({
+    aliasTarget: aliasMap[prefix],
+    remainder: request.slice(prefix.length + 1),
+    parent,
+    isMain,
+    options,
+    originalResolveFilename,
+  });
+}
+
 export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
@@ -89,7 +135,14 @@ export function withNativeRequireAliases<T>(
   }
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
-    const aliasTarget = aliasMap[request];
+    const aliasTarget = resolveNativeRequireAlias(
+      request,
+      aliasMap,
+      parent,
+      isMain,
+      options,
+      originalResolveFilename,
+    );
     if (aliasTarget) {
       return aliasTarget;
     }

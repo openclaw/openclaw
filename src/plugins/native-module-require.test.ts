@@ -1,13 +1,16 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
+  withNativeRequireAliases,
 } from "./native-module-require.js";
 
 const tempDirs: string[] = [];
+const testRequire = createRequire(import.meta.url);
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-require-"));
@@ -118,6 +121,86 @@ describe("tryNativeRequireJavaScriptModule", () => {
       tryNativeRequireJavaScriptModule(modulePath, {
         allowWindows: true,
         fallbackOnNativeError: true,
+      }),
+    ).toEqual({ ok: false });
+  });
+
+  it("resolves alias subpaths relative to file-valued alias targets", () => {
+    const dir = makeTempDir();
+    const pluginSdkDir = path.join(dir, "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    const modulePath = path.join(dir, "plugin.cjs");
+    const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
+    fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "agent-harness-task-runtime.js"),
+      'module.exports = { marker: "task-runtime" };\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      modulePath,
+      'module.exports = require("openclaw/plugin-sdk/agent-harness-task-runtime");\n',
+      "utf8",
+    );
+
+    const result = tryNativeRequireJavaScriptModule(modulePath, {
+      allowWindows: true,
+      aliasMap: {
+        "openclaw/plugin-sdk": rootAliasPath,
+      },
+    });
+
+    expect(result).toEqual({ ok: true, moduleExport: { marker: "task-runtime" } });
+  });
+
+  it("uses the longest alias prefix when resolving native require subpaths", () => {
+    const dir = makeTempDir();
+    const shortAliasDir = path.join(dir, "short");
+    const longAliasDir = path.join(dir, "long");
+    fs.mkdirSync(path.join(shortAliasDir, "nested"), { recursive: true });
+    fs.mkdirSync(longAliasDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(shortAliasDir, "nested", "runtime.js"),
+      'module.exports = { marker: "short" };\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(longAliasDir, "runtime.js"),
+      'module.exports = { marker: "long" };\n',
+      "utf8",
+    );
+
+    const loaded = withNativeRequireAliases(
+      {
+        "openclaw/plugin-sdk": shortAliasDir,
+        "openclaw/plugin-sdk/nested": longAliasDir,
+      },
+      () => testRequire("openclaw/plugin-sdk/nested/runtime"),
+    );
+
+    expect(loaded).toEqual({ marker: "long" });
+  });
+
+  it("falls back to the original resolver when a prefix alias cannot resolve the subpath", () => {
+    const dir = makeTempDir();
+    const pluginSdkDir = path.join(dir, "plugin-sdk");
+    fs.mkdirSync(pluginSdkDir, { recursive: true });
+    const modulePath = path.join(dir, "plugin.cjs");
+    const rootAliasPath = path.join(pluginSdkDir, "root-alias.cjs");
+    fs.writeFileSync(rootAliasPath, "module.exports = {};\n", "utf8");
+    fs.writeFileSync(
+      modulePath,
+      'module.exports = require("openclaw/plugin-sdk/missing-runtime");\n',
+      "utf8",
+    );
+
+    expect(
+      tryNativeRequireJavaScriptModule(modulePath, {
+        allowWindows: true,
+        aliasMap: {
+          "openclaw/plugin-sdk": rootAliasPath,
+        },
+        fallbackOnMissingDependency: true,
       }),
     ).toEqual({ ok: false });
   });
