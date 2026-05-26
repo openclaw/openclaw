@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Telegram to PostgreSQL memory bridge every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=openclaw-telegram-postgres-bridge.service
+
+[Install]
+WantedBy=timers.target
+

@@ -1,0 +1,8 @@
+[Unit]
+Description=Bridge OpenClaw Telegram turns into Zorg PostgreSQL memory
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/openclaw/.openclaw/workspace
+ExecStart=/home/openclaw/.openclaw/workspace/.venv-sqlmem/bin/python /home/openclaw/.openclaw/workspace/Zorg_MemoryDB/scripts/telegram_to_postgres_bridge.py --limit 120
+
