@@ -7,6 +7,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { isTranscriptOnlyOpenclawAssistant } from "../openclaw-transcript-mirror.js";
 import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
@@ -257,7 +258,15 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      // `delivery-mirror` / `gateway-injected` assistant turns duplicate the
+      // real assistant reply they were written from (see
+      // `docs/reference/transcript-hygiene.md`). Replay paths already skip
+      // them; this tool surfaces history to dashboards and other agents, so
+      // it must skip them too — otherwise every assistant turn appears twice.
+      const visibleMessages = rawMessages.filter(
+        (message) => !isTranscriptOnlyOpenclawAssistant(message),
+      );
+      const selectedMessages = includeTools ? visibleMessages : stripToolMessages(visibleMessages);
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);
