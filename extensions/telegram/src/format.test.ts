@@ -76,7 +76,7 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramHtml(commandBlock)).toBe("<code>/queue followup debounce:0\n</code>");
     expect(
       markdownToTelegramHtml('<pre><code class="language-python">print(1)\n</code></pre>'),
-    ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
+    ).toBe("<pre><code>print(1)\n</code></pre>");
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {

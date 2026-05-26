@@ -247,9 +247,6 @@ function preserveTelegramHtmlTag(
   const attrs = match[3] ?? "";
   if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
     openTags.push(tagName);
-    if (hasOpenTelegramHtmlTag(openTags, "pre")) {
-      return rawTag;
-    }
     return "<code>";
   }
   if (!isSupportedTelegramHtmlTag(rawTag)) {
