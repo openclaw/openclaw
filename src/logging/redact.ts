@@ -142,11 +142,42 @@ function redactPemBlock(block: string): string {
   return `${lines[0]}\n…redacted…\n${lines[lines.length - 1]}`;
 }
 
+function isShellReferenceToKey(key: string, value: string): boolean {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
+    return false;
+  }
+  const bare = value.match(/^\$([A-Z_][A-Z0-9_]*)$/);
+  if (bare) {
+    return bare[1] === key;
+  }
+  const braced = value.match(/^\$\{([A-Z_][A-Z0-9_]*)(?::[-=?+])?\}$/);
+  return braced?.[1] === key;
+}
+
+function readEnvAssignmentKey(match: string): string | undefined {
+  return match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
+}
+
+function shouldPreserveShellReferenceMatch(match: string, token: string): boolean {
+  const key = readEnvAssignmentKey(match);
+  return key ? isShellReferenceToKey(key, token) : false;
+}
+
+function isEmptyShellParameterExpansionTail(token: string): boolean {
+  return /^[-=?+]\}$/.test(token);
+}
+
 function redactMatch(match: string, groups: string[]): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
   const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
+  if (
+    shouldPreserveShellReferenceMatch(match, token) ||
+    isEmptyShellParameterExpansionTail(token)
+  ) {
+    return match;
+  }
   const masked = maskToken(token);
   if (token === match) {
     return masked;
@@ -272,6 +303,9 @@ function redactSensitiveFieldValueWithOptions(
     return redacted;
   }
   if (isSensitiveFieldKey(key)) {
+    if (isShellReferenceToKey(key, value)) {
+      return value;
+    }
     return maskToken(value);
   }
   return value;
