@@ -897,6 +897,60 @@ describe("session store writer queue", () => {
     expect(merged.modelProvider).toBeUndefined();
   });
 
+  it("rewrites generated sessionFile paths when session id changes", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: `/tmp/openclaw/sessions/${previousSessionId}.jsonl`,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}.jsonl`);
+  });
+
+  it("rewrites stale generated sessionFile patches during session rollover", () => {
+    const previousSessionId = "11111111-1111-4111-8111-111111111111";
+    const nextSessionId = "22222222-2222-4222-8222-222222222222";
+    const previousSessionFile = `/tmp/openclaw/sessions/${previousSessionId}-topic-456.jsonl`;
+    const merged = mergeSessionEntry(
+      {
+        sessionId: previousSessionId,
+        updatedAt: 100,
+        sessionFile: previousSessionFile,
+      },
+      {
+        sessionId: nextSessionId,
+        updatedAt: 200,
+        sessionFile: previousSessionFile,
+      },
+    );
+
+    expect(merged.sessionFile).toBe(`/tmp/openclaw/sessions/${nextSessionId}-topic-456.jsonl`);
+  });
+
+  it("preserves custom sessionFile paths when session id changes", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "previous-session",
+        updatedAt: 100,
+        sessionFile: "/tmp/openclaw/sessions/custom-transcript.jsonl",
+      },
+      {
+        sessionId: "next-session",
+        updatedAt: 200,
+      },
+    );
+
+    expect(merged.sessionFile).toBe("/tmp/openclaw/sessions/custom-transcript.jsonl");
+  });
+
   it("caps future updatedAt values at the session merge boundary", () => {
     const now = 1_000;
     const merged = mergeSessionEntryWithPolicy(

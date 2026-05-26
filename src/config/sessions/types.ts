@@ -13,6 +13,7 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -554,6 +555,19 @@ export function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+
+  if (existing.sessionId !== sessionId) {
+    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
+    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
+    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+      sessionFile: candidateSessionFile,
+      previousSessionId: existing.sessionId,
+      nextSessionId: sessionId,
+    });
+    if (rewrittenSessionFile) {
+      next.sessionFile = rewrittenSessionFile;
+    }
+  }
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
