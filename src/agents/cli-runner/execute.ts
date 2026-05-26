@@ -499,7 +499,7 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
+            onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText, replace }) => {
               if (thinkingDelta !== undefined && thinkingText !== undefined) {
                 emitAgentEvent({
                   runId: params.runId,
@@ -520,6 +520,12 @@ export async function executePreparedCliRun(
                     delta,
                     context.backendResolved.textTransforms?.output,
                   ),
+                  // Forward the full-state replacement signal on the existing
+                  // live-chat `replace` contract so the merger applies the
+                  // shorter timer-cleanup text instead of treating its prefix
+                  // as a stale rollback. Consumed by server-chat's
+                  // resolveMergedAssistantText and the Telegram merger.
+                  ...(replace ? { replace: true } : {}),
                 },
               });
             },
@@ -589,7 +595,7 @@ export async function executePreparedCliRun(
               backend,
               providerId: context.backendResolved.id,
               shouldInjectToolInlineMarkers: shouldInjectToolInlineMarkersHeadless,
-              onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText }) => {
+              onAssistantDelta: ({ text, delta, thinkingDelta, thinkingText, replace }) => {
                 if (thinkingDelta !== undefined && thinkingText !== undefined) {
                   emitAgentEvent({
                     runId: params.runId,
@@ -610,6 +616,8 @@ export async function executePreparedCliRun(
                       delta,
                       context.backendResolved.textTransforms?.output,
                     ),
+                    // See live-session branch above for replace semantics.
+                    ...(replace ? { replace: true } : {}),
                   },
                 });
               },

@@ -505,7 +505,7 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
     delta?: unknown,
-    opts?: { controlUiVisible?: boolean },
+    opts?: { controlUiVisible?: boolean; replace?: boolean },
   ) => {
     const cleaned = normalizeLiveAssistantEventText({ text, delta });
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
@@ -513,6 +513,10 @@ export function createAgentEventHandler({
       previousText: previousRawText,
       nextText: cleaned.text,
       nextDelta: cleaned.delta,
+      // Honour the live-chat `replace` contract so a shorter full-state
+      // text (e.g. rolling-timer cleanup) replaces the buffer instead of
+      // being kept as a prefix rollback.
+      replacement: opts?.replace === true,
     });
     if (!mergedRawText) {
       return;
@@ -1059,6 +1063,7 @@ export function createAgentEventHandler({
       ) {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta, {
           controlUiVisible: isControlUiVisible,
+          replace: evt.data.replace === true,
         });
       }
     }

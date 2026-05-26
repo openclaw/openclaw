@@ -30,6 +30,15 @@ export type CliStreamingDelta = {
   thinkingDelta?: string;
   /** Accumulated thinking text so far; set whenever `thinkingDelta` is present. */
   thinkingText?: string;
+  /**
+   * Full-state replacement signal on the existing live-chat `replace`
+   * contract. When true, `text` must be applied as-is even when it is a
+   * strict prefix of the previously emitted text — bypassing the merger's
+   * `previousText.startsWith(nextText) && !nextDelta` rollback branch. Used
+   * by the rolling-timer terminal cleanup, where the new text is the prior
+   * text with the `_ Ns ..._` suffix stripped (and therefore shorter).
+   */
+  replace?: boolean;
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
@@ -668,17 +677,17 @@ export function createCliJsonlStreamingParser(params: {
 
   // For terminal paths (result, finish) where no follow-up text delta is
   // coming: re-emit the full assistant text with the `_ Ns ..._` tick
-  // stripped, so the last-sent timer line disappears. We emit full `text`
-  // with an empty `delta`; the assistant-stream bridge forwards full text
-  // (it does not append deltas), so the live-chat merger replaces by `text`
-  // and the shorter, timer-free text wins. No bespoke replacement signal is
-  // needed — this rides the existing full-text replace contract.
+  // stripped so the last-sent timer line disappears. The new text is a
+  // strict prefix of what was already shown, which the live-chat mergers
+  // (server-chat + Telegram) treat as a stale rollback and ignore by
+  // default. Set `replace: true` on the existing live-chat replace contract
+  // so the shorter, timer-free text is applied as a full-state replacement.
   const emitTickReplacementIfPainted = (): void => {
     if (toolTickStart < 0) {
       return;
     }
     stripToolTick();
-    params.onAssistantDelta({ text: assistantText, delta: "" });
+    params.onAssistantDelta({ text: assistantText, delta: "", replace: true });
   };
 
   const trackClaudeToolUse = createClaudeToolUseTracker({

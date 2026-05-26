@@ -2024,8 +2024,18 @@ export const dispatchTelegramMessage = async ({
                           // can't leak tags or duplicate already-formatted
                           // labels. Checkpoint on the normalized text length.
                           const rawText = typeof payload.text === "string" ? payload.text : "";
-                          const normalizedReasoning =
+                          // splitTelegramReasoningText returns formatReasoningMessage
+                          // output ("Thinking\n\n" + italic body). updateInterleavedDisplay
+                          // already renders the "Thinking" header, so store only the
+                          // italic body here — otherwise the interleaved message shows
+                          // the heading twice. The header is plain text; body lines are
+                          // `_…_`, so a leading "Thinking\n\n" strip can't touch the body.
+                          const formattedReasoning =
                             splitTelegramReasoningText(rawText, true).reasoningText ?? "";
+                          const normalizedReasoning = formattedReasoning.replace(
+                            /^Thinking\n\n/u,
+                            "",
+                          );
                           const newPart = normalizedReasoning.slice(rawReasoningCheckpoint);
                           if (newPart) {
                             interleavedOutput += newPart;

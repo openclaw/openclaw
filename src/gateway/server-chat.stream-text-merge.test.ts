@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_LIVE_CHAT_BUFFER_CHARS,
-  resolveMergedAssistantText,
-} from "./live-chat-projector.js";
+import { MAX_LIVE_CHAT_BUFFER_CHARS, resolveMergedAssistantText } from "./live-chat-projector.js";
 
 describe("server chat stream text merge", () => {
   it.each([
@@ -58,6 +55,29 @@ describe("server chat stream text merge", () => {
         nextDelta: "\nAfter tool call",
       }),
     ).toBe("Before tool call\nAfter tool call");
+  });
+
+  it("keeps the longer buffer when a shorter prefix arrives without a replacement signal", () => {
+    expect(
+      resolveMergedAssistantText({
+        previousText: "Reply body\n\n_ 12s — 21:04:31_",
+        nextText: "Reply body",
+        nextDelta: "",
+      }),
+    ).toBe("Reply body\n\n_ 12s — 21:04:31_");
+  });
+
+  it("replaces the buffer with a shorter prefix when the replacement signal is set", () => {
+    // Rolling-timer terminal cleanup: the tick suffix is stripped, leaving a
+    // shorter prefix that must win over the timer-painted buffer.
+    expect(
+      resolveMergedAssistantText({
+        previousText: "Reply body\n\n_ 12s — 21:04:31_",
+        nextText: "Reply body",
+        nextDelta: "",
+        replacement: true,
+      }),
+    ).toBe("Reply body");
   });
 
   it("caps merged live text while preserving the newest assistant output", () => {
