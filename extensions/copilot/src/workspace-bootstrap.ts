@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AgentHarnessAttemptParams,
   EmbeddedContextFile,
@@ -56,6 +57,20 @@ export type CopilotWorkspaceBootstrapResult = {
  */
 export async function resolveCopilotWorkspaceBootstrapContext(params: {
   attempt: AgentHarnessAttemptParams;
+  /**
+   * Sandbox-aware working directory the SDK session will run in.
+   * When this differs from the canonical `attempt.workspaceDir`
+   * (sandbox `ro` / `none` runs that redirect to a copy), bootstrap
+   * context file paths are remapped so the rendered `systemMessage`
+   * shows the model the same workspace the SDK's native loader and
+   * bridged tools operate on. Pass `undefined` only when no sandbox
+   * resolution has happened (e.g. tests not exercising sandbox
+   * redirection). Required so future callers cannot silently miss
+   * the remap. Mirrors PI's
+   * `remapInjectedContextFilesToWorkspace` call in
+   * `src/agents/pi-embedded-runner/run/attempt.ts:1595`.
+   */
+  effectiveWorkspaceDir: string | undefined;
   warn?: (message: string) => void;
 }): Promise<CopilotWorkspaceBootstrapResult> {
   const { attempt } = params;
@@ -74,10 +89,24 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
     });
+    // Remap context-file paths from the workspace we LOADED them
+    // from (`workspaceDir`, the canonical host workspace where
+    // SOUL.md / IDENTITY.md / .openclaw conventions live) onto the
+    // workspace the SDK session will actually OPERATE in
+    // (`effectiveWorkspaceDir`). When the two are identical (no
+    // sandbox, or sandbox `rw`), remap is a no-op. The render below
+    // and the returned `contextFiles` use the remapped array so the
+    // model never sees a host path while its native loader and
+    // bridged tools see only the sandbox copy.
+    const contextFiles = remapCopilotBootstrapContextFiles({
+      files: bootstrapContext.contextFiles,
+      sourceWorkspaceDir: workspaceDir,
+      targetWorkspaceDir: readNonEmptyString(params.effectiveWorkspaceDir) ?? workspaceDir,
+    });
     return {
       bootstrapFiles: bootstrapContext.bootstrapFiles,
-      contextFiles: bootstrapContext.contextFiles,
-      instructions: renderCopilotWorkspaceBootstrapInstructions(bootstrapContext.contextFiles),
+      contextFiles,
+      instructions: renderCopilotWorkspaceBootstrapInstructions(contextFiles),
     };
   } catch (error) {
     params.warn?.(
@@ -87,6 +116,49 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
     );
     return { bootstrapFiles: [], contextFiles: [] };
   }
+}
+
+/**
+ * Rewrites context-file paths from a source workspace root to a
+ * target workspace root, mirroring PI's
+ * `remapInjectedContextFilesToWorkspace`
+ * (`src/agents/pi-embedded-runner/run/attempt.ts:603`). Files whose
+ * resolved relative path escapes the source workspace (parent
+ * traversal or absolute) are left untouched so we never pretend a
+ * file lives inside the sandbox when it does not. Exported for unit
+ * tests; intentionally local to the Copilot extension (codex keeps
+ * similar helpers extension-local rather than importing from PI).
+ */
+export function remapCopilotBootstrapContextFiles(params: {
+  files: EmbeddedContextFile[];
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+}): EmbeddedContextFile[] {
+  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
+    return params.files;
+  }
+  return params.files.map((file) => {
+    const relative = path.relative(params.sourceWorkspaceDir, file.path);
+    if (!isRelativePathInsideOrEqual(relative)) {
+      return file;
+    }
+    return {
+      ...file,
+      path:
+        relative === ""
+          ? params.targetWorkspaceDir
+          : path.join(params.targetWorkspaceDir, relative),
+    };
+  });
+}
+
+function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
 }
 
 /**

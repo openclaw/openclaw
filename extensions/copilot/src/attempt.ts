@@ -290,6 +290,16 @@ export async function runCopilotAttempt(
     // OpenClaw bootstrap block (SDK still loads AGENTS.md natively).
     const workspaceBootstrap = await resolveCopilotWorkspaceBootstrapContext({
       attempt: input,
+      // Pair with `createSessionConfig`'s `workingDirectory:
+      // effectiveWorkspaceDir` (round-8 [P1]) so bootstrap context
+      // paths rendered into `SessionConfig.systemMessage` reflect
+      // the sandbox copy when a `ro` / `none` sandbox redirected
+      // the workspace. Without this remap the model would see
+      // host-workspace paths while its native loader and bridged
+      // tools all operate in the sandbox copy. Mirrors PI's
+      // `remapInjectedContextFilesToWorkspace` call at
+      // `src/agents/pi-embedded-runner/run/attempt.ts:1595`.
+      effectiveWorkspaceDir,
       warn: (message) => console.warn(message),
     });
     const sessionConfig = createSessionConfig(

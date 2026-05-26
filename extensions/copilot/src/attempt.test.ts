@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
+import path from "node:path";
 import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
@@ -1963,6 +1964,92 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual([]);
+    });
+  });
+
+  describe("bootstrap path remap wiring (PR #86155 [P2] round-9)", () => {
+    // attempt.ts must forward the sandbox-resolved
+    // `effectiveWorkspaceDir` to `resolveCopilotWorkspaceBootstrapContext`
+    // so the helper can remap context-file paths from the host
+    // workspace to the sandbox copy when sandbox `ro`/`none`
+    // redirects the workingDirectory. The helper's own remap logic
+    // and the rendered-systemMessage assertion live in
+    // workspace-bootstrap.test.ts; this block locks in the integration
+    // contract so future refactors cannot silently drop the parameter.
+    beforeEach(() => {
+      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockReset();
+      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockResolvedValue({
+        bootstrapFiles: [],
+        contextFiles: [],
+        instructions: undefined,
+      });
+    });
+
+    it("forwards effectiveWorkspaceDir matching params.workspaceDir for non-sandboxed runs", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      const params = makeParams();
+      await runCopilotAttempt(params, { pool });
+
+      const call = workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls[0];
+      const arg = (call as unknown[] | undefined)?.[0] as {
+        attempt: { workspaceDir?: string };
+        effectiveWorkspaceDir?: string;
+      };
+      // No sandbox configured -> bootstrap sees the same workspace
+      // the attempt was given. Remap is a no-op (helper fast path).
+      expect(arg.effectiveWorkspaceDir).toBe(arg.attempt.workspaceDir);
+    });
+
+    it("forwards the sandbox copy directory as effectiveWorkspaceDir for readonly sandbox runs", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+
+      const params = makeParams();
+      const hostWorkspace = (params as { workspaceDir?: string }).workspaceDir;
+      const sandboxWorkspace = await fsp.mkdtemp(path.join(tmpdir(), "copilot-sbx-ro-"));
+      try {
+        await runCopilotAttempt(params, {
+          pool,
+          // Bypass the real plugin-bridge wiring; with a sandbox in play
+          // attempt.ts would otherwise call the real createToolBridge which
+          // requires plugin SDK fixtures we do not stand up here.
+          createToolBridge: vi.fn(async () => ({ sdkTools: [], sourceTools: [] })),
+          // Drive the sandbox resolution branch deterministically so the
+          // test asserts the exact wiring rather than the orchestrator's
+          // real sandbox discovery path. Include every SandboxContext
+          // field attempt.ts touches (enabled, workspaceAccess,
+          // workspaceDir) plus the structural fields the bridge wiring
+          // expects.
+          resolveSandboxContextOverride: async () =>
+            ({
+              enabled: true,
+              workspaceAccess: "ro",
+              workspaceDir: sandboxWorkspace,
+              agentWorkspaceDir: sandboxWorkspace,
+              scopeKey: "agent-1:session-1",
+              sessionKey: "session-1",
+              backend: { kind: "local" } as never,
+              cfg: {} as never,
+            }) as unknown as SandboxContext,
+        });
+
+        const call = workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls[0];
+        const arg = (call as unknown[] | undefined)?.[0] as {
+          attempt: { workspaceDir?: string };
+          effectiveWorkspaceDir?: string;
+        };
+        // Positive: bootstrap receives the sandbox path so the helper
+        // remaps rendered paths into the sandbox copy.
+        expect(arg.effectiveWorkspaceDir).toBe(sandboxWorkspace);
+        // Negative: the host workspace must not appear as the effective
+        // directory, otherwise the helper's fast path would suppress the
+        // remap and the model would see host paths.
+        expect(arg.effectiveWorkspaceDir).not.toBe(hostWorkspace);
+      } finally {
+        await fsp.rm(sandboxWorkspace, { force: true, recursive: true });
+      }
     });
   });
 });
