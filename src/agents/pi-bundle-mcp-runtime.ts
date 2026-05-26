@@ -13,7 +13,10 @@ import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
+import {
+  findJsonSchemaShapeError,
+  normalizeJsonSchemaForTypeBox,
+} from "../shared/json-schema-defaults.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
@@ -142,7 +145,9 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       if (schemaError) {
         throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
       }
-      const validator = Compile(stripJsonSchemaFormats(schema) as never);
+      const validator = Compile(
+        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+      );
       return (input: unknown) => {
         const valid = validator.Check(input);
         if (valid) {

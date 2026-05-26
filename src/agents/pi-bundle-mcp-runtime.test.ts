@@ -261,6 +261,16 @@ describe("session MCP runtime", () => {
       },
     });
     expect(dependencyValidator({ url: "not a uri" }).valid).toBe(true);
+
+    const mapValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: {
+        type: "string",
+      },
+    });
+    expect(mapValidator({ foo: "bar" }).valid).toBe(true);
+    expect(mapValidator({ foo: 42 }).valid).toBe(false);
   });
 
   it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
