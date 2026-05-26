@@ -28,9 +28,6 @@ type SessionStoreSnapshotCacheEntry = {
   snapshot: SessionStoreSnapshot;
   mtimeMs?: number;
   sizeBytes?: number;
-  generation: number;
-  createdAt: number;
-  entryCount: number;
 };
 
 type SerializedSessionStoreCacheEntry = {
@@ -60,7 +57,6 @@ const SESSION_STORE_STRING_INTERN_STATS = {
   skippedSmall: 0,
   skippedFull: 0,
 };
-let sessionStoreSnapshotGeneration = 0;
 let sessionStoreSerializedCacheBytes = 0;
 
 function parseNonNegativeInteger(value: string | undefined): number | null {
@@ -196,12 +192,17 @@ function cloneJsonLikeValue<T>(value: T): T {
   }
   const cloned: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    Object.defineProperty(cloned, key, {
-      value: cloneJsonLikeValue(child),
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
+    const clonedChild = cloneJsonLikeValue(child);
+    if (key === "__proto__") {
+      Object.defineProperty(cloned, key, {
+        value: clonedChild,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      cloned[key] = clonedChild;
+    }
   }
   return cloned as T;
 }
@@ -213,7 +214,7 @@ export function cloneSessionStoreSnapshot(
   const cloned =
     serialized === undefined
       ? cloneJsonLikeValue(store)
-      : cloneSessionStoreRecord(store, serialized);
+      : (JSON.parse(serialized) as Record<string, SessionEntry>);
   internSessionStoreLargeStrings(cloned);
   return deepFreeze(cloned);
 }
@@ -326,9 +327,6 @@ export function writeSessionStoreSnapshotCache(params: {
     snapshot,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    generation: (sessionStoreSnapshotGeneration += 1),
-    createdAt: Date.now(),
-    entryCount: Object.keys(snapshot).length,
   });
   return snapshot;
 }

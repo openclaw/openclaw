@@ -436,6 +436,29 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("builds a snapshot from disk without reparsing the mutable clone", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        skillsSnapshot: {
+          prompt: "snapshot skill prompt ".repeat(200),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+    clearSessionStoreCacheForTest();
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    const snapshot = readSessionStoreSnapshot(storePath);
+
+    expect(snapshot["session:1"].sessionId).toBe("id-1");
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+
+    parseSpy.mockRestore();
+  });
+
   it("serves immutable session snapshots without cloning cache hits", async () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({

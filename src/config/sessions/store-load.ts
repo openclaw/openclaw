@@ -457,7 +457,8 @@ export function loadSessionStore(
 
 export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
   const currentFileStat = getFileStatSnapshot(storePath);
-  if (isSessionStoreCacheEnabled()) {
+  const cacheEnabled = isSessionStoreCacheEnabled();
+  if (cacheEnabled) {
     const cached = readSessionStoreSnapshotCache({
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
@@ -468,8 +469,8 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
     }
   }
 
-  const store = loadSessionStore(storePath);
-  if (!isSessionStoreCacheEnabled()) {
+  const store = loadSessionStore(storePath, { clone: false });
+  if (!cacheEnabled) {
     return cloneSessionStoreSnapshot(store);
   }
   return writeSessionStoreSnapshotCache({
