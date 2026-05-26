@@ -129,6 +129,19 @@ export async function createCopilotToolBridge(
     return { sdkTools: [], sourceTools: [] };
   }
 
+  // Honor the same disable/raw-model gates PI applies at
+  // `src/agents/pi-embedded-runner/run/attempt.ts:1303-1375`.
+  // When tools are disabled, or the run is a raw-model run
+  // (`modelRun === true` or `promptMode === "none"`), the OpenClaw
+  // attempt would not construct or expose any tools — so the bridge
+  // must not hand any to the SDK either. Implemented inline (no core
+  // import) following the codex precedent at
+  // `extensions/codex/src/app-server/run-attempt.ts:3813`.
+  const attemptParams = input.attemptParams ?? ({} as CopilotToolAttemptParams);
+  if (attemptParams.disableTools === true || isCopilotRawModelRun(attemptParams)) {
+    return { sdkTools: [], sourceTools: [] };
+  }
+
   const createOpenClawCodingTools =
     input.createOpenClawCodingTools ??
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
@@ -151,20 +164,35 @@ export async function createCopilotToolBridge(
     );
   }
 
-  const duplicateNames = findDuplicateToolNames(sourceTools as AnyAgentTool[]);
+  // Mirror PI's `applyEmbeddedAttemptToolsAllow` (and codex's
+  // `filterCodexDynamicToolsForAllowlist`) so a narrow `toolsAllow`,
+  // an empty allowlist, or a forced-message-only delivery mode
+  // suppresses tools at the same point the OpenClaw attempt would.
+  const effectiveToolsAllow = includeForcedCopilotToolAllow(
+    attemptParams.toolsAllow,
+    attemptParams,
+  );
+  const filteredTools = filterCopilotToolsForAllowlist(
+    sourceTools as AnyAgentTool[],
+    effectiveToolsAllow,
+  );
+
+  // Run duplicate detection after filtering so a duplicate in a
+  // suppressed tool does not fail a narrow run (PI parity: PI never
+  // sees the duplicate either when the allowlist excludes it).
+  const duplicateNames = findDuplicateToolNames(filteredTools);
   if (duplicateNames.length > 0) {
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
-  const tools = sourceTools as AnyAgentTool[];
   return {
-    sdkTools: tools.map((sourceTool) =>
+    sdkTools: filteredTools.map((sourceTool) =>
       convertOpenClawToolToSdkTool(sourceTool, {
         abortSignal: input.abortSignal,
         beforeExecute: input.beforeExecute,
       }),
     ),
-    sourceTools: tools,
+    sourceTools: filteredTools,
   };
 }
 
@@ -187,9 +215,15 @@ export async function createCopilotToolBridge(
  * `includeToolSearchControls`, `toolSearchCatalogExecutor`,
  * `toolConstructionPlan`) is intentionally NOT forwarded: those are
  * resolved inside PI's tool-construction planner and have no analog at
- * the SDK boundary. Sandbox is also intentionally undefined at MVP —
- * the copilot agent runtime does not currently route through
- * `resolveSandboxContext`. Both gaps are documented as follow-ups.
+ * the SDK boundary. The bridge instead gates the *exposed* tool surface
+ * to the SDK by short-circuiting on `disableTools`/raw model mode and
+ * by filtering the constructed tools through
+ * `filterCopilotToolsForAllowlist` (mirrors
+ * `applyEmbeddedAttemptToolsAllow` in PI), so a Copilot run cannot hand
+ * the SDK any tool that the same OpenClaw attempt would suppress.
+ * Sandbox is forwarded via the explicit `sandbox` field on
+ * {@link CopilotToolBridgeInput}; callers resolve it via
+ * `resolveSandboxContext` before constructing the bridge.
  */
 function buildOpenClawCodingToolsOptions(
   input: CopilotToolBridgeInput,
@@ -528,6 +562,98 @@ function createError(message: string, cause: unknown): Error {
   const error = new Error(message) as Error & { cause?: unknown };
   error.cause = cause;
   return error;
+}
+
+/**
+ * Returns true when the attempt was launched as a raw-model run, which
+ * suppresses tool construction in PI
+ * (`src/agents/pi-embedded-runner/run/attempt.ts:1305-1310` and
+ * `attempt-tool-construction-plan.ts:165-184`). A run is raw when the
+ * caller explicitly sets `modelRun: true` or asks for no system prompt
+ * via `promptMode: "none"`.
+ */
+function isCopilotRawModelRun(params: CopilotToolAttemptParams): boolean {
+  return params.modelRun === true || params.promptMode === "none";
+}
+
+/**
+ * Mirrors PI's `shouldForceMessageTool` semantics: a message tool is
+ * forced when the caller asked for it explicitly or when the source
+ * reply delivery mode is `message_tool_only`, but never when
+ * `disableMessageTool` is set (the suppress flag always wins). Compare
+ * `src/agents/pi-embedded-runner/run/attempt.ts:1361-1366` and the
+ * codex equivalent at
+ * `extensions/codex/src/app-server/run-attempt.ts:4253-4258`.
+ */
+function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
+  if (params.disableMessageTool === true) {
+    return false;
+  }
+  return params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
+}
+
+function normalizeCopilotToolName(name: string | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+function hasWildcardCopilotToolsAllow(toolsAllow: readonly string[]): boolean {
+  return toolsAllow.some((entry) => normalizeCopilotToolName(entry) === "*");
+}
+
+/**
+ * Mirrors PI's `mergeForcedEmbeddedAttemptToolsAllow`
+ * (`src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.ts:112-128`).
+ * Folds any forced runtime tool names (currently just `message`) into
+ * the allowlist so they survive narrow allow rules. Returns the input
+ * unchanged when there is nothing to merge, so callers can keep
+ * passing `undefined` to mean "no allowlist" and `[*]` to mean
+ * "unrestricted".
+ */
+function includeForcedCopilotToolAllow(
+  toolsAllow: string[] | undefined,
+  params: CopilotToolAttemptParams,
+): string[] | undefined {
+  if (toolsAllow === undefined || hasWildcardCopilotToolsAllow(toolsAllow)) {
+    return toolsAllow;
+  }
+  const forcedNames = shouldForceCopilotMessageTool(params) ? ["message"] : [];
+  if (forcedNames.length === 0) {
+    return toolsAllow;
+  }
+  if (toolsAllow.length === 0) {
+    return [...forcedNames];
+  }
+  const normalized = new Set(toolsAllow.map((entry) => normalizeCopilotToolName(entry)));
+  const missing = forcedNames.filter((name) => !normalized.has(normalizeCopilotToolName(name)));
+  return missing.length === 0 ? toolsAllow : [...toolsAllow, ...missing];
+}
+
+/**
+ * Mirrors PI's `applyEmbeddedAttemptToolsAllow`
+ * (`src/agents/pi-embedded-runner/run/attempt-tool-construction-plan.ts:78-110`)
+ * with the codex extension's simplification: plain name-based matching,
+ * no plugin-group expansion (the Copilot bridge MVP does not surface
+ * plugin tools today). `undefined` returns the tools unchanged, an
+ * empty list returns no tools, and a wildcard entry returns the tools
+ * unchanged.
+ */
+function filterCopilotToolsForAllowlist<T extends { name: string }>(
+  tools: T[],
+  toolsAllow?: string[],
+): T[] {
+  if (!toolsAllow) {
+    return tools;
+  }
+  if (toolsAllow.length === 0) {
+    return [];
+  }
+  if (hasWildcardCopilotToolsAllow(toolsAllow)) {
+    return tools;
+  }
+  const allowSet = new Set(
+    toolsAllow.map((entry) => normalizeCopilotToolName(entry)).filter((entry) => entry.length > 0),
+  );
+  return tools.filter((tool) => allowSet.has(normalizeCopilotToolName(tool.name)));
 }
 
 function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {

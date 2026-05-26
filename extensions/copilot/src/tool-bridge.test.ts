@@ -637,6 +637,231 @@ describe("createCopilotToolBridge", () => {
       expect(opts.spawnWorkspaceDir).toBe("/sandbox/copy");
     });
   });
+
+  // The Copilot bridge mirrors the PI runner's disable/raw/allowlist
+  // gates locally (codex-precedent at
+  // extensions/codex/src/app-server/run-attempt.ts:3813,3906-3939,4220-4234)
+  // so a Copilot run cannot expose the SDK any tool that the same
+  // OpenClaw attempt would suppress. These tests pin the contract.
+  describe("tool-surface gating (PR #86155 [P1] round-6)", () => {
+    it("short-circuits when attemptParams.disableTools is true and never calls createOpenClawCodingTools", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { disableTools: true } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
+    });
+
+    it('short-circuits raw model runs signalled via promptMode: "none"', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { promptMode: "none" } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
+    });
+
+    it("short-circuits raw model runs signalled via modelRun: true", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { modelRun: true } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result).toEqual({ sdkTools: [], sourceTools: [] });
+      expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
+    });
+
+    it("filters constructed tools to exactly the allowlist when toolsAllow is narrow", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["read"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
+      expect(result.sdkTools.map((tool) => tool.name)).toEqual(["read"]);
+    });
+
+    it("returns no tools when toolsAllow is an empty list and nothing is forced", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: [] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools).toEqual([]);
+      expect(result.sdkTools).toEqual([]);
+    });
+
+    it('merges "message" into an empty allowlist when forceMessageTool is true', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: [], forceMessageTool: true } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["message"]);
+    });
+
+    it('merges "message" into an empty allowlist when sourceReplyDeliveryMode is message_tool_only', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          toolsAllow: [],
+          sourceReplyDeliveryMode: "message_tool_only",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["message"]);
+    });
+
+    it('appends "message" to a narrow allowlist when forceMessageTool is true', async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          toolsAllow: ["read"],
+          forceMessageTool: true,
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name).toSorted()).toEqual(["message", "read"]);
+    });
+
+    it("does NOT force a message tool when disableMessageTool is true (disable wins over force)", async () => {
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "message" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          toolsAllow: ["read"],
+          forceMessageTool: true,
+          disableMessageTool: true,
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
+    });
+
+    it("leaves the tool list unchanged when toolsAllow is undefined", async () => {
+      const tools = [makeTool({ name: "read" }), makeTool({ name: "edit" })];
+      const createOpenClawCodingTools = vi.fn(async () => tools);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {} as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read", "edit"]);
+    });
+
+    it("leaves the tool list unchanged when toolsAllow contains a wildcard", async () => {
+      const tools = [makeTool({ name: "read" }), makeTool({ name: "edit" })];
+      const createOpenClawCodingTools = vi.fn(async () => tools);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["*"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read", "edit"]);
+    });
+
+    it("runs duplicate detection AFTER allowlist filtering so a suppressed duplicate does not fail a narrow run", async () => {
+      // The raw construction returns duplicate "edit" entries, but the
+      // allowlist excludes "edit" entirely. PI parity: the duplicate
+      // never reaches the SDK, so the bridge must not throw.
+      const createOpenClawCodingTools = vi.fn(async () => [
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+        makeTool({ name: "edit" }),
+      ]);
+      const result = await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: { toolsAllow: ["read"] } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+      expect(result.sourceTools.map((tool) => tool.name)).toEqual(["read"]);
+    });
+
+    it("still throws when the filtered tool set itself contains duplicates", async () => {
+      // Both copies of "read" survive the allowlist, so the duplicate
+      // truly reaches the SDK and the bridge must fail loudly.
+      await expect(
+        createCopilotToolBridge({
+          agentId: "agent-1",
+          attemptParams: { toolsAllow: ["read"] } as never,
+          createOpenClawCodingTools: async () => [
+            makeTool({ name: "read" }),
+            makeTool({ name: "read" }),
+          ],
+          modelId: "gpt-4o",
+          modelProvider: "github-copilot",
+          sessionId: "session-1",
+        }),
+      ).rejects.toThrow("duplicate tool names: read");
+    });
+  });
 });
 
 describe("convertOpenClawToolToSdkTool", () => {
