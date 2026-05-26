@@ -54,6 +54,7 @@ function startCompaction(sessionFile: string, options: { currentTokenCount?: num
     sessionKey: "agent:main:session-1",
     sessionFile,
     workspaceDir: tempDir,
+    trigger: "manual",
     ...options,
   });
 }
@@ -121,6 +122,35 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.threadId).toBe("thread-1");
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(true);
+  });
+
+  it("skips native app-server compaction for automatic budget triggers", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
+    );
+
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(result.result?.tokensBefore).toBe(456);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      skipped: true,
+      reason: "non_manual_trigger",
+      trigger: "budget",
+    });
   });
 
   it("blocks native app-server compaction when the current OpenClaw session is sandboxed", async () => {
