@@ -13,6 +13,8 @@ import type { CoreConfig, ResolvedChannelBrokerAccount } from "./types.js";
 
 const INBOUND_PATH = "/api/v1/channel-broker/inbound";
 const SIGNATURE_HEADER = "x-openclaw-broker-signature";
+const TIMESTAMP_HEADER = "x-openclaw-broker-timestamp";
+const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
 
 function sendJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>): true {
   res.statusCode = statusCode;
@@ -34,8 +36,23 @@ function normalizeSignature(value: string | undefined): string | undefined {
   return trimmed.startsWith("sha256=") ? trimmed.slice("sha256=".length) : trimmed;
 }
 
-function verifySignature(params: { body: string; secret: string; signature: string }): boolean {
-  const expected = createHmac("sha256", params.secret).update(params.body).digest("hex");
+function parseSignatureTimestamp(value: string | undefined, now = Date.now()): number | null {
+  const timestamp = Number(value?.trim());
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return Math.abs(now - timestamp) <= SIGNATURE_MAX_AGE_MS ? timestamp : null;
+}
+
+function verifySignature(params: {
+  body: string;
+  secret: string;
+  signature: string;
+  timestamp: number;
+}): boolean {
+  const expected = createHmac("sha256", params.secret)
+    .update(`${params.timestamp}.${params.body}`)
+    .digest("hex");
   const actual = normalizeSignature(params.signature);
   if (!actual || actual.length !== expected.length || !/^[a-f0-9]+$/iu.test(actual)) {
     return false;
@@ -65,6 +82,10 @@ function isSenderAllowed(params: {
     params.event.message.nativeIds?.from ?? "",
   ]);
   return allowed.some((entry) => candidates.has(entry));
+}
+
+function isSelfOriginatedEvent(event: BrokerInboundEventV1): boolean {
+  return event.accountId ? event.sender.id === event.accountId : false;
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -98,6 +119,23 @@ function normalizeInboundEventForAccount(params: {
 
 function parseInboundEvent(value: unknown): BrokerInboundEventV1 {
   return normalizeBrokerInboundEvent(value as BrokerInboundEventV1);
+}
+
+function inboundReceiveStatusCode(
+  result: Awaited<ReturnType<typeof receiveBrokerInboundEvent>>,
+) {
+  switch (result.status) {
+    case "accepted":
+      return 202;
+    case "pending":
+      return 425;
+    case "duplicate":
+      return 200;
+    case "rejected":
+      return result.message === "delivery_failed" ? 425 : 200;
+  }
+  const unreachableStatus: never = result.status;
+  return unreachableStatus;
 }
 
 export async function handleChannelBrokerInboundHttpRequest(params: {
@@ -140,11 +178,16 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
   if (!account.signingSecret) {
     return sendJson(params.res, 401, { ok: false, error: "missing_signing_secret" });
   }
+  const signatureTimestamp = parseSignatureTimestamp(getHeader(params.req, TIMESTAMP_HEADER));
+  if (signatureTimestamp === null) {
+    return sendJson(params.res, 401, { ok: false, error: "invalid_signature_timestamp" });
+  }
   if (
     !verifySignature({
       body: body.value,
       secret: account.signingSecret,
       signature: getHeader(params.req, SIGNATURE_HEADER) ?? "",
+      timestamp: signatureTimestamp,
     })
   ) {
     return sendJson(params.res, 401, { ok: false, error: "invalid_signature" });
@@ -157,6 +200,9 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     });
   }
   event = accountScopedEvent.event;
+  if (isSelfOriginatedEvent(event)) {
+    return sendJson(params.res, 200, { ok: true, status: "ignored", reason: "self_sender" });
+  }
   if (!isSenderAllowed({ account, event })) {
     return sendJson(params.res, 403, { ok: false, error: "sender_not_allowed" });
   }
@@ -168,8 +214,8 @@ export async function handleChannelBrokerInboundHttpRequest(params: {
     dedupeKey,
     ackPolicy: "after_durable_send",
   });
-  return sendJson(params.res, result.status === "accepted" ? 202 : 200, {
-    ok: result.status !== "rejected",
+  return sendJson(params.res, inboundReceiveStatusCode(result), {
+    ok: result.status === "accepted" || result.status === "duplicate",
     status: result.status,
     dedupeKey,
     ...(result.message ? { message: result.message } : {}),

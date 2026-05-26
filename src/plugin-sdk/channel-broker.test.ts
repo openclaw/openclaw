@@ -187,7 +187,7 @@ describe("channel-broker SDK", () => {
       },
       message: {
         id: "msg-1",
-        text: "hello",
+        text: " hello ",
         attachments: [
           {
             id: "file-1",
@@ -208,6 +208,39 @@ describe("channel-broker SDK", () => {
       raw: { update_id: 99 },
     });
     expect(buildBrokerInboundDedupeKey(event)).toBe("acme:bot-main:telegram:evt-1");
+  });
+
+  it("preserves intentional inbound message whitespace", () => {
+    const event = createBrokerInboundEvent({
+      eventId: "evt-1",
+      providerId: "acme",
+      platform: "telegram",
+      conversation: { id: "chat-1", type: "direct" },
+      sender: { id: "user-1" },
+      message: { id: "msg-1", text: "  code block\\n  keep indent  " },
+    });
+
+    expect(event.message.text).toBe("  code block\\n  keep indent  ");
+  });
+
+  it("drops malformed inbound mention booleans", () => {
+    const event = createBrokerInboundEvent({
+      eventId: "evt-1",
+      providerId: "acme",
+      platform: "telegram",
+      conversation: { id: "chat-1", type: "group" },
+      sender: { id: "user-1" },
+      message: {
+        id: "msg-1",
+        mentions: {
+          canDetectMention: "true",
+          wasMentioned: "true",
+          hasAnyMention: "true",
+        } as never,
+      },
+    });
+
+    expect(event.message.mentions).toBeUndefined();
   });
 
   it("rejects malformed inbound events before durable receive dispatch", () => {

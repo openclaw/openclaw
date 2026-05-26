@@ -1,14 +1,20 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { BROKER_PROTOCOL_VERSION } from "openclaw/plugin-sdk/channel-broker";
+import type { BrokerInboundEventV1 } from "openclaw/plugin-sdk/channel-broker";
+import { BROKER_PROTOCOL_VERSION, createBrokerReceipt } from "openclaw/plugin-sdk/channel-broker";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleChannelBrokerInboundHttpRequest,
   registerChannelBrokerHttpRoutes,
 } from "./http-routes.js";
-import { resetChannelBrokerRuntimeForTest, setChannelBrokerRuntime } from "./runtime.js";
+import { resolveChannelBrokerAccount } from "./accounts.js";
+import {
+  receiveBrokerInboundEvent,
+  resetChannelBrokerRuntimeForTest,
+  setChannelBrokerRuntime,
+} from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type MockResponse = ServerResponse & {
@@ -16,15 +22,26 @@ type MockResponse = ServerResponse & {
   headers: Record<string, string>;
 };
 
+type OpenKeyedStoreMock = ReturnType<
+  typeof createPluginRuntimeMock
+>["state"]["openKeyedStore"] & {
+  callCount(): number;
+  ageRecords(ms: number): void;
+};
+
+const TEST_SIGNATURE_TIMESTAMP = Date.now();
+
 function createRequest(params: {
   body: string;
   signature?: string;
+  timestamp?: number | string;
   method?: string;
 }): IncomingMessage {
   const req = Readable.from([params.body]) as IncomingMessage;
   req.method = params.method ?? "POST";
   req.headers = {
     "content-type": "application/json",
+    "x-openclaw-broker-timestamp": String(params.timestamp ?? TEST_SIGNATURE_TIMESTAMP),
     ...(params.signature ? { "x-openclaw-broker-signature": params.signature } : {}),
   };
   return req;
@@ -53,8 +70,82 @@ function createResponse(): MockResponse {
   return res as MockResponse;
 }
 
-function sign(body: string, secret: string): string {
-  return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+function sign(
+  body: string,
+  secret: string,
+  timestamp: number | string = TEST_SIGNATURE_TIMESTAMP,
+): string {
+  return `sha256=${createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex")}`;
+}
+
+function createMemoryKeyedStore<T>() {
+  const values = new Map<string, { key: string; value: T; createdAt: number }>();
+  return {
+    async register(key: string, value: T): Promise<void> {
+      values.set(key, { key, value, createdAt: 1 });
+    },
+    async registerIfAbsent(key: string, value: T): Promise<boolean> {
+      if (values.has(key)) {
+        return false;
+      }
+      values.set(key, { key, value, createdAt: 1 });
+      return true;
+    },
+    async lookup(key: string): Promise<T | undefined> {
+      return values.get(key)?.value;
+    },
+    async consume(key: string): Promise<T | undefined> {
+      const value = values.get(key)?.value;
+      values.delete(key);
+      return value;
+    },
+    async delete(key: string): Promise<boolean> {
+      return values.delete(key);
+    },
+    async entries(): Promise<Array<{ key: string; value: T; createdAt: number }>> {
+      return Array.from(values.values());
+    },
+    async clear(): Promise<void> {
+      values.clear();
+    },
+    ageRecords(ms: number): void {
+      for (const entry of values.values()) {
+        const record = entry.value;
+        if (
+          record &&
+          typeof record === "object" &&
+          "updatedAt" in record &&
+          typeof record.updatedAt === "number"
+        ) {
+          record.updatedAt -= ms;
+        }
+      }
+    },
+  };
+}
+
+function createOpenKeyedStoreMock(): OpenKeyedStoreMock {
+  const stores = new Map<string, ReturnType<typeof createMemoryKeyedStore<unknown>>>();
+  const calls: string[] = [];
+  const openKeyedStore = (<T>(
+    options: Parameters<ReturnType<typeof createPluginRuntimeMock>["state"]["openKeyedStore"]>[0],
+  ) => {
+    const namespace = options.namespace;
+    calls.push(namespace);
+    let store = stores.get(namespace);
+    if (!store) {
+      store = createMemoryKeyedStore();
+      stores.set(namespace, store);
+    }
+    return store as ReturnType<typeof createMemoryKeyedStore<T>>;
+  }) as unknown as OpenKeyedStoreMock;
+  openKeyedStore.callCount = () => calls.length;
+  openKeyedStore.ageRecords = (ms) => {
+    for (const store of stores.values()) {
+      store.ageRecords(ms);
+    }
+  };
+  return openKeyedStore;
 }
 
 function brokerConfig(
@@ -92,6 +183,10 @@ function inboundBody(senderId = "user-1", overrides: Record<string, unknown> = {
   });
 }
 
+function inboundEvent(overrides: Record<string, unknown> = {}): BrokerInboundEventV1 {
+  return JSON.parse(inboundBody("user-1", { platform: "telegram", ...overrides }));
+}
+
 describe("channel-broker HTTP routes", () => {
   beforeEach(() => {
     resetChannelBrokerRuntimeForTest();
@@ -116,7 +211,7 @@ describe("channel-broker HTTP routes", () => {
   });
 
   it("verifies signatures, normalizes events, and delegates durable receive ack", async () => {
-    const body = inboundBody();
+    const body = inboundBody("user-1", { providerId: "ACME" });
     const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
     setChannelBrokerRuntime({ receiveInboundEvent });
     const res = createResponse();
@@ -145,6 +240,151 @@ describe("channel-broker HTTP routes", () => {
     });
   });
 
+  it("keeps thread routing scoped when providers report channel conversations with thread ids", async () => {
+    const body = inboundBody("user-1", {
+      conversation: { id: "-100123", type: "channel", threadId: "77" },
+    });
+    const config = brokerConfig();
+    const resolveAgentRoute = vi.fn(() => ({
+      agentId: "main",
+      accountId: "acme",
+      sessionKey: "agent:main:channel-broker:telegram:-100123:thread:77",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session" as const,
+      matchedBy: "default" as const,
+      channel: "channel-broker",
+    }));
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute,
+        },
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "channel", id: "telegram:-100123:thread:77" },
+        parentPeer: { kind: "channel", id: "telegram:-100123" },
+      }),
+    );
+  });
+
+  it("skips unmentioned ambient group broker messages before dispatch", async () => {
+    const body = inboundBody("user-1", {
+      message: { id: "101", text: "ambient hello" },
+    });
+    const config = brokerConfig("broker-secret", { allowFrom: ["*"] });
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: false,
+      status: "rejected",
+      message: "activation_skipped",
+    });
+    expect(pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("ignores malformed broker mention booleans before group activation", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "ambient hello",
+        mentions: { canDetectMention: "true", wasMentioned: "true", hasAnyMention: "true" },
+      },
+    });
+    const config = brokerConfig("broker-secret", { allowFrom: ["*"] });
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: false,
+      status: "rejected",
+      message: "activation_skipped",
+    });
+    expect(pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("dispatches mentioned group broker messages with mention access facts", async () => {
+    const body = inboundBody("user-1", {
+      message: {
+        id: "101",
+        text: "hello there",
+        mentions: { canDetectMention: true, wasMentioned: true, hasAnyMention: true },
+      },
+    });
+    const config = brokerConfig("broker-secret", { allowFrom: ["*"] });
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(pluginRuntime.channel.turn.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access: expect.objectContaining({
+          group: expect.objectContaining({ requireMention: true, senderAllowed: true }),
+          mentions: expect.objectContaining({
+            canDetectMention: true,
+            wasMentioned: true,
+            effectiveWasMentioned: true,
+            shouldSkip: false,
+          }),
+        }),
+      }),
+    );
+  });
+
   it("adapts the injected plugin runtime into the real channel turn path", async () => {
     const body = inboundBody();
     const config = brokerConfig();
@@ -166,6 +406,7 @@ describe("channel-broker HTTP routes", () => {
           resolveAgentRoute,
         },
       },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
     });
     setChannelBrokerRuntime(pluginRuntime);
     const res = createResponse();
@@ -182,7 +423,7 @@ describe("channel-broker HTTP routes", () => {
       expect.objectContaining({
         channel: "channel-broker",
         accountId: "acme",
-        peer: { kind: "channel", id: "telegram:-100123" },
+        peer: { kind: "channel", id: "telegram:-100123:thread:77" },
         parentPeer: { kind: "channel", id: "telegram:-100123" },
       }),
     );
@@ -201,8 +442,8 @@ describe("channel-broker HTTP routes", () => {
         messageId: "101",
         messageIdFull: "evt-1",
         reply: expect.objectContaining({
-          to: "telegram:-100123?conversationType=thread&threadId=77",
-          originatingTo: "telegram:-100123?conversationType=thread&threadId=77",
+          to: "broker:telegram:-100123?conversationType=thread&threadId=77",
+          originatingTo: "broker:telegram:-100123?conversationType=thread&threadId=77",
         }),
         message: expect.objectContaining({
           rawBody: "/verbose status",
@@ -216,7 +457,7 @@ describe("channel-broker HTTP routes", () => {
         storePath: "/tmp/sessions.json",
         sessionKey: "agent:main:channel-broker:telegram:-100123",
         ctx: expect.objectContaining({
-          To: "telegram:-100123?conversationType=thread&threadId=77",
+          To: "broker:telegram:-100123?conversationType=thread&threadId=77",
           BrokerProviderId: "acme",
           BrokerPlatform: "telegram",
         }),
@@ -232,6 +473,991 @@ describe("channel-broker HTTP routes", () => {
         }),
       }),
     );
+  });
+
+  it("routes inbound progress and final deliveries through broker previews", async () => {
+    const body = inboundBody();
+    const config = brokerConfig("broker-secret", {
+      capabilities: {
+        telegram: {
+          delivery: {
+            text: true,
+            thread: true,
+            progressUpdates: true,
+            previewFinalization: true,
+          },
+        },
+      },
+    });
+    const sendOutboundRequest = vi.fn(async ({ request }) =>
+      createBrokerReceipt({
+        requestId: request.requestId,
+        providerId: "acme",
+        platform: request.platform,
+        status: "sent",
+        messageIds: ["preview-1"],
+      }),
+    );
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(1, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "preview_update",
+        payloads: [{ text: "working" }],
+        requirements: { text: true, thread: true, progressUpdates: true },
+      }),
+    });
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(2, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({
+        mode: "finalize_preview",
+        payloads: [{ text: "done" }],
+        requirements: { text: true, thread: true, previewFinalization: true },
+      }),
+    });
+  });
+
+  it("suppresses non-final preview updates when the provider does not support progress", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const sendOutboundRequest = vi.fn();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 0 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(sendOutboundRequest).not.toHaveBeenCalled();
+  });
+
+  it("falls back to normal final delivery when preview finalization fails", async () => {
+    const body = inboundBody();
+    const config = brokerConfig("broker-secret", {
+      capabilities: {
+        telegram: {
+          delivery: {
+            text: true,
+            thread: true,
+            progressUpdates: true,
+            previewFinalization: true,
+          },
+        },
+      },
+    });
+    const sendOutboundRequest = vi
+      .fn()
+      .mockImplementationOnce(async ({ request }) =>
+        createBrokerReceipt({
+          requestId: request.requestId,
+          providerId: "acme",
+          platform: request.platform,
+          status: "sent",
+          messageIds: ["preview-1"],
+        }),
+      )
+      .mockRejectedValueOnce(new Error("finalize failed"))
+      .mockImplementationOnce(async ({ request }) =>
+        createBrokerReceipt({
+          requestId: request.requestId,
+          providerId: "acme",
+          platform: request.platform,
+          status: "sent",
+          messageIds: ["final-1"],
+        }),
+      );
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+
+    const res = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(1, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({ mode: "preview_update" }),
+    });
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(2, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({ mode: "finalize_preview" }),
+    });
+    expect(sendOutboundRequest).toHaveBeenNthCalledWith(3, {
+      account: expect.objectContaining({ providerId: "acme" }),
+      request: expect.objectContaining({ mode: "final", payloads: [{ text: "done" }] }),
+    });
+  });
+
+  it("does not fallback after visible preview finalization failures", async () => {
+    const body = inboundBody();
+    const config = brokerConfig("broker-secret", {
+      capabilities: {
+        telegram: {
+          delivery: {
+            text: true,
+            thread: true,
+            progressUpdates: true,
+            previewFinalization: true,
+          },
+        },
+      },
+    });
+    const visibleFinalizeError = Object.assign(new Error("visible finalize failed"), {
+      visibleReplySent: true,
+    });
+    const sendOutboundRequest = vi
+      .fn()
+      .mockImplementationOnce(async ({ request }) =>
+        createBrokerReceipt({
+          requestId: request.requestId,
+          providerId: "acme",
+          platform: request.platform,
+          status: "sent",
+          messageIds: ["preview-1"],
+        }),
+      )
+      .mockRejectedValueOnce(visibleFinalizeError);
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+
+    await expect(
+      handleChannelBrokerInboundHttpRequest({
+        cfg: config,
+        req: createRequest({ body, signature: sign(body, "broker-secret") }),
+        res: createResponse(),
+      }),
+    ).rejects.toThrow("visible finalize failed");
+
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(200);
+    expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(sendOutboundRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates redelivery after partial visible preview delivery failures", async () => {
+    const body = inboundBody();
+    const config = brokerConfig("broker-secret", {
+      capabilities: {
+        telegram: {
+          delivery: {
+            text: true,
+            thread: true,
+            progressUpdates: true,
+          },
+        },
+      },
+    });
+    const sendOutboundRequest = vi
+      .fn()
+      .mockImplementationOnce(async ({ request }) =>
+        createBrokerReceipt({
+          requestId: request.requestId,
+          providerId: "acme",
+          platform: request.platform,
+          status: "sent",
+          messageIds: ["preview-1"],
+        }),
+      )
+      .mockRejectedValueOnce(new Error("final send failed"));
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 1, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-preview-1",
+      sendOutboundRequest,
+    });
+
+    await expect(
+      handleChannelBrokerInboundHttpRequest({
+        cfg: config,
+        req: createRequest({ body, signature: sign(body, "broker-secret") }),
+        res: createResponse(),
+      }),
+    ).rejects.toThrow("final send failed");
+
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(200);
+    expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+    expect(sendOutboundRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates after agent dispatch even when durable final delivery fails", async () => {
+    const config = brokerConfig();
+    const account = resolveChannelBrokerAccount({ cfg: config, accountId: "acme" });
+    const event = inboundEvent();
+    const sendOutboundRequest = vi.fn().mockRejectedValue(new Error("durable send failed"));
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-final-1",
+      sendOutboundRequest,
+    });
+
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_agent_dispatch",
+      }),
+    ).rejects.toThrow("durable send failed");
+
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_agent_dispatch",
+      }),
+    ).resolves.toMatchObject({ status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates after agent dispatch when the final-only durable hook fails", async () => {
+    const config = brokerConfig();
+    const account = resolveChannelBrokerAccount({ cfg: config, accountId: "acme" });
+    const event = inboundEvent();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(async (params) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        throw new Error("missing broker input");
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      if ("kind" in preflight) {
+        throw new Error(`unexpected broker preflight admission: ${preflight.kind}`);
+      }
+      const resolved = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if (!("delivery" in resolved)) {
+        throw new Error("missing broker delivery adapter");
+      }
+      if (typeof resolved.delivery.durable !== "function") {
+        throw new Error("missing broker durable delivery hook");
+      }
+      expect(resolved.delivery.durable({ text: "done" }, { kind: "final" })).toEqual(
+        expect.objectContaining({ to: "broker:telegram:-100123?conversationType=thread&threadId=77" }),
+      );
+      throw new Error("kernel durable send failed");
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_agent_dispatch",
+      }),
+    ).rejects.toThrow("kernel durable send failed");
+
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_agent_dispatch",
+      }),
+    ).resolves.toMatchObject({ status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates broker webhook redeliveries before dispatching another turn", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: first,
+    });
+    const second = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: second,
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(second.statusCode).toBe(200);
+    expect(JSON.parse(second.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a retryable response for redelivery while durable send is still pending", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    let rejectFirstTurn!: (error: Error) => void;
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectFirstTurn = reject;
+        }),
+    );
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: createResponse(),
+    });
+    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(425);
+    expect(JSON.parse(redelivery.body)).toMatchObject({
+      ok: false,
+      status: "pending",
+      message: "delivery pending",
+    });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+
+    rejectFirstTurn(new Error("stop first turn"));
+    await expect(first).rejects.toThrow("stop first turn");
+  });
+
+  it("keeps pending broker webhooks pending after runtime reset", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    let rejectFirstTurn!: (error: Error) => void;
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectFirstTurn = reject;
+        }),
+    );
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: createResponse(),
+    });
+    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+
+    resetChannelBrokerRuntimeForTest();
+    setChannelBrokerRuntime(pluginRuntime);
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(425);
+    expect(JSON.parse(redelivery.body)).toMatchObject({
+      ok: false,
+      status: "pending",
+      message: "delivery pending",
+    });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+
+    rejectFirstTurn(new Error("stop first turn"));
+    await expect(first).rejects.toThrow("stop first turn");
+  });
+
+  it("keeps stale pending broker webhooks pending within the same runtime", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    let rejectFirstTurn!: (error: Error) => void;
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectFirstTurn = reject;
+        }),
+    );
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: createResponse(),
+    });
+    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+
+    openKeyedStore.ageRecords(11 * 60 * 1000);
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(425);
+    expect(JSON.parse(redelivery.body)).toMatchObject({
+      ok: false,
+      status: "pending",
+      message: "delivery pending",
+    });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+
+    rejectFirstTurn(new Error("stop first turn"));
+    await expect(first).rejects.toThrow("stop first turn");
+  });
+
+  it("reclaims stale pending broker webhooks after runtime reset", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const openKeyedStore = createOpenKeyedStoreMock();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore },
+    });
+    let rejectFirstTurn!: (error: Error) => void;
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectFirstTurn = reject;
+        }),
+    );
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: createResponse(),
+    });
+    await vi.waitFor(() => expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1));
+
+    resetChannelBrokerRuntimeForTest();
+    openKeyedStore.ageRecords(11 * 60 * 1000);
+    setChannelBrokerRuntime(pluginRuntime);
+    const retry = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: retry,
+    });
+
+    expect(retry.statusCode).toBe(202);
+    expect(JSON.parse(retry.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+
+    rejectFirstTurn(new Error("stale process stopped"));
+    await expect(first).rejects.toThrow("stale process stopped");
+  });
+
+  it("deduplicates redelivery after visible durable send failures", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const visibleError = Object.assign(new Error("visible final failed"), {
+      visibleReplySent: true,
+    });
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    vi.mocked(pluginRuntime.channel.turn.run).mockRejectedValueOnce(visibleError);
+    setChannelBrokerRuntime(pluginRuntime);
+
+    await expect(
+      handleChannelBrokerInboundHttpRequest({
+        cfg: config,
+        req: createRequest({ body, signature: sign(body, "broker-secret") }),
+        res: createResponse(),
+      }),
+    ).rejects.toThrow("visible final failed");
+
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(redelivery.statusCode).toBe(200);
+    expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes dedupe when failed preview counts are followed by visible final delivery", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const sendOutboundRequest = vi.fn(async ({ request }) =>
+      createBrokerReceipt({
+        requestId: request.requestId,
+        providerId: "acme",
+        platform: request.platform,
+        status: "sent",
+        messageIds: ["final-1"],
+      }),
+    );
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            return {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 1 },
+              failedCounts: { tool: 1, block: 0, final: 0 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-final-1",
+      sendOutboundRequest,
+    });
+
+    const first = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: first,
+    });
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(redelivery.statusCode).toBe(200);
+    expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes dedupe when failed preview counts are followed by durable final delivery", async () => {
+    const config = brokerConfig();
+    const account = resolveChannelBrokerAccount({ cfg: config, accountId: "acme" });
+    const event = inboundEvent();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+    });
+    vi.mocked(pluginRuntime.channel.turn.run).mockImplementationOnce(async (params) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        throw new Error("missing broker input");
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
+      if ("kind" in preflight) {
+        throw new Error(`unexpected broker preflight admission: ${preflight.kind}`);
+      }
+      const resolved = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if (!("delivery" in resolved)) {
+        throw new Error("missing broker delivery adapter");
+      }
+      if (typeof resolved.delivery.durable !== "function") {
+        throw new Error("missing broker durable delivery hook");
+      }
+      expect(resolved.delivery.durable({ text: "done" }, { kind: "final" })).toEqual(
+        expect.objectContaining({ to: "broker:telegram:-100123?conversationType=thread&threadId=77" }),
+      );
+      await resolved.delivery.onDelivered?.(
+        { text: "done" },
+        { kind: "final" },
+        { visibleReplySent: true, messageIds: ["final-1"] },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: resolved.ctxPayload,
+        routeSessionKey: resolved.routeSessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 1 },
+          failedCounts: { tool: 1, block: 0, final: 0 },
+        },
+      };
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_durable_send",
+      }),
+    ).resolves.toMatchObject({ status: "accepted" });
+    await expect(
+      receiveBrokerInboundEvent({
+        account,
+        event,
+        dedupeKey: "acme:bot-main:telegram:evt-1",
+        ackPolicy: "after_durable_send",
+      }),
+    ).resolves.toMatchObject({ status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes dedupe when dispatcher failed counts hide visible final delivery errors", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const visibleError = Object.assign(new Error("visible final failed"), {
+      visibleReplySent: true,
+    });
+    const sendOutboundRequest = vi.fn().mockRejectedValue(visibleError);
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async ({ dispatcherOptions }) => {
+            try {
+              await dispatcherOptions.deliver({ text: "done" }, { kind: "final" });
+            } catch (error) {
+              dispatcherOptions.onError?.(error, { kind: "final" });
+            }
+            return {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+              failedCounts: { tool: 0, block: 0, final: 1 },
+            };
+          }),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+    setChannelBrokerRuntime({
+      createRequestId: () => "broker-final-1",
+      sendOutboundRequest,
+    });
+
+    const first = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: first,
+    });
+    const redelivery = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: redelivery,
+    });
+
+    expect(first.statusCode).toBe(202);
+    expect(JSON.parse(first.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(redelivery.statusCode).toBe(200);
+    expect(JSON.parse(redelivery.body)).toMatchObject({ ok: true, status: "duplicate" });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not complete dedupe for dispatcher-side delivery failures", async () => {
+    const body = inboundBody();
+    const config = brokerConfig();
+    const pluginRuntime = createPluginRuntimeMock({
+      config: {
+        current: () => config,
+      },
+      state: { openKeyedStore: createOpenKeyedStoreMock() },
+      channel: {
+        reply: {
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+            failedCounts: { tool: 0, block: 0, final: 1 },
+          })),
+        },
+      },
+    });
+    setChannelBrokerRuntime(pluginRuntime);
+
+    const first = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: first,
+    });
+    const retry = createResponse();
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: config,
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res: retry,
+    });
+
+    expect(first.statusCode).toBe(425);
+    expect(JSON.parse(first.body)).toMatchObject({
+      ok: false,
+      status: "rejected",
+      message: "delivery_failed",
+    });
+    expect(retry.statusCode).toBe(425);
+    expect(JSON.parse(retry.body)).toMatchObject({
+      ok: false,
+      status: "rejected",
+      message: "delivery_failed",
+    });
+    expect(pluginRuntime.channel.turn.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects stale inbound signatures before runtime dispatch", async () => {
+    const body = inboundBody();
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+    const staleTimestamp = TEST_SIGNATURE_TIMESTAMP - 10 * 60 * 1000;
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({
+        body,
+        signature: sign(body, "broker-secret", staleTimestamp),
+        timestamp: staleTimestamp,
+      }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: false,
+      error: "invalid_signature_timestamp",
+    });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("ignores self-originated inbound events before runtime dispatch", async () => {
+    const body = inboundBody("bot-main", {
+      sender: { id: "bot-main", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn();
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig(),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      ok: true,
+      status: "ignored",
+      reason: "self_sender",
+    });
+    expect(receiveInboundEvent).not.toHaveBeenCalled();
+  });
+
+  it("still dispatches allowlisted bot senders that are not the broker account", async () => {
+    const body = inboundBody("integration-bot", {
+      sender: { id: "integration-bot", isBot: true },
+    });
+    const receiveInboundEvent = vi.fn(async () => ({ status: "accepted" as const }));
+    setChannelBrokerRuntime({ receiveInboundEvent });
+    const res = createResponse();
+
+    await handleChannelBrokerInboundHttpRequest({
+      cfg: brokerConfig("broker-secret", { allowFrom: ["integration-bot"] }),
+      req: createRequest({ body, signature: sign(body, "broker-secret") }),
+      res,
+    });
+
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body)).toMatchObject({ ok: true, status: "accepted" });
+    expect(receiveInboundEvent).toHaveBeenCalledOnce();
   });
 
   it("rejects inbound events with invalid signatures before runtime dispatch", async () => {

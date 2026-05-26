@@ -1,3 +1,5 @@
+import { normalizeAccountId } from "./account-id.js";
+
 export const BROKER_PROTOCOL_VERSION = 1 as const;
 export const CHANNEL_BROKER_CHANNEL_ID = "channel-broker" as const;
 
@@ -59,6 +61,15 @@ export type BrokerMessageAttachment = {
   raw?: unknown;
 };
 
+export type BrokerInboundMentionFacts = {
+  canDetectMention?: boolean;
+  wasMentioned?: boolean;
+  hasAnyMention?: boolean;
+  implicitMentionKinds?: Array<
+    "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
+  >;
+};
+
 export type BrokerInboundEventV1 = {
   version: BrokerProtocolVersion;
   eventId: string;
@@ -74,6 +85,7 @@ export type BrokerInboundEventV1 = {
     timestamp?: string;
     replyToId?: string;
     nativeIds?: Record<string, string>;
+    mentions?: BrokerInboundMentionFacts;
     rawRef?: string;
     raw?: unknown;
   };
@@ -248,6 +260,16 @@ function normalizeOptionalBrokerString(value: string | undefined): string | unde
   return trimmed || undefined;
 }
 
+function normalizeBrokerMessageText(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("broker message text must be a string");
+  }
+  return value.length > 0 ? value : undefined;
+}
+
 function normalizeBrokerAttachments(
   attachments: BrokerMessageAttachment[] | undefined,
 ): BrokerMessageAttachment[] | undefined {
@@ -281,6 +303,30 @@ function normalizeNativeIds(
       normalized[normalizedKey] = normalizedValue;
     }
   }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeBrokerMentionFacts(
+  mentions: BrokerInboundMentionFacts | undefined,
+): BrokerInboundMentionFacts | undefined {
+  if (!mentions) {
+    return undefined;
+  }
+  const implicitMentionKinds = (mentions.implicitMentionKinds ?? []).filter(
+    (kind): kind is NonNullable<BrokerInboundMentionFacts["implicitMentionKinds"]>[number] =>
+      kind === "reply_to_bot" ||
+      kind === "quoted_bot" ||
+      kind === "bot_thread_participant" ||
+      kind === "native",
+  );
+  const normalized: BrokerInboundMentionFacts = {
+    ...(typeof mentions.canDetectMention === "boolean"
+      ? { canDetectMention: mentions.canDetectMention }
+      : {}),
+    ...(typeof mentions.wasMentioned === "boolean" ? { wasMentioned: mentions.wasMentioned } : {}),
+    ...(typeof mentions.hasAnyMention === "boolean" ? { hasAnyMention: mentions.hasAnyMention } : {}),
+    ...(implicitMentionKinds.length ? { implicitMentionKinds } : {}),
+  };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -325,10 +371,11 @@ export function normalizeBrokerInboundEvent(event: BrokerInboundEventV1): Broker
   }
   const attachments = normalizeBrokerAttachments(event.message.attachments);
   const nativeIds = normalizeNativeIds(event.message.nativeIds);
+  const mentions = normalizeBrokerMentionFacts(event.message.mentions);
   return {
     version: BROKER_PROTOCOL_VERSION,
     eventId: requireBrokerString(event.eventId, "broker inbound event id"),
-    providerId: requireBrokerString(event.providerId, "broker provider id"),
+    providerId: normalizeAccountId(requireBrokerString(event.providerId, "broker provider id")),
     platform: normalizeBrokerPlatformId(event.platform),
     ...(normalizeOptionalBrokerString(event.accountId)
       ? { accountId: event.accountId?.trim() }
@@ -359,9 +406,7 @@ export function normalizeBrokerInboundEvent(event: BrokerInboundEventV1): Broker
     },
     message: {
       id: requireBrokerString(event.message.id, "broker message id"),
-      ...(normalizeOptionalBrokerString(event.message.text)
-        ? { text: event.message.text?.trim() }
-        : {}),
+      ...(normalizeBrokerMessageText(event.message.text) ? { text: event.message.text } : {}),
       ...(attachments ? { attachments } : {}),
       ...(normalizeOptionalBrokerString(event.message.timestamp)
         ? { timestamp: event.message.timestamp?.trim() }
@@ -370,6 +415,7 @@ export function normalizeBrokerInboundEvent(event: BrokerInboundEventV1): Broker
         ? { replyToId: event.message.replyToId?.trim() }
         : {}),
       ...(nativeIds ? { nativeIds } : {}),
+      ...(mentions ? { mentions } : {}),
       ...(normalizeOptionalBrokerString(event.message.rawRef)
         ? { rawRef: event.message.rawRef?.trim() }
         : {}),
