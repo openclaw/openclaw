@@ -2066,7 +2066,13 @@ export function createConfigIO(
     });
     if (recovered.raw === snapshot.raw) {
       // No recovery — finalize the original result with observation
-      return await finalizeSnapshotReadResult(result);
+      return await finalizeReadConfigSnapshotInternalResult(deps, result);
+    }
+    if (!recovered.restoredFromBackup) {
+      // Backup content was read but copyFile failed — disk is still corrupted.
+      // Return original result with observation so the caller gets the
+      // snapshot as-is rather than re-reading a still-corrupted file.
+      return await finalizeReadConfigSnapshotInternalResult(deps, result);
     }
     // Recovery restored the file — re-read (with finalization this time,
     // so observeConfigSnapshot sees the healthy restored content)

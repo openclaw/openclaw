@@ -586,7 +586,7 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   configPath: string;
   raw: string;
   parsed: unknown;
-}): Promise<{ raw: string; parsed: unknown }> {
+}): Promise<{ raw: string; parsed: unknown; restoredFromBackup: boolean }> {
   const stat = await params.deps.fs.promises.stat(params.configPath).catch(() => null);
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -688,7 +688,7 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
     );
     await writeConfigHealthState(params.deps, healthState);
   }
-  return { raw: backupRaw, parsed: backupParsed };
+  return { raw: backupRaw, parsed: backupParsed, restoredFromBackup };
 }
 
 export function maybeRecoverSuspiciousConfigReadSync(params: {
@@ -696,7 +696,7 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   configPath: string;
   raw: string;
   parsed: unknown;
-}): { raw: string; parsed: unknown } {
+}): { raw: string; parsed: unknown; restoredFromBackup: boolean } {
   const stat = params.deps.fs.statSync(params.configPath, { throwIfNoEntry: false }) ?? null;
   const now = new Date().toISOString();
   const current = createConfigHealthFingerprint({
@@ -800,7 +800,7 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
     );
     writeConfigHealthStateSync(params.deps, healthState);
   }
-  return { raw: backupRaw, parsed: backupParsed };
+  return { raw: backupRaw, parsed: backupParsed, restoredFromBackup };
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(params: {
