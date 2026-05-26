@@ -72,6 +72,7 @@ on:
       - "src/agents/cli-runner/**"
       - "src/agents/command/**"
       - "src/agents/embedded-agent-runner/**"
+      - "src/agents/sessions/tools/**"
       - "src/agents/tools/**"
       - "src/agents/*completion*.ts"
       - "src/agents/*transport*.ts"
