@@ -14,6 +14,7 @@ ZORG_DB_PORT="${ZORG_DB_PORT:-5432}"
 ZORG_DB_PASSWORD="${ZORG_DB_PASSWORD:-}"
 LAN_CHAT_PORT="${LAN_CHAT_PORT:-3001}"
 LAN_CHAT_HOST="${LAN_CHAT_HOST:-0.0.0.0}"
+OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH="${OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH:-true}"
 
 OPENCLAW_EFFECTIVE_HOME="${OPENCLAW_HOME:-$HOME}"
 if [[ "$OPENCLAW_EFFECTIVE_HOME" == "~" ]]; then
@@ -160,6 +161,58 @@ JSON
   chmod +x "$OPENCLAW_WORKSPACE/memory_sql_tool.py" "$OPENCLAW_WORKSPACE/memory_recall_router.py"
 }
 
+write_gateway_tui_compat_config() {
+  python3 - "$OPENCLAW_EFFECTIVE_HOME" "$OPENCLAW_WORKSPACE" "$OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+home = Path(sys.argv[1]).expanduser()
+workspace = Path(sys.argv[2]).expanduser()
+disable_device_auth = sys.argv[3].strip().lower() in {"1", "true", "yes", "on"}
+
+candidates = []
+for candidate in (
+    home / "openclaw.json",
+    home / ".openclaw" / "openclaw.json",
+    workspace.parent / "openclaw.json",
+):
+    if candidate not in candidates:
+        candidates.append(candidate)
+
+updated = False
+for path in candidates:
+    if not path.exists():
+        continue
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    if not isinstance(config, dict):
+        continue
+    gateway = config.setdefault("gateway", {})
+    if not isinstance(gateway, dict):
+        continue
+    control_ui = gateway.setdefault("controlUi", {})
+    if not isinstance(control_ui, dict):
+        gateway["controlUi"] = control_ui = {}
+
+    control_ui["allowInsecureAuth"] = True
+    if disable_device_auth:
+        control_ui["dangerouslyDisableDeviceAuth"] = True
+
+    path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"zorg-memorydb: updated Docker/TUI gateway compatibility config: {path}")
+    updated = True
+
+if not updated:
+    print("zorg-memorydb warning: no existing OpenClaw gateway config found for Docker/TUI compatibility patch", file=sys.stderr)
+PY
+  if [[ "$OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH" =~ ^([Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|1|[Oo][Nn])$ ]]; then
+    warn "Enabled token-protected Docker/TUI compatibility by disabling Control UI device-auth checks. Set OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH=false for hardened HTTPS or paired-device deployments."
+  fi
+}
+
 install_agent_readable_markdown() {
   log "Installing agent-readable Zorg MemoryDB markdown instructions"
   if [[ -f "$ZORG_WORKSPACE_DIR/rules/ZORG_MEMORYDB_MASTER_RULES.md" ]]; then
@@ -299,6 +352,7 @@ main() {
   copy_packaged_components
   ensure_postgres_database
   write_memory_config
+  write_gateway_tui_compat_config
   install_agent_readable_markdown
   import_markdown_rules
   prepare_lan_chat

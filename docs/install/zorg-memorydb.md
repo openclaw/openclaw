@@ -41,3 +41,21 @@ Use direct npm only on systems that already have Node >=22.19.0 and working glob
 ```bash
 sudo npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 ```
+
+## Docker Gateway TUI Compatibility
+
+When OpenClaw runs in Docker or Podman and the host runs `openclaw tui` against a published gateway port such as `127.0.0.1:18789`, the gateway can see the host connection as a container bridge address instead of true localhost. Without the compatibility patch, the TUI can fail with:
+
+```text
+control ui requires device identity (use HTTPS or localhost secure context)
+```
+
+The Zorg MemoryDB installer updates existing OpenClaw gateway config files for token-protected Docker/Podman installs by setting `gateway.controlUi.allowInsecureAuth=true` and, by default, `gateway.controlUi.dangerouslyDisableDeviceAuth=true`. This keeps host-side TUI access working for private Docker installs where the gateway is protected by the configured gateway token.
+
+For hardened public, HTTPS, or paired-device deployments, disable that compatibility setting before running the installer:
+
+```bash
+OPENCLAW_CONTROL_UI_DISABLE_DEVICE_AUTH=false zorg/install-zorg-memorydb.sh
+```
+
+If the host CLI still cannot connect after this patch, verify that the host-side OpenClaw config uses the same gateway token as the running container. Do not paste or publish the token in logs, issues, or chat.
