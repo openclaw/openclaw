@@ -1557,6 +1557,61 @@ describe("schema validator", () => {
       },
       expectedValue: { a: true, b: true, c: true, d: true, e: true, f: true },
     });
+
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.defaults.dependency-activates-conditional",
+        schema: {
+          type: "object",
+          properties: {
+            a: {
+              type: "boolean",
+              default: true,
+            },
+          },
+          dependencies: {
+            b: {
+              properties: {
+                kind: {
+                  const: "api",
+                  default: "api",
+                },
+              },
+              required: ["kind"],
+            },
+            a: {
+              properties: {
+                b: {
+                  type: "boolean",
+                  default: true,
+                },
+              },
+              required: ["b"],
+            },
+          },
+          if: {
+            properties: {
+              kind: {
+                const: "api",
+              },
+            },
+            required: ["kind"],
+          },
+          [jsonSchemaThenKeyword]: {
+            properties: {
+              endpoint: {
+                type: "string",
+                default: "https://example.com",
+              },
+            },
+            required: ["endpoint"],
+          },
+        },
+        value: {},
+        applyDefaults: true,
+      },
+      expectedValue: { a: true, b: true, kind: "api", endpoint: "https://example.com" },
+    });
   });
 
   it("applies defaults through patternProperties before additionalProperties", () => {

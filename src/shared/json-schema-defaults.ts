@@ -1043,38 +1043,44 @@ function applyObjectApplicatorDefaults(
   currentResourceRoot: JsonSchemaValue,
   currentResourceBaseId: string | undefined,
 ): Record<string, unknown> {
+  let nextValue = applyObjectPropertyAndDependencyDefaults(
+    schema,
+    value,
+    root,
+    resolvingRefs,
+    currentResourceRoot,
+    currentResourceBaseId,
+  );
+  nextValue = applyObjectConditionalDefaults(
+    schema,
+    nextValue,
+    root,
+    resolvingRefs,
+    currentResourceRoot,
+    currentResourceBaseId,
+  );
+  return applyObjectPropertyAndDependencyDefaults(
+    schema,
+    nextValue,
+    root,
+    resolvingRefs,
+    currentResourceRoot,
+    currentResourceBaseId,
+  );
+}
+
+function applyObjectPropertyAndDependencyDefaults(
+  schema: Record<string, unknown>,
+  value: Record<string, unknown>,
+  root: JsonSchemaValue,
+  resolvingRefs: Set<string>,
+  currentResourceRoot: JsonSchemaValue,
+  currentResourceBaseId: string | undefined,
+): Record<string, unknown> {
   let nextValue = value;
   const maxIterations = countSchemaNodes(schema);
-  let evaluatedConditional = false;
   for (let index = 0; index < maxIterations; index++) {
     const before = JSON.stringify(nextValue);
-    nextValue = applyObjectPropertyDefaults(
-      schema,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-    nextValue = applyObjectDependencyDefaults(
-      schema,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-    if (!evaluatedConditional) {
-      nextValue = applyObjectConditionalDefaults(
-        schema,
-        nextValue,
-        root,
-        resolvingRefs,
-        currentResourceRoot,
-        currentResourceBaseId,
-      );
-      evaluatedConditional = true;
-    }
     nextValue = applyObjectPropertyDefaults(
       schema,
       nextValue,
