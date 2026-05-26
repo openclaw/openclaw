@@ -10,6 +10,7 @@ import {
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
+import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -351,21 +352,6 @@ const CodexUserLocationSchema = z
     return value.country || value.region || value.city || value.timezone ? value : undefined;
   })
   .optional();
-
-const LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS = new Set([
-  "brave",
-  "duckduckgo",
-  "exa",
-  "firecrawl",
-  "gemini",
-  "grok",
-  "kimi",
-  "minimax",
-  "ollama",
-  "perplexity",
-  "searxng",
-  "tavily",
-]);
 
 const BLOCKED_WEB_SEARCH_KEYS_ISSUE_FIELD = "__openclawBlockedWebSearchKeys";
 
