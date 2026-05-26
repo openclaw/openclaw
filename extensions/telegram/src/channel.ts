@@ -40,7 +40,11 @@ import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
-import { deleteCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
+import {
+  deleteCachedTelegramBotInfo,
+  readCachedTelegramBotInfo,
+  writeCachedTelegramBotInfo,
+} from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -111,6 +115,25 @@ function resolveTelegramProbe() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
+}
+
+async function readStartupBotInfoCache(params: {
+  accountId: string;
+  token: string;
+  log?: { debug?: (message: string) => void };
+}): Promise<TelegramBotInfo | undefined> {
+  try {
+    const cached = await readCachedTelegramBotInfo({
+      accountId: params.accountId,
+      botToken: params.token,
+    });
+    return cached?.botInfo;
+  } catch (err) {
+    if (getTelegramRuntime().logging.shouldLogVerbose()) {
+      params.log?.debug?.(`[${params.accountId}] bot info cache read failed: ${String(err)}`);
+    }
+    return undefined;
+  }
 }
 
 async function writeStartupBotInfoCache(params: {
@@ -959,6 +982,15 @@ export const telegramPlugin = createChatChannelPlugin({
           if (!probe.ok && probe.status === 401) {
             await deleteStartupBotInfoCache(account.accountId);
             unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
+          } else if (!probe.ok) {
+            botInfo = await readStartupBotInfoCache({
+              accountId: account.accountId,
+              token,
+              log: ctx.log,
+            });
+            if (botInfo) {
+              telegramBotLabel = ` (@${botInfo.username})`;
+            }
           }
         } catch (err) {
           if (ctx.abortSignal.aborted) {
@@ -966,6 +998,14 @@ export const telegramPlugin = createChatChannelPlugin({
           }
           if (getTelegramRuntime().logging.shouldLogVerbose()) {
             ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+          }
+          botInfo = await readStartupBotInfoCache({
+            accountId: account.accountId,
+            token,
+            log: ctx.log,
+          });
+          if (botInfo) {
+            telegramBotLabel = ` (@${botInfo.username})`;
           }
         }
         if (unauthorizedTokenReason) {

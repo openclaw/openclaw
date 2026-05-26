@@ -50,7 +50,7 @@ function removeRetiredTelegramDmConfig(params: {
     params.changes.push(
       dm.threadReplies === undefined
         ? `Removed ${params.pathPrefix}.dm.`
-        : `Removed ${params.pathPrefix}.dm.threadReplies.`,
+        : `Removed ${params.pathPrefix}.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
     );
     changed = true;
   }
@@ -67,7 +67,9 @@ function removeRetiredTelegramDmConfig(params: {
       const nextDirectConfig = { ...directConfig };
       delete nextDirectConfig.threadReplies;
       nextDirect[chatId] = nextDirectConfig;
-      params.changes.push(`Removed ${params.pathPrefix}.direct.${chatId}.threadReplies.`);
+      params.changes.push(
+        `Removed ${params.pathPrefix}.direct.${chatId}.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.`,
+      );
       directChanged = true;
     }
     if (directChanged) {
@@ -106,13 +108,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
-      'channels.telegram.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled. Run "openclaw doctor --fix".',
+      'channels.telegram.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
     match: hasRetiredTelegramDmConfig,
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      'channels.telegram.accounts.<id>.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled. Run "openclaw doctor --fix".',
+      'channels.telegram.accounts.<id>.dm and direct.<chatId>.threadReplies were removed; DM topic sessions now follow Telegram getMe.has_topics_enabled, so topics-enabled bots may use thread-scoped DM sessions. Run "openclaw doctor --fix".',
     match: hasRetiredTelegramAccountDmConfig,
   },
   {

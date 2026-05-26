@@ -445,6 +445,29 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toMatchObject({ botInfo: refreshedBotInfo });
   });
 
+  it("falls back to cached startup botInfo when refresh fails without auth failure", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledOnce();
+    expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
+  });
+
   it("deletes cached startup botInfo when the account token changes", async () => {
     await useTempStateDir();
     installTelegramRuntime();

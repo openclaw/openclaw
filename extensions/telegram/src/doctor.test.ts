@@ -191,10 +191,10 @@ describe("telegram doctor", () => {
     expect(telegram?.accounts?.work?.dm).toBeUndefined();
     expect(telegram?.accounts?.work?.direct?.["456"]).toEqual({ systemPrompt: "Support" });
     expect(result.changes).toEqual([
-      "Removed channels.telegram.dm.threadReplies.",
-      "Removed channels.telegram.direct.123.threadReplies.",
-      "Removed channels.telegram.accounts.work.dm.threadReplies.",
-      "Removed channels.telegram.accounts.work.direct.456.threadReplies.",
+      "Removed channels.telegram.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.direct.123.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.direct.456.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
     ]);
   });
 
