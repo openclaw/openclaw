@@ -1244,6 +1244,7 @@ export function discoverOpenClawPlugins(params: {
       const seen = new Set<string>();
       const realpathCache = new Map<string, string>();
       const packageManifestCache = new Map<string, PackageManifest | null>();
+      const visitedDirectories = new Set<string>();
       const extra = params.extraPaths ?? [];
       for (const extraPath of extra) {
         if (typeof extraPath !== "string") {
@@ -1298,6 +1299,7 @@ export function discoverOpenClawPlugins(params: {
           seen,
           realpathCache,
           packageManifestCache,
+          visitedDirectories,
         });
       }
       return result;
@@ -1311,6 +1313,7 @@ export function discoverOpenClawPlugins(params: {
       const seen = new Set<string>();
       const realpathCache = new Map<string, string>();
       const packageManifestCache = new Map<string, PackageManifest | null>();
+      const visitedDirectories = new Set<string>();
       for (const sourceOverlayDir of listBundledSourceOverlayDirs({
         bundledRoot: roots.stock,
         env,
@@ -1353,6 +1356,7 @@ export function discoverOpenClawPlugins(params: {
           seen,
           realpathCache,
           packageManifestCache,
+          visitedDirectories,
         });
       }
       const sourceCheckoutExtensionsDir = resolveBundledSourceCheckoutExtensionsDir(roots.stock);
@@ -1373,6 +1377,7 @@ export function discoverOpenClawPlugins(params: {
           realpathCache,
           packageManifestCache,
           skipDirectories: readChildDirectoryNames(roots.stock),
+          visitedDirectories,
         });
       }
       const installedPaths = collectInstalledPluginRecordPaths(params.installRecords, env);
@@ -1411,6 +1416,7 @@ export function discoverOpenClawPlugins(params: {
         seen,
         realpathCache,
         packageManifestCache,
+        visitedDirectories,
       });
       return result;
     },
