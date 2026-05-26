@@ -86,6 +86,49 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].id).toBe("gemini-2.5-pro");
   });
 
+  it("applies provider policy api defaults to inline models without clobbering model baseUrl", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      anthropic: {
+        baseUrl: "https://anthropic-proxy.example.com/v1",
+        models: [
+          makeModel("claude-sonnet-4-6"),
+          {
+            ...makeModel("claude-opus-4.5"),
+            baseUrl: "https://anthropic-opus-proxy.example.com/v1",
+          },
+        ],
+      },
+      custom: {
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(
+      result.map(({ provider, id, api, baseUrl }) => ({ provider, id, api, baseUrl })),
+    ).toEqual([
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        baseUrl: "https://anthropic-proxy.example.com/v1",
+      },
+      {
+        provider: "anthropic",
+        id: "claude-opus-4.5",
+        api: "anthropic-messages",
+        baseUrl: "https://anthropic-opus-proxy.example.com/v1",
+      },
+      {
+        provider: "custom",
+        id: "custom-model",
+        api: undefined,
+        baseUrl: undefined,
+      },
+    ]);
+  });
+
   it("model-level api takes precedence over provider-level api", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {

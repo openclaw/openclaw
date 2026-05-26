@@ -1,4 +1,5 @@
 import type { Api } from "@earendil-works/pi-ai";
+import { normalizeProviderConfigForConfigDefaults } from "../../config/provider-policy.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -135,16 +136,21 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
+    const normalizedEntry = normalizeProviderConfigForConfigDefaults({
+      provider: trimmed,
+      providerConfig: entry as ModelProviderConfig,
+    }) as InlineProviderConfig;
+    const providerHeaders = sanitizeModelHeaders(normalizedEntry?.headers, {
       stripSecretRefMarkers: true,
     });
-    const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
+    const providerRequest = sanitizeConfiguredModelProviderRequest(normalizedEntry?.request);
+    return (normalizedEntry?.models ?? []).map((model) => {
+      const inlineModel = model as InlineModelEntry;
       const transport = resolveInlineProviderTransport({
-        api: model.api ?? entry?.api,
-        baseUrl: (model as InlineModelEntry).baseUrl ?? entry?.baseUrl,
+        api: model.api ?? normalizedEntry?.api,
+        baseUrl: inlineModel.baseUrl ?? normalizedEntry?.baseUrl,
       });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+      const modelHeaders = sanitizeModelHeaders(inlineModel.headers, {
         stripSecretRefMarkers: true,
       });
       const requestConfig = resolveProviderRequestConfig({
@@ -153,7 +159,7 @@ export function buildInlineProviderModels(
         baseUrl: transport.baseUrl,
         providerHeaders,
         modelHeaders,
-        authHeader: entry?.authHeader,
+        authHeader: normalizedEntry?.authHeader,
         request: providerRequest,
         capability: "llm",
         transport: "stream",
@@ -162,9 +168,9 @@ export function buildInlineProviderModels(
         attachModelProviderRequestTransport(
           {
             ...model,
-            contextWindow: model.contextWindow ?? entry?.contextWindow,
-            contextTokens: model.contextTokens ?? entry?.contextTokens,
-            maxTokens: model.maxTokens ?? entry?.maxTokens,
+            contextWindow: model.contextWindow ?? normalizedEntry?.contextWindow,
+            contextTokens: model.contextTokens ?? normalizedEntry?.contextTokens,
+            maxTokens: model.maxTokens ?? normalizedEntry?.maxTokens,
             input: resolveProviderModelInput({
               provider: trimmed,
               modelId: model.id,
@@ -178,7 +184,7 @@ export function buildInlineProviderModels(
           },
           providerRequest,
         ),
-        entry?.localService,
+        normalizedEntry?.localService,
       );
     });
   });
