@@ -4,7 +4,9 @@ import {
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
+export function persistSubagentRunsToDisk(
+  runs: Map<string, SubagentRunRecord>,
+) {
   try {
     saveSubagentRegistryToDisk(runs);
   } catch {
@@ -38,7 +40,9 @@ export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
-  const shouldReadDisk = !(process.env.VITEST || process.env.NODE_ENV === "test");
+  const shouldReadDisk = !(
+    process.env.VITEST || process.env.NODE_ENV === "test"
+  );
   if (shouldReadDisk) {
     try {
       // Persisted state lets other worker processes observe active runs.
