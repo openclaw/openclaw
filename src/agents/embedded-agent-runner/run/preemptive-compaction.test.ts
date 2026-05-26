@@ -590,7 +590,9 @@ describe("preemptive-compaction", () => {
       expect(after - before).toBeLessThanOrEqual(onlyNewTokens + baseline);
     });
 
-    it("does not double-count when the same message identity appears twice", () => {
+    it("adds the per-message cost for each duplicate identity without short-circuiting on cache hit", () => {
+      // Guards against a regression where a "seen" flag instead of the per-message
+      // cost in the WeakMap would silently drop the second occurrence's bytes.
       const shared = makeAssistantHistory("shared content ".repeat(20));
       const standalone = estimateAppendOnlyLlmBoundaryTokenPressure({
         messages: [shared],
