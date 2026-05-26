@@ -97,6 +97,24 @@ export type SessionsCleanupRunResult = {
 
 const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
 
+function isTranscriptMessageRecord(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { role?: unknown; type?: unknown };
+  if (record.type === "message") {
+    return true;
+  }
+  return (
+    record.type === undefined &&
+    (record.role === "user" ||
+      record.role === "assistant" ||
+      record.role === "tool" ||
+      record.role === "toolResult" ||
+      record.role === "system")
+  );
+}
+
 function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
   let stat: fs.Stats;
   try {
@@ -126,7 +144,7 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
     } catch {
       return false;
     }
-    if (entry && typeof entry === "object" && (entry as { type?: unknown }).type === "message") {
+    if (isTranscriptMessageRecord(entry)) {
       return false;
     }
   }

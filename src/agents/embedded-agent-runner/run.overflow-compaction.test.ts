@@ -1816,7 +1816,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       reason: "no real conversation messages",
     });
 
-    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
