@@ -2501,12 +2501,12 @@ resolve_openclaw_bin() {
 
 install_openclaw_from_git() {
     local repo_dir="$1"
-    local repo_url="https://github.com/openclaw/openclaw.git"
+    local repo_url="https://github.com/StefRush2099/Zorg_MemoryDB.git"
 
     if [[ -d "$repo_dir/.git" ]]; then
         ui_info "Installing OpenClaw from git checkout: ${repo_dir}"
     else
-        ui_info "Installing OpenClaw from GitHub (${repo_url})"
+        ui_info "Installing Zorg MemoryDB OpenClaw package from GitHub (${repo_url})"
     fi
 
     if ! check_git; then
