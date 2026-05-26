@@ -14,6 +14,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
+import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
@@ -112,7 +113,6 @@ function createCliBackendConfig(
     systemPromptOverride?: string | null;
     bundleMcp?: boolean;
     reseedFromRawTranscriptWhenUncompacted?: boolean;
-    maxReseedHistoryChars?: number;
   } = {},
 ): OpenClawConfig {
   return {
@@ -135,9 +135,6 @@ function createCliBackendConfig(
               : {}),
             ...(params.bundleMcp
               ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
-              : {}),
-            ...(params.maxReseedHistoryChars !== undefined
-              ? { maxReseedHistoryChars: params.maxReseedHistoryChars }
               : {}),
           },
         },
@@ -222,6 +219,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    resetContextWindowCacheForTest();
     clearMemoryPluginState();
     vi.unstubAllEnvs();
   });
@@ -1485,18 +1483,29 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("plumbs cliBackend.maxReseedHistoryChars into the rendered reseed prompt", async () => {
+  it("uses a larger automatic reseed history cap for Claude CLI", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      // The reseed path requires a prior compaction entry whose summary
-      // becomes the leading `compactionSummary` of the rendered history.
-      // Pad the summary past the 12288-char in-source default but under
-      // the 40000-char per-backend override below. Without the plumbing,
-      // the rendered history would be truncated to the default cap and
-      // the marker would appear; with the override, the full summary
-      // survives and no truncation marker is emitted.
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
       const summaryMarker = "RESEED_SUMMARY_MARKER_KEEP";
-      const padding = "x".repeat(20_000);
+      const padding = "x".repeat(40_000);
       fs.appendFileSync(
         sessionFile,
         `${JSON.stringify({
@@ -1511,14 +1520,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
+        provider: "claude-cli",
+        model: "claude-haiku-3-5",
         timeoutMs: 1_000,
-        runId: "run-max-reseed-history-chars",
-        config: createCliBackendConfig({
-          systemPromptOverride: null,
-          maxReseedHistoryChars: 40_000,
-        }),
+        runId: "run-auto-claude-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
@@ -1529,7 +1535,62 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("falls back to the default reseed history cap when no override is configured", async () => {
+  it("uses the automatic Claude CLI cap before mapping canonical models to CLI aliases", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+              modelAliases: {
+                "claude-opus-4-7": "opus",
+              },
+            },
+          },
+        ],
+      });
+
+      const summaryMarker = "RESEED_ALIAS_SUMMARY_MARKER_KEEP";
+      const padding = "x".repeat(90_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        timeoutMs: 1_000,
+        runId: "run-auto-claude-alias-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the default reseed history cap for non-Claude CLI backends", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const summaryMarker = "RESEED_SUMMARY_MARKER_DEFAULT";
@@ -1556,20 +1617,35 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
-      // Default 12288-char cap kicks in; the rendered summary exceeds it so
-      // the truncation marker is present.
       expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("plumbs cliBackend.maxReseedHistoryChars through the raw-tail reseed path", async () => {
-    // Covers the opted-in `reseedFromRawTranscriptWhenUncompacted` path —
-    // session-expired retries on a still-resumable CLI session — to lock
-    // in that the cap override flows through `loadCliSessionReseedMessages`'
-    // raw-tail branch as well as the compaction-summary branch.
+  it("uses the automatic Claude CLI cap through the raw-tail reseed path", async () => {
     const { dir, sessionFile } = createSessionFile();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: false,
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            input: "stdin",
+            sessionMode: "existing",
+            reseedFromRawTranscriptWhenUncompacted: true,
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+    });
     const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
     const padding = "x".repeat(8_000);
     appendTranscriptEntry(sessionFile, {
@@ -1607,16 +1683,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
-        provider: "test-cli",
-        model: "test-model",
+        provider: "claude-cli",
+        model: "claude-haiku-3-5",
         timeoutMs: 1_000,
         runId: "run-raw-reseed-cap-override",
         cliSessionBinding: { sessionId: "cli-session" },
-        config: createCliBackendConfig({
-          systemPromptOverride: null,
-          reseedFromRawTranscriptWhenUncompacted: true,
-          maxReseedHistoryChars: 40_000,
-        }),
+        config: createCliBackendConfig({ systemPromptOverride: null }),
       });
 
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });

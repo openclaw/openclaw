@@ -760,7 +760,6 @@ export const CliBackendSchema = z
     imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
     reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
-    maxReseedHistoryChars: z.number().int().positive().optional(),
     reliability: z
       .object({
         outputLimits: CliBackendOutputLimitsSchema,

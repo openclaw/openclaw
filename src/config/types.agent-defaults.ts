@@ -162,13 +162,6 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
-  /**
-   * Cap on rendered `<conversation_history>` characters when reseeding a
-   * fresh CLI session from the prior transcript. Raise for long-context
-   * models, lower for small-context local models. Must be a positive
-   * integer. Default: 12288 (`MAX_CLI_SESSION_RESEED_HISTORY_CHARS`).
-   */
-  maxReseedHistoryChars?: number;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
