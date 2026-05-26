@@ -455,6 +455,36 @@ describe("channel-broker plugin", () => {
     );
   });
 
+  it("propagates attached outbound send failures", async () => {
+    setChannelBrokerRuntime({
+      sendOutboundRequest: vi.fn(async () => {
+        throw new Error("broker send failed");
+      }),
+      createRequestId: () => "broker-send-failure-1",
+    });
+
+    await expect(
+      channelBrokerPlugin.outbound?.sendText?.({
+        cfg: {
+          channels: {
+            "channel-broker": {
+              accounts: {
+                acme: {
+                  enabled: true,
+                  baseUrl: "https://broker.example.test",
+                  platforms: ["slack"],
+                },
+              },
+            },
+          },
+        },
+        to: "broker:slack:C123",
+        text: "will fail",
+        accountId: "acme",
+      } as never),
+    ).rejects.toThrow("broker send failed");
+  });
+
   it("rejects invalid broker targets during outbound resolution", () => {
     const result = channelBrokerPlugin.outbound?.resolveTarget?.({
       cfg: {

@@ -313,25 +313,17 @@ export async function sendChannelBrokerMedia(params: {
 
 export async function sendChannelBrokerOutboundText(
   ctx: ChannelOutboundContext,
-): Promise<{ ok: boolean; messageId: string; error?: Error }> {
-  try {
-    const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
-    const result = await sendChannelBrokerText({
-      cfg: ctx.cfg as CoreConfig,
-      accountId: ctx.accountId,
-      to: ctx.to,
-      text: ctx.text,
-      threadId: ctx.threadId,
-      replyToId: ctx.replyToId,
-      silent: ctx.silent,
-      ...(signal ? { signal } : {}),
-    });
-    return { ok: true, messageId: result.messageId ?? "" };
-  } catch (error) {
-    return {
-      ok: false,
-      messageId: "",
-      error: error instanceof Error ? error : new Error(String(error)),
-    };
-  }
+): Promise<{ messageId: string }> {
+  const signal = (ctx as ChannelOutboundContext & { signal?: AbortSignal }).signal;
+  const result = await sendChannelBrokerText({
+    cfg: ctx.cfg as CoreConfig,
+    accountId: ctx.accountId,
+    to: ctx.to,
+    text: ctx.text,
+    threadId: ctx.threadId,
+    replyToId: ctx.replyToId,
+    silent: ctx.silent,
+    ...(signal ? { signal } : {}),
+  });
+  return { messageId: result.messageId ?? "" };
 }
