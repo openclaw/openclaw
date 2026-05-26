@@ -62,7 +62,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
           return;
         }
         try {
-          await deliverDiscordInteractionReply({
+          const delivered = await deliverDiscordInteractionReply({
             interaction: params.interaction,
             payload,
             mediaLocalRoots: params.mediaLocalRoots,
@@ -78,6 +78,9 @@ export async function dispatchDiscordNativeAgentReply(params: {
             responseEphemeral: params.responseEphemeral,
             chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
           });
+          if (!delivered) {
+            return;
+          }
         } catch (error) {
           if (isDiscordUnknownInteraction(error)) {
             logVerbose("discord: interaction reply skipped (interaction expired)");

@@ -353,6 +353,12 @@ describe("discordMessageActions", () => {
   it("extracts send targets for message and thread reply actions", () => {
     expect(
       discordMessageActions.extractToolSend?.({
+        args: { action: "send", to: "channel:123" },
+      }),
+    ).toEqual({ to: "channel:123" });
+
+    expect(
+      discordMessageActions.extractToolSend?.({
         args: { action: "sendMessage", to: "channel:123" },
       }),
     ).toEqual({ to: "channel:123" });

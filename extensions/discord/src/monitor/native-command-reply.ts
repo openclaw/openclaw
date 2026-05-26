@@ -74,7 +74,7 @@ export async function deliverDiscordInteractionReply(params: {
   preferFollowUp: boolean;
   responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
-}) {
+}): Promise<boolean> {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
   const discordData = payload.channelData?.discord as
@@ -115,17 +115,19 @@ export async function deliverDiscordInteractionReply(params: {
               ? { ephemeral: params.responseEphemeral }
               : {}),
           };
-    await safeDiscordInteractionCall("interaction send", async () => {
+    const result = await safeDiscordInteractionCall("interaction send", async () => {
       if (!preferFollowUp && !hasReplied) {
         await interaction.reply(payload);
         hasReplied = true;
         firstMessageComponents = undefined;
-        return;
+        return true;
       }
       await interaction.followUp(payload);
       hasReplied = true;
       firstMessageComponents = undefined;
+      return true;
     });
+    return result === true;
   };
 
   if (reply.hasMedia) {
@@ -149,18 +151,18 @@ export async function deliverDiscordInteractionReply(params: {
       }),
     );
     const caption = chunks[0] ?? "";
-    await sendMessage(caption, media, firstMessageComponents);
+    let delivered = await sendMessage(caption, media, firstMessageComponents);
     for (const chunk of chunks.slice(1)) {
       if (!chunk.trim()) {
         continue;
       }
-      await sendMessage(chunk);
+      delivered = (await sendMessage(chunk)) || delivered;
     }
-    return;
+    return delivered;
   }
 
   if (!reply.hasText && !firstMessageComponents) {
-    return;
+    return false;
   }
   let chunks =
     reply.text || firstMessageComponents
@@ -176,10 +178,12 @@ export async function deliverDiscordInteractionReply(params: {
   if (chunks.length === 0 && firstMessageComponents) {
     chunks = [""];
   }
+  let delivered = false;
   for (const chunk of chunks) {
     if (!chunk.trim() && !firstMessageComponents) {
       continue;
     }
-    await sendMessage(chunk, undefined, firstMessageComponents);
+    delivered = (await sendMessage(chunk, undefined, firstMessageComponents)) || delivered;
   }
+  return delivered;
 }

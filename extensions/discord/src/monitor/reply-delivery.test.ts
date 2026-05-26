@@ -157,6 +157,22 @@ describe("deliverDiscordReply", () => {
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
   });
 
+  it("fails when a final reply sanitizes down to no visible Discord payload", async () => {
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "analysis: internal only\ncommentary: tool trace only" }],
+        target: "channel:101",
+        token: "token",
+        accountId: "default",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      }),
+    ).rejects.toThrow("discord final reply sanitized to empty for channel:101");
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
+  });
+
   it("preserves explicit tool progress payloads at the tool delivery boundary", async () => {
     await deliverDiscordReply({
       replies: [{ text: "🛠️ Exec: `echo visible`" }],

@@ -179,6 +179,9 @@ export async function deliverDiscordReply(params: {
   const delivery = resolveDiscordDeliveryOptions(params);
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
   if (payloads.length === 0) {
+    if (params.kind === "final") {
+      throw new Error(`discord final reply sanitized to empty for ${delivery.to}`);
+    }
     return;
   }
 
