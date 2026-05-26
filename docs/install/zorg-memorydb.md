@@ -17,3 +17,11 @@ On a clean install, the bootstrap creates the database schema and starts with em
 ## Retired Markdown Memory Files
 
 Active memory markdown files should not exist in a Zorg MemoryDB install. If retired `memory/*.md` files are found, the importer records them in `zorg_markdown_imports` and `memory_source_chunks` so the database becomes the durable memory source.
+
+## Install From The GitHub Release Repository
+
+Use the HTTPS git install form. The npm `github:` shorthand can resolve through SSH on some systems and fail when root or the install user has no GitHub SSH key.
+
+```bash
+sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
