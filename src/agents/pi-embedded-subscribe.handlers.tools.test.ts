@@ -32,6 +32,9 @@ function createTestContext(): {
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
+      sessionKey: "agent:unit-session",
+      sessionId: "session-test-id",
+      agentId: "agent-test-id",
       onBlockReplyFlush,
       onAgentEvent,
       onExecutionPhase,
@@ -188,7 +191,26 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+    const warnMessage = String(warn.mock.calls[0]?.[0] ?? "");
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMessage).toContain("read tool called without path");
+    expect(warnMeta).toBeTypeOf("object");
+    expect(warnMeta?.event).toBe("embedded_read_tool_start_warning");
+    expect(warnMeta?.tags).toEqual(["tool_start", "read", "embedded", "validation"]);
+    expect(warnMeta?.runId).toBe("run-test");
+    expect(warnMeta?.sessionKey).toBe("agent:unit-session");
+    expect(warnMeta?.sessionId).toBe("session-test-id");
+    expect(warnMeta?.agentId).toBe("agent-test-id");
+    expect(warnMeta?.toolCallId).toBe("tool-2");
+    expect(warnMeta?.argsType).toBe("object");
+    expect(warnMeta?.consoleMessage).toContain("runId=run-test");
+    expect(warnMeta?.consoleMessage).toContain("sessionKey=agent:unit-session");
+    expect(warnMeta?.consoleMessage).toContain("sessionId=session-test-id");
+    expect(warnMeta?.consoleMessage).toContain("agentId=agent-test-id");
+    expect(warnMeta?.consoleMessage).toContain("toolCallId=tool-2");
+    expect(warnMeta?.consoleMessage).toContain("argsType=object");
+    expect(warnMeta?.consoleMessage).toContain("read tool called without path");
+    expect(warnMeta).not.toHaveProperty("argsPreview");
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {

@@ -29,6 +29,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -801,10 +802,46 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = readStringValue(args)?.slice(0, 200);
-        ctx.log.warn(
-          `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
-        );
+        const argsType = typeof args;
+        const argsPreview = sanitizeForConsole(readStringValue(args), 200);
+        const safeRunId = sanitizeForConsole(runId) ?? "-";
+        const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
+        const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
+        const safeAgentId = sanitizeForConsole(ctx.params.agentId);
+        const consoleMessageParts = [
+          "read tool called without path:",
+          `runId=${safeRunId}`,
+          `toolCallId=${sanitizeForConsole(toolCallId) ?? "tool-call"}`,
+          `argsType=${argsType}`,
+        ];
+        if (safeSessionKey) {
+          consoleMessageParts.push(`sessionKey=${safeSessionKey}`);
+        }
+        if (safeSessionId) {
+          consoleMessageParts.push(`sessionId=${safeSessionId}`);
+        }
+        if (safeAgentId) {
+          consoleMessageParts.push(`agentId=${safeAgentId}`);
+        }
+        if (argsPreview) {
+          consoleMessageParts.push(`argsPreview=${argsPreview}`);
+        }
+        const consoleMessage = consoleMessageParts.join(" ");
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
+          argsPreview ? ` argsPreview=${argsPreview}` : ""
+        }`;
+        ctx.log.warn(message, {
+          event: "embedded_read_tool_start_warning",
+          tags: ["tool_start", "read", "embedded", "validation"],
+          runId: ctx.params.runId,
+          toolCallId,
+          argsType,
+          ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+          ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
+          ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
+          ...(argsPreview ? { argsPreview } : {}),
+          consoleMessage,
+        });
       }
     }
 
