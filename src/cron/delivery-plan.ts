@@ -21,7 +21,7 @@ export type CronDeliveryPlan = {
 
 export function hasExplicitCronDeliveryTarget(plan: CronDeliveryPlan): boolean {
   return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId || plan.accountId,
+    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
   );
 }
 
