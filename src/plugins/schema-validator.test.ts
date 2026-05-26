@@ -1111,39 +1111,62 @@ describe("schema validator", () => {
       expectedValue: { kind: "api", endpoint: "https://example.com" },
     });
 
-    expectSuccessfulValidationValue({
-      input: {
-        cacheKey: "schema-validator.test.defaults.conditional-converges-after-default",
-        schema: {
-          type: "object",
-          if: {
-            not: {
-              required: ["mode"],
-            },
-          },
-          [jsonSchemaThenKeyword]: {
-            properties: {
-              mode: {
-                type: "string",
-                default: "auto",
-              },
-            },
-          },
-          else: {
-            properties: {
-              explicit: {
-                type: "boolean",
-                default: true,
-              },
-            },
-            required: ["explicit"],
+    const branchFlipResult = expectValidationFailure({
+      cacheKey: "schema-validator.test.defaults.conditional-default-branch-flip",
+      schema: {
+        type: "object",
+        if: {
+          not: {
+            required: ["mode"],
           },
         },
-        value: {},
-        applyDefaults: true,
+        [jsonSchemaThenKeyword]: {
+          properties: {
+            mode: {
+              type: "string",
+              default: "auto",
+            },
+          },
+        },
+        else: {
+          properties: {
+            explicit: {
+              type: "boolean",
+              default: true,
+            },
+          },
+          required: ["explicit"],
+        },
       },
-      expectedValue: { mode: "auto" },
+      value: {},
+      applyDefaults: true,
     });
+    expectValidationIssue(branchFlipResult, "explicit");
+
+    const defaultedConditionResult = expectValidationFailure({
+      cacheKey: "schema-validator.test.defaults.conditional-defaulted-condition-remains-invalid",
+      schema: {
+        type: "object",
+        properties: {
+          flag: {
+            type: "boolean",
+            default: true,
+          },
+        },
+        if: {
+          properties: {
+            flag: { const: true },
+          },
+          required: ["flag"],
+        },
+        [jsonSchemaThenKeyword]: {
+          required: ["secret"],
+        },
+      },
+      value: {},
+      applyDefaults: true,
+    });
+    expectValidationIssue(defaultedConditionResult, "<root>");
 
     expectValidationFailure({
       cacheKey: "schema-validator.test.defaults.conditional-invalid-default",

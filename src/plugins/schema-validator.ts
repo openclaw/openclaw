@@ -91,40 +91,6 @@ function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidat
   return [...validate.Errors(value)] as TypeBoxValidationError[];
 }
 
-function isDefaultConditionalBranchFlip(
-  validate: TypeBoxValidator,
-  originalValue: unknown,
-  errors: TypeBoxValidationError[],
-): boolean {
-  const hasOnlyBranchFlipErrors = errors.every((error) => {
-    if (error.keyword === "if") {
-      return true;
-    }
-    return (
-      error.keyword === "required" &&
-      typeof error.schemaPath === "string" &&
-      /^#\/(?:then|else)(?:\/|$)/.test(error.schemaPath)
-    );
-  });
-  return (
-    hasOnlyBranchFlipErrors &&
-    errors.some((error) => error.keyword === "if") &&
-    checkSchema(validate, originalValue) === null
-  );
-}
-
-function checkDefaultedSchema(
-  validate: TypeBoxValidator,
-  originalValue: unknown,
-  value: unknown,
-): TypeBoxValidationError[] | null {
-  const errors = checkSchema(validate, value);
-  if (!errors) {
-    return null;
-  }
-  return isDefaultConditionalBranchFlip(validate, originalValue, errors) ? null : errors;
-}
-
 export type JsonSchemaValidationError = {
   path: string;
   message: string;
@@ -309,10 +275,7 @@ export function validateJsonSchemaValue(params: {
       params.applyDefaults && schemaHasDefaults(params.schema)
         ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
         : params.value;
-    const errors =
-      params.applyDefaults && schemaHasDefaults(params.schema)
-        ? checkDefaultedSchema(validate, params.value, value)
-        : checkSchema(validate, value);
+    const errors = checkSchema(validate, value);
     if (!errors) {
       return { ok: true, value };
     }
@@ -343,10 +306,7 @@ export function validateJsonSchemaValue(params: {
     params.applyDefaults && cached.hasDefaults
       ? applyJsonSchemaDefaults(params.schema, cloneValidationValue(params.value))
       : params.value;
-  const errors =
-    params.applyDefaults && cached.hasDefaults
-      ? checkDefaultedSchema(cached.validate, params.value, value)
-      : checkSchema(cached.validate, value);
+  const errors = checkSchema(cached.validate, value);
   if (!errors) {
     return { ok: true, value };
   }
