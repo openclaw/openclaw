@@ -20,6 +20,7 @@ import {
   resolvePluginLoaderTryNative,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeModulePathWithDiagnostics,
   resolvePluginSdkAliasFile,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
@@ -1803,6 +1804,51 @@ export const syntheticRuntimeMarker = {
       env,
     });
     expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
+  });
+
+  it("falls back to ancestor runtime candidates when package-root markers are unavailable", () => {
+    const root = makeTempDir();
+    const distFile = path.join(root, "dist", "plugins", "runtime", "index.js");
+    const loaderCachePath = path.join(root, ".cache", "tsx", "openclaw-loader.js");
+    mkdirSafeDir(path.dirname(distFile));
+    mkdirSafeDir(path.dirname(loaderCachePath));
+    fs.writeFileSync(distFile, "export const createPluginRuntime = () => ({});\n", "utf-8");
+    fs.writeFileSync(loaderCachePath, "export {};\n", "utf-8");
+
+    expect(
+      resolvePluginRuntimeModulePath({
+        modulePath: loaderCachePath,
+        argv1: path.join(root, "bin", "openclaw"),
+        pluginSdkResolution: "dist",
+      }),
+    ).toBe(distFile);
+  });
+
+  it("reports loader, package root, and candidate paths when runtime resolution fails", () => {
+    const root = makeTempDir();
+    const modulePath = path.join(root, "dist", "plugins", "loader.js");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf-8",
+    );
+    mkdirSafeDir(path.dirname(modulePath));
+    fs.writeFileSync(modulePath, "export {};\n", "utf-8");
+
+    const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
+      modulePath,
+      pluginSdkResolution: "dist",
+    });
+
+    expect(resolution.resolvedPath).toBeNull();
+    expect(resolution.modulePath).toBe(modulePath);
+    expect(resolution.packageRoot).toBe(root);
+    expect(resolution.candidates).toContain(
+      path.join(root, "dist", "plugins", "runtime", "index.js"),
+    );
+    expect(resolution.candidates).toContain(
+      path.join(root, "src", "plugins", "runtime", "index.ts"),
+    );
   });
 });
 

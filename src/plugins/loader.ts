@@ -149,11 +149,13 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
   resolveExtensionApiAlias,
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeModulePathWithDiagnostics,
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
@@ -613,6 +615,22 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
     }
   }
   return { source, rootDir };
+}
+
+function formatPluginRuntimeModuleResolutionError(params: {
+  resolution: PluginRuntimeModuleResolution;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+}): string {
+  const { resolution } = params;
+  const candidates = resolution.candidates.length > 0 ? resolution.candidates.join(", ") : "<none>";
+  return [
+    "Unable to resolve plugin runtime module",
+    `loader=${resolution.modulePath ?? "<unresolved>"}`,
+    `packageRoot=${resolution.packageRoot ?? "<none>"}`,
+    `pluginSdkResolution=${params.pluginSdkResolution ?? "auto"}`,
+    `candidates=${candidates}`,
+    ...(resolution.error ? [`resolverError=${resolution.error}`] : []),
+  ].join("; ");
 }
 
 export const testing = {
@@ -1630,11 +1648,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (createPluginRuntimeFactory) {
         return createPluginRuntimeFactory;
       }
-      const runtimeModulePath = resolvePluginRuntimeModulePath({
+      const runtimeModuleResolution = resolvePluginRuntimeModulePathWithDiagnostics({
         pluginSdkResolution: options.pluginSdkResolution,
       });
+      const runtimeModulePath = runtimeModuleResolution.resolvedPath;
       if (!runtimeModulePath) {
-        throw new Error("Unable to resolve plugin runtime module");
+        throw new Error(
+          formatPluginRuntimeModuleResolutionError({
+            resolution: runtimeModuleResolution,
+            pluginSdkResolution: options.pluginSdkResolution,
+          }),
+        );
       }
       const runtimeModule = withProfile(
         { source: runtimeModulePath },
