@@ -659,6 +659,30 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   describe("nested skill subdirectories", () => {
+    it("ignores archived skill directories at direct and grouped discovery levels", async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "_archived", "retired-skill"),
+        name: "retired-skill",
+        description: "Retired skill",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "_archive"),
+        name: "archive-root-skill",
+        description: "Archived root skill",
+      });
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "active-skill"),
+        name: "active-skill",
+        description: "Active skill",
+      });
+
+      const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
+      expect(names).toContain("active-skill");
+      expect(names).not.toContain("retired-skill");
+      expect(names).not.toContain("archive-root-skill");
+    });
+
     it("discovers SKILL.md two levels deep under a grouping subfolder", async () => {
       const workspaceDir = await createTempWorkspaceDir();
       // Grouped layout: skills/group/skill/SKILL.md (no SKILL.md at skills/group/).
