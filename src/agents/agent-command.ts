@@ -101,7 +101,7 @@ import {
   hydrateResolvedSkillsAsync,
   isSkillsSnapshotSchemaOutdated,
 } from "./skills/snapshot-hydration.js";
-import type { SkillSnapshot } from "./skills/types.js";
+import { SKILL_SNAPSHOT_SCHEMA_VERSION, type SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -170,8 +170,13 @@ function createEmptySkillsSnapshot(params: {
   skillFilter: string[];
   version?: number;
 }): SkillSnapshot {
+  // Stamp the current schema marker so the reuse-path schema check
+  // (`isSkillsSnapshotSchemaOutdated`) treats a freshly persisted empty
+  // snapshot as current. Without this marker, an explicit empty skills
+  // filter would force a rebuild every turn.
   return {
     prompt: "",
+    schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
     skills: [],
     resolvedSkills: [],
     skillFilter: params.skillFilter,

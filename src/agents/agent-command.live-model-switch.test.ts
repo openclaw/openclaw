@@ -1534,8 +1534,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const attemptParams = mockCallArg(state.runAgentAttemptMock) as {
       skillsSnapshot?: Record<string, unknown>;
     };
+    // ClawSweeper P2 regression: the empty-filter snapshot must carry the
+    // current `schemaVersion` so the reuse-path schema check does not flag
+    // it as stale on the next turn, which would loop into a rebuild/rewrite
+    // every turn for explicit empty skill filters.
     expectRecordFields(attemptParams?.skillsSnapshot, {
       prompt: "",
+      schemaVersion: SKILL_SNAPSHOT_SCHEMA_VERSION,
       skills: [],
       resolvedSkills: [],
       skillFilter: [],
