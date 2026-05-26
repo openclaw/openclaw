@@ -21,6 +21,7 @@ const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean | string;
   env?: Record<string, string>;
   if?: string;
   name?: string;
@@ -760,6 +761,15 @@ describe("package artifact reuse", () => {
       'if [[ "$credentials" == *",opencode,"* ]]; then',
       "require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY",
     ]);
+  });
+
+  it("fails Testbox changed-check delegation when the remote command fails", () => {
+    const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
+      (step) => step.name === "Run Testbox",
+    );
+
+    expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
+    expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {

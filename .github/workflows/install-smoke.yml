@@ -132,7 +132,7 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
+          timeout 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -163,7 +163,7 @@ jobs:
 
       - name: Smoke test Dockerfile with matrix extension build arg
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+          timeout 20m docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -326,7 +326,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -359,7 +359,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "

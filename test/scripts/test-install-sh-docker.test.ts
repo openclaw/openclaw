@@ -375,6 +375,8 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("timeout 45m docker buildx build");
     expect(workflow).toContain('timeout 600s docker pull "$IMAGE_REF"');
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
+    expect(workflow.match(/timeout 20m docker run --rm/g)?.length).toBe(6);
+    expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
     expect(workflow).toContain("OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh");
