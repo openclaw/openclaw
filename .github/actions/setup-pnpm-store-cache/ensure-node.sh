@@ -111,6 +111,9 @@ openclaw_node_download_platform() {
     Linux:aarch64 | Linux:arm64) printf 'linux-arm64\n' ;;
     Darwin:x86_64) printf 'darwin-x64\n' ;;
     Darwin:arm64) printf 'darwin-arm64\n' ;;
+    MINGW*:x86_64 | MSYS*:x86_64 | CYGWIN*:x86_64 | MINGW*:AMD64 | MSYS*:AMD64 | CYGWIN*:AMD64)
+      printf 'win-x64\n'
+      ;;
     *)
       return 1
       ;;
@@ -123,8 +126,24 @@ openclaw_download_node() {
   version="$(openclaw_resolve_node_download_version "$requested_node")"
   platform="$(openclaw_node_download_platform)" || return 1
   install_root="${RUNNER_TEMP:-/tmp}/openclaw-node-${version}-${platform}"
-  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
   mkdir -p "$install_root"
+  if [[ "$platform" == win-* ]]; then
+    local archive_path
+    archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.zip"
+    archive_path="${RUNNER_TEMP:-/tmp}/node-${version}-${platform}.zip"
+    echo "Downloading Node ${version} from ${archive_url}"
+    curl -fsSL "$archive_url" -o "$archive_path"
+    if command -v powershell.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+      powershell.exe -NoLogo -NoProfile -Command \
+        "Expand-Archive -LiteralPath '$(cygpath -w "$archive_path")' -DestinationPath '$(cygpath -w "$install_root")' -Force"
+    else
+      unzip -q "$archive_path" -d "$install_root"
+    fi
+    openclaw_prepend_node_bin "$install_root/node-${version}-${platform}"
+    return 0
+  fi
+
+  archive_url="https://nodejs.org/dist/${version}/node-${version}-${platform}.tar.xz"
   echo "Downloading Node ${version} from ${archive_url}"
   curl -fsSL "$archive_url" | tar -xJ -C "$install_root" --strip-components=1
   openclaw_prepend_node_bin "$install_root/bin"
