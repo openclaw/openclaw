@@ -28,8 +28,7 @@ type CachedValidator = {
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
-
-for (const format of [
+const annotationOnlyFormats = [
   "date-time",
   "date",
   "duration",
@@ -50,10 +49,7 @@ for (const format of [
   "uri-template",
   "url",
   "uuid",
-]) {
-  Format.Set(format, () => true);
-}
-Format.Set("uri", (value) => URL.canParse(value));
+] as const;
 
 function fingerprintSchema(schema: JsonSchemaValue): string {
   return JSON.stringify(schema);
@@ -84,11 +80,30 @@ function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
   return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
 }
 
-function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
-  if (validate.Check(value)) {
-    return null;
+function withPluginFormatSemantics<T>(callback: () => T): T {
+  const previousFormats = Format.Entries();
+  // TypeBox format checks are global; snapshot/restore keeps plugin schema semantics local.
+  Format.Set("uri", (value) => URL.canParse(value));
+  for (const format of annotationOnlyFormats) {
+    Format.Set(format, () => true);
   }
-  return [...validate.Errors(value)] as TypeBoxValidationError[];
+  try {
+    return callback();
+  } finally {
+    Format.Clear();
+    for (const [format, check] of previousFormats) {
+      Format.Set(format, check);
+    }
+  }
+}
+
+function checkSchema(validate: TypeBoxValidator, value: unknown): TypeBoxValidationError[] | null {
+  return withPluginFormatSemantics(() => {
+    if (validate.Check(value)) {
+      return null;
+    }
+    return [...validate.Errors(value)] as TypeBoxValidationError[];
+  });
 }
 
 export type JsonSchemaValidationError = {

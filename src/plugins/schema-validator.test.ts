@@ -1,3 +1,4 @@
+import { Format } from "typebox/format";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
@@ -1851,5 +1852,10 @@ describe("schema validator", () => {
         token: "not a uuid",
       },
     });
+  });
+
+  it("does not weaken the global TypeBox format registry", () => {
+    expect(Format.Get("email")?.("not an email")).toBe(false);
+    expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
   });
 });
