@@ -26,6 +26,7 @@ import {
   applyJobResult,
   executeJob,
   executeJobCore,
+  executeJobCoreWithTimeout,
   onTimer,
   runMissedJobs,
 } from "./timer.js";
@@ -905,6 +906,64 @@ describe("cron service timer regressions", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("does not time out pending wake-now main systemEvent jobs before agent-turn timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const heartbeatResult = createDeferred<HeartbeatRunResult>();
+      const runHeartbeatOnce = vi.fn(async () => heartbeatResult.promise);
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => Date.parse("2026-02-15T13:00:00.000Z"),
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runHeartbeatOnce,
+        wakeNowHeartbeatBusyMaxWaitMs: 2 * 60_000,
+        wakeNowHeartbeatBusyRetryDelayMs: 250,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const mainJob: CronJob = {
+        id: "pending-main-systemevent-timeout",
+        name: "pending main timeout",
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        enabled: true,
+        schedule: { kind: "at", at: new Date("2026-02-15T13:00:00.000Z").toISOString() },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      };
+
+      const resultPromise = executeJobCoreWithTimeout(state, mainJob);
+      let settled = false;
+      void resultPromise.finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(false);
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_JOB_TIMEOUT_MS + 1_000);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+
+      heartbeatResult.resolve({ status: "ran", durationMs: 12 });
+      const result = await resultPromise;
+      expect(result.status).toBe("ok");
+      expect(result.summary).toBe("tick");
+      expect(result.error).toBeUndefined();
+      expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
