@@ -100,7 +100,7 @@ Model note: while many providers and models are supported, prefer a current flag
 Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 ```bash
-npm install -g github:StefRush2099/Zorg_MemoryDB
+npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
 # or: pnpm add -g github:StefRush2099/Zorg_MemoryDB
 
 openclaw onboard --install-daemon
@@ -504,3 +504,11 @@ clawtributors:hidden:end -->
 This fork packages Zorg MemoryDB and LAN command chat for OpenClaw installs. The installer includes a bootstrap that places the database structure, public-safe production rules, markdown-import tooling, and LAN command chat into the OpenClaw workspace without shipping private live memory rows.
 
 See [docs/install/zorg-memorydb.md](docs/install/zorg-memorydb.md).
+
+### GitHub release install command
+
+Use HTTPS for npm installs so target systems do not need a GitHub SSH key:
+
+```bash
+sudo npm install -g git+https://github.com/StefRush2099/Zorg_MemoryDB.git
+```
