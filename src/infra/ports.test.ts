@@ -379,6 +379,27 @@ describe("inspectPortUsage on Windows", () => {
     );
   });
 
+  it("does not match Windows listener ports by substring", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === "netstat") {
+        return {
+          stdout:
+            "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
+            "  TCP    [::1]:187890        [::]:0         LISTENING    9001\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toEqual([]);
+  });
+
   it("falls back to wmic when PowerShell cannot read the command line", async () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {

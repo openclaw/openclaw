@@ -417,7 +417,6 @@ async function readUnixListeners(
 
 function parseNetstatListeners(output: string, port: number): PortListener[] {
   const listeners: PortListener[] = [];
-  const portToken = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) {
@@ -426,23 +425,21 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
     if (!normalizeLowercaseStringOrEmpty(line).includes("listen")) {
       continue;
     }
-    if (!line.includes(portToken)) {
-      continue;
-    }
     const parts = line.split(/\s+/);
     if (parts.length < 4) {
       continue;
     }
+    const localAddr = parts[1];
+    if (!localAddr || parseTcpEndpoint(localAddr)?.port !== port) {
+      continue;
+    }
     const pidRaw = parts.at(-1);
     const pid = pidRaw ? Number.parseInt(pidRaw, 10) : Number.NaN;
-    const localAddr = parts[1];
     const listener: PortListener = {};
     if (Number.isFinite(pid)) {
       listener.pid = pid;
     }
-    if (localAddr?.includes(portToken)) {
-      listener.address = localAddr;
-    }
+    listener.address = localAddr;
     listeners.push(listener);
   }
   return listeners;
