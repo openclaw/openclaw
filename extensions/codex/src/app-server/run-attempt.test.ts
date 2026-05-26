@@ -2479,6 +2479,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const rawAfterCompletion = await fs.readFile(sessionFile, "utf8");
     expect(rawAfterCompletion.match(/"role":"user"/gu)).toHaveLength(1);
+    expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
   });
 
   it("does not mirror the Codex prompt early when user message persistence is suppressed", async () => {

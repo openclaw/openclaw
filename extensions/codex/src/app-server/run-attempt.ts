@@ -3255,9 +3255,11 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   void mirrorPromptAtTurnStartBestEffort({
     params,
     agentId: sessionAgentId,
+    notifyUserMessagePersisted,
     sessionKey: sandboxSessionKey,
     threadId: thread.threadId,
     turnId: activeTurnId,
@@ -3372,6 +3374,7 @@ export async function runCodexAppServerAttempt(
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
+      notifyUserMessagePersisted,
       result,
       sessionKey: contextSessionKey,
       threadId: thread.threadId,
@@ -6083,13 +6086,14 @@ function getCodexContextFileBasename(filePath: string): string {
 async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
+  notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   result: EmbeddedRunAttemptResult;
   sessionKey?: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
   try {
-    await mirrorCodexAppServerTranscript({
+    const mirrorResult = await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -6104,27 +6108,38 @@ async function mirrorTranscriptBestEffort(params: {
       idempotencyScope: `codex-app-server:${params.threadId}`,
       config: params.params.config,
     });
+    for (const message of mirrorResult.userMessagesPresent) {
+      params.notifyUserMessagePersisted(message);
+    }
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
   }
 }
 
-function notifyCodexAppServerUserMessagePersisted(params: {
-  message: Extract<AgentMessage, { role: "user" }>;
-  runParams: EmbeddedRunAttemptParams;
-}) {
-  try {
-    params.runParams.onUserMessagePersisted?.(params.message);
-  } catch (error) {
-    embeddedAgentLog.warn("codex app-server user persistence notification failed", {
-      error: formatErrorMessage(error),
-    });
-  }
+function createCodexAppServerUserMessagePersistenceNotifier(
+  runParams: EmbeddedRunAttemptParams,
+): (message: Extract<AgentMessage, { role: "user" }>) => void {
+  let notified = false;
+  return (message) => {
+    if (notified) {
+      return;
+    }
+    notified = true;
+    runParams.userTurnTranscriptRecorder?.markRuntimePersisted(message);
+    try {
+      runParams.onUserMessagePersisted?.(message);
+    } catch (error) {
+      embeddedAgentLog.warn("codex app-server user persistence notification failed", {
+        error: formatErrorMessage(error),
+      });
+    }
+  };
 }
 
 async function mirrorPromptAtTurnStartBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
+  notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   sessionKey?: string;
   threadId: string;
   turnId: string;
@@ -6147,10 +6162,7 @@ async function mirrorPromptAtTurnStartBestEffort(params: {
         config: params.params.config,
       });
       for (const message of mirrorResult.userMessagesPresent) {
-        notifyCodexAppServerUserMessagePersisted({
-          runParams: params.params,
-          message,
-        });
+        params.notifyUserMessagePersisted(message);
       }
     })();
     params.params.userTurnTranscriptRecorder?.markRuntimePersistencePending(mirrorPromise);
