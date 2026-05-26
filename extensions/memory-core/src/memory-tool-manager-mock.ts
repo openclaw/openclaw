@@ -114,6 +114,10 @@ export function getMemorySearchManagerMockCalls(): number {
   return getMemorySearchManagerMock.mock.calls.length;
 }
 
+export function getMemorySearchMockCalls(): number {
+  return stubManager.search.mock.calls.length;
+}
+
 export function getMemorySearchManagerMockConfigs(): unknown[] {
   return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
 }
