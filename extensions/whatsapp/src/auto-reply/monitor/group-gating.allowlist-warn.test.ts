@@ -84,11 +84,13 @@ describe("applyGroupGating allowlist drop warning", () => {
   it("emits a warn log naming the root groups path for the default account", async () => {
     const warn = vi.fn<WarnLogger>();
     const msg = makeUnregisteredGroupMsg("unregistered@g.us");
+    const params = makeParams(msg, warn);
 
-    const result = await applyGroupGating(makeParams(msg, warn));
+    const result = await applyGroupGating(params);
 
     expect(result).toEqual({ shouldProcess: false });
     expect(warn).toHaveBeenCalledTimes(1);
+    expect(params.logVerbose).not.toHaveBeenCalled();
     const [context, message] = warn.mock.calls[0] ?? [];
     expect(context).toMatchObject({
       conversationId: "unregistered@g.us",
