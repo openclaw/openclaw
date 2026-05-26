@@ -711,6 +711,51 @@ Agent use:
   prompt.
 - the Gateway or node host can spawn `npx chrome-devtools-mcp@latest --autoConnect`
 
+### Choosing a profile for proof runs
+
+Use the profile mode that matches the risk of the task:
+
+- **Disposable managed profile:** use the default `openclaw` profile or create a
+  short-lived local managed profile with `openclaw browser create-profile --name
+proof-<id>`. This does not reuse login state. `openclaw browser delete-profile
+--name proof-<id>` removes the OpenClaw-managed profile config and moves that
+  managed profile data to Trash.
+- **Disposable Chrome MCP launch:** use an `existing-session` profile with
+  `executablePath`, `headless`, and Chrome MCP args such as `--isolated` when
+  you need to prove Chrome MCP behavior without reusing a signed-in profile.
+  This is appropriate for public proof runs that should not depend on personal
+  cookies.
+- **Reusable logged-in profile:** use `profile="user"` or a named
+  `existing-session` profile with `userDataDir` only when the user explicitly
+  wants existing login state. Deleting the OpenClaw profile entry does not delete
+  that external browser user data directory.
+
+Example disposable Chrome MCP proof profile:
+
+```json5
+{
+  browser: {
+    profiles: {
+      "chrome-proof": {
+        driver: "existing-session",
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        mcpArgs: ["--isolated", "--no-usage-statistics"],
+        chromeMcp: {
+          capabilities: {
+            diagnostics: true,
+            extensions: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+For public or maintainer proof packets, prefer a disposable profile unless the
+proof explicitly needs logged-in state.
+
 Notes:
 
 - This path is higher-risk than the isolated `openclaw` profile because it can
@@ -750,6 +795,34 @@ Notes:
 - Existing-session can attach on the selected host or through a connected
   browser node. If Chrome lives elsewhere and no browser node is connected, use
   remote CDP or a node host instead.
+
+### Screencast proof checks
+
+Chrome MCP screencasts should be validated as video artifacts, not just as
+non-empty files. For WebM output, some encoders do not write container duration
+or `nb_frames` metadata, so a strict proof should run `ffprobe` with frame
+counting:
+
+```bash
+ffprobe -v error -count_frames -select_streams v:0 \
+  -show_entries stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_read_frames \
+  -of json /tmp/openclaw/browser-screencast.webm
+```
+
+A usable proof has a video stream, non-zero dimensions, a positive
+`r_frame_rate` or `avg_frame_rate`, and `nb_read_frames` greater than zero.
+Treat zero-byte output, invalid container errors such as `moov atom not found`,
+or no readable video stream as failed screencast evidence and recapture.
+
+Chrome MCP `/screencast/stop` performs this probe automatically when `ffprobe`
+is available on the host. In that response, `artifactReady` means a non-empty
+artifact file was observed, while `artifactVideoReady` is true only when
+`ffprobe -count_frames` confirms a decodable video stream. If `ffprobe` is
+missing or cannot validate the file, `artifactReady` can still be true but
+`artifactVideoReady` remains false and `artifactWarning` explains the failed
+probe. The default frame-count probe is bounded to 15 seconds; pass
+`probeTimeoutMs` or `videoProbeTimeoutMs` to `/screencast/stop` for longer
+recordings. Values above 60 seconds are clamped.
 
 ### Custom Chrome MCP launch
 

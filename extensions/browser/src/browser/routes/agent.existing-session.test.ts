@@ -65,6 +65,35 @@ const cdpMocks = vi.hoisted(() => ({
   setExtraHTTPHeadersViaCdp: vi.fn(async () => {}),
 }));
 
+const childProcessMocks = vi.hoisted(() => ({
+  execFile: vi.fn(
+    (
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: unknown, stdout: string, stderr: string) => void,
+    ) => {
+      callback(
+        null,
+        JSON.stringify({
+          streams: [
+            {
+              codec_name: "vp9",
+              width: 640,
+              height: 360,
+              r_frame_rate: "25/1",
+              avg_frame_rate: "25/1",
+              nb_read_frames: "42",
+            },
+          ],
+        }),
+        "",
+      );
+      return {} as never;
+    },
+  ),
+}));
+
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
@@ -126,6 +155,14 @@ vi.mock("../navigation-guard.js", () => ({
   assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
 }));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFile: childProcessMocks.execFile,
+  };
+});
 
 vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
@@ -312,6 +349,33 @@ describe("existing-session browser routes", () => {
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
+    childProcessMocks.execFile.mockClear();
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        callback(
+          null,
+          JSON.stringify({
+            streams: [
+              {
+                codec_name: "vp9",
+                width: 640,
+                height: 360,
+                r_frame_rate: "25/1",
+                avg_frame_rate: "25/1",
+                nb_read_frames: "42",
+              },
+            ],
+          }),
+          "",
+        );
+        return {} as never;
+      },
+    );
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
       .mockResolvedValueOnce(true);
@@ -1124,10 +1188,299 @@ describe("existing-session browser routes", () => {
       const stopBody = requireRecord(stopResponse.body, "screencast stop response");
       expect(stopBody.filePath).toBe(screencastPath);
       expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(true);
       expect(stopBody.artifactBytes).toBeGreaterThan(0);
+      expect(stopBody.artifactVideoProbe).toEqual({
+        tool: "ffprobe",
+        ok: true,
+        timeoutMs: 15_000,
+        codecName: "vp9",
+        width: 640,
+        height: 360,
+        rFrameRate: "25/1",
+        avgFrameRate: "25/1",
+        frameCount: 42,
+      });
+      expect(childProcessMocks.execFile).toHaveBeenCalledWith(
+        "ffprobe",
+        expect.arrayContaining(["-count_frames", "-select_streams", "v:0", screencastPath]),
+        expect.objectContaining({ timeout: 15_000 }),
+        expect.any(Function),
+      );
     } finally {
       await fs.rm(screencastPath, { force: true });
       await fs.rm(lighthousePath, { force: true, recursive: true });
+    }
+  });
+
+  it("does not mark Chrome MCP screencasts video-ready when ffprobe cannot decode video", async () => {
+    const screencastFile = `openclaw-test-invalid-cast-${Date.now()}.mp4`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        const error = Object.assign(new Error("Command failed: ffprobe"), {
+          code: 1,
+          stderr: "moov atom not found",
+        });
+        callback(error, "", "moov atom not found");
+        return {} as never;
+      },
+    );
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(screencastPath, "not-a-real-video");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: {} },
+        stopResponse.res,
+      );
+
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.filePath).toBe(screencastPath);
+      expect(stopBody.artifactExists).toBe(true);
+      expect(stopBody.artifactBytes).toBeGreaterThan(0);
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(false);
+      expect(String(stopBody.artifactWarning)).toContain("moov atom not found");
+      expect(stopBody.artifactVideoProbe).toEqual({
+        tool: "ffprobe",
+        ok: false,
+        timeoutMs: 15_000,
+        warning: "moov atom not found",
+      });
+    } finally {
+      await fs.rm(screencastPath, { force: true });
+    }
+  });
+
+  it("keeps non-empty screencast artifacts file-ready when ffprobe is unavailable", async () => {
+    const screencastFile = `openclaw-test-no-ffprobe-cast-${Date.now()}.webm`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        const error = Object.assign(new Error("spawn ffprobe ENOENT"), {
+          code: "ENOENT",
+        });
+        callback(error, "", "");
+        return {} as never;
+      },
+    );
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(screencastPath, "webm-data");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: {} },
+        stopResponse.res,
+      );
+
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(false);
+      expect(stopBody.artifactVideoProbe).toEqual({
+        tool: "ffprobe",
+        ok: false,
+        timeoutMs: 15_000,
+        warning: "ffprobe is unavailable; cannot validate screencast video frames",
+      });
+    } finally {
+      await fs.rm(screencastPath, { force: true });
+    }
+  });
+
+  it("clamps custom screencast video probe timeouts for large recordings", async () => {
+    const screencastFile = `openclaw-test-timeout-cast-${Date.now()}.webm`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        const error = Object.assign(new Error("Command failed: ffprobe"), {
+          code: "ETIMEDOUT",
+          killed: true,
+        });
+        callback(error, "", "");
+        return {} as never;
+      },
+    );
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(screencastPath, "webm-data");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: { probeTimeoutMs: 120_000 } },
+        stopResponse.res,
+      );
+
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(false);
+      expect(String(stopBody.artifactWarning)).toContain("higher probeTimeoutMs");
+      expect(stopBody.artifactVideoProbe).toEqual({
+        tool: "ffprobe",
+        ok: false,
+        timeoutMs: 60_000,
+        timedOut: true,
+        warning:
+          "ffprobe timed out after 60000ms; retry with a higher probeTimeoutMs for large recordings",
+      });
+      expect(childProcessMocks.execFile).toHaveBeenCalledWith(
+        "ffprobe",
+        expect.arrayContaining(["-count_frames", "-select_streams", "v:0", screencastPath]),
+        expect.objectContaining({ timeout: 60_000 }),
+        expect.any(Function),
+      );
+    } finally {
+      await fs.rm(screencastPath, { force: true });
+    }
+  });
+
+  it("does not validate a stale screencast path for the active recording", async () => {
+    const activeFile = `openclaw-test-active-cast-${Date.now()}.webm`;
+    const staleFile = `openclaw-test-stale-cast-${Date.now()}.webm`;
+    const activePath = path.join(DEFAULT_TRACE_DIR, activeFile);
+    const stalePath = path.join(DEFAULT_TRACE_DIR, staleFile);
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: activeFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(stalePath, "old-valid-looking-webm");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: { path: staleFile } },
+        stopResponse.res,
+      );
+
+      expect(stopResponse.statusCode).toBe(400);
+      expect(String(requireRecord(stopResponse.body, "screencast stop error").error)).toContain(
+        "does not match the active screencast artifact",
+      );
+      expect(chromeMcpMocks.stopChromeMcpScreencast).toHaveBeenCalledWith(
+        expect.objectContaining({ targetId: "7" }),
+      );
+      expect(childProcessMocks.execFile).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(activePath, { force: true });
+      await fs.rm(stalePath, { force: true });
+    }
+  });
+
+  it("retries Chrome MCP screencast probes while the artifact is still flushing", async () => {
+    const screencastFile = `openclaw-test-flushing-cast-${Date.now()}.webm`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
+    childProcessMocks.execFile.mockImplementationOnce(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        const error = Object.assign(new Error("Command failed: ffprobe"), {
+          code: 1,
+          stderr: "File ended prematurely",
+        });
+        callback(error, "", "File ended prematurely");
+        return {} as never;
+      },
+    );
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(screencastPath, "webm-data");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: {} },
+        stopResponse.res,
+      );
+
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(true);
+      expect(childProcessMocks.execFile).toHaveBeenCalledTimes(2);
+    } finally {
+      await fs.rm(screencastPath, { force: true });
+    }
+  });
+
+  it("does not treat zero ffprobe frame rates as valid screencast evidence", async () => {
+    const screencastFile = `openclaw-test-zero-rate-cast-${Date.now()}.webm`;
+    const screencastPath = path.join(DEFAULT_TRACE_DIR, screencastFile);
+    childProcessMocks.execFile.mockImplementation(
+      (
+        _file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: unknown, stdout: string, stderr: string) => void,
+      ) => {
+        callback(
+          null,
+          JSON.stringify({
+            streams: [
+              {
+                codec_name: "vp9",
+                width: 640,
+                height: 360,
+                r_frame_rate: "0/0",
+                avg_frame_rate: "0/0",
+                nb_read_frames: "42",
+              },
+            ],
+          }),
+          "",
+        );
+        return {} as never;
+      },
+    );
+    try {
+      await getDebugPostHandler("/screencast/start")?.(
+        { params: {}, query: {}, body: { path: screencastFile } },
+        createBrowserRouteResponse().res,
+      );
+      await fs.writeFile(screencastPath, "webm-data");
+
+      const stopResponse = createBrowserRouteResponse();
+      await getDebugPostHandler("/screencast/stop")?.(
+        { params: {}, query: {}, body: {} },
+        stopResponse.res,
+      );
+
+      const stopBody = requireRecord(stopResponse.body, "screencast stop response");
+      expect(stopBody.artifactReady).toBe(true);
+      expect(stopBody.artifactVideoReady).toBe(false);
+      expect(String(stopBody.artifactWarning)).toContain("positive frame rate");
+      expect(childProcessMocks.execFile).toHaveBeenCalledTimes(3);
+    } finally {
+      await fs.rm(screencastPath, { force: true });
     }
   });
 

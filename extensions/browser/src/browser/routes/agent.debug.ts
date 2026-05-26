@@ -4,6 +4,8 @@
  * Exposes console messages, page errors, network requests, dialog state, and
  * Playwright tracing scoped to the selected browser tab.
  */
+
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -166,6 +168,8 @@ function requireChromeMcpCapability(
 }
 
 const activeScreencasts = new Map<string, string>();
+const SCREENCAST_VIDEO_PROBE_DEFAULT_TIMEOUT_MS = 15_000;
+const SCREENCAST_VIDEO_PROBE_MAX_TIMEOUT_MS = 60_000;
 
 function screencastKey(profileName: string, targetId: string): string {
   return `${profileName}:${targetId}`;
@@ -173,6 +177,216 @@ function screencastKey(profileName: string, targetId: string): string {
 
 function defaultScreencastFileName(): string {
   return `browser-screencast-${crypto.randomUUID()}.webm`;
+}
+
+type ScreencastVideoProbe = {
+  tool: "ffprobe";
+  ok: boolean;
+  timeoutMs?: number;
+  codecName?: string;
+  width?: number;
+  height?: number;
+  rFrameRate?: string;
+  avgFrameRate?: string;
+  frameCount?: number;
+  timedOut?: boolean;
+  warning?: string;
+};
+
+const SCREENCAST_VIDEO_PROBE_ATTEMPTS = 3;
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readPositiveNumber(value: unknown): number | undefined {
+  const number = readNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readPositiveFrameRate(value: unknown): string | undefined {
+  const text = readString(value);
+  if (!text) {
+    return undefined;
+  }
+  const parts = text.split("/");
+  if (parts.length === 2) {
+    const numerator = Number(parts[0]);
+    const denominator = Number(parts[1]);
+    return Number.isFinite(numerator) &&
+      numerator > 0 &&
+      Number.isFinite(denominator) &&
+      denominator > 0
+      ? text
+      : undefined;
+  }
+  const number = Number(text);
+  return Number.isFinite(number) && number > 0 ? text : undefined;
+}
+
+function readFrameCount(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^[1-9]\d*$/.test(value)) {
+    return Number(value);
+  }
+  return undefined;
+}
+
+function resolveScreencastVideoProbeTimeoutMs(value: unknown): number {
+  const timeoutMs = toNumber(value);
+  if (!timeoutMs || timeoutMs <= 0) {
+    return SCREENCAST_VIDEO_PROBE_DEFAULT_TIMEOUT_MS;
+  }
+  return Math.min(Math.trunc(timeoutMs), SCREENCAST_VIDEO_PROBE_MAX_TIMEOUT_MS);
+}
+
+function parseFfprobeScreencastOutput(stdout: string, timeoutMs: number): ScreencastVideoProbe {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return {
+      tool: "ffprobe",
+      ok: false,
+      timeoutMs,
+      warning: "ffprobe returned non-JSON output",
+    };
+  }
+  const streams =
+    parsed && typeof parsed === "object" ? (parsed as { streams?: unknown }).streams : undefined;
+  const stream = Array.isArray(streams)
+    ? streams.find((entry) => entry && typeof entry === "object")
+    : undefined;
+  if (!stream || typeof stream !== "object") {
+    return { tool: "ffprobe", ok: false, timeoutMs, warning: "ffprobe found no video stream" };
+  }
+  const record = stream as Record<string, unknown>;
+  const codecName = readString(record.codec_name);
+  const width = readPositiveNumber(record.width);
+  const height = readPositiveNumber(record.height);
+  const rFrameRate = readPositiveFrameRate(record.r_frame_rate);
+  const avgFrameRate = readPositiveFrameRate(record.avg_frame_rate);
+  const frameCount = readFrameCount(record.nb_read_frames);
+  const ok = Boolean(codecName && width && height && (avgFrameRate || rFrameRate) && frameCount);
+  return {
+    tool: "ffprobe",
+    ok,
+    timeoutMs,
+    ...(codecName ? { codecName } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(rFrameRate ? { rFrameRate } : {}),
+    ...(avgFrameRate ? { avgFrameRate } : {}),
+    ...(frameCount ? { frameCount } : {}),
+    ...(ok
+      ? {}
+      : {
+          warning:
+            "ffprobe did not confirm codec, dimensions, positive frame rate, and decoded frames",
+        }),
+  };
+}
+
+function runFfprobe(filePath: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-count_frames",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_read_frames",
+        "-of",
+        "json",
+        filePath,
+      ],
+      { timeout: timeoutMs, maxBuffer: 256 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          if (stderr && !(error as { stderr?: unknown }).stderr) {
+            Object.assign(error, { stderr });
+          }
+          reject(error);
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
+}
+
+async function probeScreencastVideo(
+  filePath: string,
+  timeoutMs: number,
+): Promise<ScreencastVideoProbe> {
+  try {
+    const stdout = await runFfprobe(filePath, timeoutMs);
+    return parseFfprobeScreencastOutput(stdout, timeoutMs);
+  } catch (error) {
+    const errno = (error as NodeJS.ErrnoException).code;
+    if (errno === "ENOENT") {
+      return {
+        tool: "ffprobe",
+        ok: false,
+        timeoutMs,
+        warning: "ffprobe is unavailable; cannot validate screencast video frames",
+      };
+    }
+    const timedOut = errno === "ETIMEDOUT" || Boolean((error as { killed?: unknown }).killed);
+    const stderr = readString((error as { stderr?: unknown }).stderr);
+    return {
+      tool: "ffprobe",
+      ok: false,
+      timeoutMs,
+      ...(timedOut ? { timedOut: true } : {}),
+      warning: timedOut
+        ? `ffprobe timed out after ${timeoutMs}ms; retry with a higher probeTimeoutMs for large recordings`
+        : (stderr ?? formatErrorMessage(error)),
+    };
+  }
+}
+
+function shouldRetryScreencastVideoProbe(probe: ScreencastVideoProbe): boolean {
+  return (
+    !probe.ok &&
+    !probe.timedOut &&
+    probe.warning !== "ffprobe is unavailable; cannot validate screencast video frames"
+  );
+}
+
+function screencastVideoProbeFailure(
+  filePath: string,
+  artifactBytes: number,
+  probe: ScreencastVideoProbe,
+): {
+  filePath: string;
+  artifactExists: true;
+  artifactBytes: number;
+  artifactReady: true;
+  artifactVideoReady: false;
+  artifactVideoProbe: ScreencastVideoProbe;
+  artifactWarning: string;
+} {
+  return {
+    filePath,
+    artifactExists: true,
+    artifactBytes,
+    artifactReady: true,
+    artifactVideoReady: false,
+    artifactVideoProbe: probe,
+    artifactWarning: `screencast artifact exists but did not validate as decodable video: ${
+      probe.warning ?? "unknown ffprobe failure"
+    }`,
+  };
 }
 
 async function resolveHeapSnapshotReadPathOrRespond(
@@ -191,11 +405,16 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function inspectScreencastArtifact(filePath: string | undefined): Promise<{
+async function inspectScreencastArtifactWithProbe(
+  filePath: string | undefined,
+  probeTimeoutMs: number,
+): Promise<{
   filePath?: string;
   artifactExists?: boolean;
   artifactBytes?: number;
   artifactReady?: boolean;
+  artifactVideoReady?: boolean;
+  artifactVideoProbe?: ScreencastVideoProbe;
   artifactWarning?: string;
 }> {
   if (!filePath) {
@@ -203,13 +422,40 @@ async function inspectScreencastArtifact(filePath: string | undefined): Promise<
   }
   let observed = false;
   let lastBytes = 0;
+  let lastVideoProbe: ScreencastVideoProbe | undefined;
+  let videoProbeAttempts = 0;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
       const stat = await fs.stat(filePath);
       observed = true;
       lastBytes = stat.size;
-      if (stat.size > 0) {
-        return { filePath, artifactExists: true, artifactBytes: stat.size, artifactReady: true };
+      if (stat.size > 0 && videoProbeAttempts < SCREENCAST_VIDEO_PROBE_ATTEMPTS) {
+        videoProbeAttempts += 1;
+        const videoProbe = await probeScreencastVideo(filePath, probeTimeoutMs);
+        lastVideoProbe = videoProbe;
+        if (
+          !videoProbe.ok &&
+          shouldRetryScreencastVideoProbe(videoProbe) &&
+          videoProbeAttempts < SCREENCAST_VIDEO_PROBE_ATTEMPTS
+        ) {
+          await sleep(200);
+          continue;
+        }
+        return {
+          filePath,
+          artifactExists: true,
+          artifactBytes: stat.size,
+          artifactReady: true,
+          artifactVideoReady: videoProbe.ok,
+          artifactVideoProbe: videoProbe,
+          ...(videoProbe.ok
+            ? {}
+            : {
+                artifactWarning: `screencast artifact exists but did not validate as decodable video: ${
+                  videoProbe.warning ?? "unknown ffprobe failure"
+                }`,
+              }),
+        };
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -223,11 +469,15 @@ async function inspectScreencastArtifact(filePath: string | undefined): Promise<
     }
     await sleep(200);
   }
+  if (lastVideoProbe) {
+    return screencastVideoProbeFailure(filePath, lastBytes, lastVideoProbe);
+  }
   return {
     filePath,
     artifactExists: observed,
     artifactBytes: observed ? lastBytes : undefined,
     artifactReady: false,
+    artifactVideoReady: false,
     artifactWarning: observed
       ? "screencast artifact exists but is empty after waiting for encoder flush"
       : "screencast artifact was not observed after waiting for encoder flush",
@@ -977,9 +1227,21 @@ export function registerBrowserAgentDebugRoutes(
             timeoutMs: toNumber(body.timeoutMs),
           });
           const key = screencastKey(profileCtx.profile.name, tab.targetId);
-          filePath ??= activeScreencasts.get(key);
+          const activeFilePath = activeScreencasts.get(key);
           activeScreencasts.delete(key);
-          const artifact = await inspectScreencastArtifact(filePath);
+          if (activeFilePath && filePath && filePath !== activeFilePath) {
+            jsonError(
+              res as never,
+              400,
+              "screencast stop path does not match the active screencast artifact",
+            );
+            return;
+          }
+          filePath = activeFilePath ?? filePath;
+          const artifact = await inspectScreencastArtifactWithProbe(
+            filePath,
+            resolveScreencastVideoProbeTimeoutMs(body.probeTimeoutMs ?? body.videoProbeTimeoutMs),
+          );
           const url = await resolveTabUrl(tab.url);
           res.json({
             ok: true,

@@ -418,6 +418,13 @@ See [Inferred commitments](/concepts/commitments).
         userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
         color: "#FB542B",
       },
+      "chrome-proof": {
+        driver: "existing-session",
+        executablePath: "/usr/bin/google-chrome",
+        headless: true,
+        mcpArgs: ["--isolated", "--no-usage-statistics"],
+        color: "#00AA00",
+      },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
     color: "#FF4500",
@@ -453,10 +460,18 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- For disposable Chrome MCP proof runs, use an `existing-session` profile with
+  `executablePath`, `headless`, and `mcpArgs` such as `["--isolated",
+"--no-usage-statistics"]` instead of `userDataDir`. That launches a temporary
+  Chrome MCP browser path without depending on signed-in browser state.
 - `chromeMcp.capabilities` gates higher-risk Chrome MCP routes on
   `existing-session` profiles. `"auto"` enables diagnostics and extension
   inventory only for OpenClaw-managed existing-session profile data dirs;
   personal signed-in profiles require explicit per-profile opt-in.
+- Deleting an OpenClaw-managed local browser profile removes that profile entry
+  and moves its managed data to Trash. Deleting an `existing-session` profile
+  removes only the OpenClaw profile entry; an explicit external `userDataDir` is
+  left untouched.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, and no
