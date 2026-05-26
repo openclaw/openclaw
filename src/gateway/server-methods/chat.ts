@@ -1739,6 +1739,46 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+async function loadChatHistoryMessagesWithUsageFamilyFallback(params: {
+  sessionId?: string;
+  storePath: string | undefined;
+  entry?: {
+    sessionFile?: string;
+    usageFamilySessionIds?: string[];
+  };
+  maxMessages: number;
+  maxHistoryBytes: number;
+}): Promise<unknown[]> {
+  const currentSessionId = params.sessionId?.trim();
+  if (!currentSessionId || !params.storePath) {
+    return [];
+  }
+  const perTranscriptMaxBytes = Math.max(params.maxHistoryBytes * 2, 1024 * 1024);
+  const familySessionIds = Array.from(
+    new Set([...(params.entry?.usageFamilySessionIds ?? []), currentSessionId].filter(Boolean)),
+  );
+  const aggregated: unknown[] = [];
+  for (const familySessionId of familySessionIds) {
+    const messages = await readRecentSessionMessagesAsync(
+      familySessionId,
+      params.storePath,
+      familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
+      {
+        maxMessages: params.maxMessages,
+        maxBytes: perTranscriptMaxBytes,
+      },
+    );
+    if (messages.length === 0) {
+      continue;
+    }
+    aggregated.push(...messages);
+    if (aggregated.length > params.maxMessages) {
+      aggregated.splice(0, aggregated.length - params.maxMessages);
+    }
+  }
+  return aggregated;
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -1766,13 +1806,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const localMessages =
-      sessionId && storePath
-        ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
-        : [];
+    const localMessages = await loadChatHistoryMessagesWithUsageFamilyFallback({
+      sessionId,
+      storePath,
+      entry,
+      maxMessages: max,
+      maxHistoryBytes,
+    });
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,

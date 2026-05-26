@@ -712,6 +712,22 @@ describe("runCodexAppServerAttempt", () => {
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
   });
 
+  it("forces the message dynamic tool for channel sessions with message_tool visibility", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "automatic";
+    params.sessionKey = "agent:main:discord:channel:1491697090458292415";
+    params.config = {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+    } as typeof params.config;
+
+    expect(__testing.shouldForceMessageTool(params)).toBe(true);
+  });
+
   it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),

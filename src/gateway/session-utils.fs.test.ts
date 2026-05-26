@@ -2027,6 +2027,33 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("[chat.history omitted: message too large]");
   });
 
+  test("readRecentSessionMessagesAsync falls back to latest reset archive when active transcript is empty", async () => {
+    const sessionId = "test-reset-fallback-recent";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const resetPath = path.join(
+      tmpDir,
+      `${sessionId}.jsonl.reset.2026-05-26T00-36-56.919Z`,
+    );
+    fs.writeFileSync(transcriptPath, "", "utf-8");
+    fs.writeFileSync(
+      resetPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "before reset" } }),
+        JSON.stringify({ message: { role: "assistant", content: "after fallback" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    const serialized = JSON.stringify(out);
+    expect(serialized).toContain("before reset");
+    expect(serialized).toContain("after fallback");
+  });
+
   test("readRecentSessionUsageFromTranscriptAsync skips oversized lines", async () => {
     const sessionId = "test-oversized-usage";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

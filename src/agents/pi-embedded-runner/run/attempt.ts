@@ -53,7 +53,11 @@ import {
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
 import { resolveUserPath } from "../../../utils.js";
-import { normalizeMessageChannel } from "../../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -705,7 +709,16 @@ export function resolveAttemptToolPolicyMessageProvider(params: {
   messageProvider?: string;
   messageChannel?: string;
 }): string | undefined {
-  return params.messageProvider ?? params.messageChannel;
+  const provider = normalizeMessageChannel(params.messageProvider);
+  const channel = normalizeMessageChannel(params.messageChannel);
+  if (
+    channel &&
+    isDeliverableMessageChannel(channel) &&
+    (provider === INTERNAL_MESSAGE_CHANNEL || provider === "webchat")
+  ) {
+    return channel;
+  }
+  return provider ?? channel;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {

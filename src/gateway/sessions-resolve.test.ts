@@ -98,6 +98,20 @@ describe("resolveSessionKeyFromResolveParams", () => {
     });
   });
 
+  it("resolves key=current from an explicitly supplied current session key", async () => {
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { key: "current" },
+        currentSessionKey: "agent:main:discord:direct:user-1",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: "agent:main:discord:direct:user-1",
+    });
+    expect(hoisted.resolveGatewaySessionStoreTargetMock).not.toHaveBeenCalled();
+  });
+
   it("re-checks migrated legacy keys through the same visibility filter", async () => {
     const store = {
       [legacyKey]: { sessionId: "sess-legacy", updatedAt: 1 },

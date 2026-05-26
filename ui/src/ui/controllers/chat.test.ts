@@ -999,6 +999,48 @@ describe("sendChatMessage", () => {
     expect(textRecord.type).toBe("text");
     expect(String(textRecord.text)).toContain("origin not allowed");
   });
+
+  it("restores submitted text when an acknowledged run later fails", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const runId = await sendChatMessage(state, "keep my draft");
+    state.chatMessage = "";
+
+    expect(
+      handleChatEvent(state, {
+        runId: runId ?? undefined,
+        sessionKey: "main",
+        state: "error",
+        errorMessage: "backend failed after ack",
+      }),
+    ).toBe("error");
+    expect(state.chatMessage).toBe("keep my draft");
+    expect(state.lastError).toBe("backend failed after ack");
+  });
+
+  it("does not overwrite text typed after an acknowledged run fails", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const runId = await sendChatMessage(state, "submitted prompt");
+    state.chatMessage = "new draft";
+
+    handleChatEvent(state, {
+      runId: runId ?? undefined,
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "backend failed after ack",
+    });
+
+    expect(state.chatMessage).toBe("new draft");
+  });
 });
 
 describe("abortChatRun", () => {

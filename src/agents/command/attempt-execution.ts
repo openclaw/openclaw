@@ -14,7 +14,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { resolveMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+  resolveMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -52,6 +57,22 @@ const log = createSubsystemLogger("agents/agent-command");
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
+}
+
+function resolveRunAttemptMessageProvider(params: {
+  messageChannel?: string;
+  messageProvider?: string;
+}): string | undefined {
+  const provider = normalizeMessageChannel(params.messageProvider);
+  const channel = normalizeMessageChannel(params.messageChannel);
+  if (
+    channel &&
+    isDeliverableMessageChannel(channel) &&
+    (provider === INTERNAL_MESSAGE_CHANNEL || provider === "webchat")
+  ) {
+    return channel;
+  }
+  return provider ?? channel;
 }
 
 const ACP_TRANSCRIPT_USAGE = {
@@ -519,7 +540,10 @@ export function runAgentAttempt(params: {
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
-        messageProvider: params.opts.messageProvider ?? params.messageChannel,
+        messageProvider: resolveRunAttemptMessageProvider({
+          messageChannel: params.messageChannel,
+          messageProvider: params.opts.messageProvider,
+        }),
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
         toolsAllow: params.opts.toolsAllow,
@@ -589,7 +613,10 @@ export function runAgentAttempt(params: {
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
+    messageProvider: resolveRunAttemptMessageProvider({
+      messageChannel: params.messageChannel,
+      messageProvider: params.opts.messageProvider,
+    }),
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,

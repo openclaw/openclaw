@@ -1275,6 +1275,7 @@ export async function startGatewayServer(
       unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
       subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
       unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+      getSessionMessageSubscriptionsForConn: sessionMessageSubscribers.getSessionsForConn,
       unsubscribeAllSessionEvents: (connId: string) => {
         sessionEventSubscribers.unsubscribe(connId);
         sessionMessageSubscribers.unsubscribeAll(connId);
