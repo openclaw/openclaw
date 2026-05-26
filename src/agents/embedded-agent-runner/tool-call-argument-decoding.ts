@@ -6,6 +6,13 @@ import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
 const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 
 function decodeHtmlEntities(value: string): string {
+  const decodeNumericEntity = (raw: string, radix: 10 | 16): string => {
+    const codePoint = Number.parseInt(raw, radix);
+    return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : `&#${radix === 16 ? "x" : ""}${raw};`;
+  };
+
   return value
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
@@ -13,8 +20,8 @@ function decodeHtmlEntities(value: string): string {
     .replace(/&apos;/gi, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gi, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => decodeNumericEntity(hex, 16))
+    .replace(/&#(\d+);/gi, (_, dec: string) => decodeNumericEntity(dec, 10));
 }
 
 export function decodeHtmlEntitiesInObject(value: unknown): unknown {
