@@ -48,7 +48,7 @@ function requireFirstMockArg(
   if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
     throw new Error(`expected ${label} payload`);
   }
-  return arg as Record<string, unknown>;
+  return arg;
 }
 
 describe("tool-cards", () => {
