@@ -111,6 +111,12 @@ const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
+type NativeMemoryWatchPair = {
+  dir: string;
+  main: fsSync.FSWatcher;
+  parent: fsSync.FSWatcher | null;
+};
+
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
     const override = (globalThis as Record<PropertyKey, unknown>)[TEST_MEMORY_WATCH_FACTORY_KEY];
@@ -213,12 +219,7 @@ export abstract class MemoryManagerSyncOps {
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
   protected watcher: FSWatcher | null = null;
-  protected nativeMemoryWatchers: fsSync.FSWatcher[] = [];
-  // Non-recursive parent-directory watchers paired with `nativeMemoryWatchers`,
-  // used to detect root-directory replacement (`rm -rf memory && mkdir memory`)
-  // and reattach the main native watcher on the new inode. See
-  // attachNativeMemoryWatchForDir() for the lifecycle.
-  protected nativeMemoryParentWatchers: fsSync.FSWatcher[] = [];
+  private nativeMemoryWatchPairs: NativeMemoryWatchPair[] = [];
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
@@ -456,7 +457,7 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    if (this.watcher || this.nativeMemoryWatchers.length > 0) {
+    if (this.watcher || this.nativeMemoryWatchPairs.length > 0) {
       // Already initialized — preserve idempotence.
       return;
     }
@@ -594,30 +595,12 @@ export abstract class MemoryManagerSyncOps {
       );
       return false;
     }
-    // Forward-declared so the main watcher's error handler can also
-    // close the paired parent watcher when it dies — otherwise the
-    // parent could later reattach native coverage on top of an already-
-    // installed chokidar fallback (clawsweeper review [P3] 5df68c…).
-    let parentWatcherRef: fsSync.FSWatcher | null = null;
+    const pair: NativeMemoryWatchPair = { dir, main: mainWatcher, parent: null };
     mainWatcher.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`memory native watcher error on ${dir}: ${message}`);
       // Per Node docs the FSWatcher is no longer usable after an error.
-      try {
-        mainWatcher.close();
-      } catch {
-        // ignore close failures on already-broken watcher
-      }
-      this.removeNativeMemoryWatch(mainWatcher);
-      if (parentWatcherRef) {
-        try {
-          parentWatcherRef.close();
-        } catch {
-          // ignore
-        }
-        this.removeNativeMemoryParentWatch(parentWatcherRef);
-        parentWatcherRef = null;
-      }
+      this.closeNativeMemoryWatchPair(pair);
       if (this.closed) {
         return;
       }
@@ -628,7 +611,7 @@ export abstract class MemoryManagerSyncOps {
       markDirty();
       this.attachMemoryChokidarFallback(dir, markDirty);
     });
-    this.nativeMemoryWatchers.push(mainWatcher);
+    this.nativeMemoryWatchPairs.push(pair);
     // Non-recursive parent watcher: catches root-directory replacement so
     // we can reattach the main watcher on the new inode. Without this,
     // `rm -rf memory && mkdir memory` would leave the main watcher bound
@@ -660,19 +643,7 @@ export abstract class MemoryManagerSyncOps {
           // Root was replaced (or removed). Tear down the existing pair
           // and either reattach (if dir still exists) or fall back to
           // chokidar (if dir is gone).
-          try {
-            mainWatcher.close();
-          } catch {
-            // ignore
-          }
-          this.removeNativeMemoryWatch(mainWatcher);
-          try {
-            parentWatcher.close();
-          } catch {
-            // ignore
-          }
-          this.removeNativeMemoryParentWatch(parentWatcher);
-          parentWatcherRef = null;
+          this.closeNativeMemoryWatchPair(pair);
           if (this.closed) {
             return;
           }
@@ -700,14 +671,13 @@ export abstract class MemoryManagerSyncOps {
           // ignore
         }
         this.removeNativeMemoryParentWatch(parentWatcher);
-        if (parentWatcherRef === parentWatcher) {
-          parentWatcherRef = null;
+        if (pair.parent === parentWatcher) {
+          pair.parent = null;
         }
         // Main watcher still alive — root-replacement detection is lost
         // but normal events still flow. No fallback needed.
       });
-      this.nativeMemoryParentWatchers.push(parentWatcher);
-      parentWatcherRef = parentWatcher;
+      pair.parent = parentWatcher;
     } catch (err) {
       // Parent watcher couldn't start (e.g. parentDir not accessible).
       // The main watcher still works for non-replacement events; just
@@ -719,17 +689,46 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  private removeNativeMemoryWatch(w: fsSync.FSWatcher): void {
-    const idx = this.nativeMemoryWatchers.indexOf(w);
-    if (idx >= 0) {
-      this.nativeMemoryWatchers.splice(idx, 1);
+  private closeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    try {
+      pair.main.close();
+    } catch {
+      // ignore close failures
+    }
+    if (pair.parent) {
+      try {
+        pair.parent.close();
+      } catch {
+        // ignore close failures
+      }
+      pair.parent = null;
+    }
+    this.removeNativeMemoryWatchPair(pair);
+  }
+
+  protected closeNativeMemoryWatchPairs(): void {
+    while (this.nativeMemoryWatchPairs.length > 0) {
+      const pair = this.nativeMemoryWatchPairs[0];
+      if (!pair) {
+        return;
+      }
+      this.closeNativeMemoryWatchPair(pair);
     }
   }
 
   private removeNativeMemoryParentWatch(w: fsSync.FSWatcher): void {
-    const idx = this.nativeMemoryParentWatchers.indexOf(w);
+    for (const pair of this.nativeMemoryWatchPairs) {
+      if (pair.parent === w) {
+        pair.parent = null;
+        return;
+      }
+    }
+  }
+
+  private removeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    const idx = this.nativeMemoryWatchPairs.indexOf(pair);
     if (idx >= 0) {
-      this.nativeMemoryParentWatchers.splice(idx, 1);
+      this.nativeMemoryWatchPairs.splice(idx, 1);
     }
   }
 

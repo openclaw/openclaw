@@ -1043,26 +1043,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       await this.watcher.close();
       this.watcher = null;
     }
-    if (this.nativeMemoryWatchers.length > 0) {
-      for (const w of this.nativeMemoryWatchers) {
-        try {
-          w.close();
-        } catch {
-          // ignore close failures
-        }
-      }
-      this.nativeMemoryWatchers = [];
-    }
-    if (this.nativeMemoryParentWatchers.length > 0) {
-      for (const w of this.nativeMemoryParentWatchers) {
-        try {
-          w.close();
-        } catch {
-          // ignore close failures
-        }
-      }
-      this.nativeMemoryParentWatchers = [];
-    }
+    this.closeNativeMemoryWatchPairs();
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
