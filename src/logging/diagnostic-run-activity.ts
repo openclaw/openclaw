@@ -31,6 +31,11 @@ type DiagnosticModelStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "provider" | "model"
 >;
 
+type DiagnosticRunProgressActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "run.progress" }>,
+  "runId" | "sessionId" | "sessionKey" | "reason"
+>;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
@@ -220,16 +225,11 @@ function recordModelEnded(
   touchSessionActivity(activity, "model_call:ended");
 }
 
-function recordRunProgress(event: Extract<DiagnosticEventPayload, { type: "run.progress" }>): void {
+function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(event);
 }
 
-export function markDiagnosticRunProgress(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  reason: string;
-}): void {
+export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
@@ -321,12 +321,7 @@ export function getDiagnosticSessionActivitySnapshot(
   };
 }
 
-export function markDiagnosticRunProgressForTest(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  reason: string;
-}): void {
+export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(params);
 }
 
