@@ -114,19 +114,41 @@ openclaw_resolve_node_download_version() {
     return 0
   fi
 
-  local prefix="${requested_node#v}"
+  local prefix index_json resolved
+  prefix="${requested_node#v}"
   prefix="${prefix%%[xX]*}"
   prefix="v${prefix}"
   [[ "$prefix" == *. ]] || prefix="${prefix}."
-  curl -fsSL https://nodejs.org/dist/index.json |
-    OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
+
+  index_json="$(curl -fsSL https://nodejs.org/dist/index.json)" || return 1
+
+  if command -v node >/dev/null 2>&1; then
+    resolved="$(
+      OPENCLAW_NODE_PREFIX="$prefix" node -e '
+const fs = require("node:fs");
+const prefix = process.env.OPENCLAW_NODE_PREFIX;
+const versions = JSON.parse(fs.readFileSync(0, "utf8"));
+const match = versions.find((item) => (item.version || "").startsWith(prefix));
+if (match) console.log(match.version);
+' <<< "$index_json"
+    )" || resolved=""
+  fi
+
+  if [[ -z "$resolved" ]] && command -v python3 >/dev/null 2>&1; then
+    resolved="$(
+      OPENCLAW_NODE_PREFIX="$prefix" python3 -c 'import json, os, sys
 prefix = os.environ["OPENCLAW_NODE_PREFIX"]
 for item in json.load(sys.stdin):
     version = item.get("version", "")
     if version.startswith(prefix):
         print(version)
         break
-'
+' <<< "$index_json"
+    )" || resolved=""
+  fi
+
+  [[ -n "$resolved" ]] || return 1
+  printf '%s\n' "$resolved"
 }
 
 openclaw_node_download_platform() {
@@ -175,10 +197,16 @@ openclaw_download_node() {
     ps_bin_dir="$ps_install_root\\node-${version}-${platform}"
     node_bin_dir="$install_root/node-${version}-${platform}"
     if command -v pwsh >/dev/null 2>&1; then
-      pwsh -NoLogo -NoProfile -Command "Expand-Archive -LiteralPath '${ps_archive_path}' -DestinationPath '${ps_install_root}' -Force"
+      OPENCLAW_NODE_ARCHIVE="$ps_archive_path" \
+        OPENCLAW_NODE_INSTALL_ROOT="$ps_install_root" \
+        pwsh -NoLogo -NoProfile -NonInteractive -Command \
+          'Expand-Archive -LiteralPath $env:OPENCLAW_NODE_ARCHIVE -DestinationPath $env:OPENCLAW_NODE_INSTALL_ROOT -Force'
       openclaw_prepend_node_bin "$node_bin_dir" "$ps_bin_dir"
     elif command -v powershell.exe >/dev/null 2>&1; then
-      powershell.exe -NoLogo -NoProfile -Command "Expand-Archive -LiteralPath '${ps_archive_path}' -DestinationPath '${ps_install_root}' -Force"
+      OPENCLAW_NODE_ARCHIVE="$ps_archive_path" \
+        OPENCLAW_NODE_INSTALL_ROOT="$ps_install_root" \
+        powershell.exe -NoLogo -NoProfile -NonInteractive -Command \
+          'Expand-Archive -LiteralPath $env:OPENCLAW_NODE_ARCHIVE -DestinationPath $env:OPENCLAW_NODE_INSTALL_ROOT -Force'
       openclaw_prepend_node_bin "$node_bin_dir" "$ps_bin_dir"
     else
       unzip -q "$archive_path" -d "$install_root"
