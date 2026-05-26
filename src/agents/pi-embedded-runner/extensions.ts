@@ -128,7 +128,8 @@ function buildContextPruningFactory(params: {
     settings,
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
-    dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropAllThinkingBlocks,
+    dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks === true,
+    dropAllThinkingBlocks: transcriptPolicy.dropAllThinkingBlocks === true,
     lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
       provider: params.provider,
       modelId: params.modelId,

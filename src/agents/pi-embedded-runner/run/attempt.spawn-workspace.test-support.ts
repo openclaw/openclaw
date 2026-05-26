@@ -752,6 +752,7 @@ vi.mock("../sandbox-info.js", () => ({
 vi.mock("../thinking.js", () => ({
   dropReasoningFromHistory: <T>(messages: T) => messages,
   dropThinkingBlocks: <T>(messages: T) => messages,
+  dropAllThinkingBlocks: <T>(messages: T) => messages,
 }));
 
 vi.mock("../tool-name-allowlist.js", async (importOriginal) => {

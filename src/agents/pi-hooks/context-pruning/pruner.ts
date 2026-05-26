@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
-import { dropThinkingBlocks } from "../../pi-embedded-runner/thinking.js";
+import { dropAllThinkingBlocks, dropThinkingBlocks } from "../../pi-embedded-runner/thinking.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
@@ -291,6 +291,7 @@ export function pruneContextMessages(params: {
   isToolPrunable?: (toolName: string) => boolean;
   contextWindowTokensOverride?: number;
   dropThinkingBlocksForEstimate?: boolean;
+  dropAllThinkingBlocksForEstimate?: boolean;
 }): AgentMessage[] {
   const { messages, settings, ctx } = params;
   const contextWindowTokens =
@@ -320,9 +321,11 @@ export function pruneContextMessages(params: {
   const pruneStartIndex = firstUserIndex === null ? messages.length : firstUserIndex;
 
   const isToolPrunable = params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
-  const estimatedMessages = params.dropThinkingBlocksForEstimate
-    ? dropThinkingBlocks(messages)
-    : messages;
+  const estimatedMessages = params.dropAllThinkingBlocksForEstimate
+    ? dropAllThinkingBlocks(messages)
+    : params.dropThinkingBlocksForEstimate
+      ? dropThinkingBlocks(messages)
+      : messages;
 
   const totalCharsBefore = estimateContextChars(estimatedMessages);
   let totalChars = totalCharsBefore;

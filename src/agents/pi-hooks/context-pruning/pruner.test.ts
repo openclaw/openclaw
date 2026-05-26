@@ -64,6 +64,7 @@ function makeToolResult(
 function pruneWithOversizedAssistantThinking(params: {
   assistantBlock: AssistantContentBlock;
   dropThinkingBlocksForEstimate?: boolean;
+  dropAllThinkingBlocksForEstimate?: boolean;
 }) {
   return pruneContextMessages({
     messages: [
@@ -77,6 +78,9 @@ function pruneWithOversizedAssistantThinking(params: {
     ctx: CONTEXT_WINDOW_5K,
     isToolPrunable: () => true,
     ...(params.dropThinkingBlocksForEstimate ? { dropThinkingBlocksForEstimate: true } : {}),
+    ...(params.dropAllThinkingBlocksForEstimate
+      ? { dropAllThinkingBlocksForEstimate: true }
+      : {}),
   });
 }
 
@@ -354,6 +358,23 @@ describe("pruneContextMessages", () => {
     });
 
     expect(result).toBe(messages);
+  });
+
+  it("ignores latest-turn thinking signatures when dropAllThinkingBlocksForEstimate is true", () => {
+    const result = pruneWithOversizedAssistantThinking({
+      assistantBlock: {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "S".repeat(40_000),
+      } as unknown as AssistantContentBlock,
+      dropAllThinkingBlocksForEstimate: true,
+    });
+    const toolResult = result.find((m) => m.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toBe("X".repeat(2_000));
   });
 
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {

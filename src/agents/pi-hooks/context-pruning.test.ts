@@ -318,6 +318,7 @@ describe("context-pruning", () => {
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
       dropThinkingBlocks: false,
+      dropAllThinkingBlocks: false,
       lastCacheTouchAt: Date.now() - DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs - 1000,
     });
 
@@ -341,6 +342,7 @@ describe("context-pruning", () => {
       contextWindowTokens: 1000,
       isToolPrunable: () => true,
       dropThinkingBlocks: false,
+      dropAllThinkingBlocks: false,
       lastCacheTouchAt: lastTouch,
     });
 
