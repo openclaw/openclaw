@@ -19,6 +19,15 @@ afterEach(() => {
 });
 
 describe("OpenAI Codex OAuth token responses", () => {
+  it("waits for Node OAuth runtime before creating an authorization flow", async () => {
+    const flow = await testing.createAuthorizationFlow("openclaw-test");
+    const url = new URL(flow.url);
+
+    expect(flow.state).toMatch(/^[a-f0-9]{32}$/u);
+    expect(url.searchParams.get("state")).toBe(flow.state);
+    expect(url.searchParams.get("originator")).toBe("openclaw-test");
+  });
+
   it("does not echo token payload values when the exchange response is malformed", async () => {
     stubTokenResponse({
       access_token: "secret-access-token",

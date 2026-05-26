@@ -5,18 +5,6 @@
  * It is only intended for CLI use, not browser environments.
  */
 
-// NEVER convert to top-level imports - breaks browser/Vite builds
-let randomBytes: typeof import("node:crypto").randomBytes | null = null;
-let http: typeof import("node:http") | null = null;
-if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-  void import("node:crypto").then((m) => {
-    randomBytes = m.randomBytes;
-  });
-  void import("node:http").then((m) => {
-    http = m;
-  });
-}
-
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { oauthErrorHtml, oauthSuccessHtml } from "./openai-codex-oauth-page.runtime.js";
 import type {
@@ -42,11 +30,27 @@ type TokenResponseJson = {
   refresh_token?: string;
   expires_in?: number;
 };
+type NodeOAuthRuntime = {
+  randomBytes: typeof import("node:crypto").randomBytes;
+  http: typeof import("node:http");
+};
 
-function createState(): string {
-  if (!randomBytes) {
-    throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
+let nodeOAuthRuntimePromise: Promise<NodeOAuthRuntime> | null = null;
+
+function loadNodeOAuthRuntime(): Promise<NodeOAuthRuntime> {
+  if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
+    return Promise.reject(new Error("OpenAI Codex OAuth is only available in Node.js environments"));
   }
+  nodeOAuthRuntimePromise ??= Promise.all([import("node:crypto"), import("node:http")]).then(
+    ([cryptoModule, httpModule]) => ({
+      randomBytes: cryptoModule.randomBytes,
+      http: httpModule,
+    }),
+  );
+  return nodeOAuthRuntimePromise;
+}
+
+function createState(randomBytes: typeof import("node:crypto").randomBytes): string {
   return randomBytes(16).toString("hex");
 }
 
@@ -186,8 +190,11 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 async function createAuthorizationFlow(
   originator: string = "openclaw",
 ): Promise<{ verifier: string; state: string; url: string }> {
-  const { verifier, challenge } = await generatePKCE();
-  const state = createState();
+  const [{ verifier, challenge }, runtime] = await Promise.all([
+    generatePKCE(),
+    loadNodeOAuthRuntime(),
+  ]);
+  const state = createState(runtime.randomBytes);
 
   const url = new URL(AUTHORIZE_URL);
   url.searchParams.set("response_type", "code");
@@ -210,11 +217,8 @@ type OAuthServerInfo = {
   waitForCode: () => Promise<{ code: string } | null>;
 };
 
-function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
-  if (!http) {
-    throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
-  }
-
+async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
+  const { http } = await loadNodeOAuthRuntime();
   let settleWait: ((value: { code: string } | null) => void) | undefined;
   const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
     let settled = false;
@@ -457,6 +461,7 @@ export const openaiCodexOAuthProvider: OAuthProviderInterface = {
 };
 
 export const testing = {
+  createAuthorizationFlow,
   exchangeAuthorizationCode,
   refreshAccessToken,
 };
