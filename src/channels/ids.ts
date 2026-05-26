@@ -1,5 +1,5 @@
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
 export type ChatChannelId = string;
 
@@ -10,11 +10,11 @@ type BundledChatChannelEntry = {
 };
 
 function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
-  return listBundledChannelCatalogEntries()
+  return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
     .map((entry) => ({
-      id: normalizeOptionalLowercaseString(entry.id) ?? entry.id,
-      aliases: entry.aliases,
-      order: entry.order,
+      id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
+      aliases: entry.aliases ?? [],
+      order: entry.order ?? Number.MAX_SAFE_INTEGER,
     }))
     .toSorted(
       (left, right) =>

@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
@@ -11,10 +10,6 @@ import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
-
-const channelConfigPresenceModuleLoader = createLazyImportLoader(
-  () => import("../channels/config-presence.js"),
-);
 
 type StatusJsonScanPolicy = {
   commandName: string;
@@ -50,13 +45,7 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
 }
 
 async function hasPotentialConfiguredChannelsForStatusJson(cfg: OpenClawConfig): Promise<boolean> {
-  if (hasExplicitStatusJsonChannelConfig(cfg)) {
-    return true;
-  }
-  const { hasPotentialConfiguredChannels } = await channelConfigPresenceModuleLoader.load();
-  return hasPotentialConfiguredChannels(cfg, process.env, {
-    includePersistedAuthState: false,
-  });
+  return hasExplicitStatusJsonChannelConfig(cfg);
 }
 
 export async function scanStatusJsonWithPolicy(

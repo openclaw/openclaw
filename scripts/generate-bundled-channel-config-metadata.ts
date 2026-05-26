@@ -61,6 +61,9 @@ const { writeGeneratedOutput } = (await import(
 type BundledChannelConfigMetadata = {
   pluginId: string;
   channelId: string;
+  aliases?: readonly string[];
+  order?: number;
+  configurable?: boolean;
   label?: string;
   description?: string;
   schema: Record<string, unknown>;
@@ -134,6 +137,38 @@ function resolveRootDescription(
   return undefined;
 }
 
+function resolveRootAliases(source: BundledPluginSource, channelId: string): string[] {
+  const channelMeta = resolvePackageChannelMeta(source);
+  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.aliases)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      channelMeta.aliases
+        .map((alias) => (typeof alias === "string" ? alias.trim().toLowerCase() : ""))
+        .filter((alias) => alias.length > 0),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveRootOrder(source: BundledPluginSource, channelId: string): number | undefined {
+  const channelMeta = resolvePackageChannelMeta(source);
+  const order = channelMeta?.id === channelId ? channelMeta.order : undefined;
+  return typeof order === "number" && Number.isFinite(order) ? order : undefined;
+}
+
+function resolveRootConfigurable(source: BundledPluginSource, channelId: string): boolean {
+  const channelMeta = resolvePackageChannelMeta(source);
+  const exposure =
+    channelMeta?.id === channelId &&
+    channelMeta.exposure &&
+    typeof channelMeta.exposure === "object" &&
+    !Array.isArray(channelMeta.exposure)
+      ? (channelMeta.exposure as Record<string, unknown>)
+      : null;
+  return exposure?.configured !== false;
+}
+
 function formatTypeScriptModule(source: string, outputPath: string, repoRoot: string): string {
   return formatGeneratedModule(source, {
     repoRoot,
@@ -202,6 +237,9 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       continue;
     }
     for (const channelId of channelIds) {
+      const aliases = resolveRootAliases(source, channelId);
+      const order = resolveRootOrder(source, channelId);
+      const configurable = resolveRootConfigurable(source, channelId);
       const label = resolveRootLabel(source, channelId);
       const description = resolveRootDescription(source, channelId);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
@@ -211,6 +249,9 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       entries.push({
         pluginId: source.manifest.id,
         channelId,
+        ...(aliases.length > 0 ? { aliases } : {}),
+        ...(order === undefined ? {} : { order }),
+        ...(configurable ? {} : { configurable }),
         ...(label ? { label } : {}),
         ...(description ? { description } : {}),
         schema: surface.schema,
@@ -240,6 +281,9 @@ export async function writeBundledChannelConfigMetadataModule(params?: {
 type BundledChannelConfigMetadata = {
   pluginId: string;
   channelId: string;
+  aliases?: readonly string[];
+  order?: number;
+  configurable?: boolean;
   label?: string;
   description?: string;
   schema: Record<string, unknown>;
