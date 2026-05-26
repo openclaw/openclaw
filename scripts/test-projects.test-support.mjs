@@ -355,6 +355,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
+  ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   [
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
@@ -418,6 +419,7 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/check-deadcode-unused-files.test.ts",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["test/scripts/ci-docker-pull-retry.test.ts", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
   [
@@ -488,6 +490,7 @@ const SOURCE_TEST_TARGETS = new Map([
     CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
   ],
   ["test/helpers/normalize-text.ts", TEST_HELPER_NORMALIZE_TEXT_TARGETS],
+  ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [

@@ -8,7 +8,12 @@ import type {
 } from "../../context-engine/types.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  GatewayDrainingError,
+  getQueueSize,
+  isGatewayDraining,
+} from "../../process/command-queue.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -51,6 +56,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   agentId?: string;
   config?: OpenClawConfig;
   disposeContextEngineAfterMaintenance?: boolean;
+  onScheduleFailure?: (error: unknown) => void;
 };
 
 type DeferredTurnMaintenanceRunState = {
@@ -560,6 +566,11 @@ function scheduleDeferredTurnMaintenance(
   if (!sessionKey) {
     return undefined;
   }
+  if (isGatewayDraining()) {
+    params.onScheduleFailure?.(new GatewayDrainingError());
+    return undefined;
+  }
+
   const activeRun = activeDeferredTurnMaintenanceRuns.get(sessionKey);
   if (activeRun) {
     const supersededParams = activeRun.rerunRequested ? activeRun.latestParams : undefined;
@@ -632,6 +643,7 @@ function scheduleDeferredTurnMaintenance(
   let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
     .catch((err) => {
+      params.onScheduleFailure?.(err);
       markDeferredTurnMaintenanceTaskScheduleFailure({
         sessionKey,
         taskId: task.taskId,
@@ -681,6 +693,7 @@ export async function runContextEngineMaintenance(params: {
   agentId?: string;
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
+  onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
   disposeDeferredContextEngineAfterMaintenance?: boolean;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
@@ -706,6 +719,7 @@ export async function runContextEngineMaintenance(params: {
         agentId: params.agentId,
         config: params.config,
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
+        onScheduleFailure: params.onDeferredMaintenanceFailure,
       });
       if (deferred) {
         params.onDeferredMaintenance?.(deferred);

@@ -101,6 +101,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
   contextEngineRuntimeContext: ContextEngineRuntimeContext;
 }): Promise<EmbeddedPiCompactResult> {
   let deferredScheduled = false;
+  let deferredScheduleFailure: unknown;
   try {
     await runContextEngineMaintenance({
       contextEngine: params.contextEngine,
@@ -114,6 +115,9 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       onDeferredMaintenance: () => {
         deferredScheduled = true;
       },
+      onDeferredMaintenanceFailure: (error) => {
+        deferredScheduleFailure = error;
+      },
     });
   } catch (err) {
     log.warn("failed to defer context-engine budget compaction", {
@@ -121,11 +125,12 @@ async function deferOwningContextEngineBudgetCompaction(params: {
     });
   }
 
-  if (!deferredScheduled) {
+  if (!deferredScheduled || deferredScheduleFailure) {
     await disposeContextEngine(params.contextEngine);
     log.warn(
       `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
-        `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId})`,
+        `(sessionKey=${params.compactParams.sessionKey ?? params.compactParams.sessionId}` +
+        `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
     );
     return {
       ok: false,

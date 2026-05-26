@@ -8,6 +8,11 @@ import {
   type ModelVisibilityPolicy,
 } from "./model-selection-shared.js";
 
+export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
+  allowManifestNormalization: true,
+  allowPluginNormalization: true,
+} as const;
+
 function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
   if (params.agentId) {
     const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);

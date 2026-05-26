@@ -125,6 +125,23 @@ function isReplaySafeThinkingAssistantTurn(
   return sawToolCall;
 }
 
+function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
+  for (const block of content) {
+    if (!isRawToolCallBlock(block) || block.name !== "sessions_spawn") {
+      continue;
+    }
+    const input = block.input;
+    if (!input || typeof input !== "object") {
+      continue;
+    }
+    const attachments = (input as { attachments?: unknown }).attachments;
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -176,6 +193,22 @@ function normalizeToolResultName(
   return message;
 }
 
+function normalizeLegacyToolResultId(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+  toolCalls: Array<{ id: string; name?: string }>,
+): Extract<AgentMessage, { role: "toolResult" }> {
+  if (extractToolResultId(message) || toolCalls.length !== 1) {
+    return message;
+  }
+  const [toolCall] = toolCalls;
+  const toolResultName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
+  const toolCallName = normalizeOptionalString(toolCall.name);
+  if (toolResultName && toolCallName && toolResultName !== toolCallName) {
+    return message;
+  }
+  return { ...message, toolCallId: toolCall.id, isError: true };
+}
+
 export { makeMissingToolResult };
 
 type ToolCallInputRepairReport = {
@@ -221,6 +254,11 @@ function collectFollowingToolResults(
   index: number,
 ): { ids: Set<string>; displaced: boolean } {
   const ids = new Set<string>();
+  const assistant = messages[index];
+  const currentToolCalls =
+    assistant && typeof assistant === "object" && assistant.role === "assistant"
+      ? extractToolCallsFromAssistant(assistant)
+      : [];
   let sawNonToolResult = false;
   let displaced = false;
   for (let nextIndex = index + 1; nextIndex < messages.length; nextIndex += 1) {
@@ -233,7 +271,8 @@ function collectFollowingToolResults(
       break;
     }
     if (message.role === "toolResult") {
-      const resultIds = extractToolResultIds(message);
+      const normalizedLegacyResult = normalizeLegacyToolResultId(message, currentToolCalls);
+      const resultIds = extractToolResultIds(normalizedLegacyResult);
       for (const id of resultIds) {
         ids.add(id);
       }
@@ -276,9 +315,9 @@ function repairToolCallInputs(
       countRawToolCallBlocks(msg.content) > 0
     ) {
       // Signed Anthropic thinking blocks must remain byte-for-byte stable on
-      // replay. Preserve the turn only if every sibling tool call is already
-      // valid and already has a real tool result. Otherwise drop the
-      // whole assistant turn rather than mutating provider-owned content.
+      // replay. Preserve the turn when every sibling tool call is already valid;
+      // the later pairing repair can synthesize missing legacy tool results
+      // without mutating provider-owned assistant content.
       const replaySafeToolCalls = extractToolCallsFromAssistant(msg);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
@@ -286,8 +325,9 @@ function repairToolCallInputs(
         replaySafeToolCalls.every(
           (toolCall) =>
             !preservedThinkingToolCallIds.has(toolCall.id) &&
-            (!followingToolResults.displaced || !priorToolCallIds.has(toolCall.id)) &&
-            followingToolResults.ids.has(toolCall.id),
+            (!hasSessionsSpawnAttachmentToolCall(msg.content) ||
+              followingToolResults.ids.has(toolCall.id)) &&
+            (!followingToolResults.displaced || !priorToolCallIds.has(toolCall.id)),
         )
       ) {
         for (const toolCall of replaySafeToolCalls) {
@@ -495,13 +535,19 @@ export function repairToolUseResultPairing(
       }
 
       if (nextRole === "toolResult") {
-        const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
+        const toolResult = normalizeLegacyToolResultId(
+          next as Extract<AgentMessage, { role: "toolResult" }>,
+          toolCalls,
+        );
         const id = extractToolResultId(toolResult);
         if (id && toolCallIds.has(id)) {
           if (seenToolResultIds.has(id)) {
             droppedDuplicateCount += 1;
             changed = true;
             continue;
+          }
+          if (toolResult !== next) {
+            changed = true;
           }
           const normalizedToolResult = normalizeToolResultName(
             toolResult,

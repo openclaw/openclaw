@@ -564,19 +564,20 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     expect(out).toStrictEqual([]);
   });
 
-  it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
+  it("drops only later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
+    const firstAssistant = {
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "First signed replay turn.",
+          thinkingSignature: "sig_first",
+        },
+        { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+      ],
+    } as const;
     const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "thinking",
-            thinking: "First signed replay turn.",
-            thinkingSignature: "sig_first",
-          },
-          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
-        ],
-      },
+      firstAssistant,
       {
         role: "assistant",
         content: [
@@ -595,7 +596,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
       allowProviderOwnedThinkingReplay: true,
     });
 
-    expect(out).toEqual([]);
+    expect(out).toEqual([firstAssistant]);
   });
 
   it("preserves signed-thinking turns that reuse a mutable earlier tool id", () => {

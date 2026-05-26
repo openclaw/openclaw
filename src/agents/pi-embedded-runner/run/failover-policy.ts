@@ -116,11 +116,9 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
     return false;
   }
   const timeoutFailure = isAssistantTimeoutFailure(params);
-  if (
-    timeoutFailure &&
-    params.harnessOwnsTransport &&
-    !isConcreteNonTimeoutAssistantFailure(params)
-  ) {
+  const harnessOwnedTimeout =
+    params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
+  if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
   return (!params.aborted && params.failoverFailure) || timeoutFailure;

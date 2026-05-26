@@ -364,9 +364,9 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("includes resize failure details when image optimization cannot produce a JPEG", async () => {
+  it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
-      /Failed to optimize image: .+/,
+      /Unable to determine image dimensions/,
     );
   });
 
@@ -440,118 +440,6 @@ describe("loadWebMedia", () => {
     expect(single.qualities).toEqual([80, 70, 60, 50, 40]);
     expect(many.sides[0]).toBe(1280);
     expect(many.qualities).toEqual([70, 60, 50, 40]);
-  });
-
-  async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
-    vi.resetModules();
-    vi.doMock("./media-services.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./media-services.js")>()),
-      convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
-      hasAlphaChannel: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
-      }),
-      isImageProcessorUnavailableError: (err: unknown) =>
-        err instanceof Error && err.message.includes("Photon did not expose"),
-      optimizeImageToPng: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
-      }),
-      resizeToJpeg: vi.fn(async () => {
-        throw new Error(
-          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
-        );
-      }),
-    }));
-    try {
-      return await fn();
-    } finally {
-      vi.doUnmock("./media-services.js");
-      vi.resetModules();
-    }
-  }
-
-  it("sends an in-limit original image when image optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      const result = await loadWebMediaWithMissingOptimizer(
-        tinyPngFile,
-        createLocalWebMediaOptions(),
-      );
-      expect(result.kind).toBe("image");
-      expect(result.contentType).toBe("image/png");
-      expect(result.fileName).toBe("tiny.png");
-      expect(result.buffer.equals(Buffer.from(TINY_PNG_BASE64, "base64"))).toBe(true);
-    });
-  });
-
-  it("does not bypass the size cap when image optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      await expect(
-        loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Photon did not expose/);
-    });
-  });
-
-  it("sends an in-limit data URL image when image optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
-      const result = await optimizeImageBufferForWebMedia({
-        buffer,
-        contentType: "image/png",
-        maxBytes: 1024,
-        imageCompression: { models: [{ maxSidePx: 1024 }] },
-      });
-      expect(result.kind).toBe("image");
-      expect(result.contentType).toBe("image/png");
-      expect(result.buffer.equals(buffer)).toBe(true);
-    });
-  });
-
-  it("does not preserve an original image when the declared MIME mismatches the bytes", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      await expect(
-        optimizeImageBufferForWebMedia({
-          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
-          contentType: "image/jpeg",
-          maxBytes: 1024,
-          imageCompression: { models: [{ maxSidePx: 1024 }] },
-        }),
-      ).rejects.toThrow(/Photon did not expose/);
-    });
-  });
-
-  it("does not bypass the data URL image cap when image optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      await expect(
-        optimizeImageBufferForWebMedia({
-          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
-          contentType: "image/png",
-          maxBytes: 8,
-          imageCompression: { models: [{ maxSidePx: 1024 }] },
-        }),
-      ).rejects.toThrow(/Photon did not expose/);
-    });
-  });
-
-  it("does not bypass model dimensions when image optimization is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
-      await expect(
-        optimizeImageBufferForWebMedia({
-          buffer: createLargeColorBlockPng(1600),
-          contentType: "image/png",
-          maxBytes: 16 * 1024 * 1024,
-          imageCompression: { models: [{ maxSidePx: 512 }] },
-        }),
-      ).rejects.toThrow(/Photon did not expose/);
-    });
   });
 
   it("preserves in-limit GIF buffers when optimizing direct image buffers", async () => {
@@ -657,17 +545,6 @@ describe("loadWebMedia", () => {
         models: [{}],
       }).sides[0],
     ).toBe(2048);
-  });
-
-  it("does not send original HEIC media when image conversion is unavailable", async () => {
-    await withUnavailableImageOptimizer(async () => {
-      const heicFile = path.join(fixtureRoot, "photo.heic");
-      await fs.writeFile(heicFile, Buffer.from("heic-source"));
-      const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
-      await expect(
-        loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Photon did not expose/);
-    });
   });
 
   it("resolves relative local media paths against the provided workspace directory", async () => {

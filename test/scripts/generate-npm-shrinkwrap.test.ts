@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   applyPackageExtensionPeerMetadata,
+  collectCurrentShrinkwrapOverrides,
   collectOverrideViolations,
   collectPnpmLockViolations,
   createNpmShrinkwrapCommand,
@@ -9,6 +10,7 @@ import {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageDependencyInputsChanged,
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
@@ -141,6 +143,46 @@ describe("generate-npm-shrinkwrap", () => {
     ]);
   });
 
+  it("pins current shrinkwrap versions that are still in the pnpm lock", () => {
+    const lockfile = {
+      packages: {
+        "": {},
+        "node_modules/@aws-sdk/core": {
+          version: "3.974.13",
+        },
+        "node_modules/@aws-sdk/core/node_modules/fast-xml-parser": {
+          version: "5.2.5",
+        },
+        "node_modules/react": {
+          version: "19.2.4",
+        },
+        "node_modules/react-dom": {
+          version: "19.2.4",
+        },
+        "node_modules/react-dom/node_modules/react": {
+          version: "19.2.5",
+        },
+        "node_modules/zod": {
+          version: "4.4.4",
+        },
+      },
+    };
+    const pnpmPackages = new Set([
+      "@aws-sdk/core@3.974.13",
+      "fast-xml-parser@5.2.5",
+      "react@19.2.4",
+      "react@19.2.5",
+      "react-dom@19.2.4",
+    ]);
+
+    expect(
+      collectCurrentShrinkwrapOverrides(lockfile, new Set(["@aws-sdk/core"]), pnpmPackages),
+    ).toEqual({
+      "fast-xml-parser": "5.2.5",
+      "react-dom": "19.2.4",
+    });
+  });
+
   it("normalizes npm patch-version metadata drift", () => {
     expect(
       normalizeNpmVersionDrift({
@@ -259,5 +301,23 @@ describe("generate-npm-shrinkwrap", () => {
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("extensions/acpx");
     expect(packageDirs.length).toBeGreaterThan(1);
+  });
+
+  it("detects package dependency inputs that make current shrinkwrap pins unsafe", () => {
+    expect(
+      packageDependencyInputsChanged(process.cwd(), ["scripts/generate-npm-shrinkwrap.mjs"]),
+    ).toBe(true);
+    expect(packageDependencyInputsChanged(process.cwd(), ["pnpm-lock.yaml"])).toBe(true);
+    expect(packageDependencyInputsChanged(process.cwd(), ["package.json"])).toBe(true);
+    expect(
+      packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
+        "extensions/acpx/npm-shrinkwrap.json",
+      ]),
+    ).toBe(true);
+    expect(
+      packageDependencyInputsChanged(path.join(process.cwd(), "extensions/acpx"), [
+        "extensions/brave/package.json",
+      ]),
+    ).toBe(false);
   });
 });

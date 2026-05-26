@@ -30,6 +30,9 @@ vi.mock("./session-binding.js", () => ({
 
 vi.mock("./shared-client.js", () => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
+  getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
+    getSharedCodexAppServerClientMock(...args),
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
 vi.mock("./auth-bridge.js", () => ({

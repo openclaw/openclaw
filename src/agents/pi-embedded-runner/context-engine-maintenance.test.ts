@@ -3,6 +3,7 @@ import type { ContextEngineRuntimeContext } from "../../context-engine/types.js"
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   enqueueCommandInLane,
+  markGatewayDraining,
   resetCommandQueueStateForTest,
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
@@ -954,6 +955,143 @@ describe("runContextEngineMaintenance", () => {
         "maintain:second",
         "dispose:second",
       ]);
+    });
+  });
+
+  it("reports deferred maintenance schedule failure while gateway is draining", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-draining-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const sessionKey = "agent:main:session-draining";
+      const maintain = vi.fn(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
+      const onDeferredMaintenance = vi.fn();
+      const onDeferredMaintenanceFailure = vi.fn();
+      const backgroundEngine = {
+        info: {
+          id: "test",
+          name: "Test Engine",
+          turnMaintenanceMode: "background" as const,
+        },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }: { messages: unknown[] }) => ({
+          messages,
+          estimatedTokens: 0,
+        }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+      markGatewayDraining();
+      const result = await runContextEngineMaintenance({
+        contextEngine: backgroundEngine,
+        sessionId: "session-draining",
+        sessionKey,
+        sessionFile: "/tmp/session-draining.jsonl",
+        reason: "turn",
+        onDeferredMaintenance,
+        onDeferredMaintenanceFailure,
+      });
+
+      expect(result).toBeUndefined();
+      expect(onDeferredMaintenance).not.toHaveBeenCalled();
+      expect(onDeferredMaintenanceFailure).toHaveBeenCalledOnce();
+      expect(onDeferredMaintenanceFailure.mock.calls[0]?.[0]).toHaveProperty(
+        "name",
+        "GatewayDrainingError",
+      );
+      expect(maintain).not.toHaveBeenCalled();
+      const tasks = listTasksForOwnerKey(sessionKey).filter(
+        (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+      );
+      expect(tasks).toEqual([]);
+    });
+  });
+
+  it("rejects coalesced deferred maintenance requests while gateway is draining", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-draining-coalesced-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-draining-coalesced";
+        let releaseMaintenance: (() => void) | undefined;
+        const maintain = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            releaseMaintenance = resolve;
+          });
+          return {
+            changed: false,
+            bytesFreed: 0,
+            rewrittenEntries: 0,
+          };
+        });
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        const firstDeferred: Promise<void>[] = [];
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-draining-coalesced",
+          sessionKey,
+          sessionFile: "/tmp/session-draining-coalesced.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            firstDeferred.push(promise);
+          },
+        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        const onDeferredMaintenance = vi.fn();
+        const onDeferredMaintenanceFailure = vi.fn();
+        markGatewayDraining();
+        const result = await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-draining-coalesced",
+          sessionKey,
+          sessionFile: "/tmp/session-draining-coalesced.jsonl",
+          reason: "turn",
+          onDeferredMaintenance,
+          onDeferredMaintenanceFailure,
+        });
+
+        expect(result).toBeUndefined();
+        expect(onDeferredMaintenance).not.toHaveBeenCalled();
+        expect(onDeferredMaintenanceFailure).toHaveBeenCalledOnce();
+        expect(onDeferredMaintenanceFailure.mock.calls[0]?.[0]).toHaveProperty(
+          "name",
+          "GatewayDrainingError",
+        );
+        expect(maintain).toHaveBeenCalledTimes(1);
+
+        if (!releaseMaintenance) {
+          throw new Error("Expected maintenance release callback to be initialized");
+        }
+        releaseMaintenance();
+        await firstDeferred[0];
+      } finally {
+        resetCommandQueueStateForTest();
+        vi.useRealTimers();
+      }
     });
   });
 
