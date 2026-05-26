@@ -49,6 +49,9 @@ describe("redactSensitiveText", () => {
     const input = [
       'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"',
       "OPENAI_API_KEY=$OPENAI_API_KEY",
+      "API_KEY=$API_KEY",
+      "TOKEN=${TOKEN}",
+      "PASSWORD=${PASSWORD:-}",
       "GITHUB_TOKEN=${GITHUB_TOKEN}",
     ].join("\n");
     const output = redactSensitiveText(input, {
