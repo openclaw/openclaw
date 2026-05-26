@@ -47,12 +47,14 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
       reply: { text: "dreaming claimed" },
     });
     const onExecutionPhase = vi.fn();
+    const abortController = new AbortController();
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
       trigger: "cron",
       jobId: "cron-job-123",
       prompt: "__openclaw_memory_core_short_term_promotion_dream__",
+      abortSignal: abortController.signal,
       onExecutionPhase,
     });
 
@@ -70,6 +72,7 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.abortSignal).toBe(abortController.signal);
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });

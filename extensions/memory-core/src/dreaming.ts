@@ -50,9 +50,25 @@ const DREAMING_PRESSURE_HEAP_WARNING_BYTES = 1024 * BYTES_PER_MIB;
 const DREAMING_PRESSURE_BACKOFF_INITIAL_MS = 30_000;
 const DREAMING_PRESSURE_BACKOFF_MAX_MS = 5 * 60_000;
 
-let dreamingPressureBackoffSleep: (delayMs: number) => Promise<void> = (delayMs) =>
+let dreamingPressureBackoffSleep: (delayMs: number, abortSignal?: AbortSignal) => Promise<void> = (
+  delayMs,
+  abortSignal,
+) =>
   new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
+    if (abortSignal?.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
   });
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
@@ -182,36 +198,63 @@ function formatDreamingResourcePressure(pressure: DreamingResourcePressure): str
 async function waitForDreamingPressureToEase(params: {
   logger: Logger;
   workspaceDir: string;
-}): Promise<void> {
+  abortSignal?: AbortSignal;
+}): Promise<"ready" | "aborted"> {
   let pressure = detectDreamingResourcePressure();
   let delayMs = DREAMING_PRESSURE_BACKOFF_INITIAL_MS;
   while (pressure) {
+    if (params.abortSignal?.aborted) {
+      params.logger.warn(
+        `memory-core: dreaming promotion stopped while waiting for gateway memory pressure to ease [workspace=${params.workspaceDir}].`,
+      );
+      return "aborted";
+    }
     params.logger.warn(
       `memory-core: dreaming promotion waiting ${delayMs}ms because gateway memory pressure is high (${formatDreamingResourcePressure(pressure)}) [workspace=${params.workspaceDir}].`,
     );
-    await dreamingPressureBackoffSleep(delayMs);
+    await dreamingPressureBackoffSleep(delayMs, params.abortSignal);
+    if (params.abortSignal?.aborted) {
+      params.logger.warn(
+        `memory-core: dreaming promotion stopped while waiting for gateway memory pressure to ease [workspace=${params.workspaceDir}].`,
+      );
+      return "aborted";
+    }
     pressure = detectDreamingResourcePressure();
     delayMs = Math.min(delayMs * 2, DREAMING_PRESSURE_BACKOFF_MAX_MS);
   }
+  return "ready";
 }
 
 export function setDreamingPressureBackoffSleepForTest(
-  sleep?: (delayMs: number) => Promise<void>,
+  sleep?: (delayMs: number, abortSignal?: AbortSignal) => Promise<void>,
 ): void {
   if (sleep) {
     let calls = 0;
-    dreamingPressureBackoffSleep = async (delayMs) => {
+    dreamingPressureBackoffSleep = async (delayMs, abortSignal) => {
       calls += 1;
       if (calls > 100) {
         throw new Error("dreaming pressure backoff test sleep exceeded 100 calls");
       }
-      await sleep(delayMs);
+      await sleep(delayMs, abortSignal);
     };
     return;
   }
-  dreamingPressureBackoffSleep = (delayMs) =>
+  dreamingPressureBackoffSleep = (delayMs, abortSignal) =>
     new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        abortSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      const onAbort = () => {
+        clearTimeout(timer);
+        abortSignal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
     });
 }
 
@@ -576,6 +619,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  abortSignal?: AbortSignal;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -631,10 +675,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const detachNarratives = params.trigger === "cron";
   for (const workspaceDir of workspaces) {
     if (params.trigger === "cron") {
-      await waitForDreamingPressureToEase({
+      const pressureStatus = await waitForDreamingPressureToEase({
         logger: params.logger,
         workspaceDir,
+        abortSignal: params.abortSignal,
       });
+      if (pressureStatus === "aborted") {
+        return { handled: true, reason: "memory-core: short-term dreaming aborted" };
+      }
     }
     try {
       const sweepNowMs = Date.now();
@@ -718,20 +766,20 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       });
       // Generate dream diary narrative from promoted memories.
       if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {
-        const narrativePressure =
-          params.trigger === "cron" ? detectDreamingResourcePressure() : null;
-        if (narrativePressure) {
-          params.logger.warn(
-            `memory-core: deferred detached dream narrative because gateway memory pressure is high (${formatDreamingResourcePressure(narrativePressure)}) [workspace=${workspaceDir}].`,
-          );
-          continue;
-        }
         const data: NarrativePhaseData = {
           phase: "deep",
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
         if (detachNarratives) {
+          const narrativePressureStatus = await waitForDreamingPressureToEase({
+            logger: params.logger,
+            workspaceDir,
+            abortSignal: params.abortSignal,
+          });
+          if (narrativePressureStatus === "aborted") {
+            return { handled: true, reason: "memory-core: short-term dreaming aborted" };
+          }
           runDetachedDreamNarrative({
             subagent: params.subagent,
             workspaceDir,
@@ -995,6 +1043,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
+        abortSignal: ctx.abortSignal,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);

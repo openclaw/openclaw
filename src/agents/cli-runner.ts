@@ -198,6 +198,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
+        abortSignal: params.abortSignal,
         ...buildAgentHookContextChannelFields(params),
       } as const;
       params.onExecutionPhase?.({

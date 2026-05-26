@@ -570,6 +570,7 @@ export async function runEmbeddedPiAgent(
         modelProviderId: provider,
         modelId,
         trigger: params.trigger,
+        abortSignal: params.abortSignal,
         ...buildAgentHookContextChannelFields(params),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {

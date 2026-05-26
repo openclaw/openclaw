@@ -843,23 +843,22 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
+      const beforeAgentReplyContext = {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        abortSignal: opts?.abortSignal,
+        ...buildAgentHookContextChannelFields({
+          sessionKey: agentSessionKey,
+          messageProvider: hookMessageProvider,
+          currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+          messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+        }),
+      };
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-        hookRunner.runBeforeAgentReply(
-          { cleanedBody },
-          {
-            agentId,
-            sessionKey: agentSessionKey,
-            sessionId,
-            workspaceDir,
-            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-            ...buildAgentHookContextChannelFields({
-              sessionKey: agentSessionKey,
-              messageProvider: hookMessageProvider,
-              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-            }),
-          },
-        ),
+        hookRunner.runBeforeAgentReply({ cleanedBody }, beforeAgentReplyContext),
       );
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };

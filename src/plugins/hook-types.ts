@@ -199,6 +199,8 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Abort signal for the current agent turn, when the caller can cancel it. */
+  abortSignal?: AbortSignal;
   /** Resolved effective context-token budget after model/config/agent caps. */
   contextTokenBudget?: number;
   /** Source that supplied the resolved context-token budget. */

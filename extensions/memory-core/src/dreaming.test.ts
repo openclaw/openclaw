@@ -217,11 +217,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
-function getBeforeAgentReplyHandler(
-  onMock: ReturnType<typeof vi.fn>,
-): (
+function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>): (
   event: { cleanedBody: string },
-  ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+  ctx: {
+    trigger?: string;
+    workspaceDir?: string;
+    sessionKey?: string;
+    abortSignal?: AbortSignal;
+  },
 ) => Promise<unknown> {
   const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
   if (!call) {
@@ -229,7 +232,12 @@ function getBeforeAgentReplyHandler(
   }
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
+    ctx: {
+      trigger?: string;
+      workspaceDir?: string;
+      sessionKey?: string;
+      abortSignal?: AbortSignal;
+    },
   ) => Promise<unknown>;
 }
 
@@ -2395,6 +2403,85 @@ describe("short-term dreaming trigger", () => {
     expect(subagent.run.mock.calls[0]?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("still schedules managed cron dream diary prose when pressure rises after promotion", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-cron-pressure-narrative-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Archive router backups weekly."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "router backups",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Archive router backups weekly.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const lowPressure = {
+      rss: 64 * 1024 * 1024,
+      heapTotal: 64 * 1024 * 1024,
+      heapUsed: 32 * 1024 * 1024,
+      external: 0,
+      arrayBuffers: 0,
+    };
+    const highPressure = {
+      ...lowPressure,
+      rss: 2 * 1024 * 1024 * 1024,
+    };
+    const pressureSequence = [lowPressure, highPressure, lowPressure];
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => {
+      return pressureSequence.shift() ?? lowPressure;
+    });
+    const backoffDelays: number[] = [];
+    setDreamingPressureBackoffSleepForTest(async (delayMs) => {
+      backoffDelays.push(delayMs);
+    });
+
+    const subagent = {
+      run: vi.fn(async (_params: { model?: string }) => ({ runId: "narrative-run-1" })),
+      waitForRun: vi.fn(async () => ({ status: "ok" })),
+      getSessionMessages: vi.fn(async () => ({
+        messages: [{ role: "assistant", content: "The backups settled into the archive." }],
+      })),
+      deleteSession: vi.fn(async () => {}),
+    };
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "cron",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+      subagent,
+    });
+
+    expect(result?.handled).toBe(true);
+    await vi.waitFor(async () => {
+      expect(subagent.run).toHaveBeenCalled();
+      const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(dreamsText).toContain("The backups settled into the archive.");
+    });
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("deferred detached dream narrative"),
+    );
+    expect(backoffDelays).toEqual([30_000]);
+  });
+
   it("skips dreaming promotion cleanly when limit is zero", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-limit-zero-");
@@ -2933,6 +3020,89 @@ describe("short-term dreaming trigger", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining(
         "memory-core: dreaming promotion waiting 300000ms because gateway memory pressure is high",
+      ),
+    );
+  });
+
+  it("stops managed cron backoff when the cron abort signal fires", async () => {
+    const logger = createLogger();
+    const abortController = new AbortController();
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-cron-pressure-abort-");
+    const alphaWorkspace = path.join(workspaceRoot, "alpha");
+    const betaWorkspace = path.join(workspaceRoot, "beta");
+    for (const [workspaceDir, query, snippet] of [
+      [alphaWorkspace, "alpha abort", "Alpha abort note."],
+      [betaWorkspace, "beta abort", "Beta abort note."],
+    ] as const) {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-02", [snippet]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query,
+        results: [
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet,
+            source: "memory",
+          },
+        ],
+      });
+    }
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            workspace: alphaWorkspace,
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const highPressure = {
+      rss: 2 * 1024 * 1024 * 1024,
+      heapTotal: 64 * 1024 * 1024,
+      heapUsed: 32 * 1024 * 1024,
+      external: 0,
+      arrayBuffers: 0,
+    };
+    vi.spyOn(process, "memoryUsage").mockReturnValue(highPressure);
+    const backoffDelays: number[] = [];
+    setDreamingPressureBackoffSleepForTest(async (delayMs) => {
+      backoffDelays.push(delayMs);
+      abortController.abort("test cron timeout");
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "cron",
+      workspaceDir: betaWorkspace,
+      cfg,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+      abortSignal: abortController.signal,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming aborted",
+    });
+    expect(backoffDelays).toEqual([30_000]);
+    await expectPathMissing(path.join(alphaWorkspace, "MEMORY.md"));
+    await expectPathMissing(path.join(betaWorkspace, "MEMORY.md"));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "memory-core: dreaming promotion stopped while waiting for gateway memory pressure to ease",
       ),
     );
   });

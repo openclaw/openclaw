@@ -77,12 +77,15 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
   });
 
   it("returns a plugin reply and invokes the hook after inline actions", async () => {
+    const abortController = new AbortController();
     mocks.runBeforeAgentReply.mockResolvedValue({
       handled: true,
       reply: { text: "plugin reply" },
     });
 
-    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+    const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {
+      abortSignal: abortController.signal,
+    });
 
     expect(result).toEqual({ text: "plugin reply" });
     expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
@@ -97,6 +100,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           messageProvider?: string;
           trigger?: string;
           channelId?: string;
+          abortSignal?: AbortSignal;
         },
       ]
     >;
@@ -108,6 +112,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.messageProvider).toBe("telegram");
     expect(hookCtx.trigger).toBe("user");
     expect(hookCtx.channelId).toBe("-100123");
+    expect(hookCtx.abortSignal).toBe(abortController.signal);
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.runBeforeAgentReply.mock.invocationCallOrder[0] ?? 0,
     );
