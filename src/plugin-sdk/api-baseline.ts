@@ -76,8 +76,26 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
+function normalizePackageInstallPath(filePath: string): string | undefined {
+  const normalized = filePath.split(path.sep).join(path.posix.sep);
+  for (const marker of ["/node_modules/", "/openclaw-pnpm-node-modules/"]) {
+    const index = normalized.lastIndexOf(marker);
+    if (index >= 0) {
+      return `node_modules/${normalized.slice(index + marker.length)}`;
+    }
+  }
+  return undefined;
+}
+
+export function normalizePluginSdkApiSourcePath(repoRoot: string, filePath: string): string {
+  return (
+    normalizePackageInstallPath(filePath) ??
+    path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep)
+  );
+}
+
 function relativePath(repoRoot: string, filePath: string): string {
-  return path.relative(repoRoot, filePath).split(path.sep).join(path.posix.sep);
+  return normalizePluginSdkApiSourcePath(repoRoot, filePath);
 }
 
 function isAbsoluteImportPath(value: string): boolean {
@@ -90,11 +108,11 @@ function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): s
   }
 
   const resolvedPath = path.resolve(value);
-  const relative = path.relative(repoRoot, resolvedPath);
+  const relative = normalizePluginSdkApiSourcePath(repoRoot, resolvedPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return value;
   }
-  return relative.split(path.sep).join(path.posix.sep);
+  return relative;
 }
 
 export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: string): string {
