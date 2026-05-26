@@ -2408,7 +2408,11 @@ export async function runCodexAppServerAttempt(
       ...(turnId ? { turnId } : {}),
     });
     embeddedAgentLog.debug("codex app-server raw notification received", correlation);
-    if (notification.method === "turn/completed" && correlation.matchesActiveTurn === false) {
+    if (
+      notification.method === "turn/completed" &&
+      correlation.matchesActiveThread &&
+      correlation.matchesActiveTurn === false
+    ) {
       embeddedAgentLog.warn(
         "codex app-server turn/completed did not match active turn",
         correlation,

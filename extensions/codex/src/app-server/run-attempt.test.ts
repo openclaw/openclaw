@@ -8629,6 +8629,79 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("does not warn on cross-thread turn/completed broadcast notifications", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-other",
+        turnId: "turn-other",
+        turn: {
+          id: "turn-other",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-other", text: "foreign completion" }],
+        },
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(warn).not.toHaveBeenCalledWith(
+      "codex app-server turn/completed did not match active turn",
+      expect.anything(),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("warns on same-thread turn/completed notifications for a different turn", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-other",
+        turn: {
+          id: "turn-other",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-other", text: "wrong turn" }],
+        },
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server turn/completed did not match active turn",
+      expect.objectContaining({
+        activeThreadId: "thread-1",
+        activeTurnId: "turn-1",
+        matchesActiveThread: true,
+        matchesActiveTurn: false,
+        threadId: "thread-1",
+        turnId: "turn-other",
+      }),
+    );
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
   it("releases completion and native hook relay state when Codex raw-events an interrupted turn marker", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
